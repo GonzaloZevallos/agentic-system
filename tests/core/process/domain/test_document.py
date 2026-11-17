@@ -1,10 +1,11 @@
 import ast
 from pathlib import Path
-from typing import get_args
+from typing import get_args, get_type_hints
 
 import pytest
 import yaml
 
+from agentic.core.measurement.domain import cycle
 from agentic.core.process.application import resume
 from agentic.core.process.domain import (
     document,
@@ -2379,3 +2380,42 @@ def test_record_closure_replaces_a_block_style_stack_unfetchable_and_clears_it_w
     cleared = document.record_closure(written, {"stack_unfetchable": None})
     assert cleared.count("stack_unfetchable:") == 1
     assert _read_unfetchable(cleared) is None
+
+
+_SPEC_STATE = {**_base_state(), "spec": {"path": "docs/specs/a.md", "slice": "s"}}
+
+
+def test_a_document_with_a_spec_records_the_spec_delivery_and_without_one_does_not():
+    assert "spec_delivery: true" in document.render(_SPEC_STATE)
+    plain = document.render(_base_state())
+    assert "spec_delivery" not in plain
+    # The same state with the key false or null renders byte-identical to today.
+    assert document.render(_base_state(spec_delivery=False)) == plain
+    assert document.render(_base_state(spec={})) == plain
+
+
+def test_the_spec_delivery_record_survives_a_rebuild_without_the_spec():
+    text = document.render(_SPEC_STATE)
+    rebuilt = resume.state_from(document.parse(text))
+    assert rebuilt["spec_delivery"] is True
+    assert "spec" not in rebuilt
+    # A patch through the reducer of the field cannot take the mark back.
+    reducer = get_args(get_type_hints(task.TaskState, include_extras=True)["spec_delivery"])[1]
+    assert reducer is task.sticky_true
+    kept = {**rebuilt, "spec_delivery": reducer(rebuilt["spec_delivery"], False)}
+    again = document.render({**_base_state(), **kept})
+    assert "spec_delivery: true" in again
+    assert cycle.path_facts(document.parse(again)).spec_delivery is True
+
+
+def test_a_document_without_the_key_rebuilds_without_it_and_is_no_spec_delivery():
+    parsed = document.parse(document.render(_base_state()))
+    assert "spec_delivery" not in resume.state_from(parsed)
+    assert cycle.path_facts(parsed).spec_delivery is False
+
+
+def test_the_record_is_read_by_no_decision_and_survives_a_closure():
+    assert rules.spec_delivery({"spec_delivery": True}) is False
+    text = document.render(_SPEC_STATE)
+    closed = document.record_closure(text, {"closed_at": "2026-09-21T10:00:00Z"})
+    assert document.parse(closed)["spec_delivery"] is True

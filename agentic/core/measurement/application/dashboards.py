@@ -1,4 +1,4 @@
-"""Apply a product's Langfuse dashboards through two ports (GH-274, ADR-0051).
+"""Apply the Langfuse dashboard through two ports (GH-274, ADR-0051).
 
 `DashboardStore` is where the rows live (Langfuse's Postgres); `WidgetData` is where the
 numbers live (ClickHouse). The use case builds the rows (`domain.dashboards`), plans the
@@ -71,8 +71,8 @@ class DashboardStore(Protocol):
         """`(table, column)` of the two dashboard tables, as the database reports them."""
         ...
 
-    def read(self, product: str) -> Sequence[domain.Row]:
-        """The rows of this store's project that carry `product`'s marker, and no others."""
+    def read(self) -> Sequence[domain.Row]:
+        """The rows of this store's project that carry the scope marker, and no others."""
         ...
 
     def apply(self, changes: domain.Changes) -> None:
@@ -122,29 +122,28 @@ def _read_back(desired: Sequence[domain.Row], stored: Sequence[domain.Row]) -> l
 
 
 def apply_dashboards(
-    product: str,
     store: DashboardStore,
     *,
     dry_run: bool = False,
     data: WidgetData | None = None,
 ) -> Report:
-    """Build, plan and (unless `dry_run`) write `product`'s dashboards, then read them
-    back. Raises `ColumnDrift` before writing when the tables are not the recorded ones.
-    With `data`, a widget that reads zero rows is a problem unless it is one of
+    """Build, plan and (unless `dry_run`) write the one dashboard, the same for every
+    product, then read it back. Raises `ColumnDrift` before writing when the tables are not
+    the recorded ones. With `data`, a widget that reads zero rows is a problem unless it is one of
     `ZERO_ROW_EXCEPTIONS`."""
     found = store.columns()
     if found != RECORDED_COLUMNS:
         raise ColumnDrift(_drift(found))
-    specs = domain.build_dashboards(product)
+    specs = domain.build_dashboards()
     desired = domain.rows(specs)
-    stored = store.read(product)
+    stored = store.read()
     changes = domain.plan(desired, stored)
     stored_ids = {row.id for row in stored}
     created = frozenset(row.id for row in changes.upserts if row.id not in stored_ids)
     problems: list[str] = []
     if not dry_run:
         store.apply(changes)
-        problems += _read_back(desired, store.read(product))
+        problems += _read_back(desired, store.read())
     counts: list[tuple[str, str, int]] = []
     if data is not None:
         allowed = {(dashboard, widget) for dashboard, widget, _ in domain.ZERO_ROW_EXCEPTIONS}

@@ -12,9 +12,9 @@ or land the plan holds back is said in the round's output, never silent.
 
 `rules.poll_plan` decides the order and which issues qualify; this module only gathers
 the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED`,
-`RETAKEN`, `AUTO_MERGE_REFUSED` and `AUTO_MERGED` are the comment prefixes the system
-posts, all registered into `resume.SYSTEM_COMMENTS` so a resume reads them as the
-system's own, never a human's answer. A retake (GH-176) is the poller taking up a run a
+`RETAKEN` and `AUTO_MERGED` are comment prefixes the system posts (`AUTO_MERGE_REFUSED`
+lives in `refusal_note`), all registered into `resume.SYSTEM_COMMENTS` so a resume reads
+them as the system's own, never a human's answer. A retake (GH-176) is the poller taking up a run a
 reboot interrupted: it reads the run's lock through `RunLock.read`, never `acquire`, and
 decides in `rules.interrupted_run`."""
 
@@ -56,7 +56,9 @@ from ..domain.task import (
     PullRequest,
     TaskState,
     add_head_yield,
+    add_tracker_failures,
     apply,
+    refusal_noted_record,
 )
 from . import (
     adr_collision,
@@ -90,6 +92,7 @@ from .ports import (
     TrackerTimedOut,
     Upstream,
 )
+from .refusal_note import POLLER_NOTED, note_refusal, read_comments, said
 from .registration import REGISTER_WAIT_S, await_registration
 from .stack_facts import StackMemo, stack_facts
 
@@ -104,10 +107,9 @@ AUTO_RESUMED = "Auto-resumed: "
 # left no lock. Defined in `domain/retakes.py`, the one place that counts them, and re-exported
 # here for `resume.py`, which registers them in `resume.SYSTEM_COMMENTS`.
 
-# The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
-# `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
-# itself. Defined here, imported by `resume.py`, so neither is ever read as a human's answer.
-AUTO_MERGE_REFUSED = "Auto-merge refused: "
+# The comment the automatic merge posts when it merges (GH-178, ADR-0045), registered into
+# `resume.SYSTEM_COMMENTS` the same way. Defined here, imported by `resume.py`, so it is never
+# read as a human's answer. The refusal's own prefix lives in `refusal_note`.
 AUTO_MERGED = "Auto-merged: "
 
 # The two comments the landing posts (GH-239, ADR-0048), registered into
@@ -717,7 +719,7 @@ def assess_merge(
         return Abandoned(pull_request)
     # GH-784: the thread is read only when the hold looks at it (`thread_needed`): a task refused
     # `not_ready`, or one the document alone answers, costs no read.
-    from .merge import read_comments, thread_needed
+    from .merge import thread_needed
 
     facts = _merge_facts(
         task_id,
@@ -1420,6 +1422,70 @@ def _record_unfetchable(
     return True
 
 
+def _already_noted(raw: TaskState, head: str, reason: str) -> bool:
+    """Whether the document's `refusal_noted` is this (head, reason): the head by
+    `rules.same_commit`, the reason by equality. An absent or unreadable record is not."""
+    stored = raw.get("refusal_noted")
+    if not isinstance(stored, Mapping):
+        return False
+    return stored.get("reason") == reason and rules.same_commit(_text(stored.get("head")), head)
+
+
+def _note_refusal(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    facts: rules.MergeFacts,
+    reason: rules.MergeRefusal | None,
+    turn: Turn,
+    now: datetime,
+    out: list[str],
+    *,
+    acts: bool,
+    dry_run: bool,
+) -> None:
+    """GH-885: comments one of the four `POLLER_NOTED` refusals on the issue once per
+    (head, reason) and records it in `refusal_noted`. `acts` is the round's: not held and the
+    task not at work. The issue thread is the memory (`said`: any earlier comment of this head
+    and reason, ever; the verb's own rule skips only after the LAST refusal comment, so A, B, A
+    posts twice here); the record only avoids the read, so a pair unchanged costs no tracker
+    call. A failed read posts and records nothing; a failed post lands in `tracker_failures`
+    and records nothing; the next round tries again. The poller never posts a `Landing:` line:
+    the closing sentence is `refusal_note.closing_for` over the step the table gives."""
+    head = facts.pr_head
+    if not acts or dry_run or reason is None or reason not in POLLER_NOTED or head is None:
+        return
+    if _already_noted(raw, head, reason):
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        out.append(f"agentic: poll: auto-merge #{number} -> refusal note unread")
+        return
+    bodies = [comment.body for comment in comments]
+    failure = None
+    if not said(bodies, head, reason):
+        step = landing_plan.step_for(raw, reason, facts, turn=turn)
+        failure = note_refusal(ports, task_id, head, reason, facts, step, bodies)
+    try:
+        if failure is not None:
+            # A fresh load: a row written since `raw` was read is not lost by this write.
+            stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+            rows = add_tracker_failures(
+                stored if isinstance(stored, list) else [], [failure.record()]
+            )
+            ports.documents.record_closure(task_id, {"tracker_failures": rows})
+            return
+        at = now.astimezone(UTC).isoformat()
+        ports.documents.record_closure(
+            task_id, {"refusal_noted": refusal_noted_record(head, reason, at)}
+        )
+    except (ValueError, OSError):
+        out.append(f"agentic: poll: auto-merge #{number} -> refusal note not recorded")
+        return
+    out.append(f"agentic: poll: auto-merge #{number} -> refusal noted: {reason}")
+
+
 def gather_merges(
     ports: Ports,
     eval_set: frozenset[int] | None,
@@ -1439,6 +1505,7 @@ def gather_merges(
     integrating: frozenset[str] = frozenset(),
     *,
     memo: StackMemo,
+    dry_run: bool,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1479,12 +1546,13 @@ def gather_merges(
     round_ = evaluate_landing_order(
         ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating, memo=memo
     )
+
+    def at_work(task_id: str) -> bool:
+        return task_id in busy or lock.refusal(task_id) is not None
+
     if not held:
         # GH-681, informative: the lane's record, never read by a decision. Recording first, so
         # clearing never takes an admission a merge followed; a task at work is never written.
-        def at_work(task_id: str) -> bool:
-            return task_id in busy or lock.refusal(task_id) is not None
-
         landing_lane.record_lane_merges(
             ports, [entry.task_id for entry in round_.entries], now, at_work, out
         )
@@ -1569,6 +1637,19 @@ def gather_merges(
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"
             out.append(line)
+            _note_refusal(
+                ports,
+                task_id,
+                number,
+                raw,
+                facts,
+                decision.reason,
+                turn,
+                now,
+                out,
+                acts=not held and not at_work(task_id),
+                dry_run=dry_run,
+            )
             if lands is not None and decision.reason is not None and turn == "head":
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
@@ -3080,6 +3161,7 @@ def run_once(
                 resumes,
                 integrating=integrating,
                 memo=stack_memo,
+                dry_run=dry_run,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

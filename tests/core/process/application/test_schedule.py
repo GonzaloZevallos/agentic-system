@@ -27,12 +27,15 @@ from agentic.core.process.domain.task import (
     add_restorations,
     add_review_scopes,
     add_shadow_reviews,
+    add_stack_pauses,
+    add_stack_restacks,
     add_tracker_actions,
     add_tracker_failures,
     apply,
     first,
     last,
     merge,
+    sticky_true,
 )
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryDocuments, memory_ports
@@ -444,6 +447,13 @@ def value_for(key: str, branch: str, n: int):
                 "at": "t",
             }
         ]
+    if reducer is add_stack_restacks:
+        # One row per (at, upstream), a function of that key alone: the first row seen wins.
+        return [{"at": f"t{n % 3}", "upstream": "u", "conflict": False, "cost_usd": 0.5}]
+    if reducer is add_stack_pauses:
+        # One row per (parent, cause, at), a function of that key alone: a later row replaces
+        # the earlier, so a row that differed by branch would depend on which landed last.
+        return [{"parent": 7, "cause": "c", "at": f"t{n % 3}", "resumed_at": None}]
     if reducer is add_shadow_reviews:
         # One row per subtask, a function of the subtask alone: the first row seen wins, so a
         # row that differed by branch would depend on which branch landed first.
@@ -504,6 +514,9 @@ def value_for(key: str, branch: str, n: int):
         # One row per version, a function of the version alone: the last row seen wins, so a
         # row that differed by branch would depend on which branch landed first.
         return [{"version": n % 3 + 1, "head": "h", "jobs": [], "tests": ["aaaaaaaa"]}]
+    if reducer is sticky_true:
+        # A flag that only ever turns on: an OR, so the order of the branches never matters.
+        return n % 2 == 0
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -527,9 +540,12 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_restorations,
             add_review_scopes,
             add_shadow_reviews,
+            add_stack_pauses,
+            add_stack_restacks,
             add_tracker_actions,
             add_tracker_failures,
             last,
+            sticky_true,
         ), key
 
 

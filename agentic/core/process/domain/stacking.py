@@ -33,11 +33,17 @@ in order:
 It returns `{}` whenever the target equals the current state, and clears with
 `{"stack_unfetchable": None}` (`record_closure` cannot delete a key). It reads no `pause_log`, so
 a poller retake never resets the clock.
+
+`pause_cause` and `pause_note` (GH-898) only produce the cause a stacked child waits for and its
+text; they gate nothing. `refusal` stays the only gate on merging. Where the note is posted, when
+a paused child is skipped and the rule that no merge runs while `pause_cause` is not `none` belong
+to the poller hold part, whose ADR lives with it. "Moves again" means the parent leaves the cause:
+it is reopened, resumed, or its escalation is released.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
@@ -116,6 +122,19 @@ def parse_stack_parent(raw: Mapping[str, object]) -> Absent | StackParent | Unre
     return StackParent(issue=issue, task_id=task_id, head=head, started_at=started_at)
 
 
+def stacked(raw: Mapping[str, object]) -> bool:
+    """A view of `parse_stack_parent` (GH-897): whether the document is stacked, an unreadable
+    record included. It gates the restack rows, which an orphaned task is owed too."""
+    return not isinstance(parse_stack_parent(raw), Absent)
+
+
+def stacked_on(raw: Mapping[str, object]) -> int | None:
+    """A view of `parse_stack_parent` (GH-897): the parent issue, only for a readable record.
+    It gates the pull request line, which never names a parent it could not read."""
+    parsed = parse_stack_parent(raw)
+    return parsed["issue"] if isinstance(parsed, dict) else None
+
+
 def facts_of(raw: Mapping[str, object]) -> StackFacts | None:
     """The one builder of unread facts (GH-860): `None` for a document that never was stacked,
     so that it makes no stacking read and decides as it always did; otherwise the record (`None`
@@ -186,6 +205,83 @@ def refusal(stack: StackFacts, conflicts: bool | None) -> rules.MergeRefusal | N
     if stack.parent_in_upstream is False and stack.parent_state == "closed":
         return "stack_base_orphaned"
     return "stack_parent_unmerged"
+
+
+PauseCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned", "unreadable", "none"]
+NotedCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned"]
+
+PAUSE_DEPTH = 10
+"""The most links of a parent chain `pause_cause` reads: a longer one is `unreadable`."""
+
+_NOTE_TEXT: Mapping[NotedCause, str] = {
+    "parent_escalated": "escalated",
+    "parent_stopped": "was stopped",
+    "parent_abandoned": "was closed as not planned",
+}
+
+
+@dataclass(frozen=True)
+class ParentLink:
+    """One parent of a stacked child's chain, as the caller read it. `record` is what the
+    child (or the parent below) names; `in_upstream` is whether `record.head` is in the upstream
+    (`None`: git could not tell). Every other fact is `None` when its read failed or was not made
+    because `in_upstream` is not `False`; `waits_on_human` is `landing.waits_on_human` of the
+    parent's document, `stopped` a deliberate stop of its run. `next_record` is the parent's own
+    `stack_parent`: `Absent` ends the chain, `Unreadable` cannot be followed."""
+
+    record: StackParent
+    in_upstream: bool | None
+    state: str | None
+    state_reason: str | None
+    waits_on_human: bool | None
+    stopped: bool | None
+    next_record: Absent | StackParent | Unreadable
+
+
+def _link_cause(link: ParentLink) -> PauseCause | None:
+    """What this one link says: a cause, `unreadable`, `none` (the parent landed: nothing
+    above it matters), or `None` when it is idle and the next link decides."""
+    if link.in_upstream is True:
+        return "none"
+    if link.in_upstream is None:
+        return "unreadable"
+    if link.waits_on_human is True:
+        return "parent_escalated"
+    if link.stopped is True:
+        return "parent_stopped"
+    if link.state == "CLOSED" and link.state_reason == "NOT_PLANNED":
+        return "parent_abandoned"
+    facts = (link.state, link.state_reason, link.waits_on_human, link.stopped)
+    if any(fact is None for fact in facts) or isinstance(link.next_record, Unreadable):
+        return "unreadable"
+    return None
+
+
+def pause_cause(chain: Sequence[ParentLink]) -> PauseCause:
+    """Why a stacked child waits on its parents, `none` when it does not. The links are read in
+    order, each by `_link_cause`; a repeated issue or an 11th link is `unreadable`, and so is a
+    chain that ends with a parent still to read. Anything not known is `unreadable`, never
+    `none`. It decides nothing about merging: that is `refusal`'s."""
+    seen: set[int] = set()
+    for position, link in enumerate(chain):
+        issue = link.record["issue"]
+        if position >= PAUSE_DEPTH or issue in seen:
+            return "unreadable"
+        seen.add(issue)
+        cause = _link_cause(link)
+        if cause is not None:
+            return cause
+        if isinstance(link.next_record, Absent):
+            return "none"
+    return "none" if not chain else "unreadable"
+
+
+def pause_note(parent: int, cause: NotedCause) -> str:
+    """The text a paused child's issue carries: the parent and the cause, and when it ends."""
+    return (
+        f"Paused: stacked on #{parent}, which {_NOTE_TEXT[cause]}. "
+        f"Resumes when #{parent} moves again."
+    )
 
 
 def parent_unmerged(stack: StackFacts, conflicts: bool | None) -> bool:

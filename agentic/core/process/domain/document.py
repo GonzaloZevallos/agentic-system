@@ -23,7 +23,7 @@ from typing import Any, cast, get_args
 
 import yaml
 
-from . import size_budget, tracker_items
+from . import size_budget, spec_delivery, tracker_items
 from .landing_order import LANE_MERGES_MAX, YieldReason, instant
 from .legacy_names import rename_legacy_roles
 from .task import (
@@ -529,6 +529,11 @@ def render(
         # reviewed before it is byte-identical to one written before; parsed back under the
         # same name. Nothing reads it to decide.
         **({"review_scopes": r} if (r := state.get("review_scopes")) else {}),
+        # The restack cost and the parent waits of a stacked task (GH-897): written only when
+        # there is a row, so a document that was never stacked is byte-identical to one written
+        # before; parsed back under the same names, nothing reads them to decide.
+        **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
+        **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
         **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
@@ -649,6 +654,9 @@ def render(
         **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
         # Why a spec was refused (GH-594), written only when set.
         **({"spec_refusal": e} if (e := state.get("spec_refusal")) else {}),
+        # The measurement record of a spec delivery (GH-594), kept once written even without
+        # `state["spec"]`; read only by `eval compare`.
+        **({"spec_delivery": True} if spec_delivery.recorded(state) else {}),
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),

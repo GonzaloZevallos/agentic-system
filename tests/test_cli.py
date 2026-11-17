@@ -4756,7 +4756,7 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
     moment = datetime(2026, 10, 17, tzinfo=UTC)
     task_time = TaskTime(moment, moment)
     dimensions = Dimensions("v", "b", "a")
-    scores = [Score("cost_usd", 1.0, "NUMERIC")]
+    scores = [Score("cost_usd", 1.0, "NUMERIC", timestamp=moment)]
 
     # Accepting control: the bound product reaches the transport, on both posts.
     assert scorer.write("apostrophe", "GH-1", {}, scores, task_time, dimensions) is True
@@ -4788,12 +4788,21 @@ class FakeScorer:
     """`LangfuseScores.write`'s shape: records every call, answers `results` in order
     (`True` once they run out)."""
 
-    def __init__(self, results=()):
+    def __init__(self, results=(), retire_results=()):
         self.calls = []
+        self.retired = []
+        self.events = []
         self._results = list(results)
+        self._retire_results = list(retire_results)
+
+    def retire(self, score_ids):
+        self.retired.append(list(score_ids))
+        self.events.append("retire")
+        return self._retire_results.pop(0) if self._retire_results else True
 
     def write(self, product, task_id, document, scores, task_time, dimensions):
         self.calls.append((product, task_id, tuple(scores), task_time, dimensions))
+        self.events.append("write")
         return self._results.pop(0) if self._results else True
 
 
@@ -5469,10 +5478,10 @@ class DashboardFake:
     def columns(self):
         return self.recorded
 
-    def read(self, product):
+    def read(self):
         from agentic.core.measurement.domain import dashboards as dom
 
-        return [r for r in self.rows.values() if dom.product_of(r) == product]
+        return [r for r in self.rows.values() if dom.in_scope(r)]
 
     def apply(self, changes):
         for row in changes.deletes:
@@ -5540,8 +5549,8 @@ def test_a_dry_run_lists_every_create_with_title_and_id_and_writes_nothing(
     code = _dashboards(monkeypatch, close_root(tmp_path), store, "--dry-run", env=DASHBOARD_ENV)
     out = capsys.readouterr().out
     assert code == 0 and store.rows == {}
-    assert "create Panorama · " in out and "create Dónde va la plata · " in out
-    assert "would created 23, updated 0, deleted 0, unchanged 0" in out
+    assert "create ¿Dónde se va el tiempo? (" in out
+    assert "would created 8, updated 0, deleted 0, unchanged 0" in out
 
 
 def test_a_second_apply_reports_everything_unchanged(monkeypatch, tmp_path, capsys):
@@ -5550,14 +5559,14 @@ def test_a_second_apply_reports_everything_unchanged(monkeypatch, tmp_path, caps
     capsys.readouterr()
     assert _dashboards(monkeypatch, root, store, env=DASHBOARD_ENV) == 0
     out = capsys.readouterr().out
-    assert "created 0, updated 0, deleted 0, unchanged 23" in out
+    assert "created 0, updated 0, deleted 0, unchanged 8" in out
     assert "create " not in out
 
 
 def test_verify_prints_rows_per_widget_and_a_zero_widget_exits_1(monkeypatch, tmp_path, capsys):
     class Data:
         def count(self, widget):
-            return 0 if widget.key == "cycle_time" else 5
+            return 0 if widget.key == "cycle_median" else 5
 
     env = {
         **DASHBOARD_ENV,
@@ -5570,9 +5579,9 @@ def test_verify_prints_rows_per_widget_and_a_zero_widget_exits_1(monkeypatch, tm
     )
     captured = capsys.readouterr()
     assert code == 1
-    assert "overview/delivered_per_week: 5 rows" in captured.out
-    assert "overview/cycle_time: 0 rows" in captured.out
-    assert "overview/cycle_time: reads 0 rows" in captured.err
+    assert "time/hours_by_stage: 5 rows" in captured.out
+    assert "time/cycle_median: 0 rows" in captured.out
+    assert "time/cycle_median: reads 0 rows" in captured.err
 
 
 def test_column_drift_refuses_with_exit_2_and_writes_nothing(monkeypatch, tmp_path, capsys):
@@ -6953,3 +6962,115 @@ def test_the_backfill_prints_the_stage_report_in_the_dry_run_and_the_live_run(
         assert any(line.startswith("GH-9 | ") for line in lines)
         assert any(line.startswith("queue>active_h (unclipped)") for line in lines)
     assert outputs[0][1:-1] == outputs[1][1:-1]
+
+
+# The merge-dated scores (GH-819): the backfill and the live write stamp them the same way.
+
+
+def _merge_dated(scores):
+    return [s for s in scores if cli.task_scores.merge_dated(s.name)]
+
+
+def test_two_backfill_one_calls_give_identical_id_and_timestamp_pairs_dated_at_the_merge():
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": stage_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    first = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    again = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    pairs = [(s.id, s.timestamp) for s in first.scores]
+    assert pairs == [(s.id, s.timestamp) for s in again.scores]
+    merge = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
+    dated = _merge_dated(first.scores)
+    assert {s.name for s in dated} >= {"cycle_h", "cycle_active_h", "stage_split_known"}
+    assert {s.timestamp for s in dated} == {merge}
+    assert {s.timestamp for s in first.scores if s not in dated} == {first.moment.end}
+
+
+def test_backfill_one_without_a_merge_emits_no_merge_dated_score():
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(merged=None)}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert _merge_dated(found.scores) == []
+
+
+def test_the_finish_write_has_no_merge_and_sends_no_merge_dated_score(tmp_path):
+    ports = close_ports(close_root(tmp_path), FakePullRequestTracker({}))
+    ports.documents.save(finished_task())
+    scorer = FakeScorer()
+    cli._write_scores(scorer, "GH-9", ports, finished_only=True)
+    [(_, _, scores, _, _)] = scorer.calls
+    assert scores and _merge_dated(scores) == []
+
+
+def test_the_close_write_passes_the_merge_through_to_the_stamps(tmp_path):
+    ports = close_ports(close_root(tmp_path), FakePullRequestTracker({}))
+    ports.documents.save(finished_task())
+    scorer = FakeScorer()
+    cli._write_scores(
+        scorer,
+        "GH-9",
+        ports,
+        pr_created_at="2026-09-20T12:00:00+00:00",
+        pr_merged_at="2026-09-20T13:00:00+00:00",
+        issue_created_at="2026-09-20T09:00:00+00:00",
+    )
+    [(_, _, scores, _, _)] = scorer.calls
+    merge = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
+    assert {s.timestamp for s in _merge_dated(scores)} == {merge}
+    assert "cycle_h" in {s.name for s in scores}
+
+
+def _merged_backfill(tmp_path):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    return root, ports
+
+
+def test_the_backfill_retires_the_merge_dated_ids_of_a_document_before_writing_it(
+    monkeypatch, tmp_path
+):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert scorer.events == ["retire", "write"]
+    (written,) = (call[2] for call in scorer.calls)
+    dated = {s.id for s in written if cli.task_scores.merge_dated(s.name)}
+    assert dated and set(scorer.retired[0]) == dated
+
+
+def test_a_retire_that_times_out_skips_the_task_counts_it_partial_and_exits_one(
+    monkeypatch, tmp_path, capsys
+):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer(retire_results=[False])
+    assert _backfill(monkeypatch, root, ports, scorer) == 1
+    out = capsys.readouterr().out
+    assert "agentic: GH-9: skipped:retire_timeout" in out.splitlines()
+    assert scorer.calls == []  # never half-written
+    assert "scored 0, partial 1" in out.splitlines()[-1]
+
+
+def test_a_dry_run_retires_nothing(monkeypatch, tmp_path):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, "--dry-run") == 0
+    assert scorer.events == []
+
+
+def test_a_document_with_no_merge_has_nothing_to_retire(monkeypatch, tmp_path):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(merged=None)}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports, outcome="closed")
+    scorer = FakeScorer()
+    _backfill(monkeypatch, root, ports, scorer)
+    assert scorer.events == ["write"]

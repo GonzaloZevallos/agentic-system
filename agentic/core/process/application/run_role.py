@@ -1122,7 +1122,9 @@ async def run_role(
             cfg,
             ports,
             vocabulary,
-            drawing_rule_for=lambda: drawing.rule_for(ports.stack.design(task_base(state, ports))),
+            drawing_rule_for=lambda: drawing.rule_for(
+                ports.stack.design(task_base(state, ports)), role.slug
+            ),
             **placeholders,
         )
         # The constant block the table names for the role (ADR-0096): only with a spec and only

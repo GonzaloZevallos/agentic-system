@@ -1,6 +1,6 @@
 """The psycopg adapter against a real Langfuse Postgres (GH-274, ADR-0051). Opt-in: skipped
 unless `AGENTIC_LANGFUSE_DATABASE_URL` and `AGENTIC_LANGFUSE_PUBLIC_KEY` are set. It writes
-under a throwaway product name and removes what it wrote."""
+the one dashboard and removes what it wrote."""
 
 import os
 import uuid
@@ -28,44 +28,30 @@ def store():
 
 
 @pytest.fixture
-def products(store):
-    mine = [f"it-{uuid.uuid4().hex[:8]}", f"it-{uuid.uuid4().hex[:8]}"]
-    yield mine
-    for product in mine:
-        stale = store.read(product)
-        store.apply(
-            dom.Changes((), tuple(sorted(stale, key=lambda r: isinstance(r, dom.WidgetRow))), ())
-        )
+def clean(store):
+    """What the apply wrote is removed afterwards."""
+    yield
+    stale = sorted(store.read(), key=lambda r: isinstance(r, dom.WidgetRow))
+    store.apply(dom.Changes((), tuple(stale), ()))
 
 
 def test_columns_are_the_recorded_ones(store):
     assert store.columns() == app.RECORDED_COLUMNS
 
 
-def test_what_is_written_is_read_back_equal_and_a_second_apply_changes_nothing(store, products):
-    first = app.apply_dashboards(products[0], store)
+def test_what_is_written_is_read_back_equal_and_a_second_apply_changes_nothing(store, clean):
+    first = app.apply_dashboards(store)
     assert first.ok
-    second = app.apply_dashboards(products[0], store)
+    second = app.apply_dashboards(store)
     assert second.changes.upserts == () and second.changes.deletes == ()
 
 
-def test_a_delete_never_touches_another_product_or_a_preset(store, products):
-    a, b = products
-    app.apply_dashboards(a, store)
-    app.apply_dashboards(b, store)
-    stale = store.read(a)
-    store.apply(dom.Changes((), tuple(stale), ()))
-    assert store.read(a) == []
-    assert len(store.read(b)) == len(dom.rows(dom.build_dashboards(b)))
-
-
-def test_a_delete_with_a_forged_marker_deletes_nothing(store, products):
-    a, b = products
-    app.apply_dashboards(b, store)
-    row = store.read(b)[0]
-    forged = replace(row, description=dom._described("x", a))
-    store.apply(dom.Changes((), (forged,), ()))
-    assert len(store.read(b)) == len(dom.rows(dom.build_dashboards(b)))
+def test_a_delete_with_a_legacy_marker_deletes_nothing(store, clean):
+    app.apply_dashboards(store)
+    row = store.read()[0]
+    legacy = replace(row, description="x\n[agentic-dashboards product=agentic-system]")
+    store.apply(dom.Changes((), (legacy,), ()))
+    assert len(store.read()) == len(dom.rows(dom.build_dashboards()))
 
 
 def test_an_unknown_public_key_is_refused():
@@ -73,7 +59,7 @@ def test_an_unknown_public_key_is_refused():
 
     assert DSN
     with pytest.raises(app.UnknownProject):
-        PostgresDashboards(DSN, "pk-lf-no-such-key").read("p")
+        PostgresDashboards(DSN, "pk-lf-no-such-key").read()
 
 
 def test_an_unreachable_database_is_the_use_cases_own_error():
@@ -86,7 +72,7 @@ def test_an_unreachable_database_is_the_use_cases_own_error():
 
 @pytest.fixture
 def other_project(store):
-    """A second project owning one dashboard row at an id our product would write, removed
+    """A second project owning one dashboard row at an id we would write, removed
     (cascading to its rows) afterwards."""
     pid = f"it-proj-{uuid.uuid4().hex[:8]}"
     with store._connection() as conn:
@@ -101,10 +87,9 @@ def other_project(store):
 
 
 def test_a_row_of_another_project_at_our_id_is_refused_untouched_and_rolls_back_the_rest(
-    store, products, other_project
+    store, clean, other_project
 ):
-    product = products[0]
-    ours = dom.rows(dom.build_dashboards(product))
+    ours = dom.rows(dom.build_dashboards())
     foreign = ours[-1]  # a dashboard: every widget is upserted before it
     assert isinstance(foreign, dom.DashboardRow)
     with store._connection() as conn:
@@ -114,10 +99,10 @@ def test_a_row_of_another_project_at_our_id_is_refused_untouched_and_rolls_back_
             (foreign.id, other_project),
         )
     with pytest.raises(RuntimeError, match="another project"):
-        app.apply_dashboards(product, store)
+        app.apply_dashboards(store)
     with store._connection() as conn:
         row = conn.execute(
             "select name, project_id from dashboards where id = %s", (foreign.id,)
         ).fetchone()
     assert row == ("theirs", other_project)
-    assert store.read(product) == []
+    assert store.read() == []

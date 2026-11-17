@@ -138,6 +138,17 @@ muestre (la compuerta de ADR-0037 dio `unreachable`/`unfavorable` en tres de sus
 respuestas), así que el lector sigue siendo `agentic eval compare`, sobre los mismos
 documentos que este mismo módulo ya recorría.
 
+### El bloque informativo por ruta de `agentic eval compare` (GH-599, GH-594)
+
+Después del veredicto del scorecard, `agentic eval compare` imprime por línea de base un
+bloque informativo: el tiempo de ciclo por `initial_path`, las promociones por tipo, las tareas
+excluidas por motivo y la línea `spec_delivery: n of m`, con `n` las tareas terminadas que
+vinieron de una especificación y `m` las tareas terminadas. Ninguna de estas líneas entra en el
+veredicto ni la lee nada que decida. La clave `spec_delivery` del documento de tarea es un
+registro, no una señal: no hay atributo de span, métrica ni etiqueta nueva. La cifra es un
+piso: los documentos escritos antes de este cambio no llevan la clave, así que `0 of m` sobre
+una línea de base vieja quiere decir «no registrado», no «ninguna».
+
 ### Qué se pierde, dicho en ADR-0037
 
 - **La lectura agregada de 13 meses** que sostenía Prometheus: `observability/langfuse/
@@ -182,6 +193,9 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
 | `followups` | `1` si `followups_filed` (se archivó o comentó el seguimiento de fuera de alcance), `0` si hay registro `landing` de un pull request (sin `before_pr`: el pase previo al pull request no cuenta) sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
 | `checks_red` | entradas de `merge_checks.checks` con `passed: false` (las corridas del presubmit no quedan en el documento) | numérico | no hay registro `merge_checks` |
+| `cycle_active_h` | `cycle_h` menos `stage_h.human_wait` y `stage_h.account_limit`, del mismo reparto que `stage_h` | numérico | las mismas condiciones que `stage_h`: sin reparto no se escribe |
+| `stage_split_known` | `1` si el ciclo tiene reparto por etapas, `0` si no (el backfill lo llama «parcial») | booleano | el PR no se mergeó o no se pudo leer su fecha de merge |
+| `slowest_stage.<CycleStage>` | el `cycle_h` de la tarea, bajo el nombre de la etapa con más horas (empate: la primera en el orden de `CycleStage`); una por tarea | numérico | las mismas condiciones que `stage_h` |
 
 Reglas para leerlos:
 
@@ -220,64 +234,51 @@ Siguen siendo valores cerrados del mismo atributo: no se agregan métricas ni sp
 
 ## Dashboards
 
-Cuatro dashboards por producto, definidos en `agentic/core/measurement/domain/dashboards.py`
-y escritos en las tablas `dashboards` y `dashboard_widgets` de Langfuse por
-`agentic dashboards apply` (ADR-0051, que enmienda a ADR-0037). El repo es la fuente: una
-edición en la interfaz de un dashboard nuestro se pisa en el siguiente `apply`. El título de
-cada dashboard lleva el producto como sufijo (`Panorama · agentic-system`); los widgets leen
-`environment` = ese producto, nunca la suma de varios.
+Un solo dashboard para los dos productos, «¿Dónde se va el tiempo?», definido en
+`agentic/core/measurement/domain/dashboards.py` y escrito en las tablas `dashboards` y
+`dashboard_widgets` de Langfuse por `agentic dashboards apply` (ADR-0051, que enmienda a
+ADR-0037; la adenda de GH-819 reemplaza a los cuatro dashboards por producto). El repo es la
+fuente: una edición en la interfaz del dashboard se pisa en el siguiente `apply`, y el
+resultado es el mismo desde el directorio de cualquiera de los dos productos. El producto no
+es un filtro del widget: se elige con la barra de filtros de Langfuse (`environment`).
 
 | Dashboard | Título | Vista | Medida | Lee | Desglose | Tiempo | Nota |
 |---|---|---|---|---|---|---|---|
-| Panorama | Costo por PR mergeado (mediana), por tipo | `SCORES_NUMERIC` | `value` · `p50` | `delivered_cost_usd.type.<TaskType>` | `name`, `traceRelease` | `task_time.end` | |
-| Panorama | PRs mergeados por semana de entrega | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `traceRelease` | `task_time.end` | solo entregadas (`booleanValue` = true) |
-| Panorama | Tiempo de ciclo (h, calendario) | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | `traceRelease` | `task_time.end` | |
-| Panorama | Devoluciones por tarea | `SCORES_NUMERIC` | `value` · `avg` | `returns` | `traceRelease` | `task_time.end` | |
-| Panorama | Plata perdida: costo de fallos | `SCORES_NUMERIC` | `value` · `sum` | `failed_cost_usd` | `traceRelease` | `task_time.end` | |
-| Panorama | Plata perdida: escalaciones | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | |
-| Panorama | Gasto: original vs. follow-ups | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.origin.<Origin>` | `name` | `task_time.end` | |
-| Mejora del sistema | Retrabajo por categoría de devolución | `SCORES_NUMERIC` | `value` · `sum` | `returns.<ChangeCategory>` | `name`, `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Fallos por razón | `SCORES_NUMERIC` | `value` · `sum` | `failures.<FailureReason>` | `name`, `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Roles más caros | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name`, `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Horas activas por versión | `SCORES_NUMERIC` | `value` · `p50` | `active_h` | `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Calidad de la entrega: hallazgos importantes | `SCORES_NUMERIC` | `value` · `avg` | `findings_important` | `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Calidad de la entrega: follow-ups | `SCORES_NUMERIC` | `value` · `avg` | `followups` | `traceRelease` | `task_time.end` | |
-| Mejora del sistema | Calidad de la entrega: chequeos en rojo | `SCORES_NUMERIC` | `value` · `avg` | `checks_red` | `traceRelease` | `task_time.end` | |
-| Operación | Escalaciones por clase | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | rango de 7 días de la interfaz |
-| Operación | Fallos por límite de cuenta, por día | `SCORES_NUMERIC` | `value` · `sum` | `failures.account_limit` | `timestampDay` | `task_time.end` | por día, no por hora |
-| Operación | Entregas por día | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `timestampDay` | `task_time.end` | solo entregadas (`booleanValue` = true) |
-| Dónde va la plata | Costo por rol | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name` | `task_time.end` | |
-| Dónde va la plata | Costo por modelo | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.model.<ModelFamily>` | `name` | `task_time.end` | costo del intento que entregó (Σ `cost_by_model`), no `cost_usd` |
+| ¿Dónde se va el tiempo? | Ciclo mediano (h) | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | | `pr_merged_at` | número |
+| ¿Dónde se va el tiempo? | Ciclo mediano sin esperas (h) | `SCORES_NUMERIC` | `value` · `p50` | `cycle_active_h` | | `pr_merged_at` | número: ciclo menos `human_wait` y `account_limit` |
+| ¿Dónde se va el tiempo? | Tareas sin reparto | `SCORES_BOOLEAN` | `count` · `count` | `stage_split_known` | | `pr_merged_at` | número; solo falsas (`booleanValue` = false); cero es lo bueno |
+| ¿Dónde se va el tiempo? | ¿Dónde se va el tiempo? (horas por etapa) | `SCORES_NUMERIC` | `value` · `sum` | `stage_h.<CycleStage>` | `name` | `pr_merged_at` | barras horizontales, de mayor a menor, con etiquetas de valor |
+| ¿Dónde se va el tiempo? | Parte del total por etapa | `SCORES_NUMERIC` | `value` · `sum` | `stage_h.<CycleStage>` | `name` | `pr_merged_at` | torta de las mismas horas |
+| ¿Dónde se va el tiempo? | Horas por etapa, por semana | `SCORES_NUMERIC` | `value` · `sum` | `stage_h.<CycleStage>` | `name` | `pr_merged_at` | barras apiladas por semana de merge |
+| ¿Dónde se va el tiempo? | Las 10 tareas más lentas | `SCORES_NUMERIC` | `value` · `max` | `slowest_stage.<CycleStage>` | `traceName`, `name` | `pr_merged_at` | tabla de 10 filas, orden `max_value` descendente: tarea, etapa más larga, horas de ciclo |
 
 Cómo leer la tabla:
 
-- **El tiempo.** Cada score se ubica por `task_time.end`, el fin de la última corrida de la
-  tarea, nunca por la fecha del merge: "PRs mergeados por semana de entrega" cuenta la semana
-  en que terminó la tarea. La fecha del merge se lee en `cycle_h`.
-- **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
-  del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
-- **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como
-  `unknown` en el desglose; ningún widget la filtra.
-- **Semana calendario y "últimos 7 días" son del rango de la interfaz**, no de la definición:
-  la fila de un widget o de un dashboard no guarda ni granularidad ni rango (ADR-0051,
-  sección 3). Se elige la semana en Panorama y los últimos 7 días en Operación.
-- **Un widget no divide ni filtra por condición.** Lo condicional o por categoría es un
-  score propio (`delivered_cost_usd.type.*`, `returns.*`, `failures.*`, `escalations.*`,
-  `cost_usd.role.*`, `cost_usd.model.*`, `cost_usd.origin.*`), omitido cuando no ocurrió.
-- **`--verify` es manual.** `agentic dashboards apply --verify` cuenta, por widget, contra
-  ClickHouse; nunca corre en CI. Un widget sin filas es un fallo, salvo los de
-  `ZERO_ROW_EXCEPTIONS` (los que leen `failures.*`, `escalations.*`, `returns.*` o
-  `cost_usd.role.*`, cuyo score se omite cuando nada ocurrió).
-
-Widgets pedidos que no están, y por qué (ninguno se reemplazó con un visual inventado):
-
-- **Operación: tareas atascadas.** Una tarea atascada es la que no tiene score de cierre: su
-  ausencia no es una fila que una vista pueda contar.
-- **Operación: fallos por hora.** El catálogo no tiene dimensión de hora; queda por día.
-- **Panorama: línea vertical de cambio de versión.** No hay anotaciones; el marcador es el
-  desglose por versión.
-- **Panorama: "% del gasto en follow-ups".** Un widget no divide; "Gasto: original vs.
-  follow-ups" muestra las dos series.
+- **El tiempo.** Los demás scores se ubican por `task_time.end`, el fin de la última corrida de la
+  tarea; ningún widget los lee desde GH-819. Los que solo existen con un merge (`cycle_h`, `stage_h.*`, `cycle_active_h`,
+  `stage_split_known`, `slowest_stage.*`): esos llevan la fecha del merge del PR, para que
+  la tendencia semanal y el rango pongan la tarea en la semana en que se mergeó
+  (`task_scores.score_time`; GH-819). Sin merge no se escriben.
+  **Reescritura verificada (GH-819, entorno `agentic-gate-probe`):** reescribir un id con
+  otra fecha no deja dos filas pero conserva la primera `timestamp`, así que no la mueve.
+  El backfill retira antes (`DELETE /api/public/scores/{id}` y espera 404, hasta 60 s) los
+  scores con fecha de merge de cada documento y recién después los escribe; si se agota el
+  tiempo imprime `skipped:retire_timeout`, no escribe ese documento y sale con 1. La misma
+  salida cubre un `DELETE` rechazado o una llamada que falló: la causa exacta va en la línea
+  `Langfuse retire failed for <id>: …` que el adaptador imprime antes.
+- **Rango y semana son de la interfaz**, no de la definición: la fila de un widget o de un
+  dashboard no guarda ni granularidad ni rango (ADR-0051, sección 3). El dueño aceptó el
+  rango por defecto de Langfuse y el tamaño de barra del selector de fechas.
+- **Un widget no divide ni filtra por condición.** El porcentaje no existe como número: las
+  barras en horas y la torta muestran la misma proporción. Lo condicional es un score propio
+  (`cycle_active_h`, `stage_split_known`, `slowest_stage.*`), omitido cuando no ocurrió.
+- **La tabla de tareas lentas muestra tarea, etapa y horas, no el producto**: una tabla de
+  Langfuse admite a lo sumo dos dimensiones (`MAX_PIVOT_TABLE_DIMENSIONS` = 2); el producto
+  se elige con la barra de filtros.
+- **`--verify` es manual.** `agentic dashboards apply --verify` cuenta, por widget
+  (`<dashboard>/<widget>`), contra ClickHouse con los mismos filtros del widget; nunca corre
+  en CI. Un widget sin filas es un fallo, salvo `tasks_without_split` (`ZERO_ROW_EXCEPTIONS`:
+  cero es lo bueno, todas las tareas mergeadas tuvieron su reparto).
 
 ## Costo en Langfuse
 

@@ -14,10 +14,16 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, landing, presubmit, rules, tracker_items
-from ..domain.pull_request import BoundedBody, bounded_body, closes_line, with_required_lines
+from ..domain import document, landing, presubmit, rules, stacking, tracker_items
+from ..domain.pull_request import (
+    BoundedBody,
+    bounded_body,
+    closes_line,
+    stacked_line,
+    with_required_lines,
+)
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
-from ..domain.task import WAITING_ON_HUMAN, TaskState
+from ..domain.task import WAITING_ON_HUMAN, TaskState, add_stack_restacks
 from . import api_break
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
@@ -139,6 +145,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         for part in (
             replaced_note,
             closes_line(state.get("description", "")),
+            stacked_line(stacking.stacked_on(state)),
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
             _perf_preface(state),
@@ -152,8 +159,17 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # A re-delivery under a landing pass closes its entry with what the pass cost; a sync
     # is closed as resolved only when the head holds the upstream it was dispatched for.
     reopened = state.get("landing")
+    restacked: TaskState = {}
     if reopened:
-        state = {**state, "landing": _closed_landing(reopened, state, task.path, ports)}
+        closed = _closed_landing(reopened, state, task.path, ports)
+        row = landing.restack_close(reopened, closed, state, stacking.stacked(state))
+        # GH-897: a stacked task's closed sync leaves its restack row in the same state the
+        # `landing` list rides in, through the reducer so a re-applied patch adds nothing.
+        if row is not None:
+            restacked = {
+                "stack_restacks": add_stack_restacks(state.get("stack_restacks", []), [row])
+            }
+        state = {**state, "landing": closed, **restacked}
     try:
         step = "api break line read failed"
         required = api_break.required_line(ports, task_base(state, ports), state)
@@ -219,6 +235,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         **items_done,
         **({"criteria_over_cap": over} if over else {}),
         **({"landing": state["landing"]} if state.get("landing") else {}),
+        **({"stack_restacks": state["stack_restacks"]} if restacked else {}),
     }
     # Best effort from here: the pull request exists, so a crash would only make the
     # next attempt hit "already exists".

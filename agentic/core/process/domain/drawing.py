@@ -30,12 +30,36 @@ DRAWING_RULE = (
 )
 
 
-def rule_for(design: Design | None) -> str:
-    """The rule when the product declares a `design`, "" when `None`.
+Seat = Literal["interviewer", "interviewee"]
+
+DRAWING_SEATS: Mapping[str, Seat] = MappingProxyType(
+    {"product_analyst_interviewer": "interviewer", "pm_interviewee": "interviewee"}
+)
+"""The roles of the definition interview that carry a drawing check, by slug: the table says
+which check and which variant of the rule a seat gets, never the shape of its data."""
+
+_SEAT_RULES: Mapping[Seat, str] = MappingProxyType(
+    {
+        "interviewer": "Mark in `visible` every question whose answer changes what a person sees.",
+        "interviewee": (
+            "Answer each visible question with a drawing check; a departure goes in "
+            "`departures`, never as an assumption."
+        ),
+    }
+)
+
+
+def rule_for(design: Design | None, slug: str) -> str:
+    """The rule for the role `slug` when the product declares a `design`, "" when `None`:
+    one line, the base rule plus what the seat of `DRAWING_SEATS` must do; any other role
+    gets the base rule alone.
 
     `None` means the stack was read and declares no `design`; an unreadable stack never
     reaches here, it raises where it is read."""
-    return "" if design is None else DRAWING_RULE
+    if design is None:
+        return ""
+    seat = DRAWING_SEATS.get(slug)
+    return DRAWING_RULE if seat is None else f"{DRAWING_RULE} {_SEAT_RULES[seat]}"
 
 
 @dataclass(frozen=True)
@@ -378,7 +402,7 @@ _NO_DRAWING_RULE: dict[str, str] = {}
 for _reason, _names in (
     (
         "pending GH-766 part 3",
-        "pm_interviewee pm_consultant pm_bug product_analyst_interviewer spec/pm_consultant",
+        "pm_consultant pm_bug spec/pm_consultant",
     ),
     ("pending GH-766 part 4", "tech_lead spec/plan"),
     ("pending GH-766 part 5", "ux_lead_final ui_lead_final"),

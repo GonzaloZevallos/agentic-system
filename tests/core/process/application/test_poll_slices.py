@@ -63,6 +63,7 @@ def _gather(ports, tmp_path, reruns=None):
         lines,
         cfg=_cfg(tmp_path),
         reruns=reruns,
+        dry_run=False,
         memo=StackMemo(),
     )
     return found, lines
@@ -220,7 +221,15 @@ def test_with_a_real_repo_the_renamed_unit_branches_still_resolve_and_the_task_c
     )
     lines: list[str] = []
     poll.gather_merges(
-        ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[], memo=StackMemo()
+        ports,
+        frozenset(),
+        master,
+        _Locks(),
+        lines,
+        cfg=_cfg(repo),
+        reruns=[],
+        dry_run=False,
+        memo=StackMemo(),
     )
     assert lines == ["agentic: poll: #5 -> closed: every unit landed through slices (#350)"]
     assert ports.documents.closures["GH-5"]["closed_by_slices"] == [SLICE_PR]

@@ -29,6 +29,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
 from .core.knowledge.adapters.git import GitStack
+from .core.knowledge.adapters.git.spec_reader import GitSpecReader
+from .core.knowledge.adapters.spec_validator import DomainSpecValidator
 from .core.measurement.adapters.filesystem.read_cache import FilesystemReadCache
 from .core.measurement.adapters.github.issue_listing import GhIssueListing
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
@@ -493,6 +495,10 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         ),
         scratch=scratch,
         free_space=free_space,
+        # GH-594, part 4b-4: a `Spec:` line in an issue body routes the task. The reader reads
+        # the product's own repo, the validator is the pure Knowledge one; `honoured` needs both.
+        spec_reader=GitSpecReader(cfg.product_dir),
+        spec_validator=DomainSpecValidator(),
     )
 
 

@@ -89,6 +89,13 @@ def body_source(state: Mapping[str, Any]) -> Literal["description", "inbox"]:
     return "inbox" if resumed and candidate else "description"
 
 
+def recorded(state: Mapping[str, Any]) -> bool:
+    """Whether the task document carries the `spec_delivery` record: a spec is in the state, or
+    the record was already written (it is sticky). A measurement record read only by
+    `eval compare`; never read by a decision (`rules.spec_delivery` reads `state["spec"]`)."""
+    return bool(state.get("spec")) or state.get("spec_delivery") is True
+
+
 def spec_path_ok(path: str) -> bool:
     """True only for a spec path in its one form (`SPEC_PATH`) of at most 255 characters."""
     return len(path) <= SPEC_PATH_MAX_CHARS and SPEC_PATH.fullmatch(path) is not None

@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
     class task__ReviewScopeRecord["ReviewScopeRecord"]
@@ -37,19 +38,20 @@ classDiagram
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
     class task__StackParent["StackParent"]
+    class task__StackPause["StackPause"]
+    class task__StackRestack["StackRestack"]
     class task__StackUnfetchable["StackUnfetchable"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
-    class task__TrackerActionDone["TrackerActionDone"]
-    class task__TrackerFailure["TrackerFailure"]
-    class task__TrackerFailureRecord["TrackerFailureRecord"]
     task__TaskState --> task__StackParent
     task__TaskState --|> task__TaskInput
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
+  - `stacking.ParentLink` se asocia con `task.StackParent`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)

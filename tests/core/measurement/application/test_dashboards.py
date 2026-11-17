@@ -9,7 +9,6 @@ import pytest
 from agentic.core.measurement.application import dashboards as app
 from agentic.core.measurement.domain import dashboards as dom
 
-PRODUCT = "agentic-system"
 GOLDEN = Path(__file__).resolve().parents[3] / "fixtures" / "langfuse_dashboards" / "golden.json"
 
 
@@ -26,8 +25,8 @@ class FakeStore:
     def columns(self):
         return self._columns
 
-    def read(self, product):
-        found = [r for r in self.rows.values() if dom.product_of(r) == product]
+    def read(self):
+        found = [r for r in self.rows.values() if dom.in_scope(r)]
         return self.tamper(found) if self.tamper else found
 
     def apply(self, changes):
@@ -50,62 +49,62 @@ class FakeData:
 
 
 def widget_count():
-    return sum(len(d.widgets) for d in dom.build_dashboards(PRODUCT))
+    return sum(len(d.widgets) for d in dom.build_dashboards())
 
 
 def test_the_first_apply_creates_every_row_and_the_second_changes_nothing():
     store = FakeStore()
-    first = app.apply_dashboards(PRODUCT, store)
-    assert len(first.changes.upserts) == widget_count() + 4
+    first = app.apply_dashboards(store)
+    assert len(first.changes.upserts) == widget_count() + 1
     assert first.ok and first.applied
-    second = app.apply_dashboards(PRODUCT, store)
+    second = app.apply_dashboards(store)
     assert second.changes.upserts == () and second.changes.deletes == ()
-    assert len(second.changes.unchanged) == widget_count() + 4
+    assert len(second.changes.unchanged) == widget_count() + 1
     assert second.ok
 
 
 def test_a_dry_run_plans_and_writes_nothing():
     store = FakeStore()
-    report = app.apply_dashboards(PRODUCT, store, dry_run=True)
-    assert len(report.changes.upserts) == widget_count() + 4
+    report = app.apply_dashboards(store, dry_run=True)
+    assert len(report.changes.upserts) == widget_count() + 1
     assert store.applied == [] and store.rows == {} and not report.applied
 
 
 def test_a_row_edited_in_the_ui_is_put_back():
     store = FakeStore()
-    app.apply_dashboards(PRODUCT, store)
+    app.apply_dashboards(store)
     widget = next(r for r in store.rows.values() if isinstance(r, dom.WidgetRow))
     store.rows[(dom.WidgetRow, widget.id)] = replace(widget, name="edited by hand")
-    report = app.apply_dashboards(PRODUCT, store)
+    report = app.apply_dashboards(store)
     assert [r.id for r in report.changes.upserts] == [widget.id]
     assert store.rows[(dom.WidgetRow, widget.id)] == widget
 
 
-def test_a_stale_row_of_the_product_is_deleted_and_another_products_is_not():
+def test_a_stale_row_of_ours_is_deleted_and_a_legacy_product_row_is_not():
     store = FakeStore()
-    app.apply_dashboards(PRODUCT, store)
-    app.apply_dashboards("apostrophe", store)
-    stale = replace(
-        next(r for r in store.rows.values() if isinstance(r, dom.WidgetRow)),
-        id="gone",
-        description=dom._described("old", PRODUCT),
+    app.apply_dashboards(store)
+    template = next(r for r in store.rows.values() if isinstance(r, dom.WidgetRow))
+    stale = replace(template, id="gone", description=dom._described("old"))
+    legacy = replace(
+        template, id="legacy", description="old\n[agentic-dashboards product=agentic-system]"
     )
     store.rows[(dom.WidgetRow, "gone")] = stale
+    store.rows[(dom.WidgetRow, "legacy")] = legacy
     before = len(store.rows)
-    report = app.apply_dashboards(PRODUCT, store)
+    report = app.apply_dashboards(store)
     assert [r.id for r in report.changes.deletes] == ["gone"]
-    assert len(store.rows) == before - 1
+    assert len(store.rows) == before - 1 and (dom.WidgetRow, "legacy") in store.rows
 
 
 def test_the_preflight_refuses_on_column_drift_before_writing_anything():
     drifted = app.RECORDED_COLUMNS | {("dashboards", "owner_team")}
     store = FakeStore(columns=drifted)
     with pytest.raises(app.ColumnDrift, match="dashboards.owner_team"):
-        app.apply_dashboards(PRODUCT, store)
+        app.apply_dashboards(store)
     assert store.applied == []
     missing = app.RECORDED_COLUMNS - {("dashboard_widgets", "chart_config")}
     with pytest.raises(app.ColumnDrift, match="dashboard_widgets.chart_config"):
-        app.apply_dashboards(PRODUCT, FakeStore(columns=missing), dry_run=True)
+        app.apply_dashboards(FakeStore(columns=missing), dry_run=True)
 
 
 def test_the_recorded_columns_are_the_goldens():
@@ -118,7 +117,7 @@ def test_a_read_back_that_differs_from_the_plan_fails():
     def drop_one(found):
         return found[1:]
 
-    report = app.apply_dashboards(PRODUCT, FakeStore(tamper=drop_one))
+    report = app.apply_dashboards(FakeStore(tamper=drop_one))
     assert not report.ok
     assert any("read-back" in p for p in report.problems)
 
@@ -127,28 +126,28 @@ def test_a_read_back_with_a_changed_row_fails():
     def mangle(found):
         return [replace(r, name="x") if isinstance(r, dom.DashboardRow) else r for r in found]
 
-    report = app.apply_dashboards(PRODUCT, FakeStore(tamper=mangle))
+    report = app.apply_dashboards(FakeStore(tamper=mangle))
     assert not report.ok
 
 
 def test_a_zero_row_widget_fails_unless_it_is_an_exception():
-    zero = ("overview", "cycle_time")
-    report = app.apply_dashboards(PRODUCT, FakeStore(), data=FakeData(zero=[zero]))
+    zero = ("time", "cycle_median")
+    report = app.apply_dashboards(FakeStore(), data=FakeData(zero=[zero]))
     assert not report.ok
-    assert any("overview/cycle_time" in p for p in report.problems)
-    allowed = ("overview", "escalations_lost")
+    assert any("time/cycle_median" in p for p in report.problems)
+    allowed = ("time", "tasks_without_split")
     assert allowed in {(d, w) for d, w, _ in dom.ZERO_ROW_EXCEPTIONS}
-    report = app.apply_dashboards(PRODUCT, FakeStore(), data=FakeData(zero=[allowed]))
+    report = app.apply_dashboards(FakeStore(), data=FakeData(zero=[allowed]))
     assert report.ok
-    assert (("overview", "escalations_lost", 0)) in report.counts
+    assert ("time", "tasks_without_split", 0) in report.counts
 
 
-def test_verify_counts_every_widget_once_and_reports_rows():
+def test_verify_counts_every_widget_once_and_names_dashboard_and_widget():
     data = FakeData()
-    report = app.apply_dashboards(PRODUCT, FakeStore(), dry_run=True, data=data)
+    report = app.apply_dashboards(FakeStore(), dry_run=True, data=data)
     assert len(data.asked) == widget_count() and len(report.counts) == widget_count()
-    assert report.counts[0] == ("overview", "cost_per_delivered_pr", 3)
+    assert report.counts[0] == ("time", "cycle_median", 3)
 
 
 def test_without_data_nothing_is_counted():
-    assert app.apply_dashboards(PRODUCT, FakeStore()).counts == ()
+    assert app.apply_dashboards(FakeStore()).counts == ()

@@ -484,6 +484,7 @@ class PathFacts:
     lead_class: LeadTimeClass = "unrecorded"
     lead_s: float | None = None
     promotion_kind: str | None = None
+    spec_delivery: bool = False
 
 
 def path_facts(document: Mapping[str, Any]) -> PathFacts:
@@ -499,6 +500,7 @@ def path_facts(document: Mapping[str, Any]) -> PathFacts:
         lead_class=lead_time_class(document),
         lead_s=lead_time_seconds(document) if recorded else None,
         promotion_kind=kind,
+        spec_delivery=document.get("spec_delivery") is True,
     )
 
 
@@ -516,11 +518,13 @@ class PathLeadTime:
 class PathReport:
     """The informative block of `eval compare`: lead time per `initial_path`, the excluded
     counts by reason (global, in `EXCLUSION_ORDER`) and the promotions by kind among the
-    recorded tasks."""
+    recorded tasks. `spec_deliveries` is (n, m): the ended tasks whose document carries the
+    `spec_delivery` mark, of all ended tasks; a floor, as older documents lack the key."""
 
     paths: Mapping[str, PathLeadTime]
     exclusions: tuple[tuple[LeadTimeClass, int], ...]
     promotions: Mapping[str, int]
+    spec_deliveries: tuple[int, int]
 
 
 def path_report(facts: Iterable[PathFacts]) -> PathReport:
@@ -542,4 +546,6 @@ def path_report(facts: Iterable[PathFacts]) -> PathReport:
     exclusions = tuple(
         (reason, sum(1 for f in ended if f.lead_class == reason)) for reason in EXCLUSION_ORDER
     )
-    return PathReport(paths, exclusions, promotions)
+    return PathReport(
+        paths, exclusions, promotions, (sum(1 for f in ended if f.spec_delivery), len(ended))
+    )

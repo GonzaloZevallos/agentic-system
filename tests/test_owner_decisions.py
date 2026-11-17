@@ -282,7 +282,13 @@ PRECEDENCE = "a rule dated after the ADR wins and the task leaves an `outside` f
 
 def rendered(role: roles.Role, tmp_path: Path) -> str:
     raw, source = FilesystemPrompts(tmp_path).raw(role)
-    values = {**PLACEHOLDERS, "max_changes": 2, "max_turns": role.max_turns, "flags": "- none"}
+    values = {
+        **PLACEHOLDERS,
+        "max_changes": 2,
+        "max_turns": role.max_turns,
+        "flags": "- none",
+        "drawing_rule": "",
+    }
     return " ".join(roles.render(raw, source, **values).text.split())
 
 
@@ -350,3 +356,21 @@ def test_the_owner_paths_are_one_tuple_declared_in_shared_and_reexported_by_know
     from agentic.shared import owner_decisions
 
     assert knowledge.OWNER_DECISIONS is owner_decisions.OWNER_DECISIONS
+
+
+def test_the_interviewee_prompt_carries_the_drawing_rule_only_with_a_design(tmp_path):
+    from agentic.core.process.domain import drawing
+    from agentic.core.process.domain.design import Design
+
+    design = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
+    role = roles.PM_INTERVIEWEE
+    raw, source = FilesystemPrompts(tmp_path).raw(role)
+    values = {**PLACEHOLDERS, "max_changes": 2, "max_turns": role.max_turns, "flags": "- none"}
+
+    with_design = roles.render(
+        raw, source, **values, drawing_rule=drawing.rule_for(design, role.slug)
+    )
+    without = roles.render(raw, source, **values, drawing_rule=drawing.rule_for(None, role.slug))
+
+    assert drawing.DRAWING_RULE in with_design.text
+    assert drawing.DRAWING_RULE not in without.text
