@@ -1606,10 +1606,6 @@ class LandingEntry(TypedDict, total=False):
     api_break_decided: str
     rejected: str
     reasks: int
-    # GH-893, `escalate` entries answering `stack_parent_unmerged`: the `since` of the
-    # `stack_unfetchable` record the escalation was written for. `landing.already_dispatched`
-    # reads it so a wait released by a person can escalate again; absent everywhere else.
-    stack_since: str
 
 
 class OutOfBoundsLine(TypedDict):

@@ -102,7 +102,7 @@ sequenceDiagram
    `stack_parent` no lee ni escribe nada. Al vencer la espera, `landing_step` devuelve `escalate`
    con `LandingStep.stack_since` (el `since` del registro); `application/landing.py` lo escribe como
    `stack_since` en la entrada `escalate` de `landing` (`LandingEntry.stack_since`), y
-   `poll.py:_landing_step` y `landing_plan.py:step_for` lo pasan a `landing.py:already_dispatched`,
+   `poll.py:_landing_step` y `landing_plan.py:pending` lo pasan a `landing.py:already_dispatched`,
    que cuenta esa entrada como tomada solo si el `stack_since` pedido es `None` o igual al suyo. Así
    una espera liberada por una persona, con la cabeza aún sin poder traerse, empieza otra de 12 h y
    escala de nuevo, mientras `merge.py` y `resume.py`, que no pasan el valor, la leen como tomada.
