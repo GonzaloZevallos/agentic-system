@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__ImportantPartition["ImportantPartition"]
     class rules__InterviewProgress["InterviewProgress"]
     class rules__LandCandidate["LandCandidate"]
     class rules__LandWait["LandWait"]

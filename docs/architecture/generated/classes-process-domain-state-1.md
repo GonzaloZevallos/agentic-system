@@ -30,6 +30,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 ```mermaid
 classDiagram
     class carve_out__CarveOut["CarveOut"]
+    class drawing_answer__Classified["Classified"]
+    class drawing_answer__ClassifyMismatch["ClassifyMismatch"]
     class drawing_answer__Due["Due"]
     class drawing_answer__Exhausted["Exhausted"]
     class experiment__Arm["Arm"]
@@ -42,5 +44,4 @@ classDiagram
     class rules__Commit["Commit"]
     class rules__Deferred["Deferred"]
     class rules__FastForwardBlock["FastForwardBlock"]
-    class rules__ImportantPartition["ImportantPartition"]
 ```
