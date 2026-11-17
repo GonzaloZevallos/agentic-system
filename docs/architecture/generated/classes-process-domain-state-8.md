@@ -37,13 +37,13 @@ classDiagram
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
     class task__StackParent["StackParent"]
+    class task__StackPause["StackPause"]
+    class task__StackRestack["StackRestack"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
     class task__TrackerActionDone["TrackerActionDone"]
     class task__TrackerFailure["TrackerFailure"]
-    class task__TrackerFailureRecord["TrackerFailureRecord"]
-    class task__TrackerPosted["TrackerPosted"]
     task__TaskState --> task__StackParent
     task__TaskState --|> task__TaskInput
 ```
