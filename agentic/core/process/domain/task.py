@@ -429,6 +429,21 @@ def add_tracker_failures(
     return list(joined.values())[:TRACKER_FAILURES_MAX]
 
 
+class RefusalNoted(TypedDict):
+    """The record that the poller commented a refusal (GH-885): the pull request head, the
+    refusal and when (ISO UTC)."""
+
+    head: str
+    reason: str
+    at: str
+
+
+def refusal_noted_record(head: str, reason: str, at: str) -> RefusalNoted:
+    """The `RefusalNoted` row for `(head, reason)` at `at`, which the caller reads from its own
+    clock: this reads none."""
+    return {"head": head, "reason": reason, "at": at}
+
+
 HEAD_YIELDS_MAX = 10
 
 

@@ -12,9 +12,9 @@ or land the plan holds back is said in the round's output, never silent.
 
 `rules.poll_plan` decides the order and which issues qualify; this module only gathers
 the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED`,
-`RETAKEN`, `AUTO_MERGE_REFUSED` and `AUTO_MERGED` are the comment prefixes the system
-posts, all registered into `resume.SYSTEM_COMMENTS` so a resume reads them as the
-system's own, never a human's answer. A retake (GH-176) is the poller taking up a run a
+`RETAKEN` and `AUTO_MERGED` are comment prefixes the system posts (`AUTO_MERGE_REFUSED`
+lives in `refusal_note`), all registered into `resume.SYSTEM_COMMENTS` so a resume reads
+them as the system's own, never a human's answer. A retake (GH-176) is the poller taking up a run a
 reboot interrupted: it reads the run's lock through `RunLock.read`, never `acquire`, and
 decides in `rules.interrupted_run`."""
 
@@ -90,6 +90,7 @@ from .ports import (
     TrackerTimedOut,
     Upstream,
 )
+from .refusal_note import read_comments
 from .registration import REGISTER_WAIT_S, await_registration
 from .stack_facts import StackMemo, stack_facts
 
@@ -104,10 +105,9 @@ AUTO_RESUMED = "Auto-resumed: "
 # left no lock. Defined in `domain/retakes.py`, the one place that counts them, and re-exported
 # here for `resume.py`, which registers them in `resume.SYSTEM_COMMENTS`.
 
-# The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
-# `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
-# itself. Defined here, imported by `resume.py`, so neither is ever read as a human's answer.
-AUTO_MERGE_REFUSED = "Auto-merge refused: "
+# The comment the automatic merge posts when it merges (GH-178, ADR-0045), registered into
+# `resume.SYSTEM_COMMENTS` the same way. Defined here, imported by `resume.py`, so it is never
+# read as a human's answer. The refusal's own prefix lives in `refusal_note`.
 AUTO_MERGED = "Auto-merged: "
 
 # The two comments the landing posts (GH-239, ADR-0048), registered into
@@ -713,7 +713,7 @@ def assess_merge(
         return Abandoned(pull_request)
     # GH-784: the thread is read only when the hold looks at it (`thread_needed`): a task refused
     # `not_ready`, or one the document alone answers, costs no read.
-    from .merge import read_comments, thread_needed
+    from .merge import thread_needed
 
     facts = _merge_facts(
         task_id,

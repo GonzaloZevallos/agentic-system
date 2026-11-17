@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentic.core.process.application import landing_plan, merge
+from agentic.core.process.application import landing_plan, merge, refusal_note
 from agentic.core.process.application.ports import Upstream
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _ports
@@ -59,7 +59,7 @@ def test_an_unverified_run_is_refused_with_its_verdict_and_left_to_the_human(tmp
     [comment] = _refusals(ports)
     assert comment.splitlines()[0] == f"Auto-merge refused: {HEAD} perf_unverified"
     assert "verdict unverified" in comment
-    assert comment.endswith(merge.LEFT_TO_HUMAN)
+    assert comment.endswith(refusal_note.LEFT_TO_HUMAN)
 
 
 def test_an_approval_on_another_head_names_both_shas(tmp_path):

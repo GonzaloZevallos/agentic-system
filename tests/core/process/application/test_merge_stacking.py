@@ -11,8 +11,9 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application import merge
-from agentic.core.process.application.merge import STACK_EVIDENCE, MergeResult
+from agentic.core.process.application.merge import MergeResult
 from agentic.core.process.application.ports import IssueState, TrackerCallFailed, Upstream
+from agentic.core.process.application.refusal_note import STACK_EVIDENCE
 from agentic.core.process.domain.task import StackParent
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _ports

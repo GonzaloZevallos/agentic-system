@@ -40,7 +40,6 @@ from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
 from .plan import PART_BUILT_WHOLE
 from .poll import (
-    AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     AUTO_RESUMED,
     LANDING,
@@ -53,6 +52,7 @@ from .poll import (
     assess_merge,
 )
 from .ports import GitError, Ports, Workspace
+from .refusal_note import AUTO_MERGE_REFUSED
 from .run_role import task_cap
 from .stack_facts import StackMemo
 from .tracker_only import TRACKER_WORK
