@@ -50,6 +50,8 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
+  - `stacking.ParentLink` se asocia con `task.StackParent`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
