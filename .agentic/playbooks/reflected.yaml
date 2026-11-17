@@ -1309,3 +1309,14 @@ tasks:
       tasks:
       - GH-765
     decisions: 1
+  GH-862@review:
+    cost_usd: 0.0514
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-862
+    decisions: 1
