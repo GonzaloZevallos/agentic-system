@@ -506,6 +506,7 @@ def _landing_step(
         step.kind,
         facts.current_master,
         names=step.names,
+        stack_since=step.stack_since,
     ):
         return None
     return step
@@ -669,6 +670,8 @@ class MergeAssessment:
     conflict_unread: bool = False
     # Where a `True` conflict was read (GH-326), for the log line only.
     conflict_source: ConflictSource | None = None
+    # GH-885: `stacking.unfetchable_patch` of this assessment, `None` when it changes nothing.
+    unfetchable: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +692,7 @@ def assess_merge(
     *,
     cfg: Configuration | None,
     memo: StackMemo,
+    now: datetime | None = None,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
@@ -777,6 +781,13 @@ def assess_merge(
             stack=stack_facts(ports, cfg, facts.stack, current_master, facts.pr_head, memo),
         )
         decision = rules.auto_merge_decision(gated(facts))
+    clock: dict[str, object] | None = None
+    if facts.stack is not None:
+        # GH-885: the wait on an unfetchable head. The patch is computed once, with or without the
+        # probe (an escalated child's record is cleared even when nothing was read); the expiry
+        # facts are filled only in a turn where a head was read missing. `landing_step` reads them,
+        # the decision does not.
+        clock, facts = _unfetchable_clock(raw, facts, now or datetime.now(UTC))
     unread = False
     source: ConflictSource | None = None
     if (
@@ -804,7 +815,38 @@ def assess_merge(
             facts = with_recorded_red(facts)
             decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
-        facts, decision, report, pull_request, unread, source if facts.conflicts else None
+        facts,
+        decision,
+        report,
+        pull_request,
+        unread,
+        source if facts.conflicts else None,
+        unfetchable=clock or None,
+    )
+
+
+def _unfetchable_clock(
+    raw: TaskState, facts: rules.MergeFacts, now: datetime
+) -> tuple[dict[str, object], rules.MergeFacts]:
+    """`stacking.unfetchable_patch` for a stacked child, and `facts` with the expiry read from the
+    record the patch leaves, only when `heads_fetched is False` (the only turn `landing_step`
+    asks it). The patch is `{}` when nothing changes."""
+    stack = facts.stack
+    if stack is None:
+        return {}, facts
+    patch = stacking.unfetchable_patch(raw, stack, facts.pr_head, now)
+    if stack.heads_fetched is not False:
+        return patch, facts
+    after = apply(raw, patch) if patch else raw
+    record = stacking.parse_unfetchable(after)
+    since = None if record is None or isinstance(record, stacking.Unreadable) else record["since"]
+    return patch, replace(
+        facts,
+        stack=replace(
+            stack,
+            unfetchable_expired=stacking.unfetchable_expired(record, now),
+            unfetchable_since=since,
+        ),
     )
 
 
@@ -1166,7 +1208,7 @@ def evaluate_landing_order(
             continue
         try:
             assessed = assess_merge(
-                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo
+                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo, now=now
             )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
@@ -1353,6 +1395,31 @@ def _record_turn(
     return True
 
 
+def _record_unfetchable(
+    ports: Ports,
+    entry: OrderEntry,
+    busy: frozenset[str],
+    lock: RunLock,
+    out: list[str],
+) -> bool:
+    """The one writer of `stack_unfetchable` (GH-885), through `record_closure`: what
+    `stacking.unfetchable_patch` made of this round's assessment, when it is not `{}`. The task is
+    checked again at write time (a child or a lock that appeared since the assessment owns the
+    document now). A write that fails is one line and never ends the round: the patch is computed
+    again next round. True when written."""
+    assessed = entry.outcome
+    if not isinstance(assessed, MergeAssessment) or assessed.unfetchable is None:
+        return False
+    if entry.task_id in busy or lock.refusal(entry.task_id) is not None:
+        return False
+    try:
+        ports.documents.record_closure(entry.task_id, assessed.unfetchable)
+    except (ValueError, OSError) as exc:
+        out.append(f"agentic: poll: #{entry.number} -> stack_unfetchable not recorded: {exc}")
+        return False
+    return True
+
+
 def gather_merges(
     ports: Ports,
     eval_set: frozenset[int] | None,
@@ -1433,6 +1500,7 @@ def gather_merges(
         assessed = entry.outcome
         if not held:
             _record_turn(ports, entry, round_, now, out)
+            _record_unfetchable(ports, entry, busy, lock, out)
         if assessed is None:
             continue  # busy or locked: a child already works on it
         if isinstance(assessed, StackUnreadable):

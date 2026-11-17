@@ -58,8 +58,10 @@ sequenceDiagram
    Tres rechazos son de una tarea apilada (GH-855, GH-859; `agentic/core/process/domain/stacking.py:refusal`
    es su única tabla de verdad; `stacking.facts_of` arma los hechos sin leer y no da nada para un
    documento sin `stack_parent`, que no hace ninguna lectura y decide como siempre): `stack_parent_unmerged` (el padre no llegó al upstream, o
-   no se pudo leer la ascendencia) da `wait`, sin tope propio: una Cabeza lenta cede por
-   `HEAD_BUDGET`; `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
+   no se pudo leer la ascendencia) da `wait`: una Cabeza lenta cede por `HEAD_BUDGET`; si una
+   cabeza que necesita (la del padre o la del propio hijo) no se puede traer, la espera vence a las
+   12 h (`stacking.py:STACK_UNFETCHABLE_WAIT`, GH-885) y `landing_step` da `escalate` (clase
+   `questions`); `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
    `sync_master`, un solo merge de master, nunca un rebase; `stack_base_orphaned` (registro ilegible,
    o padre reconstruido, cerrado como NOT_PLANNED o fusionado con squash) es del humano y da
    `none`, con una frase fija en el comentario del rechazo. Un padre fusionado con squash o rebase
@@ -83,6 +85,17 @@ sequenceDiagram
    (`agentic/core/process/application/merge.py:merge_task`, GH-876) lee los mismos hechos a través
    de `stack_facts` con su propio `StackMemo` por llamada, compartido por sus nuevas decisiones,
    bajo la misma guarda menos el término `unlandable`.
+   La espera de una cabeza que no se puede traer (GH-885) la corre el poller: `stack_facts` fija
+   `heads_fetched` según las dos comprobaciones de existencia; `poll.py:assess_merge` recibe el `now`
+   de la ronda (lo pasa `evaluate_landing_order`) y calcula una vez `stacking.unfetchable_patch` para
+   un hijo apilado, con o sin sonda, y la lleva en `MergeAssessment.unfetchable` (`None` si no cambia
+   nada); solo cuando `heads_fetched` es `False` llena `unfetchable_expired` y `unfetchable_since`
+   desde el registro resultante, que `landing_step` lee. `poll.py:gather_merges` escribe el parche
+   con `poll.py:_record_unfetchable` y `record_closure` en el registro `stack_unfetchable`
+   `{head, since}` (clave de `document.py:RECORD_KEYS`), solo en una ronda que no está retenida y
+   nunca para una tarea ocupada o con lock, que se comprueba otra vez al escribir; un documento sin
+   `stack_parent` no lee ni escribe nada. `poll.py:_landing_step` pasa `stack_since` a
+   `landing.py:already_dispatched`.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo
