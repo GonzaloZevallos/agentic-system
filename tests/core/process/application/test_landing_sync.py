@@ -572,7 +572,7 @@ def _on_disk(tmp_path):
     `landing` the writer re-rendered, with the entry's cost base."""
     ports = memory_ports(documents=FilesystemTaskDocuments(tmp_path))
     entry = {"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
-    marked = landing_rules.with_cost_base([entry], HEAD, "re_review", 3.5)
+    marked = landing_rules.with_cost_base([entry], HEAD, "re_review", 3.5, 0)
     ports.documents.save({"id": "GH-5", "title": "t", "description": "d", "landing": marked})
     return ports
 

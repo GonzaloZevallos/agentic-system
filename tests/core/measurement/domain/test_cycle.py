@@ -947,3 +947,35 @@ def test_promotions_are_counted_by_kind_among_recorded_tasks_only():
 
 def test_the_report_has_every_kind_even_with_no_promotion():
     assert tuple(report().promotions) == (*get_args(task_path.PromotionKind), "other")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(True, True), (False, False), (None, False), ("yes", False), (1, False)]
+)
+def test_path_facts_reads_the_spec_delivery_mark_only_when_it_is_true(value, expected):
+    assert cycle.path_facts({"spec_delivery": value}).spec_delivery is expected
+
+
+def test_path_facts_reads_a_missing_spec_delivery_as_false():
+    assert cycle.path_facts({}).spec_delivery is False
+
+
+def ended_doc(**over):
+    return {"status": "ready_for_review", "closed_at": CLOSED, **over}
+
+
+def test_the_report_counts_spec_deliveries_over_the_ended_tasks_without_a_recorded_path():
+    result = report(
+        ended_doc(spec_delivery=True),
+        ended_doc(spec_delivery=True, initial_path="light"),
+        ended_doc(spec_delivery=False),
+        ended_doc(spec_delivery="yes"),
+        ended_doc(),
+        # an open task is in neither figure
+        {"status": "developing", "spec_delivery": True},
+    )
+    assert result.spec_deliveries == (2, 5)
+
+
+def test_the_report_of_no_tasks_has_no_spec_deliveries():
+    assert report().spec_deliveries == (0, 0)

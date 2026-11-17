@@ -24,6 +24,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_application__ports["application.ports"]
     m_application__preflight["application.preflight"]
+    m_application__refusal_note["application.refusal_note"]
     m_application__release["application.release"]
     m_application__run_role["application.run_role"]
     m_application__spec_guard["application.spec_guard"]
@@ -35,6 +36,8 @@ graph TD
     m_application__preflight --> g_pkg__domain
     m_application__preflight --> m_application__ports
     m_application__preflight --> m_application__run_role
+    m_application__refusal_note --> g_pkg__domain
+    m_application__refusal_note --> m_application__ports
     m_application__release --> g_pkg__domain
     m_application__release --> m_application__ports
     m_application__run_role --> g_application__checks

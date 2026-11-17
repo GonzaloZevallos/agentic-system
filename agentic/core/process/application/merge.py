@@ -42,6 +42,7 @@ from ..domain.task import (
     MergeRefusalRecord,
     PullRequest,
     TaskState,
+    TrackerFailure,
     add_flakes,
     add_merge_ci,
     add_tracker_failures,
@@ -52,7 +53,6 @@ from .deliver import READY
 from .delivered import files_patch, size_patch
 from .escalate import ESCALATED
 from .poll import (
-    AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,
     _merge_facts,
@@ -76,6 +76,15 @@ from .ports import (
 )
 from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
+from .refusal_note import (
+    AUTO_MERGE_REFUSED,
+    LEFT_TO_HUMAN,
+    POLLER_NOTED,
+    STACK_EVIDENCE,
+    closing_for,
+    note_refusal,
+    read_comments,
+)
 from .release import release_after_merge, release_checkout
 from .stack_facts import StackMemo, stack_facts
 
@@ -121,21 +130,6 @@ UNCOMMENTED: tuple[str, ...] = (
     "stack_restack_due",
 )
 
-# What a stacking refusal says in a comment (GH-859): one fixed phrase per value, keyed by the
-# refusal, never a word of the parent, its issue or the record. Only `stack_base_orphaned` is
-# commented; the other two are listed so that no stacking value has a comment without a phrase.
-STACK_EVIDENCE: dict[str, str] = {
-    "stack_parent_unmerged": "The parent this task is stacked on has not merged yet.",
-    "stack_restack_due": "The parent merged; this task takes the base branch in once.",
-    "stack_base_orphaned": (
-        "The commit this task was built on will never reach the base branch: its parent was "
-        "rebuilt, closed without merging, merged without a merge commit, or the record of the "
-        "parent could not be read."
-    ),
-}
-
-LEFT_TO_HUMAN = "Left for the human to merge."
-
 # Nothing was committed before the merge worktree existed: every head differs from it, so
 # `CheckoutPresubmit` runs the checks even when the upstream was already in the head.
 _NOTHING_BEFORE = ""
@@ -161,15 +155,6 @@ class MergeResult:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def read_comments(ports: Ports, task_id: str) -> list[IssueComment] | None:
-    """The issue's comments with their instants, read once per merge decision (GH-784); `None`
-    when the read fails, which `escalation_hold` turns into an unknown fact, never a clear one."""
-    try:
-        return ports.tracker.timestamped_comments(task_id)
-    except (ValueError, OSError):
-        return None
 
 
 def _held_by_state(state: TaskState) -> bool:
@@ -1458,8 +1443,12 @@ def _note(task_id: str, text: str, ports: Ports) -> None:
     document as a `tracker_failures` row. The merge child has no state owner, so the row
     is applied to the stored list with the state's own reducer and written with
     `record_closure`, the only line-level write the child ever makes."""
-    if (failure := ports.tracker.note(task_id, text)) is None:
-        return
+    if (failure := ports.tracker.note(task_id, text)) is not None:
+        _record_failure(task_id, failure, ports)
+
+
+def _record_failure(task_id: str, failure: TrackerFailure, ports: Ports) -> None:
+    """Writes the `tracker_failures` row of a note that did not land (see `_note`)."""
     stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
     rows = add_tracker_failures(stored if isinstance(stored, list) else [], [failure.record()])
     ports.documents.record_closure(task_id, {"tracker_failures": rows})
@@ -1625,14 +1614,6 @@ def _adr_evidence(facts: rules.MergeFacts) -> str:
     return ""
 
 
-def _perf_evidence(facts: rules.MergeFacts) -> str:
-    """What a `perf_unverified` refusal says, one fixed line from the structured facts: the
-    run's head when it differs from the pull request's, else its verdict (`none`: no run)."""
-    if facts.perf_verdict == "approved":
-        return f"measured {facts.perf_head or 'none'}, head {facts.pr_head}"
-    return f"verdict {facts.perf_verdict or 'none'}"
-
-
 def _drawing_evidence(facts: rules.MergeFacts) -> str:
     """What a `drawing_unsettled` refusal says, one fixed line from the structured facts: how
     many rows are open and whether the record's head still covers the pull request's:
@@ -1647,12 +1628,6 @@ def _drawing_evidence(facts: rules.MergeFacts) -> str:
     return f"open={facts.drawing_open} head={head}"
 
 
-def _criteria_evidence(facts: rules.MergeFacts) -> str:
-    """What a `criteria_over_cap` refusal says: the messages `knowledge` wrote, one per
-    line (file, count, cap), and nothing this module counted. An unreadable read has none."""
-    return "\n".join(f"- {message}" for message in facts.criteria_regressed or ())
-
-
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -1660,6 +1635,32 @@ def _summary_line(comment: str) -> str:
         if line.strip():
             return "" if line == LEFT_TO_HUMAN else line
     return ""
+
+
+def _announce_step(
+    task_id: str,
+    head: str,
+    step: landing_rules.LandingStep | None,
+    facts: rules.MergeFacts | None,
+    bodies: Sequence[str],
+    ports: Ports,
+) -> None:
+    """Announces the landing step of a refusal with a `Landing:` line, once per (head, step)."""
+    # Announced only when the system will take it: an inert step says nothing.
+    if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
+        line = f"{LANDING}{head} {step.kind}"
+        # Once per (head, step): not when the document's `landing` list already holds
+        # the key, and not when the comment is already on the issue (the step may not
+        # have been recorded yet).
+        taken = landing_rules.already_dispatched(
+            landing_plan.live_entries(ports.documents.load(task_id) or {}),
+            head,
+            step.kind,
+            facts.current_master if facts is not None else None,
+            names=step.names,
+        )
+        if not taken and not any(body.splitlines()[:1] == [line] for body in bodies):
+            _note(task_id, line, ports)
 
 
 def _refuse(
@@ -1685,7 +1686,15 @@ def _refuse(
             if facts is not None
             else None
         )
-        closing = LEFT_TO_HUMAN if step is None or step.kind == "none" else ""
+        if facts is not None and reason in POLLER_NOTED:
+            # The words and the once-per-head rule are `refusal_note`'s (GH-885); the failure
+            # row and the `Landing:` line stay the verb's.
+            noted = note_refusal(ports, task_id, head, reason, facts, step, bodies)
+            if noted is not None:
+                _record_failure(task_id, noted, ports)
+            _announce_step(task_id, head, step, facts, bodies, ports)
+            return MergeResult("refused", reason)
+        closing = closing_for(step)
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
         summary = ""
         text = "\n\n".join(part for part in (first, closing) if part)
@@ -1706,12 +1715,8 @@ def _refuse(
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts, report), closing) if part
             )
-        if facts is not None and reason == "perf_unverified":
-            text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
         if facts is not None and reason == "drawing_unsettled":
             text = "\n\n".join(part for part in (first, _drawing_evidence(facts), closing) if part)
-        if facts is not None and reason == "criteria_over_cap":
-            text = "\n\n".join(part for part in (first, _criteria_evidence(facts), closing) if part)
         if reason in ("ci_no_verdict", "ci_stale_exhausted", "ci_untrusted_no_dispatch"):
             text = "\n\n".join(
                 part for part in (first, _fresh_run_evidence(reason, facts, cause), closing) if part
@@ -1733,19 +1738,5 @@ def _refuse(
             or (reason == "checks_failed" and _summary_line(refused[-1]) != summary)
         ):
             _note(task_id, text, ports)
-        # Announced only when the system will take it: an inert step says nothing.
-        if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
-            line = f"{LANDING}{head} {step.kind}"
-            # Once per (head, step): not when the document's `landing` list already holds
-            # the key, and not when the comment is already on the issue (the step may not
-            # have been recorded yet).
-            taken = landing_rules.already_dispatched(
-                landing_plan.live_entries(ports.documents.load(task_id) or {}),
-                head,
-                step.kind,
-                facts.current_master if facts is not None else None,
-                names=step.names,
-            )
-            if not taken and not any(body.splitlines()[:1] == [line] for body in bodies):
-                _note(task_id, line, ports)
+        _announce_step(task_id, head, step, facts, bodies, ports)
     return MergeResult("refused", reason)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from agentic.core.knowledge.domain import knowledge
-from agentic.core.process.application import landing, landing_plan, merge
+from agentic.core.process.application import landing, landing_plan, merge, refusal_note
 from agentic.core.process.application.ports import GitError, Upstream
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -74,7 +74,8 @@ def test_a_pr_that_grows_a_document_past_the_cap_is_refused_with_the_file_and_th
     found, lines = _merges(ports)
 
     assert found == []
-    [line] = lines
+    line, noted = lines  # GH-895: the poller also comments it once and says so
+    assert noted == "agentic: poll: auto-merge #5 -> refusal noted: criteria_over_cap"
     assert line.startswith("agentic: poll: auto-merge #5 -> left to the human: criteria_over_cap (")
     assert f"`{DOC}`: {CAP + 5} lines (cap {CAP})" in line
 
@@ -110,7 +111,10 @@ def test_documents_git_cannot_read_are_refused_as_unreadable():
 
     assert _merges(ports) == (
         [],
-        ["agentic: poll: auto-merge #5 -> left to the human: criteria_unreadable"],
+        [
+            "agentic: poll: auto-merge #5 -> left to the human: criteria_unreadable",
+            "agentic: poll: auto-merge #5 -> refusal noted: criteria_unreadable",
+        ],
     )
 
 
@@ -169,7 +173,7 @@ def test_the_merge_verb_refuses_on_the_same_facts_and_comments_the_files(tmp_pat
     [(_, comment)] = ports.tracker.comments
     assert comment.splitlines()[0] == f"Auto-merge refused: {HEAD} criteria_over_cap"
     assert f"`{DOC}`: {CAP + 5} lines (cap {CAP})" in comment
-    assert comment.endswith(merge.LEFT_TO_HUMAN)
+    assert comment.endswith(refusal_note.LEFT_TO_HUMAN)
     assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 

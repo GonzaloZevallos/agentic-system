@@ -263,7 +263,9 @@ def _on_head(ports, head):
 
 
 def _candidates(ports) -> list[int]:
-    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], memo=StackMemo())
+    return poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], dry_run=False, memo=StackMemo()
+    )
 
 
 def _land(ports, tmp_path, launcher):

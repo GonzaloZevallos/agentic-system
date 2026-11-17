@@ -89,7 +89,7 @@ def _round(ports, master=MASTER, **more):
     lines: list[str] = []
     lands: list[rules.LandCandidate] = []
     found = poll.gather_merges(
-        ports, frozenset(), master, _Locks(), lines, lands, memo=StackMemo(), **more
+        ports, frozenset(), master, _Locks(), lines, lands, dry_run=False, memo=StackMemo(), **more
     )
     return found, lands, lines
 
@@ -224,7 +224,15 @@ def test_a_waiting_task_that_owes_a_resume_is_not_a_land_candidate():
     lands: list[rules.LandCandidate] = []
     # a child works on the older pass: it leads, and the younger one waits behind it
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(alive={"GH-7"}), [], lands, now=NOW, memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(alive={"GH-7"}),
+        [],
+        lands,
+        now=NOW,
+        dry_run=False,
+        memo=StackMemo(),
     )
 
     assert found == []
@@ -544,6 +552,7 @@ def _lane_round(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",
         busy=frozenset({"GH-7"}),
         cfg=Configuration(product_dir=tmp_path),
         integrating=frozenset(integrating),
+        dry_run=False,
         memo=StackMemo(),
         **more,
     )
@@ -640,6 +649,7 @@ class TestFastLane:
             [],
             now=NOW,
             cfg=Configuration(product_dir=tmp_path),
+            dry_run=False,
             memo=StackMemo(),
         )
 
@@ -782,6 +792,7 @@ def _idle_round(ports, tmp_path, locks):
         busy=frozenset(),
         cfg=Configuration(product_dir=tmp_path),
         integrating=frozenset({"GH-7"}),
+        dry_run=False,
         memo=StackMemo(),
     )
 
@@ -1020,6 +1031,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             [],
             now=NOW,
             cfg=Configuration(product_dir=tmp_path),
+            dry_run=False,
             memo=StackMemo(),
         )
 

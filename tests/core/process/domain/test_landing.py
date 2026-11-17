@@ -534,7 +534,7 @@ _RESUME = {"resume_spawns": 1, "resume_spawned_at": "2026-10-14T12:00:00+00:00"}
 
 def test_with_cost_base_preserves_the_resume_keys():
     entries = [{"head": HEAD, "step": "re_review", **_RESUME, "cost_base": 1.0}]
-    (out,) = landing.with_cost_base(entries, HEAD, "re_review", 2.5)
+    (out,) = landing.with_cost_base(entries, HEAD, "re_review", 2.5, 0)
     assert out["cost_base"] == 2.5
     assert out["resume_spawns"] == 1
     assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
@@ -1099,12 +1099,12 @@ def test_with_cost_base_writes_only_the_last_entry_and_only_when_it_matches():
         {"head": HEAD, "step": "sync_master", "cost_usd": 1.0},
         {"head": HEAD, "step": "sync_master"},
     ]
-    first, last = landing.with_cost_base(entries, HEAD, "sync_master", 7.0)
+    first, last = landing.with_cost_base(entries, HEAD, "sync_master", 7.0, 2)
     assert "cost_base" not in first
     assert last["cost_base"] == 7.0
-    untouched = landing.with_cost_base(entries, HEAD, "fix", 7.0)
+    untouched = landing.with_cost_base(entries, HEAD, "fix", 7.0, 2)
     assert all("cost_base" not in e for e in untouched)
-    assert landing.with_cost_base([entries[0]], "z" * 40, "sync_master", 7.0) == [entries[0]]
+    assert landing.with_cost_base([entries[0]], "z" * 40, "sync_master", 7.0, 2) == [entries[0]]
 
 
 def test_the_second_unsynced_pass_for_one_upstream_is_the_diagnose():
