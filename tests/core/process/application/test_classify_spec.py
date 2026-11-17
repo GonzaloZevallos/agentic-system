@@ -3,6 +3,8 @@ at the upstream commit, validated and recorded, or refused before PjM runs. Ever
 through `classify` over the memory ports; what changes between a refusal and its fix is an input
 `classify` reads: the spec file, the upstream sha or `owner_login`."""
 
+import json
+
 import pytest
 
 from agentic.core.process.application.classify import classify, spec_intake
@@ -12,6 +14,7 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import (
     FakeSpecReader,
     FakeSpecValidator,
+    MemoryInbox,
     MemoryWorkspace,
     ScriptedRunner,
     classified,
@@ -41,13 +44,15 @@ def contract(commit: str = SHA) -> dict:
     }
 
 
-def build(*, result="spec_invalid", texts=None, pjm=None, upstream=None):
+def build(*, result="spec_invalid", texts=None, pjm=None, upstream=None, inbox=None):
     runner = ScriptedRunner(pjm=pjm if pjm is not None else [classified()])
     reader = FakeSpecReader({(SHA, PATH): "text"} if texts is None else texts)
     validator = FakeSpecValidator(result)
     workspace = MemoryWorkspace()
     workspace.upstream_answer = upstream or Upstream("origin/main", SHA, None)
-    ports = memory_ports(runner, workspace=workspace, spec_reader=reader, spec_validator=validator)
+    ports = memory_ports(
+        runner, workspace=workspace, spec_reader=reader, spec_validator=validator, inbox=inbox
+    )
     return ports, runner, reader, validator
 
 
@@ -227,3 +232,132 @@ async def test_without_both_ports_a_spec_line_is_not_looked_at(tmp_path, which):
     }
     assert ports.workspace.upstream_calls == 0 and reader.calls == []
     assert spec_intake(STATE, cfg_of(tmp_path), ports_off) is None
+
+
+# GH-809: the owner fixes the issue's `Spec:` line; the resume reads the issue, not `description`.
+ISSUE = "GH-7"
+AT = "2026-11-16T12:30:00+00:00"
+
+
+def issue_state(body: str) -> dict:
+    return {"id": ISSUE, "title": "Export report", "description": body}
+
+
+def inbox_of(body: str) -> MemoryInbox:
+    return MemoryInbox(**{"7": {"id": ISSUE, "title": "Export report", "description": body}})
+
+
+async def refuse_and_resume(ports, cfg, body: str) -> dict:
+    """The real cycle: classify refuses, the task pauses, the owner resumes."""
+    state = issue_state(body)
+    refused = await classify(state, cfg, ports)
+    assert "escalated" in refused
+    paused = task.apply(state, refused)
+    return task.apply(paused, rules.resumed(paused, None, at=AT))
+
+
+async def test_a_malformed_spec_line_fixed_in_the_issue_is_read_on_the_resume(tmp_path):
+    inbox = inbox_of("Spec: nope.txt\n")
+    ports, runner, _, validator = build(result=contract(), inbox=inbox)
+    cfg = cfg_of(tmp_path)
+    resumed = await refuse_and_resume(ports, cfg, "Spec: nope.txt\n")
+    assert inbox.task_calls == 0
+
+    inbox.issues["7"]["description"] = f"Spec: {PATH}#csv\n"
+    fixed = await classify(resumed, cfg, ports)
+
+    assert "escalated" not in fixed
+    assert fixed["spec"]["path"] == PATH
+    assert fixed["flags"] == {"touches_ui": True, "touches_copy": True}
+    assert validator.calls[-1][1:4] == (PATH, SHA, "csv")
+    assert inbox.task_calls == 1
+    assert resumed["description"] == "Spec: nope.txt\n"  # description is left as it was
+    assert pjm_calls(runner) == 1
+
+
+async def test_a_slice_fixed_in_the_issue_is_the_one_validated_on_the_resume(tmp_path):
+    inbox = inbox_of(f"Spec: {PATH}#nope\n")
+    ports, _, _, validator = build(result="slice_unknown", inbox=inbox)
+    cfg = cfg_of(tmp_path)
+    resumed = await refuse_and_resume(ports, cfg, f"Spec: {PATH}#nope\n")
+    assert validator.calls[-1][3] == "nope"
+
+    inbox.issues["7"]["description"] = f"Spec: {PATH}#csv\n"
+    validator.result = contract()
+    fixed = await classify(resumed, cfg, ports)
+
+    assert validator.calls[-1][3] == "csv"
+    assert fixed["spec"]["slice"] == "csv"
+    assert "escalated" not in fixed
+
+
+UNREAD = [
+    ("value_error", lambda: ValueError("secret-sentinel"), None),
+    ("os_error", lambda: OSError("secret-sentinel"), None),
+    ("empty_body", None, ""),
+]
+
+
+@pytest.mark.parametrize(("error", "empty"), [r[1:] for r in UNREAD], ids=[r[0] for r in UNREAD])
+async def test_an_issue_body_unread_on_the_resume_is_refused_as_unreachable(tmp_path, error, empty):
+    inbox = inbox_of("Spec: nope.txt\n")
+    ports, runner, reader, _ = build(result=contract(), inbox=inbox)
+    cfg = cfg_of(tmp_path)
+    resumed = await refuse_and_resume(ports, cfg, "Spec: nope.txt\n")
+    pjm_before = pjm_calls(runner)
+    if error is not None:
+        inbox.task_exceptions[7] = error()
+    else:
+        inbox.issues["7"]["description"] = empty
+
+    patch = await classify(resumed, cfg, ports)
+
+    assert patch["escalation_class"] == "classification"
+    assert patch["spec_refusal"] == {"cause": "spec_unreadable", "detail": ["unreachable"]}
+    assert "restore the body" in patch["escalated"]
+    assert "secret-sentinel" not in json.dumps(patch)
+    assert "secret-sentinel" not in json.dumps(ports.documents.load(ISSUE), default=str)
+    assert "description" not in patch and resumed["description"] == "Spec: nope.txt\n"
+    assert pjm_calls(runner) == pjm_before == 0
+    assert reader.calls == []
+
+
+async def test_the_issue_is_not_read_on_a_first_run(tmp_path):
+    inbox = inbox_of(BODY)
+    ports, _, _, _ = build(result=contract(), inbox=inbox)
+
+    patch = await classify(issue_state(BODY), cfg_of(tmp_path), ports)
+
+    assert patch["spec"]["path"] == PATH
+    assert inbox.task_calls == 0
+
+
+async def test_the_issue_is_not_read_on_a_resume_whose_description_has_no_line(tmp_path):
+    inbox = inbox_of(BODY)
+    ports, _, _, _ = build(result=contract(), inbox=inbox)
+    state = {**issue_state("Users want CSV.\n"), "pause_log": [{"kind": "resumed", "at": AT}]}
+
+    patch = await classify(state, cfg_of(tmp_path), ports)
+
+    assert "spec" not in patch and "escalated" not in patch
+    assert inbox.task_calls == 0
+
+
+async def test_the_issue_is_not_read_on_a_resume_when_the_route_is_not_honoured(tmp_path):
+    inbox = inbox_of(BODY)
+    ports = memory_ports(ScriptedRunner(pjm=[classified()]), inbox=inbox)
+    state = {**issue_state("Spec: nope.txt\n"), "pause_log": [{"kind": "resumed", "at": AT}]}
+
+    assert spec_intake(state, cfg_of(tmp_path), ports) is None
+    assert inbox.task_calls == 0
+
+
+async def test_a_resumed_run_without_a_task_number_parses_the_description(tmp_path):
+    inbox = inbox_of(BODY)
+    ports, _, _, _ = build(result=contract(), inbox=inbox)
+    state = {**STATE, "pause_log": [{"kind": "resumed", "at": AT}]}  # id "T-1": no issue
+
+    patch = spec_intake(state, cfg_of(tmp_path), ports)
+
+    assert patch is not None and patch["spec"]["path"] == PATH
+    assert inbox.task_calls == 0

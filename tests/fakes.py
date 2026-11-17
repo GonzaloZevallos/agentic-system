@@ -791,6 +791,10 @@ class MemoryInbox:
         # state_errors` already uses for `issue_state` -- a declared rejected input,
         # never an accidental `KeyError` off an inbox a scenario forgot to seed.
         self.task_errors = task_errors or set()
+        # GH-809: a number here makes `task` raise this very exception (a sentinel message, an
+        # `OSError`), and `task_calls` counts the reads, as `refs_calls` does for the listing.
+        self.task_exceptions: dict[int, Exception] = {}
+        self.task_calls = 0
         # GH-464: the flake path's own read. `refs` seeds it with titled issues, `refs_error`
         # makes it raise, `refs_calls` counts how often a path listed (none below the threshold).
         self.refs: list[IssueRef] | None = None
@@ -798,6 +802,9 @@ class MemoryInbox:
         self.refs_calls = 0
 
     def task(self, number: int) -> TaskInput:
+        self.task_calls += 1
+        if number in self.task_exceptions:
+            raise self.task_exceptions[number]
         if number in self.task_errors:
             raise ValueError(f"issue #{number} has no body; the roles need a description")
         return self.issues[str(number)]
