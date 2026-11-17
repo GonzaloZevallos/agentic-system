@@ -1540,6 +1540,11 @@ class LandingEntry(TypedDict, total=False):
     # in `outcome` beside the `AdrDecisionOutcome`s); `escalate_adr` entries: the upstream sha at
     # which a numeric question was released because the product names its ADRs by date
     # (`landing.released_by_naming`), with `released_at` its time.
+    # GH-885, `escalate` entries of `stack_parent_unmerged`: the `since` of the unfetchable-head
+    # clock (`stack_unfetchable`) the escalation was asked for. `landing.already_dispatched` takes
+    # the entry for that clock only, so a released wait that runs out again is asked again on the
+    # same head. Absent on an entry written before, which is taken as always.
+    stack_since: str
     mode: RenumberMode
     naming_released: str
     # GH-267, all optional: a document without them reads and renders as before.

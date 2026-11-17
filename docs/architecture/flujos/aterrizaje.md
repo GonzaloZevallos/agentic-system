@@ -68,6 +68,11 @@ sequenceDiagram
    `escalate`, con un texto fijo por rechazo (`landing.py:STACK_ESCALATION`), sin palabras del
    padre, del issue ni del registro. Tampoco corta un slice: `slice_or_restart` responde
    `no_clean_slice` sin mirar ninguna unidad, y `slice_facts` de una tarea apilada nunca mergea.
+   La entrada `escalate` de `stack_parent_unmerged` (GH-885) lleva `stack_since`, el `since` del reloj
+   `stack_unfetchable` por el que se pidió, y `landing.already_dispatched` la toma como ya
+   despachada sólo para ese reloj: tras liberarla con la cabeza todavía sin poder traerse, el reloj
+   nuevo vuelve a escalar sobre la misma cabeza. Quien no pasa `stack_since` (`merge`, `resume`) la
+   lee siempre como tomada; una entrada sin `stack_since` se toma como antes.
    La liberación de ese escalado por restack agotado llega con una parte posterior; mientras tanto la
    salida es mergear a mano o relanzar.
    Los hechos del hijo apilado los lee el poller (GH-860): `agentic/core/process/application/poll.py:assess_merge`
