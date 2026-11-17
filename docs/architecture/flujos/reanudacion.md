@@ -85,13 +85,18 @@ sequenceDiagram
    muestra la tarea, dónde se frenó, lo gastado y qué reanuda, y la CLI pide confirmación
    salvo con `--yes`. Una pausa sobre desviaciones del dibujo no usa `human_decision`: ver 8.
 5. **Retomar.** La CLI invoca el grafo con `Command(resume=...)`. `pause` devuelve el patch
-   de reanudación (`agentic/core/process/domain/rules.py:resumed`) y el ruteo va a donde el
+   de reanudación (`agentic/core/process/domain/drawing_answer.py:resume_patch`, que compone
+   `agentic/core/process/domain/rules.py:resumed`) y el ruteo va a donde el
    estado dice que se frenó (`agentic/core/process/domain/rules.py:resume_target`): una tarea
    ligera sin plan sigue a `plan` y no a `define`, y una promoción pendiente la manda primero a
    `define` o `diagnose` (`agentic/core/process/domain/rules.py:promotion_route`).
    Una reanudación con decisión de una pregunta de ajuste, o de una estimación con partes, deja
    `plan_due` y vuelve siempre a `plan`, nunca a `tracker_only`
    (`agentic/core/process/domain/rules.py:resume_target`); solo el plan que se entrega lo limpia.
+   Lo mismo pasa cuando el dueño responde una pausa de desviaciones cuyo registro
+   (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
+   `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
+   `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
@@ -134,4 +139,5 @@ sequenceDiagram
    línea `Drawing <n>: <veredicto> (flag)` por opción. Las filas respondidas viajan en
    `agentic/core/process/application/resume.py:Resumption.answer` (`drawing_departures`, solo si
    hay) y `agentic/core/process/adapters/langgraph/graph.py:_pause_node` las pliega con el
-   reducer en el mismo patch que `rules.resumed`; el cli nunca las siembra.
+   reducer en el mismo patch, que arma `agentic/core/process/domain/drawing_answer.py:resume_patch`
+   sobre `rules.resumed`; el cli nunca las siembra.

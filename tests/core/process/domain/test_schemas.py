@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -1806,3 +1807,85 @@ def test_plan_check_for_under_a_spec_accepts_a_plan_that_names_other_files():
 def test_plan_check_for_without_a_spec_accepts_a_plan_that_names_the_path(spec_path):
     check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=spec_path)
     check(_naming(files=[SPEC_PATH], required=[SPEC_PATH]))
+
+
+# The plan gate's rejected departures (GH-766 part 4a): a plan that declares again a departure
+# the owner rejected is refused, and the reason names the path, the element and `#n`.
+
+
+def _departure(drawing="designs/home.png", element="Sales line"):
+    return {
+        "drawing": drawing,
+        "element": element,
+        "shows": "a line chart",
+        "would_ship": "a single figure",
+        "recommendation": "draw the chart",
+        "reason": "cheaper",
+        "raised_by": "tech_lead",
+    }
+
+
+def _with_departures(*departures):
+    return {**_estimated(20.0, 3), "drawing_departures": list(departures)}
+
+
+def test_plan_check_for_rejects_a_departure_the_owner_rejected_without_naming_the_key():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 2})
+    with pytest.raises(ValueError) as refused:
+        check(_with_departures(_departure(element="  sales   LINE ")))
+    reason = str(refused.value)
+    assert "designs/home.png" in reason
+    assert "Sales line" in reason or "sales   LINE" in reason
+    assert "#2" in reason
+    assert key not in reason
+
+
+def test_plan_check_for_accepts_a_departure_that_was_not_rejected():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 2})
+    check(_with_departures(_departure(element="Other element")))  # does not raise
+
+
+def test_plan_check_for_with_an_empty_rejected_map_changes_nothing():
+    plain = schemas.plan_check_for(_history(1, []), 0.0)
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={})
+    check(_with_departures(_departure()))  # does not raise
+    plain(_estimated(20.0, 3))  # a plan without the field passes too
+    check(_estimated(20.0, 3))
+
+
+def test_plan_check_for_default_rejected_map_is_one_immutable_object():
+    default = schemas._NO_REJECTED
+    assert len(default) == 0
+    with pytest.raises(TypeError):
+        cast(Any, default)["a:b"] = 1
+
+
+def test_a_tech_plan_declares_drawing_departures_and_validates_with_them():
+    for model in (schemas.TechPlan, schemas.TechPlanWithAssumptions):
+        field = schemas.json_schema(model, {"touches_ui": "a", "touches_copy": "b"})["properties"][
+            "drawing_departures"
+        ]
+        assert "simplification" in field["description"]
+        assert "numbers" in field["description"]
+    sizes = {"hand_files": 1, "hand_lines": 10, "test_lines": 10}
+    parsed = schemas.validate(schemas.TechPlan, {**_with_departures(_departure()), **sizes}, VOCAB)
+    assert parsed["drawing_departures"][0]["element"] == "Sales line"
+    bare = schemas.validate(schemas.TechPlan, {**_estimated(20.0, 3), **sizes}, VOCAB)
+    assert bare["drawing_departures"] == []
+
+
+def test_plan_check_for_finds_a_rejected_departure_among_several_and_keys_by_drawing():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 4})
+    other_drawing = _departure(drawing="designs/report.png")  # same element, another drawing
+    check(_with_departures(other_drawing))  # does not raise
+    with pytest.raises(ValueError, match="#4"):
+        check(_with_departures(other_drawing, _departure()))

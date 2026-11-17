@@ -3591,9 +3591,11 @@ def resumed(
     estimate: float | None = None,
     *,
     at: str,
+    drawing_plan: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
+    `drawing_plan` (GH-766) owes the plan again: only `drawing_answer.resume_patch` passes it.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
     from the merges it just did, and only that one knows what conflicted. Returns a
@@ -3640,6 +3642,8 @@ def resumed(
         # plan is made again, with the same budget.
         patch["parts"] = []
         patch["plan_due"] = True
+    if drawing_plan:
+        patch["plan_due"] = True  # the owner answered the plan's own departures
     if (
         state.get("escalation_class") == "estimate"
         and (decided or estimate is not None)

@@ -634,9 +634,7 @@ def prepare(
             )
         owed = _owed_publication(task_id, paused, source, cfg, ports)
         paused = apply(paused, {"publish_owed": owed})
-        patch = rules.resumed(paused, decision, estimate, at=ports.now())
-        if answered:
-            patch = {**patch, "drawing_departures": list(answered)}
+        patch = drawing_answer.resume_patch(paused, decision, estimate, answered, at=ports.now())
         resumed = apply(paused, patch)
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))

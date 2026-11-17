@@ -2242,6 +2242,56 @@ def test_a_non_empty_departure_record_round_trips_intact():
     assert parsed["drawing_departures"] == rows
 
 
+def _escalation_state(**record: object) -> dict[str, object]:
+    return {**_departure_base(), "drawing_escalation": record}
+
+
+def test_a_state_without_an_escalation_writes_the_frontmatter_it_always_did():
+    plain = document.render(_departure_base())
+    assert "drawing_escalation" not in plain
+    assert document.render({**_departure_base(), "drawing_escalation": {}}) == plain
+    assert "drawing_escalation" not in document.parse(plain)
+
+
+@pytest.mark.parametrize("stage", [None, "plan"])
+def test_an_escalation_round_trips_with_and_without_a_plan_stage(stage):
+    record = {"round": 2, "numbers": [1, 3], "cause": "drawing_cap"}
+    if stage:
+        record["stage"] = stage
+    text = document.render(_escalation_state(**record))
+    parsed = document.parse(text)
+    assert parsed["drawing_escalation"] == record
+    assert ("stage: plan" in text) is bool(stage)
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+def test_a_delivery_stage_is_not_written_so_it_reads_back_as_absent():
+    record = {"round": 1, "numbers": [1], "cause": "drawing_departure", "stage": "delivery"}
+    text = document.render(_escalation_state(**record))
+    assert "stage" not in text
+    assert "stage" not in document.parse(text)["drawing_escalation"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"round": 0, "numbers": [1], "cause": "drawing_departure"},
+        {"round": True, "numbers": [1], "cause": "drawing_departure"},
+        {"round": 1, "numbers": ["1"], "cause": "drawing_departure"},
+        {"round": 1, "numbers": 1, "cause": "drawing_departure"},
+        {"round": 1, "numbers": [1], "cause": "other"},
+        {"round": 1, "numbers": [1], "cause": "drawing_cap", "stage": "later"},
+    ],
+)
+def test_an_invalid_escalation_record_is_dropped_on_load_and_never_written(bad):
+    assert "drawing_escalation" not in document.render(_escalation_state(**bad))
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\ndrawing_escalation: " + str(bad).replace("'", '"') + "\n---\n", 1
+    )
+    assert "drawing_escalation" in stored
+    assert "drawing_escalation" not in document.parse(stored)
+
+
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
 
 

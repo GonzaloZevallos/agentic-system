@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__MergeConflictRecord["MergeConflictRecord"]
     class task__MergeOutcome["MergeOutcome"]
     class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OutOfBoundsLine["OutOfBoundsLine"]
@@ -43,7 +44,6 @@ classDiagram
     class task__ReleasePatch["ReleasePatch"]
     class task__RestartPending["RestartPending"]
     class task__RestartSettledRow["RestartSettledRow"]
-    class task__Restoration["Restoration"]
 ```
 
 ## Relaciones con otras páginas

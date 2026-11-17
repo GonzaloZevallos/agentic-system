@@ -270,6 +270,36 @@ def _departure_rows(raw: object, source: object) -> list[DepartureRecord]:
     return cast(list[DepartureRecord], raw)
 
 
+_ESCALATION_CAUSES = ("drawing_departure", "drawing_cap")
+_ESCALATION_STAGES = ("plan", "delivery")
+
+
+def _escalation_record(raw: object) -> dict[str, Any] | None:
+    """The stored `drawing_escalation` read back as `{round, numbers, cause}` plus `stage` when it
+    is `plan`; `None` when it is not whole (`round` an int of at least 1, `numbers` a list of
+    ints, `cause` and `stage` from their closed sets), so a hand-edited record is dropped, as
+    an invalid size record is, and never fails the load."""
+    if not isinstance(raw, Mapping):
+        return None
+    round_, numbers, cause, stage = (raw.get(k) for k in ("round", "numbers", "cause", "stage"))
+    if not (
+        isinstance(round_, int)
+        and not isinstance(round_, bool)
+        and round_ >= 1
+        and isinstance(numbers, list)
+        and all(isinstance(n, int) and not isinstance(n, bool) for n in numbers)
+        and cause in _ESCALATION_CAUSES
+        and (stage is None or stage in _ESCALATION_STAGES)
+    ):
+        return None
+    return {
+        "round": round_,
+        "numbers": numbers,
+        "cause": cause,
+        **({"stage": "plan"} if stage == "plan" else {}),
+    }
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -356,6 +386,11 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["assumptions"] = _assumption_rows(state["assumptions"])
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
+    if "drawing_escalation" in state:
+        if (escalation := _escalation_record(state["drawing_escalation"])) is None:
+            del state["drawing_escalation"]
+        else:
+            state["drawing_escalation"] = escalation
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -514,6 +549,14 @@ def render(
         # there is one, so every document without one is byte-identical to one written before;
         # parsed back under the same name.
         **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
+        # The drawing-departure escalations so far (GH-766): `{round, numbers, cause}` and `stage`
+        # only when it is `plan`, written only when there is one, so a document without one is
+        # byte-identical to one written before; parsed back under the same name.
+        **(
+            {"drawing_escalation": e}
+            if (e := _escalation_record(state.get("drawing_escalation")))
+            else {}
+        ),
         # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
         # there and never when it is absent, so a document without it is byte-identical to one
         # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.

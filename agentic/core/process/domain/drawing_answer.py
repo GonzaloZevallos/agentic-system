@@ -4,14 +4,17 @@
 `escalation_due` and `escalation_patch` the only place the escalation of departures is decided
 and worded; `prompt_cause` the only reading of which drawing cause a pause carries; and
 `section_lines` the only rendering of the rows a role reads; `classify` the only rule that
-crosses a `departs` check with `departures` and with `drawing_departures`. Imports only the
+crosses a `departs` check with `departures` and with `drawing_departures`; `plan_split` the only
+reading of the owner's verdict on a departure the plan declares; `plan_resume` and `resume_patch`
+the only composition of the patch that resumes a pause the owner answered. Imports only the
 domain's `task`, `rules`, `drawing`, `escalation_prompts` and `schemas`."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from types import MappingProxyType
+from typing import Any, Literal
 
 from . import drawing, escalation_prompts, rules, task
 from .schemas import DrawingCheck, DrawingDeparture
@@ -117,11 +120,15 @@ def escalation_patch(
     at: str,
     *,
     contradicted: frozenset[int] = frozenset(),
+    stage: Literal["plan", "delivery"] = "delivery",
 ) -> dict[str, object]:
     """The patch that escalates `departures` (and every row still open) to the owner: the new
     rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
     escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
     comment). Raises `ValueError` when no number remains unanswered.
+
+    `stage` says which gate asked: `plan` is written to the record, `delivery` (the default) is
+    what an absent one reads as.
 
     Called only from the system's serialized turn, never from a branch node: it reads the
     round the whole task has reached."""
@@ -137,13 +144,87 @@ def escalation_patch(
         spec=state.get("spec"),
         spec_cause="drawing" if rules.spec_delivery(state) else None,
     )
-    return {
-        **escalation,
-        "drawing_departures": new_rows,
-        "drawing_escalation": task.DrawingEscalation(
-            round=due.round, numbers=numbers, cause=due.cause
-        ),
-    }
+    record = task.DrawingEscalation(round=due.round, numbers=numbers, cause=due.cause)
+    if stage == "plan":
+        record["stage"] = "plan"
+    return {**escalation, "drawing_departures": new_rows, "drawing_escalation": record}
+
+
+@dataclass(frozen=True)
+class PlanSplit:
+    """The departures a plan declares, by the owner's verdict on each: `accepted`, `rejected`,
+    and `open` (no row yet, or a row with no answer), each deduplicated by key in order of
+    appearance. `rejected_numbers` maps the key of every rejected one to its number, which is
+    what the plan gate takes; the key never reaches a text."""
+
+    accepted: tuple[drawing.Departure, ...]
+    rejected: tuple[drawing.Departure, ...]
+    open: tuple[drawing.Departure, ...]
+    rejected_numbers: Mapping[str, int]
+
+
+def plan_split(state: task.TaskState, departures: Sequence[drawing.Departure]) -> PlanSplit:
+    """Split `departures` by the verdict held in the `drawing_departures` rows, compared by
+    `drawing.departure_key`. The only place the verdict of a departure of the plan is read."""
+    rows = {r["key"]: r for r in state.get("drawing_departures", [])}
+    accepted: dict[str, drawing.Departure] = {}
+    rejected: dict[str, drawing.Departure] = {}
+    open_: dict[str, drawing.Departure] = {}
+    numbers: dict[str, int] = {}
+    seen: set[str] = set()
+    for d in departures:
+        key = drawing.departure_key(d.drawing, d.element)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = rows.get(key)
+        answer = row["answer"] if row is not None else None
+        if row is None or answer is None:
+            open_[key] = d
+        elif answer["verdict"] == "accept":
+            accepted[key] = d
+        else:
+            rejected[key] = d
+            numbers[key] = row["number"]
+    return PlanSplit(
+        accepted=tuple(accepted.values()),
+        rejected=tuple(rejected.values()),
+        open=tuple(open_.values()),
+        rejected_numbers=MappingProxyType(numbers),
+    )
+
+
+def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> bool:
+    """Whether the owner's answer reopens the plan: the pause is a live drawing one
+    (`prompt_cause`), the resumption answered at least one row, and the gate that asked was the
+    plan's. A stale `plan` record under another pause never does."""
+    record = state.get("drawing_escalation")
+    return (
+        prompt_cause(state) is not None
+        and bool(answered)
+        and record is not None
+        and record.get("stage", "delivery") == "plan"
+    )
+
+
+def resume_patch(
+    state: task.TaskState,
+    decision: str | None,
+    estimate: float | None,
+    answered: Sequence[task.DepartureRecord],
+    *,
+    at: str,
+) -> dict[str, Any]:
+    """The patch that resumes a paused task given the rows the owner `answered` (none for any
+    other pause): `rules.resumed`, told by `plan_resume` whether the plan is owed, plus the
+    answered rows when there are some. The only composition of that patch and the only caller
+    of `plan_resume`, so the only source of `rules.resumed`'s `drawing_plan`."""
+    patch = rules.resumed(
+        state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
+    )
+    if answered:
+        patch["drawing_departures"] = list(answered)
+    return patch
 
 
 def prompt_cause(state: task.TaskState) -> Cause | None:

@@ -34,6 +34,7 @@ classDiagram
     class drawing_answer__ClassifyMismatch["ClassifyMismatch"]
     class drawing_answer__Due["Due"]
     class drawing_answer__Exhausted["Exhausted"]
+    class drawing_answer__PlanSplit["PlanSplit"]
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]
@@ -43,5 +44,4 @@ classDiagram
     class rules__CiGate["CiGate"]
     class rules__Commit["Commit"]
     class rules__Deferred["Deferred"]
-    class rules__FastForwardBlock["FastForwardBlock"]
 ```
