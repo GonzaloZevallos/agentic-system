@@ -161,9 +161,8 @@ def test_a_land_reads_the_parent_once_for_its_order_note_and_once_for_its_own_de
     assert calls["issue_state"] == 2
 
 
-def test_the_verb_still_refuses_an_unread_record_as_unmerged_until_876(tmp_path):
-    """Pins today's result: `merge_task` inherits the unread facts and never upgrades them.
-    #876 wires the verb's own read and changes this on purpose."""
+def test_the_verb_reads_the_parent_once_and_refuses_it_as_unmerged(tmp_path):
+    """GH-876: `merge_task` reads the parent through `stack_facts`: one `issue_state` per call."""
     ports = _stacked(5)
     calls = _count(ports)
     result = merge.merge_task(
@@ -177,4 +176,4 @@ def test_the_verb_still_refuses_an_unread_record_as_unmerged_until_876(tmp_path)
         lambda: datetime(2026, 11, 16, tzinfo=UTC).isoformat(),
     )
     assert "stack_parent_unmerged" in repr(result)
-    assert calls["issue_state"] == 0
+    assert calls["issue_state"] == 1
