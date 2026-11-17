@@ -6,12 +6,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agentic.core.process.application import merge, poll
+from agentic.core.process.application import landing, merge, poll
 from agentic.core.process.application.ports import IssueState, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain.task import VERDICT_UNLANDABLE, StackParent
 from tests.core.process.application.test_poll import _cfg, _Locks
-from tests.core.process.application.test_poll_merge import HEAD, MASTER, _ports
+from tests.core.process.application.test_poll_merge import HEAD, MASTER, _HeldLocks, _ports
 
 PARENT = "c" * 40
 CLOSING = "f" * 40
@@ -141,22 +141,23 @@ def test_the_poller_round_gives_its_children_one_memo(tmp_path):
     assert any("stack_parent_unmerged" in line for line in lines)
 
 
-def test_two_assessments_with_a_fresh_memo_each_read_the_issue_twice(tmp_path):
-    """What `landing.land` and `resume` do: a fresh memo at each `assess_merge` call."""
-    ports = _stacked(5)
+def test_a_land_reads_the_parent_once_for_its_order_note_and_once_for_its_own_decision(tmp_path):
+    """`landing.land` assesses twice, `_note_order` (the other children of the order: GH-6, the task
+    itself being at work) and `_land` (GH-5), each with its own fresh memo, both of one parent: a
+    memo shared between them would make the second read free."""
+    ports = _stacked(5, 6)
     calls = _count(ports)
-    cfg = _cfg(tmp_path)
-    for _ in range(2):
-        poll.assess_merge(
-            ports,
-            "GH-5",
-            ports.documents.load("GH-5"),
-            5,
-            frozenset(),
-            MASTER,
-            cfg=cfg,
-            memo=StackMemo(),
-        )
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lambda _line: None,
+        turn="head",
+    )
+    assert result.kind == "skipped"
     assert calls["issue_state"] == 2
 
 
