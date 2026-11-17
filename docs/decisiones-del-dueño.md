@@ -105,3 +105,8 @@ Una parte que sigue por encima del presupuesto se parte de nuevo; construir ente
 Origen: issue #592, «Owner's rule: a part that is still over budget splits again. Building an oversized part whole is no longer an option.»
 Reemplaza: D-99072874
 Rozan: ADR-0054, ADR-0093
+
+### D-4ec9e036 · 2026-11-14
+Todo lo que una persona ve y se aparta de un dibujo que el dueño aprobó lo decide el dueño, nunca un rol: textos y redacción, formatos (fechas, números, unidades), un elemento mostrado, oculto, agregado o movido, y el orden y la disposición. Las decisiones técnicas y de proceso que dejan igual lo que una persona ve siguen siendo del sistema y del orquestador: cómo partir, tests, CI, flakes y estimaciones.
+Origen: issue #766, «Anything a person sees that departs from a drawing the owner approved is the owner's decision, never a role's.»
+Rozan: ADR-0040

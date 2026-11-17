@@ -791,6 +791,10 @@ class MemoryInbox:
         # state_errors` already uses for `issue_state` -- a declared rejected input,
         # never an accidental `KeyError` off an inbox a scenario forgot to seed.
         self.task_errors = task_errors or set()
+        # GH-809: a number here makes `task` raise this very exception (a sentinel message, an
+        # `OSError`), and `task_calls` counts the reads, as `refs_calls` does for the listing.
+        self.task_exceptions: dict[int, Exception] = {}
+        self.task_calls = 0
         # GH-464: the flake path's own read. `refs` seeds it with titled issues, `refs_error`
         # makes it raise, `refs_calls` counts how often a path listed (none below the threshold).
         self.refs: list[IssueRef] | None = None
@@ -798,6 +802,9 @@ class MemoryInbox:
         self.refs_calls = 0
 
     def task(self, number: int) -> TaskInput:
+        self.task_calls += 1
+        if number in self.task_exceptions:
+            raise self.task_exceptions[number]
         if number in self.task_errors:
             raise ValueError(f"issue #{number} has no body; the roles need a description")
         return self.issues[str(number)]
@@ -862,6 +869,8 @@ class MemoryWorkspace:
         self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
+        # Paths with no `.git` (`is_checkout` is True for every other one, GH-824).
+        self.not_checkouts: set[Path] = set()
         # ADR-0065: the tree a checkout holds (scripted per path; `tree:<path>` otherwise),
         # the setup-tree records `record_setup_tree` made and each call in order.
         self.trees: dict[Path, str] = {}
@@ -1620,6 +1629,9 @@ class MemoryWorkspace:
 
     def checkout_names(self, prefix: str) -> list[str]:
         return sorted(name for name in self.stale_checkouts if name.startswith(prefix))
+
+    def is_checkout(self, path: Path) -> bool:
+        return path not in self.not_checkouts
 
     def remove_checkout(self, name: str) -> None:
         self._noted("remove", name)
@@ -2968,6 +2980,13 @@ PART_DEFAULTS: dict[str, object] = {
 }
 
 
+def _reasons_for(part: dict[str, object]) -> dict[str, object]:
+    """One reason per edge a fake part declares (GH-837), unless the test wrote its own."""
+    edges = part.get("depends_on") or []
+    assert isinstance(edges, list)
+    return {"depends_on_reasons": [f"needs what part {dep} creates" for dep in edges]}
+
+
 def planned_parts(
     *parts: dict[str, object],
     cost: float = 0.3,
@@ -2980,12 +2999,14 @@ def planned_parts(
     test_lines: int = 10,
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
-    given, two chained ones."""
+    given, two, the second needing the first."""
     given = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
         {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
     ]
-    items: list[dict[str, object]] = [{**PART_DEFAULTS, **item} for item in given]
+    items: list[dict[str, object]] = [
+        {**PART_DEFAULTS, **_reasons_for(item), **item} for item in given
+    ]
     markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
         f"#### {i['title']}\n\n{i['body']}" for i in items
     )

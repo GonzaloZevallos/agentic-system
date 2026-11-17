@@ -86,3 +86,42 @@ async def test_from_document_with_no_checkpoint_values_resumes_from_the_document
         "GH-1", cfg, _ports(), from_document=True, dry_run=True, checkpointer=_Saver()
     )
     assert "from:      document" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_drawing_flags_reach_prepare_and_a_malformed_one_is_refused_before_the_lock(
+    tmp_path, capsys, monkeypatch
+):
+    """GH-766: `--drawing` is passed to every prepare call; a bad one is `CannotStart`."""
+    seen: list[tuple[str, ...]] = []
+    real = cli.resuming.prepare
+
+    def spy(*args, drawing_flags=(), **kwargs):
+        seen.append(tuple(drawing_flags))
+        return real(*args, drawing_flags=drawing_flags, **kwargs)
+
+    monkeypatch.setattr(cli.resuming, "prepare", spy)
+    _thread(monkeypatch, {"id": "GH-1", "status": "developing"}, ("developer",))
+    cfg = Configuration(product_dir=tmp_path)
+    with pytest.raises(cli.CannotStart, match="only to a task paused on drawing departures"):
+        await cli._resume(
+            "GH-1",
+            cfg,
+            _ports(),
+            from_document=True,
+            dry_run=True,
+            checkpointer=_Saver(),
+            drawing=("1=accept",),
+        )
+    assert seen == [("1=accept",)]
+    with pytest.raises(cli.CannotStart, match="expected <n>=accept"):
+        await cli._resume(
+            "GH-1",
+            cfg,
+            _ports(),
+            from_document=True,
+            dry_run=True,
+            checkpointer=_Saver(),
+            drawing=("oops",),
+        )
+    assert "Resume?" not in capsys.readouterr().out

@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -197,10 +198,15 @@ class SolutionTurn(InterviewTurn):
 
 
 class DefinitionTurn(InterviewTurn):
-    """The definition interviewer's round once it names the drawings a question depends
-    on (GH-766 part 3). No role uses it yet: `roles.py` keeps `InterviewTurn`."""
+    """The definition interviewer's round (`PRODUCT_ANALYST_INTERVIEWER`): `visible` names
+    the questions whose answer changes something a person sees, so each needs a drawing
+    check (GH-766 part 3)."""
 
-    visible: list[int] = Field(default_factory=list)
+    visible: list[int] = Field(
+        default_factory=list,
+        description="Numbers of the questions of this round whose answer changes what a "
+        "person sees (the `**Qn**` markers); empty if none or when done",
+    )
 
 
 class DrawingDeparture(BaseModel):
@@ -253,6 +259,16 @@ class Answers(RoleOutput):
         default_factory=list,
         description="Numbers, from `## With the human` as received this round, of the "
         "questions this round's answers settle after all; empty if none",
+    )
+    drawing_checks: list[DrawingCheck] = Field(
+        default_factory=list,
+        description="One check, with ref `Q<n>`, for every question marked visible; "
+        "empty when no question is visible",
+    )
+    departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="One departure, with the same drawing and element, for every check "
+        "that says `departs`; empty if none",
     )
 
 
@@ -429,6 +445,16 @@ class Consultation(RoleOutput):
         description="Numbers, from `## With the human` as received this consultation, "
         "of the questions these answers settle after all; empty if none",
     )
+    drawing_checks: list[DrawingCheck] = Field(
+        default_factory=list,
+        description="One check, with ref `Q<n>`, for every question marked visible; "
+        "empty when no question is visible",
+    )
+    departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="One departure, with the same drawing and element, for every check "
+        "that says `departs`; empty if none",
+    )
     definitions: list[CapabilityFile] = Field(
         description="The capability files whose behaviour an answer changes or completes, "
         "each complete (not a diff) with its `## Jobs`. Empty when no answer changes the "
@@ -489,8 +515,19 @@ class Part(BaseModel):
     )
     depends_on: list[int] = Field(
         default_factory=list,
-        description="Numbers of the EARLIER parts that must be merged before this one starts "
-        "(1 is the first part). Empty when it can start at once",
+        description="Numbers of the earlier parts whose code this part needs (it calls, imports, "
+        "extends or migrates something that part creates; 1 is the first part). Empty when it "
+        "can start at once, which is preferred",
+    )
+    depends_on_reasons: list[str] = Field(
+        default_factory=list,
+        description="One reason per `depends_on` entry, in the same order: one line naming what "
+        "the other part creates and this part needs. Empty when `depends_on` is",
+    )
+    overlap_risk: str = Field(
+        default="",
+        description="One line naming the files this part is expected to touch that another "
+        "independent part also touches. Empty otherwise",
     )
     hand_files: int = Field(
         ge=0,
@@ -511,13 +548,16 @@ class Part(BaseModel):
     )
     kind: PartKind = Field(
         description="`migration` for a part that converts or moves existing data, and only "
-        "for that: it is always a part of its own, ordered next to the part it depends on or "
-        "the part that depends on it. `change` for everything else"
+        "for that: it is always a part of its own, and its neighbour (the part it depends on "
+        "or the part that depends on it) is a real edge with a reason. `change` for "
+        "everything else"
     )
     guard: str = Field(
         description="Empty when this part leaves no user-visible behaviour unfinished. "
-        "Otherwise how it stays unreachable until the last part that finishes it: out of the "
-        "navigation, or behind a flag, and where"
+        "Otherwise how it stays unreachable until the part that finishes it lands: out of the "
+        "navigation, or behind a flag, and where. With no edges it must hold if this part "
+        "lands alone, in any order among its siblings; a guard that waits for a sibling is "
+        "an edge with a reason"
     )
 
 
@@ -550,6 +590,21 @@ class DesignReview(RoleOutput):
     reason: str = Field(description="One line. On `returned`, what the thinker must fix")
     items: list[DesignItem] = Field(
         description="Every remark, blocking or observation; empty only when there is none"
+    )
+
+
+class FinalDesignReview(DesignReview):
+    """A final-validation design review that also reports the drawing checks it made and
+    the departures it found (GH-766 part 5). No role uses it yet: `roles.py` keeps
+    `DesignReview`. Both lists are required and may be empty."""
+
+    drawing_checks: list[DrawingCheck] = Field(
+        description="One check per question or screen compared against its approved "
+        "drawing; empty only when none was due"
+    )
+    departures: list[DrawingDeparture] = Field(
+        description="Every visible departure from an approved drawing, one per `departs` "
+        "check; empty only when there is none"
     )
 
 
@@ -765,7 +820,7 @@ class TechPlan(RoleOutput):
         default_factory=list,
         description="Only for a task that is not itself a part of a split, and only when the "
         "estimate does not fit (over the size limit the system sets, or the history's "
-        "reference says so): at least two chained parts, each a small task of its own, in the "
+        "reference says so): at least two parts, each a small task of its own, in the "
         "order to build them, and no subtasks. A part of a split never writes `parts`. Empty "
         "when the plan fits",
     )
@@ -832,6 +887,14 @@ class TechPlan(RoleOutput):
         "characters with no backtick, `{{` or link: the system writes it as the product's "
         "`Breaking-API:` line in the pull request body. An empty string when the task breaks "
         "no API",
+    )
+
+    drawing_departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="Every visible simplification of the plan against an approved drawing: "
+        "what the drawing shows, what would ship instead, and your recommendation. Declare "
+        "each one here and never decide it yourself; the system numbers them and the owner "
+        "answers each. Empty when nothing visible departs from a drawing",
     )
 
     promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
@@ -1235,22 +1298,23 @@ def _lines(text: str) -> list[str]:
 def parts_check(
     parts: list[dict[str, Any]],
     ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
-    *,
-    one_terminal: bool = False,
 ) -> None:
     """The structure of a split: at least two parts, each with a title and a body, each
-    depending only on earlier parts, once. Earlier-only is what keeps the chain acyclic.
+    depending only on earlier parts, once. Earlier-only is what keeps the edges acyclic.
+
+    An edge is a real need of code another part creates, and carries its reason, one per
+    `depends_on` entry in the same order; `overlap_risk` (which may be empty) names files an
+    independent part also touches. Both are read with an empty default, so a part without
+    them has no edge to explain. Their refusals, and the migration's, come in one message.
 
     A part that declares its size (GH-592) is judged on it times `ratio`, the same floor the
     plan is judged with, and must fit the size budget: a part is a task of its own. A part
     of kind `migration` has a neighbour in `depends_on`, before it or after it, so a data
-    conversion never stands alone. With `one_terminal`, set when the plan is written by a part,
-    exactly one part is depended on by none: its pull request closes the parent part's issue,
-    and every other part reaches it."""
+    conversion never stands alone. Which parts are sinks is `rules.last_part_numbers`'s."""
     if len(parts) < 2:
         raise ValueError(
             f"a split needs at least two parts, this one has {len(parts)}: "
-            "a plan that does not fit is cut into chained tasks"
+            "a plan that does not fit is cut into parts, each a task of its own"
         )
     for number, part in enumerate(parts, 1):
         if not part["title"].strip():
@@ -1266,10 +1330,54 @@ def parts_check(
                 raise ValueError(
                     f"part {number} depends on part {dep}: a part depends only on earlier parts"
                 )
+    refusals = _reason_pass(parts)
+    try:
+        _migration_check(parts)
+    except ValueError as refusal:
+        refusals.append(str(refusal))
+    if refusals:
+        raise ValueError("; ".join(refusals))
     _size_pass(parts, ratio)
-    _migration_check(parts)
-    if one_terminal:
-        _terminal_check(parts)
+
+
+def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
+    if reasons > edges:
+        return "remove the extra reason or add the edge it explains"
+    if part.get("kind") == "migration":
+        return "write the missing reason: a migration keeps its edge"
+    return (
+        "write the missing reason, naming what that part creates, "
+        "or remove the edge if this part can start alone"
+    )
+
+
+def _reason_pass(parts: list[dict[str, Any]]) -> list[str]:
+    """Every refusal of the reasons and `overlap_risk` of the parts, in part order, then
+    field order: one retry shows all of them."""
+    refusals: list[str] = []
+    for number, part in enumerate(parts, 1):
+        edges = len(part["depends_on"])
+        reasons = part.get("depends_on_reasons", [])
+        if len(reasons) != edges:
+            refusals.append(
+                f"part {number} has {edges} depends_on and {len(reasons)} depends_on_reasons: "
+                + _edge_fix(part, edges, len(reasons))
+            )
+        for index, reason in enumerate(reasons):
+            refusal = plan_view.part_line_refusal(
+                number, f"depends_on_reasons[{index}]", reason, may_be_empty=False
+            )
+            if refusal:
+                refusals.append(f"{refusal}: one plain line naming what the other part creates")
+        refusal = plan_view.part_line_refusal(
+            number, "overlap_risk", part.get("overlap_risk", ""), may_be_empty=True
+        )
+        if refusal:
+            refusals.append(
+                f"{refusal}: one plain line naming the files another independent part also "
+                "touches, or empty"
+            )
+    return refusals
 
 
 def _size_pass(parts: list[dict[str, Any]], ratio: size_budget.Ratio) -> None:
@@ -1300,18 +1408,6 @@ def _migration_check(parts: list[dict[str, Any]]) -> None:
                 f"part {number} is a migration with no neighbour: it must depend on the part "
                 "that writes both shapes, or be depended on by the part that reads the new one"
             )
-
-
-def _terminal_check(parts: list[dict[str, Any]]) -> None:
-    listed = {dep for part in parts for dep in part["depends_on"]}
-    sinks = [number for number in range(1, len(parts) + 1) if number not in listed]
-    if len(sinks) != 1:
-        found = ", ".join(str(number) for number in sinks)
-        raise ValueError(
-            "a part that splits needs exactly one terminal part, the one no other part depends "
-            f"on, so that its pull request closes this part's issue; this plan has {len(sinks)} "
-            f"(parts {found}): make the last part depend on the others"
-        )
 
 
 def _tracker_only_check(data: dict[str, Any]) -> None:
@@ -1561,6 +1657,22 @@ def _has_human_item(data: dict[str, Any]) -> bool:
     )
 
 
+_NO_REJECTED: Mapping[str, int] = MappingProxyType({})
+
+
+def _rejected_again_check(data: dict[str, Any], rejected: Mapping[str, int]) -> None:
+    """Refuses a plan that declares again a departure the owner rejected. The reason names
+    the path, the element and the number, never the internal key."""
+    for raw in data.get("drawing_departures") or []:
+        number = rejected.get(departure_key(raw["drawing"], raw["element"]))
+        if number is not None:
+            raise ValueError(
+                f"drawing_departures declares again departure #{number}, the element "
+                f"`{raw['element']}` of {raw['drawing']}, which the owner rejected: build "
+                "what the drawing shows and drop it from the plan"
+            )
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1576,6 +1688,7 @@ def plan_check_for(
     size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
     has_spec: bool = False,
     spec_path: str | None = None,
+    rejected: Mapping[str, int] = _NO_REJECTED,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1623,7 +1736,11 @@ def plan_check_for(
     refused with `spec_human_item`, unless it sets `spec_conflict`: a spec delivery never asks
     the owner a question outside the three spec causes. With `spec_path` (the same delivery's spec
     file) a plan whose subtasks' `files` or `required_paths` name it is refused with
-    `spec_protected`: no unit changes the spec. Without a spec nothing changes."""
+    `spec_protected`: no unit changes the spec. Without a spec nothing changes.
+
+    With `rejected` (departure key to number, from `drawing_answer.PlanSplit`) a plan whose
+    `drawing_departures` declares one of them again is refused, naming path, element and `#n`.
+    With the empty map the check is what it was."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
@@ -1636,6 +1753,7 @@ def plan_check_for(
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
         _ci_names_check(data, workflow, stack_ci)
+        _rejected_again_check(data, rejected)
         if has_spec and not data.get("spec_conflict") and _has_human_item(data):
             raise ValueError(SPEC_HUMAN_ITEM_REFUSAL)
         if spec_path and _names_path(data, spec_path):
@@ -1656,7 +1774,7 @@ def plan_check_for(
             _tracker_only_check(data)
             return
         if parts:
-            parts_check(parts, size_ratio, one_terminal=part_of is not None)
+            parts_check(parts, size_ratio)
         else:
             plan_check(data)
             _revision_check(existing_ids, subtasks)
@@ -1691,7 +1809,8 @@ def plan_check_for(
             raise ValueError(
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
-                f"at least two chained tasks, and no subtasks. {_size_words(fit, size_ratio)}"
+                "at least two tasks, each a task of its own, and no subtasks. "
+                f"{_size_words(fit, size_ratio)}"
                 f"{SPLIT_NOT_WAIVED}"
             )
         if plan_shape != DEFAULT_PLAN_SHAPE:

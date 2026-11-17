@@ -216,6 +216,11 @@ aterrizaje sincroniza), `ci_no_verdict` (GitHub no dio veredicto; escala y se li
 cabeza/upstream) y `ci_untrusted_no_dispatch` (cabeza no confiable sin `ci_dispatch`; queda para el
 humano). No se agregan métricas ni spans.
 
+Tres valores más, de la tarea apilada (GH-859): `stack_parent_unmerged` (el padre no llegó al
+upstream; el aterrizaje espera), `stack_restack_due` (el padre aterrizó y el hijo toma master una
+vez) y `stack_base_orphaned` (la cabeza registrada nunca llegará a la base; queda para el humano).
+Siguen siendo valores cerrados del mismo atributo: no se agregan métricas ni spans.
+
 ## Dashboards
 
 Un solo dashboard para los dos productos, «¿Dónde se va el tiempo?», definido en

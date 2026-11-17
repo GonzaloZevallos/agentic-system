@@ -89,3 +89,5 @@ recorrido real ni comparaciones y su documento lo dice.
   tarea tiene que absorberlo.
 
 **Adenda 2026-11-04 (GH-469).** `final_validation` ya no es un nodo propio: corre junto con los demás verificadores de la cabeza integrada en `verify`. Ver [ADR-0084](0084-verificadores-de-la-cabeza-integrada-en-conjunto.md).
+
+**Adenda 2026-11-15 (GH-766).** La regla posterior del dueño D-4ec9e036 prevalece sobre este ADR: la observación al diseño ya no cubre nada visible que se aparte del dibujo aprobado. Eso es una desviación del dibujo, que espera al dueño y se responde por número.

@@ -196,7 +196,15 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   `core.process.adapters`; solo las excepciones de `core.process.application.ports`, que mapea
   por tipo a la causa de la página). La composición lo arma con `composition.backfill_listing`,
   sobre `composition.backfill_gh_read`: una sola llamada por página, sin reintento ni línea
-  impresa.
+  impresa. `backfill_listing` devuelve `(listing, cache)`: la clave `owner/repo`
+  (`repo_key(origin)`) se construye una vez y nombra tanto la ruta de las páginas como el
+  archivo de la caché; sin clave (sin `origin` de GitHub) la caché es `NoCache`.
+- `adapters/filesystem/` (GH-803): `agentic/core/measurement/adapters/filesystem/read_cache.py:FilesystemReadCache`
+  cumple `ReadCache` con un archivo JSON por repositorio,
+  `$XDG_CACHE_HOME/agentic/scores-reads/<owner>__<repo>.json` (`composition.backfill_cache_root`),
+  que guarda solo los items crudos de cada página con su `read_at` y `open`. Escribe tras cada
+  página por una única función (`_write_atomic`: archivo temporal con el pid y `os.replace`);
+  un archivo ilegible, corrupto o de otra versión es una lectura nueva y se sobrescribe.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

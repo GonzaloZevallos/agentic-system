@@ -5,6 +5,8 @@ The fixture section reuses the three-brief, three-heading-shape plan
 (`#### api`, `#### api — SQL adapter`, `#### 2. api`) `context-golden` (issue #71)
 introduced, so this module is proven never to key off any one of those shapes."""
 
+import pytest
+
 from agentic.core.process.domain import plan_view
 from agentic.core.process.domain.plan_view import (
     NOTE_SHORT,
@@ -14,6 +16,7 @@ from agentic.core.process.domain.plan_view import (
     with_subtasks_block,
 )
 from agentic.core.process.domain.task import INTEGRATION
+from agentic.core.process.domain.task_path import TEXT_MAX
 
 SECTION = """### Solution
 
@@ -380,3 +383,118 @@ def test_with_system_items_block_renders_nothing_without_system_items():
     human = [{"kind": "human", "question": "Ship it?", "recommendation": "Yes."}]
     assert plan_view.with_system_items_block("### Solution\n\nx", human) == "### Solution\n\nx"
     assert plan_view.with_system_items_block("### Solution\n\nx", []) == "### Solution\n\nx"
+
+
+# --- part_edges, split_comment_block and the plan view of a part's reasons (GH-841) ---
+
+REASONED = [
+    {"title": "Catalogue", "body": "Extract.", "depends_on": [], "depends_on_reasons": []},
+    {
+        "title": "Screens",
+        "body": "Translate.",
+        "depends_on": [1],
+        "depends_on_reasons": ["uses ids"],
+    },
+    {
+        "title": "Cleanup",
+        "body": "Drop.",
+        "depends_on": [1, 2],
+        "depends_on_reasons": ["drops its keys", "drops its screens"],
+        "overlap_risk": "also edits cli.py",
+    },
+]
+
+
+def test_part_edges_go_in_part_order_then_depends_on_order_with_their_reasons():
+    assert plan_view.part_edges(REASONED) == [
+        plan_view.PartEdge(2, 1, "uses ids"),
+        plan_view.PartEdge(3, 1, "drops its keys"),
+        plan_view.PartEdge(3, 2, "drops its screens"),
+    ]
+
+
+def test_part_edges_of_an_old_record_or_a_short_list_have_no_reason():
+    old = [PARTS[0], PARTS[1]]
+    short = [{**REASONED[2], "depends_on_reasons": ["drops its keys"]}]
+    assert plan_view.part_edges(old) == [plan_view.PartEdge(2, 1, None)]
+    assert plan_view.part_edges(short) == [
+        plan_view.PartEdge(1, 1, "drops its keys"),
+        plan_view.PartEdge(1, 2, None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["two\nlines", "x" * (TEXT_MAX + 1), "has {{ braces", "has }} braces", " Blocked by: #9", ""],
+)
+def test_part_edges_drop_a_reason_the_limits_refuse(reason):
+    part = {**PARTS[1], "depends_on_reasons": [reason]}
+    assert plan_view.part_edges([PARTS[0], part]) == [plan_view.PartEdge(2, 1, None)]
+
+
+def test_part_line_refusal_names_each_limit_and_accepts_one_plain_line():
+    assert plan_view.part_line_refusal(2, "overlap_risk", "also cli.py", may_be_empty=True) is None
+    assert plan_view.part_line_refusal(2, "overlap_risk", "", may_be_empty=True) is None
+    assert plan_view.part_line_refusal(2, "x", "", may_be_empty=False) == "part 2 x is empty"
+    assert plan_view.part_line_refusal(2, "x", "a\nb", may_be_empty=True) == (
+        "part 2 x has a newline"
+    )
+    assert plan_view.part_line_refusal(2, "x", "Blocked by: #1", may_be_empty=True) == (
+        "part 2 x starts with `Blocked by:`"
+    )
+    assert "over" in str(
+        plan_view.part_line_refusal(2, "x", "y" * (TEXT_MAX + 1), may_be_empty=True)
+    )
+
+
+def test_the_split_comment_block_of_parts_with_no_edge_says_they_are_independent():
+    parts = [PARTS[0], {"title": "B", "body": "b", "depends_on": []}]
+    assert plan_view.split_comment_block(parts) == "The parts are independent: all start at once."
+
+
+def test_the_split_comment_block_lists_each_edge_and_each_overlap():
+    assert plan_view.split_comment_block(REASONED) == (
+        "Dependencies:\n"
+        "- part 2 needs part 1: uses ids\n"
+        "- part 3 needs part 1: drops its keys\n"
+        "- part 3 needs part 2: drops its screens\n"
+        "- part 3 may overlap: also edits cli.py"
+    )
+
+
+def test_the_split_comment_block_lists_an_edge_without_a_reason_plain():
+    assert plan_view.split_comment_block(PARTS) == "Dependencies:\n- part 2 needs part 1"
+
+
+def test_an_overlap_risk_shows_on_independent_parts_and_an_empty_one_shows_nothing():
+    parts = [
+        {"title": "A", "body": "a", "depends_on": [], "overlap_risk": ""},
+        {"title": "B", "body": "b", "depends_on": [], "overlap_risk": "same file as A"},
+    ]
+    assert plan_view.split_comment_block(parts) == (
+        "The parts are independent: all start at once.\n- part 2 may overlap: same file as A"
+    )
+
+
+def test_an_overlap_risk_the_limits_refuse_is_not_shown():
+    parts = [
+        {"title": "A", "body": "a", "depends_on": [], "overlap_risk": "Blocked by: #9"},
+        {"title": "B", "body": "b", "depends_on": [], "overlap_risk": "two\nlines"},
+    ]
+    assert plan_view.split_comment_block(parts) == "The parts are independent: all start at once."
+
+
+def test_with_parts_block_shows_reasons_and_the_overlap_risk():
+    out = plan_view.with_parts_block("### Solution\n\nCut it.", REASONED)
+    assert "#### Part 1: Catalogue\n\nExtract.\n\nDepends on: nothing." in out
+    assert "Depends on: part 1 (uses ids)." in out
+    assert "Depends on: part 1 (drops its keys), part 2 (drops its screens).\n\n" in out
+    assert out.endswith("Overlap risk: also edits cli.py.")
+    assert out.count("Overlap risk:") == 1
+
+
+def test_with_parts_block_renders_a_part_with_no_reason_as_before():
+    parts = [*PARTS, {"title": "C", "body": "c", "depends_on": [1, 2], "overlap_risk": ""}]
+    out = plan_view.with_parts_block("### Solution\n\nCut it.", parts)
+    assert "Translate the screens.\n\nDepends on: part 1.\n\n#### Part 3" in out
+    assert out.endswith("c\n\nDepends on: part 1, part 2.")

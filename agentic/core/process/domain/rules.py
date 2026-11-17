@@ -21,13 +21,16 @@ from . import (
     adr_dated,
     adr_numbers,
     ci,
+    drawing,
     escalation_prompts,
     exempt_queue,
+    launch_order,
     merge_ci,
     presubmit,
     restart,
     retakes,
     size_budget,
+    stacking,
     task_path,
     tracker_items,
 )
@@ -3086,6 +3089,33 @@ def repetition_sentence(prev_version: int) -> str:
     )
 
 
+def repetition_for(state: TaskState, unit: str) -> str:
+    """The repetition sentence the returned Developer's `extra_input` carries, or `""`: the one
+    place that decides it (invariant 8, once per attempt). It holds only when the highest-version
+    valid read of `full_checks_reads` is that of the current `full_checks` record (same version
+    and commit; a failed read that was never stored leaves an older one, which says nothing about
+    this record), the failure `repeat`s, and the unit's `full_checks` section does not reach the
+    Developer: `_ci_red` already ends that section with this sentence, so it rides here only
+    when `return_sections` does not carry it (a clean restart). Never raises on malformed rows."""
+    record = state.get("full_checks")
+    reads = state.get("full_checks_reads", [])
+    valid = _valid_by_version(reads)
+    earlier = previous_read(reads)
+    if record is None or not valid or earlier is None:
+        return ""
+    newest = valid[-1]
+    if newest["version"] != record.get("version"):
+        return ""
+    read_head, record_head = newest.get("head"), record.get("head")
+    if not isinstance(read_head, str) or not same_commit(read_head, record_head):
+        return ""
+    if repeated_ci_failure(reads) != "repeat":
+        return ""
+    if _section_of(unit, "full_checks") in return_sections(state, unit):
+        return ""
+    return repetition_sentence(earlier["version"])
+
+
 def full_checks_excerpt_due(
     state: TaskState, unit: str, head: str
 ) -> Literal["read", "dispatch", "none"]:
@@ -3561,9 +3591,11 @@ def resumed(
     estimate: float | None = None,
     *,
     at: str,
+    drawing_plan: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
+    `drawing_plan` (GH-766) owes the plan again: only `drawing_answer.resume_patch` passes it.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
     from the merges it just did, and only that one knows what conflicted. Returns a
@@ -3610,6 +3642,8 @@ def resumed(
         # plan is made again, with the same budget.
         patch["parts"] = []
         patch["plan_due"] = True
+    if drawing_plan:
+        patch["plan_due"] = True  # the owner answered the plan's own departures
     if (
         state.get("escalation_class") == "estimate"
         and (decided or estimate is not None)
@@ -5227,8 +5261,9 @@ class LandCandidate:
 
 @dataclass(frozen=True)
 class Deferred:
-    """A merge, land or orphan retake `poll_plan` held back this round, and why: `no_slot` (a
-    `land_model` child or an `orphan` retake needs a slot and none is left, headroom included),
+    """A merge, land, orphan retake or launch `poll_plan` held back this round, and why: `no_slot`
+    (a `land_model` child, an `orphan` retake or a `launch` needs a slot and none is left,
+    headroom included),
     `exempt_busy` (the one exempt
     child the machine allows is already live, or this round already starts one),
     `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
@@ -5236,27 +5271,47 @@ class Deferred:
     `land_queued` (a `land_model` land with a slot to start in, yielding to another product's
     land whose wait began earlier: first come, first landed, GH-362) or `backoff` (a merge whose
     refusal wrote nothing and still holds on the same head and master, GH-500: it is not tried
-    again until one moves or `exempt_queue.EXEMPT_REFUSAL_BACKOFF` runs out)."""
+    again until one moves or `exempt_queue.EXEMPT_REFUSAL_BACKOFF` runs out).
 
-    kind: Literal["merge", "land", "orphan"]
+    A `launch` (GH-836) is an unblocked candidate the plan did not start, with exactly one of
+    `space_held` (the round is held by the free-space floor), `schedule` (its own attempt
+    calendar has not come), `resume_waiting` (a resume of the product still waits out its
+    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence."""
+
+    kind: Literal["merge", "land", "orphan", "launch"]
     issue: int
-    reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting", "backoff"]
+    reason: Literal[
+        "no_slot",
+        "land_queued",
+        "exempt_busy",
+        "pause_waiting",
+        "backoff",
+        "pacing",
+        "resume_waiting",
+        "space_held",
+        "schedule",
+    ]
 
 
 def holds_launches(deferred: Deferred) -> bool:
     """Whether this deferral opens an Espera de aterrizaje (ADR-0045 addendum, GH-362): the
-    product's poller publishes it, and the other products hold every counted start below a
-    land while it lasts. Only a `land` that waits does, for a slot (`no_slot`) or for an earlier
-    wait of another product (`land_queued`): `exempt_busy` is the serialisation of the children
-    that take no slot, and `pause_waiting` waits on the
+    product's poller publishes it, and the other products hold every resume and retake below a
+    land while it lasts (a launch is no longer held, GH-836). Only a `land` that waits does, for
+    a slot (`no_slot`) or for an earlier wait of another product (`land_queued`): `exempt_busy`
+    is the serialisation of the children that take no slot, and `pause_waiting` waits on the
     account's calendar, which another product's start does not lengthen. `backoff` is a merge
-    that waits on its own refusal, never on a slot."""
+    that waits on its own refusal, never on a slot. A deferred `launch` never opens one: a
+    launch waiting is not a land waiting."""
+    if deferred.kind == "launch":
+        return False
     match deferred.reason:
         case "no_slot" | "land_queued":
             return deferred.kind == "land"
         case "exempt_busy" | "pause_waiting":
             return False
         case "backoff":
+            return False
+        case "pacing" | "resume_waiting" | "space_held" | "schedule":
             return False
         case _:
             assert_never(deferred.reason)
@@ -5352,6 +5407,14 @@ def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple
     )
 
 
+def sweeps_when_held(held: tuple[str, ...]) -> bool:
+    """Whether a round held by the floor still runs the closed-task worktree sweep (GH-865): when
+    the product volume is among the holds. The sweep starts no child and writes nothing to scratch
+    or `/tmp`, and it is what frees the product volume; scratch usually shares its filesystem, so
+    'held only by the product volume' would never be true. The only place this is decided."""
+    return PRODUCT_VOLUME in held
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
@@ -5375,14 +5438,16 @@ def poll_plan(
     exempt_attempts: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt] = {},
     backed_off_merges: Sequence[int] = (),
     exempt_yield: bool = False,
+    dependents: Mapping[int, int] = {},
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
     counts against the cap, nearest to merge first (`closeness`, below): every `retakes`
     and `crash_retakes` issue (a run a reboot interrupted, `interrupted_run`, or one that
-    raised) and the due resumes, together, while `available_slots` lasts; at most one launch,
-    the lowest-numbered issue with every blocker resolved and its own wait (if any) elapsed
-    -- and only when no eligible pause anywhere in the
+    raised) and the due resumes, together, while `available_slots` lasts; then one launch per
+    slot left (GH-836), taken from the issues with every blocker resolved and its own wait (if
+    any) elapsed, in the Orden de lanzamiento (`dependents`, below) -- and only when no
+    eligible pause anywhere in the
     product is still waiting out its own calendar (its own next slot has not arrived
     yet, but one is still scheduled), whether or not a slot is free for it. A pause
     whose calendar is spent (`resume_exhausted`) does not count as "still waiting": it
@@ -5403,9 +5468,13 @@ def poll_plan(
     land competes at the rank of `CLOSENESS` "land", so it goes first in `actions`.
 
     `others_landing` (GH-362, Espera de aterrizaje) is true while another product has a fresh
-    published wait for a land: every start ranked below a land is held, that is every launch,
-    resume and retake, whatever its phase. Lands, closes and the children that take no slot
-    are untouched, and nothing held leaves a deferral.
+    published wait for a land: every resume and retake is held, whatever its phase, and nothing
+    held leaves a deferral. Launches are not held by it (GH-836): one product's land wait never
+    stops the other's launches. Lands, closes and the children that take no slot are untouched.
+
+    `dependents` (GH-836, `launch_order.dependents`) maps an issue to how many open issues wait
+    on it, transitively; a missing key is zero. The ready launches go in
+    `launch_order.launch_key` order: most dependents first, then the lowest issue.
 
     `earlier_land_wait` (GH-362, `land_queued_behind`) is true while another product's wait
     for a land began earlier than this product's own: the `land_model` land that would start
@@ -5451,16 +5520,22 @@ def poll_plan(
     `land_checks` land that did not start is `exempt_busy`, except a backed-off merge, which is
     `backoff`.
 
-    `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
-    if `paced_launch_fits` says so, counting this round's retakes and resumes as live
-    runs (a launch after one on an empty machine is the second run) against a ceiling of
-    `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
-    are never gated, and a waiting pause still blocks every launch.
+    `pace` (GH-177, `None` is today's behaviour) gates only the launches: each one goes out
+    only if `paced_launch_fits` says so, counting this round's retakes and resumes, and the
+    launches already decided in the same round, as live runs (a launch after one on an empty
+    machine is the second run) against a ceiling of `pace.live_runs` plus the `available_slots`
+    received. The first that does not fit ends the launches of the round. Closes, retakes and
+    resumes are never gated, and a waiting pause still blocks every launch.
+
+    Every unblocked launch candidate that does not start is `Deferred("launch", issue, reason)`
+    with one reason, by precedence: `space_held`, `schedule`, `resume_waiting`, then `pacing` or
+    `no_slot`. A blocked candidate is neither launched nor deferred here.
 
     `orphan_retakes` (GH-403, `orphaned_run`) are the issues whose run left no lock: they are
     retakes in every respect (the same cap, the same closeness order, the same holds), with
     `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
-    only source of its line; a round held by `others_landing` or `held` defers nothing.
+    only source of its line; a round held by `others_landing` or `held` defers no orphan (a
+    `held` round does defer its unblocked launches, as `space_held`).
 
     `spent_retakes` (GH-466) are the issues whose retake budget is spent and not yet announced:
     each is a `retakes_spent` action, which spawns nothing and so takes no slot, comes right
@@ -5469,11 +5544,16 @@ def poll_plan(
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
     not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
     merge starts, because a start would write scratch to a disk that is almost full. It defers
-    nothing, so it opens no Espera de aterrizaje."""
+    only the unblocked launch candidates, each `space_held` (GH-836), so it opens no Espera de
+    aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
+    unblocked = sorted(
+        (c for c in launches if not c.blocked),
+        key=lambda c: launch_order.launch_key(c.issue, dependents),
+    )
     if held:
-        return PollPlan(actions, [])
+        return PollPlan(actions, [Deferred("launch", c.issue, "space_held") for c in unblocked])
     received_slots = available_slots
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
@@ -5540,32 +5620,35 @@ def poll_plan(
     some_resume_still_waiting = any(
         not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
     )
-    if slots_left > 0 and not some_resume_still_waiting and not others_landing:
-        ready = sorted(
-            (
-                c
-                for c in launches
-                if not c.blocked
-                and (
-                    c.since is None
-                    or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE)
-                    is not None
-                )
-            ),
-            key=lambda c: c.issue,
-        )
-        if ready and (
-            pace is None
-            or paced_launch_fits(
+    due = [
+        c
+        for c in unblocked
+        if c.since is None
+        or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE) is not None
+    ]
+    deferred.extend(Deferred("launch", c.issue, "schedule") for c in unblocked if c not in due)
+    if some_resume_still_waiting:
+        deferred.extend(Deferred("launch", c.issue, "resume_waiting") for c in due)
+    else:
+        launched = 0
+        for position, c in enumerate(due):
+            if slots_left == 0:
+                reason: Literal["no_slot", "pacing"] = "no_slot"
+            elif pace is not None and not paced_launch_fits(
                 spent_usd=pace.spent_usd,
                 covered_s=pace.covered_s,
-                live_runs=pace.live_runs + started,
+                live_runs=pace.live_runs + started + launched,
                 ceiling=pace.live_runs + received_slots,
                 pace_usd_per_h=pace.pace_usd_per_h,
-            )
-        ):
-            actions.append(PollAction("launch", ready[0].issue, arm=ready[0].arm))
-            slots_left -= 1
+            ):
+                reason = "pacing"
+            else:
+                actions.append(PollAction("launch", c.issue, arm=c.arm))
+                slots_left -= 1
+                launched += 1
+                continue
+            deferred.extend(Deferred("launch", rest.issue, reason) for rest in due[position:])
+            break
 
     deferred.extend(Deferred("merge", issue, "backoff") for issue in sorted(set(backed_off_merges)))
     exempt_merges = sorted(set(merges) - set(backed_off_merges))
@@ -5718,6 +5801,7 @@ MergeRefusal = Literal[
     "not_approved",
     "head_not_reviewed",
     "perf_unverified",
+    "drawing_unsettled",
     "criteria_over_cap",
     "criteria_unreadable",
     "open_findings_blocking",
@@ -5737,6 +5821,9 @@ MergeRefusal = Literal[
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
+    "stack_parent_unmerged",
+    "stack_restack_due",
+    "stack_base_orphaned",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -5757,10 +5844,16 @@ MergeRefusal = Literal[
   QA Performance run is not `approved`, or it was not measured on the pull request's own head
   (a missing or short sha fails closed). Right after `head_not_reviewed`, so a head nobody
   reviewed is never reported as a performance problem. The landing leaves it to the human.
+- `drawing_unsettled` (GH-766 part 5): the state carries a `drawing_checks` record
+  (`MergeFacts.drawing_checked`) and it does not cover this head, or a row of it is still open.
+  Covering is `full_commit_id(drawing_head)` and `head_reviewed(drawing_head, close_docs,
+  pr_head)`, not `same_commit`: PM's final validation leaves the `close_docs` commit on top of
+  the head the drawing was verified on, and a strict comparison would hold every task with a
+  design. Open is `drawing_open > 0`. Right after `perf_unverified`. Left to the human.
 - `criteria_over_cap` (GH-334): the head puts a criteria document past `CRITERIA_MAX_LINES`
   while making it longer than the merge base had it (`MergeFacts.criteria_regressed`, the
   messages naming file and count). The state master already holds is not refused, only what
-  the pull request adds. Right after `perf_unverified`, before any finding. Left to the human.
+  the pull request adds. Right after `drawing_unsettled`, before any finding. Left to the human.
 - `criteria_unreadable` (GH-334): the criteria documents could not be read at the merge base
   or the head (`criteria_regressed is None`), so nothing proves the head adds no excess. Fails
   closed, same place and same landing step.
@@ -5807,6 +5900,14 @@ MergeRefusal = Literal[
 - `ci_untrusted_no_dispatch` (GH-463): the head touches the CI's own definition and the stack
   declares no `ci_dispatch`: no workflow of the base can judge it and the local suite no
   longer runs for a `ci:` product, so it is left to the human at once.
+- `stack_parent_unmerged` (GH-855): a stacked child whose parent has not reached upstream, or
+  whose ancestry could not be read (`MergeFacts.stack`, `stacking.refusal`). Right after
+  `eval_set`, before any conflict, merge or check outcome, so nothing is run for a child that
+  cannot merge yet.
+- `stack_restack_due` (GH-855): the parent landed and the child does not hold its head; one
+  merge of master, never a rebase, is due. A conflicting head is `merge_conflict` instead.
+- `stack_base_orphaned` (GH-855): the record is unreadable, or the parent closed without its
+  recorded head reaching upstream (rebuilt, not planned, squashed). Left to the human.
 """
 
 
@@ -5918,6 +6019,11 @@ class MergeFacts:
     perf_convened: bool = False
     perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
+    # GH-766 part 5: the `drawing_checks` record, read only by `drawing_merge_facts`. Without
+    # one `drawing_checked` is False and the other two say nothing.
+    drawing_checked: bool = False
+    drawing_head: str | None = None
+    drawing_open: int = 0
     criteria_regressed: tuple[str, ...] | None = ()
     ci_plan_only: tuple[str, ...] = ()
     ci_red_on_base: tuple[str, ...] = ()
@@ -5933,6 +6039,9 @@ class MergeFacts:
     ci_dispatch_declared: bool = False
     ci_covered: bool | None = None
     ci_run_inert: bool | None = None
+    # GH-855: the stacked start's facts; `None` for a task that is not stacked, which decides as
+    # it always did and triggers no stacking read.
+    stack: stacking.StackFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -6116,6 +6225,70 @@ def perf_merge_facts(
     return (True, latest.get("perf_verdict"), latest.get("perf_head"))
 
 
+def _drawing_rows(record: Mapping[str, object]) -> list[Mapping[str, object]] | None:
+    """The rows of a `drawing_checks` record when it is a list of mappings that each carry a
+    `str` verdict, else `None`: the record is malformed."""
+    rows = record.get("rows")
+    if not isinstance(rows, list):
+        return None
+    if not all(isinstance(row, Mapping) and isinstance(row.get("verdict"), str) for row in rows):
+        return None
+    return rows
+
+
+def drawing_merge_facts(state: TaskState) -> tuple[bool, str | None, int]:
+    """`(checked, head, open)` for `MergeFacts`, the only reader of the `drawing_checks` record
+    (GH-766 part 5). `checked` is the record being present at all, so a present one never reads
+    as absent, whatever it holds. `head` is the stored head when it is a `str`. `open` is the
+    larger of the stored count (an `int` >= 0, else 1) and the rows still open by
+    `drawing.row_is_open`, so a stored 0 over an unverified row is open; a `rows` that is not a
+    list of mappings with a `str` verdict makes it at least 1. Nothing but this function
+    judges the record; no record reads `(False, None, 0)`."""
+    if "drawing_checks" not in state:
+        return (False, None, 0)
+    record = state["drawing_checks"]
+    if not isinstance(record, Mapping):
+        return (True, None, 1)
+    head = record.get("head")
+    stored = record.get("open")
+    stored_open = stored if isinstance(stored, int) and not isinstance(stored, bool) else 1
+    rows = _drawing_rows(record)
+    if rows is None or stored_open < 0:
+        return (True, head if isinstance(head, str) else None, max(stored_open, 1))
+    counted = sum(
+        1 for row in rows if drawing.row_is_open(str(row["verdict"]), row.get("settled") is True)
+    )
+    return (True, head if isinstance(head, str) else None, max(stored_open, counted))
+
+
+_DRAWING_REF_MAX = 240
+_DRAWING_UNREADABLE = "Drawing check record unreadable"
+
+
+def drawing_body_lines(state: TaskState) -> list[str]:
+    """One fixed line of the pull request body per open row of the `drawing_checks` record
+    (GH-766 part 5): `Drawing not verified: <subject> <ref>` for an `unverified` row and
+    `Drawing departure not settled: <subject> <ref>` for an open `departs` one, `ref` flattened
+    to one line and cut at 240 characters. A malformed record is the single line `Drawing check
+    record unreadable`; no record, none. A held pull request always says why."""
+    if "drawing_checks" not in state:
+        return []
+    record = state["drawing_checks"]
+    rows = _drawing_rows(record) if isinstance(record, Mapping) else None
+    if rows is None:
+        return [_DRAWING_UNREADABLE]
+    lines: list[str] = []
+    for row in rows:
+        verdict = str(row["verdict"])
+        if not drawing.row_is_open(verdict, row.get("settled") is True):
+            continue
+        head = "Drawing departure not settled:" if verdict == "departs" else "Drawing not verified:"
+        ref = " ".join(str(row.get("ref", "")).split())[:_DRAWING_REF_MAX]
+        subject = " ".join(str(row.get("subject", "")).split())
+        lines.append(f"{head} {subject} {ref}".rstrip())
+    return lines
+
+
 def reviewed_unit(state: TaskState) -> Subtask | None:
     """The subtask whose approval stands for the whole task: the `integration` one when
     the plan had several, else the only one. `None` for several subtasks with no
@@ -6177,9 +6350,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `open_escalation` (the fact is not `False`: `None` is never
     clear, GH-784), `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `criteria_unreadable`
+    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `drawing_unsettled`
+    (only when `drawing_checked`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
-    `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `stacking.refusal` (only when `stack` is
+    not `None`: `stack_parent_unmerged`, `stack_restack_due` or `stack_base_orphaned`, GH-855; a
+    task that is not stacked is decided as it always was), `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and
@@ -6224,6 +6400,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         and same_commit(facts.perf_head, facts.pr_head)
     ):
         return MergeDecision("refuse", "perf_unverified")
+    if facts.drawing_checked and not (
+        full_commit_id(facts.drawing_head)
+        and head_reviewed(facts.drawing_head, facts.close_docs, facts.pr_head)
+        and facts.drawing_open == 0
+    ):
+        return MergeDecision("refuse", "drawing_unsettled")
     if facts.criteria_regressed is None:
         return MergeDecision("refuse", "criteria_unreadable")
     if facts.criteria_regressed:
@@ -6238,6 +6420,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
         return MergeDecision("refuse", "eval_set")
+    if facts.stack is not None and (stacked := stacking.refusal(facts.stack, facts.conflicts)):
+        return MergeDecision("refuse", stacked)
     if facts.conflicts is True:
         return MergeDecision("refuse", "merge_conflict")
     if facts.merge_failures >= MERGE_CALLS_MAX:
@@ -6393,6 +6577,17 @@ def criteria_probe_wanted(facts: MergeFacts) -> bool:
     `criteria_over_cap` already rules the pull request out."""
     return auto_merge_decision(replace(facts, criteria_regressed=("x",))) == MergeDecision(
         "refuse", "criteria_over_cap"
+    )
+
+
+def stack_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether reading the stacking facts is worth it for `facts` (GH-855): the only answer to
+    that question, derived from the order of `auto_merge_decision`. It is worth it exactly when
+    a parent that is not known to have landed would be the decision, that is, when no refusal
+    ahead of the stacking check already rules the pull request out. The placeholder holds a
+    record and no other fact, so it never says a thing the reads would."""
+    return auto_merge_decision(replace(facts, stack=stacking.unread_facts())) == MergeDecision(
+        "refuse", "stack_parent_unmerged"
     )
 
 
@@ -6673,8 +6868,9 @@ SLICING_RULES = (
     "until its last part (out of the navigation, or behind a flag), and each part's `guard` "
     "says how. A migration that converts or moves existing data is a part of its own, "
     "`kind: migration`, idempotent or after a part that writes both shapes (dual-write); "
-    "readers switch after it and the removal of the old shape comes later. Parts you write "
-    "end in exactly one terminal part, the one no other part depends on."
+    "readers switch after it and the removal of the old shape comes later. A part depends on "
+    "another only for code that part creates, and with a single part no other depends on, that "
+    "part's pull request closes the parent's issue."
 )
 
 
@@ -6736,18 +6932,29 @@ TRACKER_WITH_PARTS = (
     "   goes in that part's body."
 )
 _PARTS_STEP = (
-    "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
-    "   small task of its own that lands and shows in the product before the next one starts.\n"
-    "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
-    "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+    "8. `### Parts`, only when the estimate does not fit: at least two parts, each a small\n"
+    "   task of its own that lands and shows in the product by itself. Parts preferably run at\n"
+    "   the same time. Each part has a `title`, a `body` (its whole description: the person who\n"
+    "   builds it has not seen this plan) and `depends_on`, the numbers of earlier parts (1 is\n"
+    "   the first) whose code it needs: it calls, imports, extends or migrates something that\n"
+    "   part creates. Ordering for neatness, a shared document or 'reads better in sequence' is\n"
+    "   not a dependency. Every edge carries its reason in `depends_on_reasons`, one line per\n"
+    "   entry in the same order, naming what the other part creates. Files that independent\n"
+    "   parts both touch go in `overlap_risk`, one line naming them, never as an edge: the\n"
+    "   landing queue handles conflicts between independent pull requests. Leave it empty\n"
+    "   otherwise. A migration always has its edge, with a reason. A part's `guard`, with no\n"
+    "   edges, must hold if the part lands alone, in any order among its siblings; a guard that\n"
+    "   waits for a sibling is an edge with a reason.\n"
     "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the\n"
     "   size budget splits again. If the section `## Human` says to narrow this task, plan the\n"
     "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
     "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
-    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
-    "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+    "- `parts`: one entry per part with `title`, `body`, `depends_on` (only for code the part\n"
+    "  needs from an earlier one), `depends_on_reasons` (one line per edge) and `overlap_risk`\n"
+    "  (files an independent part also touches, or empty), ONLY when the estimate does not\n"
+    "  fit; then `subtasks` is empty. Empty when the plan fits."
 )
 
 

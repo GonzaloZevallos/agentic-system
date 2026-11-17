@@ -79,9 +79,9 @@ options:
 ## `agentic resume`
 
 ```text
-usage: agentic resume [-h] --issue N [--task-budget USD] [--estimate USD] [--from-document]
-                      [--dry-run] [--yes] [--by-poller] [--product-dir PRODUCT_DIR] [--verbose]
-                      [--detach]
+usage: agentic resume [-h] --issue N [--task-budget USD] [--estimate USD] [--drawing N=VERDICT]
+                      [--from-document] [--dry-run] [--yes] [--by-poller]
+                      [--product-dir PRODUCT_DIR] [--verbose] [--detach]
 
 options:
   -h, --help            show this help message and exit
@@ -90,6 +90,8 @@ options:
   --estimate USD        the cost estimate to put in force when the task paused at the cap of its
                         estimate (default: the one the task proposed); an error on any other pause.
                         --task-budget governs only the flat task cap
+  --drawing N=VERDICT   answer departure N from an approved drawing: N=accept or N=reject; repeat it
+                        for each number (an error on a task not paused on drawing departures)
   --from-document       seed the state from the task document instead of the checkpoint
   --dry-run             show what would resume and stop, spending nothing
   --yes                 do not ask for confirmation

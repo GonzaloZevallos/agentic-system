@@ -43,6 +43,7 @@ classDiagram
     class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
+    class task__MergeCiRecord["MergeCiRecord"]
 ```
 
 ## Relaciones con otras páginas

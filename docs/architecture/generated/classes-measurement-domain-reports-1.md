@@ -15,9 +15,9 @@ classDiagram
     class findings_report__FindingsReport["FindingsReport"]
     class issue_listing__ListedIssue["ListedIssue"]
     class issue_listing__Missing["Missing"]
+    class issue_listing__PageRecord["PageRecord"]
     class issue_listing__TaskTimes["TaskTimes"]
     class planning__PlanningFigures["PlanningFigures"]
     class planning__TaskPlanning["TaskPlanning"]
-    class playbook_window__CheckProposal["CheckProposal"]
     findings_report__FindingsReport --> findings_report__Figures
 ```

@@ -4378,6 +4378,25 @@ def test_space_holds_at_exactly_the_floor_is_not_a_hold():
     )
 
 
+@pytest.mark.parametrize(
+    ("held", "sweeps"),
+    [
+        ((), False),
+        (("scratch",), False),
+        (("/tmp",), False),
+        (("scratch", "/tmp"), False),
+        (("product",), True),
+        (("scratch", "product"), True),
+        (("product", "/tmp"), True),
+        (("scratch", "product", "/tmp"), True),
+    ],
+)
+def test_sweeps_when_held_is_true_only_when_the_product_volume_is_among_the_holds(
+    held: tuple[str, ...], sweeps: bool
+):
+    assert rules.sweeps_when_held(held) is sweeps
+
+
 def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
     return rules.poll_plan(
         closes=[9, 4],
@@ -4393,12 +4412,12 @@ def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
     )
 
 
-def test_a_held_plan_is_the_closes_alone_and_defers_nothing():
+def test_a_held_plan_is_the_closes_alone_and_defers_only_the_launches_by_space():
     open_plan = _busy_plan(())
     assert {a.kind for a in open_plan.actions} >= {"close", "launch", "retake", "merge", "land"}
     held = _busy_plan(("/tmp",))
     assert held.actions == [rules.PollAction("close", 4), rules.PollAction("close", 9)]
-    assert held.deferred == []
+    assert held.deferred == [rules.Deferred("launch", 5, "space_held")]
 
 
 # --- GH-391: `disk_full`, the external reason a measured full disk narrows a failure to ---
@@ -4635,7 +4654,10 @@ def test_poll_plan_defers_every_orphan_when_no_slot_is_left_and_launches_nothing
     launch = rules.LaunchCandidate(20, False, None, 0, len(rules.LAUNCH_SCHEDULE))
     plan = _orphan_plan(available_slots=0, orphan_retakes=[7], launches=[launch])
     assert plan.actions == []
-    assert plan.deferred == [rules.Deferred("orphan", 7, "no_slot")]
+    assert plan.deferred == [
+        rules.Deferred("orphan", 7, "no_slot"),
+        rules.Deferred("launch", 20, "no_slot"),
+    ]
     assert not any(rules.holds_launches(d) for d in plan.deferred)
 
 
@@ -4781,7 +4803,7 @@ def test_auto_resumable_answers_the_same_with_and_without_at():
 def test_a_part_below_the_cap_reads_the_slicing_rules_without_retyping_the_budget():
     text = rules.split_part_text(("GH-1", 2, 1))
     assert rules.SLICING_RULES in text and "kind: migration" in text
-    assert "exactly one terminal part" in text
+    assert "exactly one terminal part" not in text and "closes the parent" in text
     assert "15" not in text and "400" not in text and "600" not in text
 
 
@@ -5407,3 +5429,146 @@ def test_part_over_line_with_a_remainder_carries_its_figures_and_keeps_the_fit_q
     )
     assert "61.50 USD and 9 files" in patch["escalated"] and patch["fit_question"] is True
     assert patch["escalation_class"] == "estimate"
+
+
+# GH-836: several launches per round, in the Orden de lanzamiento, and the journal of the rest.
+def _cand(issue: int, *, blocked: bool = False, due: bool = True) -> rules.LaunchCandidate:
+    since = None if due else NOW - timedelta(seconds=1)
+    return rules.LaunchCandidate(issue, blocked, since, 3, 6)
+
+
+def _launch_round(**kwargs) -> rules.PollPlan:
+    base: dict = {"closes": [], "resumes": [], "launches": [], "now": NOW}
+    return rules.poll_plan(**{**base, **kwargs})
+
+
+def _launched(plan: rules.PollPlan) -> list[int]:
+    return [a.issue for a in plan.actions if a.kind == "launch"]
+
+
+def _launch_deferred(plan: rules.PollPlan) -> list[tuple[int, str]]:
+    return [(d.issue, d.reason) for d in plan.deferred if d.kind == "launch"]
+
+
+def test_a_round_launches_one_ready_issue_per_free_slot_in_dependents_order():
+    plan = _launch_round(
+        launches=[_cand(4), _cand(5), _cand(6), _cand(7)],
+        available_slots=3,
+        dependents={6: 2, 7: 2, 5: 1},
+    )
+    assert _launched(plan) == [6, 7, 5]
+    assert _launch_deferred(plan) == [(4, "no_slot")]
+
+
+def test_a_tie_in_dependents_goes_to_the_lowest_issue():
+    plan = _launch_round(launches=[_cand(8), _cand(3)], available_slots=2)
+    assert _launched(plan) == [3, 8]
+
+
+def test_the_launches_come_after_the_resumes_and_take_what_they_leave():
+    due = rules.ResumeCandidate(
+        issue=2, reason="upstream", since=NOW - timedelta(days=1), prior=1, limit=5
+    )
+    plan = _launch_round(resumes=[due], launches=[_cand(4), _cand(5)], available_slots=2)
+    assert [(a.kind, a.issue) for a in plan.actions] == [("resume", 2), ("launch", 4)]
+    assert _launch_deferred(plan) == [(5, "no_slot")]
+
+
+def test_others_landing_holds_the_due_resumes_but_not_the_launches():
+    due = rules.ResumeCandidate(
+        issue=2, reason="upstream", since=NOW - timedelta(days=1), prior=1, limit=5
+    )
+    plan = _launch_round(
+        resumes=[due], launches=[_cand(4), _cand(5)], available_slots=2, others_landing=True
+    )
+    assert [(a.kind, a.issue) for a in plan.actions] == [("launch", 4), ("launch", 5)]
+
+
+def test_a_land_on_the_headroom_starts_with_no_plain_slot_and_no_launch_takes_it():
+    plan = _launch_round(
+        launches=[_cand(4)],
+        available_slots=0,
+        land_slots=1,
+        lands=[rules.LandCandidate(7, "land_model")],
+    )
+    assert [(a.kind, a.issue) for a in plan.actions] == [("land", 7)]
+    assert _launch_deferred(plan) == [(4, "no_slot")]
+
+
+def test_a_pending_resume_of_the_product_defers_every_ready_launch():
+    waiting = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=1, limit=24
+    )
+    plan = _launch_round(resumes=[waiting], launches=[_cand(4), _cand(6)], available_slots=2)
+    assert _launched(plan) == []
+    assert _launch_deferred(plan) == [(4, "resume_waiting"), (6, "resume_waiting")]
+
+
+def test_the_spend_pace_is_asked_for_each_launch_and_the_rest_wait_for_it():
+    pace = rules.SpendPace(spent_usd=100.0, covered_s=3600.0, live_runs=0, pace_usd_per_h=10.0)
+    plan = _launch_round(launches=[_cand(4), _cand(5), _cand(6)], available_slots=3, pace=pace)
+    assert _launched(plan) == [4]
+    assert _launch_deferred(plan) == [(5, "pacing"), (6, "pacing")]
+
+
+def test_the_launches_of_the_same_round_count_as_live_for_the_pace():
+    # 10 USD/h spent against a 20 USD/h pace: the first run fits, and with it live the ceiling
+    # of 2 is reached, so the second does not.
+    pace = rules.SpendPace(spent_usd=10.0, covered_s=3600.0, live_runs=0, pace_usd_per_h=20.0)
+    plan = _launch_round(launches=[_cand(4), _cand(5)], available_slots=1, pace=pace)
+    assert _launched(plan) == [4]
+    two = _launch_round(launches=[_cand(4), _cand(5), _cand(6)], available_slots=2, pace=pace)
+    assert _launched(two) == [4, 5]
+    assert _launch_deferred(two) == [(6, "no_slot")]
+
+
+def test_a_candidate_whose_calendar_has_not_come_is_deferred_by_schedule():
+    plan = _launch_round(launches=[_cand(4, due=False), _cand(5)], available_slots=2)
+    assert _launched(plan) == [5]
+    assert _launch_deferred(plan) == [(4, "schedule")]
+
+
+def test_a_held_round_keeps_its_actions_and_defers_each_unblocked_launch_by_space():
+    plan = _launch_round(
+        closes=[1],
+        launches=[_cand(4), _cand(5, blocked=True), _cand(6, due=False)],
+        available_slots=2,
+        held=["scratch"],
+    )
+    assert [(a.kind, a.issue) for a in plan.actions] == [("close", 1)]
+    assert sorted(_launch_deferred(plan)) == [(4, "space_held"), (6, "space_held")]
+
+
+@pytest.mark.parametrize(
+    ("extra", "slots"),
+    [
+        ({}, 0),
+        ({}, 2),
+        ({}, 9),
+        ({"others_landing": True}, 1),
+        ({"held": ["scratch"]}, 3),
+        (
+            {
+                "resumes": [
+                    rules.ResumeCandidate(
+                        issue=2, reason="account_limit", since=NOW, prior=1, limit=24
+                    )
+                ]
+            },
+            3,
+        ),
+        ({"pace": rules.SpendPace(100.0, 3600.0, 0, 10.0)}, 3),
+    ],
+)
+def test_every_unblocked_candidate_is_launched_or_deferred_once_and_never_both(extra, slots):
+    candidates = [_cand(4), _cand(5, blocked=True), _cand(6, due=False), _cand(7), _cand(8)]
+    plan = _launch_round(launches=candidates, available_slots=slots, **extra)
+    launched = _launched(plan)
+    deferred = [issue for issue, _ in _launch_deferred(plan)]
+    blocked = {c.issue for c in candidates if c.blocked}
+    assert len(deferred) == len(set(deferred))
+    assert set(launched).isdisjoint(deferred)
+    assert set(launched) | set(deferred) | blocked == {c.issue for c in candidates}
+    assert blocked.isdisjoint(set(launched) | set(deferred))
+    closed = {"space_held", "schedule", "resume_waiting", "pacing", "no_slot"}
+    assert {reason for _, reason in _launch_deferred(plan)} <= closed

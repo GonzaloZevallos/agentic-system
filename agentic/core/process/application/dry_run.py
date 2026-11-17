@@ -115,9 +115,9 @@ READS = {
         """added_adrs added_lines adr_first_date ancestry base_of branch_head branches
         changed_lines changed_paths checkout_names checkout_path commit_date commit_messages
         dependency_state differs_outside fast_forward_view fetched_upstream first_parent_commits
-        full_head gain_paths git_version head introduced_paths is_ancestor is_clean is_committed
-        is_ignored merge_head merge_in_progress merge_resolution numstat owned_drift paths_naming
-        remote_dispatch_refs remote_refs
+        full_head gain_paths git_version head introduced_paths is_ancestor is_checkout is_clean
+        is_committed is_ignored merge_head merge_in_progress merge_resolution numstat owned_drift
+        paths_naming remote_dispatch_refs remote_refs
         repository_at setup_tree show touched_paths tree tree_changes tree_names upstream
         worktrees"""
     ),

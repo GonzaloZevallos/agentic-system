@@ -180,3 +180,8 @@ _Campo_: closed — GitHub, para un pull request que se cierra sin fusionar
 ### Score con fecha de merge
 
 Un score que solo existe con un merge (`cycle_h`, `stage_h.*`, `cycle_active_h`, `stage_split_known`, `slowest_stage.*`) y que se fecha en el merge del pull request, no en el fin de la tarea (`task_scores.score_time`). El dashboard «¿Dónde se va el tiempo?» (ADR-0051, adenda de GH-819) solo lee estos scores, así que la tarea cae en la semana en que se mergeó.
+
+**Caché de lecturas del backfill**:
+Las páginas crudas del listado de issues y pull requests de un repositorio, guardadas en disco entre corridas de `scores backfill` para que un dry run y una corrida real, o una corrida detenida y su repetición, lean cada página una vez. Guarda solo los items tal como GitHub los lista (número, `created_at`, si es pull request, `merged_at`, estado), la hora de lectura de cada página y si estaba abierta; nunca un score, un id ni un resultado. Una página abierta (la última, o con un pull request abierto sin fusionar) se confía 10 minutos, una cerrada 3 horas. Un archivo ilegible o de otra versión es una lectura nueva, no un error.
+_Avoid_: caché de scores, caché de resultados (lo que se guarda es lo leído, no lo calculado)
+_Campo_: read-through cache — de arquitectura de software; la vecina más cercana es la caché HTTP condicional, que aquí no se usa porque cada ETag también cuesta una lectura

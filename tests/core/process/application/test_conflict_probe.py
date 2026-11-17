@@ -11,6 +11,7 @@ import pytest
 
 from agentic.core.process.application import landing, merge, poll
 from agentic.core.process.application.ports import Upstream, UpstreamMerge
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain.ci import CiCheck, CiReport
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -77,7 +78,7 @@ def test_a_refusal_ahead_of_the_conflict_makes_no_probe_in_the_poller_or_land(re
     ports.workspace.conflict_answers[(HEAD, MASTER)] = True
 
     lines: list[str] = []
-    poll.gather_merges(ports, eval_set, MASTER, _Locks(), lines)
+    poll.gather_merges(ports, eval_set, MASTER, _Locks(), lines, memo=StackMemo())
     landing.land(
         "GH-5",
         _cfg(tmp_path),

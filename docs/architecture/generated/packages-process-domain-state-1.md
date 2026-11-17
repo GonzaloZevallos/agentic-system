@@ -11,7 +11,9 @@ Esta página muestra los módulos del grupo `state` de `domain` y los imports qu
 
 ```mermaid
 graph TD
+    g_domain__checks["checks (grupo)"]
     g_domain__landing["landing (grupo)"]
+    g_domain__machine["machine (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state__2["state parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
@@ -25,17 +27,30 @@ graph TD
     m_domain__legacy_names["domain.legacy_names"]
     m_domain__restart["domain.restart"]
     m_domain__returns["domain.returns"]
+    m_domain__rules["domain.rules"]
     m_domain__document --> g_domain__landing
     m_domain__document --> g_domain__roles
     m_domain__document --> g_domain__state__2
+    m_domain__document --> m_domain__drawing_answer
     m_domain__document --> m_domain__legacy_names
     m_domain__drawing_answer --> g_domain__roles
     m_domain__drawing_answer --> g_domain__state__2
     m_domain__drawing_answer --> m_domain__escalation_prompts
+    m_domain__drawing_answer --> m_domain__rules
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
     m_domain__returns --> g_domain__state__2
+    m_domain__returns --> m_domain__rules
+    m_domain__rules --> g_domain__checks
+    m_domain__rules --> g_domain__landing
+    m_domain__rules --> g_domain__machine
+    m_domain__rules --> g_domain__roles
+    m_domain__rules --> g_domain__state__2
+    m_domain__rules --> g_pkg__agentic__shared
+    m_domain__rules --> m_domain__document
+    m_domain__rules --> m_domain__escalation_prompts
+    m_domain__rules --> m_domain__restart
 ```

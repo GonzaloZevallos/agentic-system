@@ -13,9 +13,18 @@ import pytest
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application import poll, tracker_only
 from agentic.core.process.application.ports import RunRegistration, Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest
-from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _Locks, _round
+from tests.core.process.application.test_poll import (
+    ESCALATED_AT,
+    _cfg,
+    _launched,
+    _Locks,
+    _round,
+    _waiting,
+)
+from tests.core.process.application.test_poll import _ready as _queued
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _pr, _ready
 from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryTracker, memory_ports
 
@@ -47,7 +56,14 @@ def _ports(ancestors: set[str], **more):
 def _gather(ports, tmp_path, reruns=None):
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, cfg=_cfg(tmp_path), reruns=reruns
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        cfg=_cfg(tmp_path),
+        reruns=reruns,
+        memo=StackMemo(),
     )
     return found, lines
 
@@ -137,6 +153,19 @@ def test_a_fresh_run_waits_for_a_slot(tmp_path):
     assert launcher.spawned == []
 
 
+def test_a_fresh_run_with_a_dependent_goes_before_a_new_launch_without_any(tmp_path):
+    # GH-836: the rerun of #5 competes like any candidate; #30 waits on it, #3 has nobody.
+    ports = _ports({A})
+    _queued(ports, 3)
+    _waiting(ports, {30: "Blocked by: #5"})
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path, max_concurrent_runs=1), ports, MemoryRunRegistry(), launcher, ESCALATED_AT
+    )
+    assert _launched(launcher) == ["5"]
+    assert "agentic: poll: launch #3 waiting (no_slot)" in lines
+
+
 def _git(repo: Path, *args: str) -> str:
     done = subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
@@ -190,7 +219,9 @@ def test_with_a_real_repo_the_renamed_unit_branches_still_resolve_and_the_task_c
         state="CLOSED", created_at="2026-10-05T00:00:00Z", merged_at=None, commits=(), head_oid=HEAD
     )
     lines: list[str] = []
-    poll.gather_merges(ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[])
+    poll.gather_merges(
+        ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[], memo=StackMemo()
+    )
     assert lines == ["agentic: poll: #5 -> closed: every unit landed through slices (#350)"]
     assert ports.documents.closures["GH-5"]["closed_by_slices"] == [SLICE_PR]
 

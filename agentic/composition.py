@@ -19,6 +19,7 @@ import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -28,11 +29,13 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
 from .core.knowledge.adapters.git import GitStack
+from .core.measurement.adapters.filesystem.read_cache import FilesystemReadCache
 from .core.measurement.adapters.github.issue_listing import GhIssueListing
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
-from .core.measurement.application.ports import GhRead, IssueListing
+from .core.measurement.application.ports import GhRead, IssueListing, NoCache, ReadCache
 from .core.measurement.domain import evaluation
+from .core.measurement.domain.issue_listing import repo_key
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.evaluation import (
@@ -512,9 +515,29 @@ def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
     return read
 
 
-def backfill_listing(product_dir: Path) -> IssueListing:
-    """The repository's issues listing for the backfill, over `backfill_gh_read`."""
-    return GhIssueListing(backfill_gh_read(product_dir))
+def backfill_cache_root() -> Path:
+    """Where the backfill keeps its read caches: `$XDG_CACHE_HOME` when set and not empty,
+    else `~/.cache`, plus `agentic/scores-reads`. Read from the environment, no setting."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (Path(base) if base else Path.home() / ".cache") / "agentic" / "scores-reads"
+
+
+def backfill_clock() -> Callable[[], datetime]:
+    """The backfill's clock: the current time, UTC, for the age of a cached page."""
+    return lambda: datetime.now(UTC)
+
+
+def backfill_listing(product_dir: Path) -> tuple[IssueListing, ReadCache]:
+    """The repository's issues listing for the backfill, over `backfill_gh_read`, and its read
+    cache. The repository key is built once from the checkout's `origin` and names both the
+    page path and the cache file; with no key (no GitHub origin) the listing keeps `gh`'s
+    placeholders and nothing is cached."""
+    # `_origin_of` serves the rotation; the backfill reuses it as is.
+    key = repo_key(_origin_of(product_dir))
+    listing = GhIssueListing(backfill_gh_read(product_dir), key)
+    if key is None:
+        return listing, NoCache()
+    return listing, FilesystemReadCache(backfill_cache_root(), key)
 
 
 def _file_name(product: str) -> str:

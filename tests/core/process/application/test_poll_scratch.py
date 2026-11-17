@@ -239,7 +239,9 @@ def test_under_the_floor_on_any_volume_the_round_only_closes_and_says_why(
     ports = _busy_ports(_free(tmp_path, **free_kwargs))
     lines, launcher = _round(tmp_path, ports)
     assert [argv[1] for argv in launcher.spawned] == ["close"]
-    assert lines == [line, "agentic: poll: close #3 -> pid 4242"]
+    # A ready issue the held round did not start says so (GH-836): `space_held`.
+    assert lines[:2] == [line, "agentic: poll: close #3 -> pid 4242"]
+    assert all(entry.endswith("(space_held)") for entry in lines[2:])
     assert ports.tracker.comments == []  # no resume was announced
 
 

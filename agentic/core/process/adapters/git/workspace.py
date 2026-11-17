@@ -1036,6 +1036,12 @@ class GitWorkspace:
             path.name for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix)
         )
 
+    def is_checkout(self, path: Path) -> bool:
+        try:
+            return (path / ".git").exists()
+        except OSError:
+            return False
+
     def _run_bounded(self, *args: str) -> None:
         subprocess.run(
             ["git", *args],

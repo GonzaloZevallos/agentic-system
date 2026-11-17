@@ -1,5 +1,7 @@
-"""The drawing schema classes nothing consumes yet (GH-766 part 1b): they validate on
-their own and no schema a role receives reaches them, so no prompt or role output moves."""
+"""The drawing schema classes (GH-766 parts 1b, 3a and 4a): they validate on their own, and only
+`Answers`, `Consultation` and their subclasses carry `drawing_checks` and `departures`,
+`DefinitionTurn` the `visible` field. The Tech Lead's plan (`TechPlan` and its subclasses) alone
+declares `drawing_departures`; no role output carries a number or any other drawing field."""
 
 from collections.abc import Iterable
 from typing import Any
@@ -14,27 +16,23 @@ from agentic.core.process.domain.schemas import (
     DefinitionTurn,
     DrawingCheck,
     DrawingDeparture,
+    FinalDesignReview,
     RoleOutput,
 )
 
-FORBIDDEN_FIELDS = {"drawing_checks", "departures", "drawing_departures", "visible"}
-FORBIDDEN_DEFS = {"DrawingDeparture", "DrawingCheck", "DefinitionTurn"}
+DRAWING_DEFS = {"DrawingDeparture", "DrawingCheck"}
+FORBIDDEN_DEFS = DRAWING_DEFS | {"DefinitionTurn"}
+# What only the plan author may declare, and never a role output besides it.
+FORBIDDEN_FIELDS = {"drawing_departures"}
+PLAN_FIELDS = {"drawing_departures"}
 
-# The base schemas a role receives today. A base class added later and left out of this
-# list is not covered by this check; the walk over every Role output below is what
-# catches a new one a role actually uses.
-BASE_SCHEMAS = [
-    s.TechPlan,
-    s.Consultation,
-    s.ConsultationWithAssumptions,
-    s.TechAnswers,
-    s.PlatformAnswers,
-    s.FinalValidation,
-    s.Delivery,
-    s.DesignReview,
-    s.InterviewTurn,
-    s.Answers,
-]
+
+def _is_plan(model: type[BaseModel]) -> bool:
+    return issubclass(model, s.TechPlan)
+
+
+def _fields_forbidden_for(model: type[BaseModel]) -> set[str]:
+    return FORBIDDEN_FIELDS - (PLAN_FIELDS if _is_plan(model) else set())
 
 
 def _departure(**over: str) -> dict[str, str]:
@@ -80,6 +78,46 @@ def test_a_check_with_an_invalid_path_is_rejected_even_when_unverified():
         DrawingCheck(subject="screen", ref="h", verdict="unverified", drawing="a:b", element="x")
 
 
+def test_the_final_design_review_has_the_two_drawing_fields_and_accepts_empty_lists():
+    assert {"drawing_checks", "departures"} <= set(FinalDesignReview.model_fields)
+    assert issubclass(FinalDesignReview, s.DesignReview)
+    review = FinalDesignReview(
+        markdown="m", verdict="approved", reason="ok", items=[], drawing_checks=[], departures=[]
+    )
+    assert review.drawing_checks == [] and review.departures == []
+    with pytest.raises(ValidationError):
+        FinalDesignReview(markdown="m", verdict="approved", reason="ok", items=[], departures=[])
+    with pytest.raises(ValidationError):
+        FinalDesignReview(
+            markdown="m", verdict="approved", reason="ok", items=[], drawing_checks=[]
+        )
+
+
+def test_the_final_design_review_validates_its_rows():
+    ok = FinalDesignReview(
+        markdown="m",
+        verdict="returned",
+        reason="r",
+        items=[],
+        drawing_checks=[
+            DrawingCheck(
+                subject="screen", ref="home", verdict="departs", drawing="a.png", element="x"
+            )
+        ],
+        departures=[DrawingDeparture(**_departure())],
+    )
+    assert len(ok.drawing_checks) == 1 and len(ok.departures) == 1
+    with pytest.raises(ValidationError):
+        FinalDesignReview(
+            markdown="m",
+            verdict="approved",
+            reason="r",
+            items=[],
+            drawing_checks=[{"subject": "screen", "ref": "h", "verdict": "departs"}],
+            departures=[],
+        )
+
+
 def test_a_definition_turn_validates_without_visible():
     turn = DefinitionTurn(done=True, markdown="m")
     assert turn.visible == []
@@ -98,20 +136,6 @@ def test_a_departure_keeps_the_drawing_as_given_and_rejects_a_colon_in_it():
 def test_a_departure_with_an_unusable_path_or_element_is_rejected(over: dict[str, str]):
     with pytest.raises(ValidationError):
         DrawingDeparture(**_departure(**over))
-
-
-@pytest.mark.parametrize("model", BASE_SCHEMAS, ids=lambda m: m.__name__)
-def test_no_base_schema_a_role_receives_has_a_drawing_field(model: type[BaseModel]):
-    assert not _forbidden_properties(model)
-
-
-def _forbidden_properties(model: type[BaseModel]) -> set[str]:
-    return FORBIDDEN_FIELDS & set(model.model_json_schema()["properties"])
-
-
-@pytest.mark.parametrize("model", [DefinitionTurn], ids=lambda m: m.__name__)
-def test_the_base_schema_check_catches_a_model_with_a_forbidden_property(model: type[BaseModel]):
-    assert _forbidden_properties(model) == {"visible"}
 
 
 def _walk(node: Any, root: dict[str, Any], seen: set[str], titles: set[str], names: set[str]):
@@ -166,11 +190,44 @@ def test_there_are_role_outputs_to_walk():
     assert len(_role_outputs()) > 10
 
 
+def _with_field(name: str) -> set[type[BaseModel]]:
+    return {c for c in _subclasses(RoleOutput) | {RoleOutput} if name in c.model_fields}
+
+
+def test_visible_exists_only_in_the_definition_turn():
+    assert _with_field("visible") == {DefinitionTurn}
+
+
+def test_drawing_checks_and_departures_exist_only_in_answers_consultation_and_subclasses():
+    owners = {s.Answers, s.Consultation} | _subclasses(s.Answers) | _subclasses(s.Consultation)
+    assert owners >= {s.Answers, s.Consultation, s.ConsultationWithAssumptions}
+    # The final review is the one other owner (a role gets it in 5.2); DesignReview stays clean.
+    owners = owners | {FinalDesignReview}
+    assert _with_field("drawing_checks") == owners
+    assert _with_field("departures") == owners
+
+
 @pytest.mark.parametrize("model", _role_outputs(), ids=lambda m: m.__name__)
-def test_no_role_output_reaches_a_drawing_schema_or_field(model: type[BaseModel]):
-    titles, names = _reachable(model)
-    assert not FORBIDDEN_DEFS & titles
-    assert not FORBIDDEN_FIELDS & names
+def test_a_role_output_reaches_the_drawing_schemas_only_through_those_fields(
+    model: type[BaseModel],
+):
+    titles, _ = _reachable(model)
+    if _is_plan(model):
+        # The plan reaches the departure class through `drawing_departures`, never a check.
+        assert "drawing_departures" in model.model_fields
+        assert not {"drawing_checks", "departures"} & set(model.model_fields)
+        assert DRAWING_DEFS & titles == {"DrawingDeparture"}
+        return
+    carries = bool({"drawing_checks", "departures"} & set(model.model_fields))
+    assert bool(DRAWING_DEFS & titles) == carries
+    assert not _fields_forbidden_for(model) & set(model.model_fields)
+
+
+def test_the_empty_default_keeps_the_new_fields_out_of_an_existing_payload():
+    turn = s.Answers(markdown="m", questions_for_human=[])
+    assert turn.drawing_checks == [] and turn.departures == []
+    consultation = s.Consultation(markdown="m", questions_for_human=[], definitions=[], glossary=[])
+    assert consultation.drawing_checks == [] and consultation.departures == []
 
 
 def _subclasses(cls: type) -> set[type]:
@@ -182,7 +239,10 @@ def _subclasses(cls: type) -> set[type]:
 
 def _writers_of_the_record(classes: Iterable[type[BaseModel]]) -> list[str]:
     return sorted(
-        c.__name__ for c in classes if {"drawing_departures", "number"} & set(c.model_fields)
+        c.__name__
+        for c in classes
+        if ({"drawing_departures", "number"} - (PLAN_FIELDS if _is_plan(c) else set()))
+        & set(c.model_fields)
     )
 
 
@@ -204,3 +264,19 @@ def test_the_writers_check_reports_a_class_with_a_number_or_the_record():
         text: str = ""
 
     assert _writers_of_the_record([WithNumber, WithRecord, Clean]) == ["WithNumber", "WithRecord"]
+
+
+def test_only_the_plan_may_declare_drawing_departures_and_never_a_number():
+    class OtherOutput(s.Delivery):
+        drawing_departures: list[DrawingDeparture] = []
+
+    class PlanWithNumber(s.TechPlan):
+        number: int = 0
+
+    assert _writers_of_the_record([s.TechPlan, s.TechPlanWithAssumptions]) == []
+    assert _writers_of_the_record([OtherOutput, PlanWithNumber]) == [
+        "OtherOutput",
+        "PlanWithNumber",
+    ]
+    assert _fields_forbidden_for(OtherOutput) & set(OtherOutput.model_json_schema()["properties"])
+    assert "drawing_departures" in s.TechPlan.model_fields

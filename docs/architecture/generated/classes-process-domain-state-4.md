@@ -43,6 +43,7 @@ classDiagram
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DepartureAnswer["DepartureAnswer"]
+    class task__DepartureRecord["DepartureRecord"]
 ```
 
 ## Relaciones con otras páginas

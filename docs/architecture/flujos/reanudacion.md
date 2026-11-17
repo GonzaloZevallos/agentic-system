@@ -83,15 +83,20 @@ sequenceDiagram
    (`agentic/core/process/application/resume.py:human_decision`), se niega si el tope ya está
    gastado y devuelve una `Resumption`. `agentic/core/process/application/resume.py:summary`
    muestra la tarea, dónde se frenó, lo gastado y qué reanuda, y la CLI pide confirmación
-   salvo con `--yes`.
+   salvo con `--yes`. Una pausa sobre desviaciones del dibujo no usa `human_decision`: ver 8.
 5. **Retomar.** La CLI invoca el grafo con `Command(resume=...)`. `pause` devuelve el patch
-   de reanudación (`agentic/core/process/domain/rules.py:resumed`) y el ruteo va a donde el
+   de reanudación (`agentic/core/process/domain/drawing_answer.py:resume_patch`, que compone
+   `agentic/core/process/domain/rules.py:resumed`) y el ruteo va a donde el
    estado dice que se frenó (`agentic/core/process/domain/rules.py:resume_target`): una tarea
    ligera sin plan sigue a `plan` y no a `define`, y una promoción pendiente la manda primero a
    `define` o `diagnose` (`agentic/core/process/domain/rules.py:promotion_route`).
    Una reanudación con decisión de una pregunta de ajuste, o de una estimación con partes, deja
    `plan_due` y vuelve siempre a `plan`, nunca a `tracker_only`
    (`agentic/core/process/domain/rules.py:resume_target`); solo el plan que se entrega lo limpia.
+   Lo mismo pasa cuando el dueño responde una pausa de desviaciones cuyo registro
+   (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
+   `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
+   `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
@@ -116,3 +121,23 @@ sequenceDiagram
      es una pausa humana.
    - `agentic/core/process/application/landing_plan.py:release` no libera la tarea mientras
      `tracker_human` no esté vacío, aunque haya un escalado de CI en el mismo head.
+8. **Una pausa sobre desviaciones del dibujo (GH-766).** Cuando
+   `agentic/core/process/domain/drawing_answer.py:prompt_cause` no es `None`,
+   `agentic/core/process/application/resume.py:prepare` no lee la decisión con `human_decision`:
+   `agentic/core/process/application/resume.py:_pending_drawing` toma los comentarios posteriores
+   al último `Escalated: `
+   (`agentic/core/process/application/resume.py:comments_since`, que salta los otros comentarios
+   del sistema sin reiniciar la cuenta) y los lee por número con
+   `agentic/core/process/domain/drawing.py:answers` (gana la última línea). Encima pone las
+   opciones `--drawing <n>=accept|reject` (`agentic/core/process/domain/drawing.py:flag_verdicts`),
+   y la opción gana sobre el comentario. Todo número abierto necesita veredicto, esté o no en la
+   ronda escalada: si falta uno o está contradicho, espera (`WaitingOnHuman`, con los números y la
+   pista de escribir otro comentario o usar `--drawing`; las opciones de esa llamada no se
+   guardan). Se niega con `ValueError`, antes del lock y de escribir nada, una opción en una pausa
+   que no es de dibujo o con una corrida caída, un número sin fila, o un número ya respondido con
+   otro veredicto. El texto de la decisión (`## Human`) sale solo de ahí: los comentarios más una
+   línea `Drawing <n>: <veredicto> (flag)` por opción. Las filas respondidas viajan en
+   `agentic/core/process/application/resume.py:Resumption.answer` (`drawing_departures`, solo si
+   hay) y `agentic/core/process/adapters/langgraph/graph.py:_pause_node` las pliega con el
+   reducer en el mismo patch, que arma `agentic/core/process/domain/drawing_answer.py:resume_patch`
+   sobre `rules.resumed`; el cli nunca las siembra.

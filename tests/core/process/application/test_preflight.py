@@ -384,21 +384,37 @@ ORIGINAL_PARTS_WORDING = {
         "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
     ),
     "{{parts_step}}": (
-        "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
-        "   small task of its own that lands and shows in the product before the next one starts.\n"
-        "   Each part has a `title`, a `body` (its whole description: the person who builds it has"
-        "\n"
-        "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-        "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the"
-        "\n"
-        "   size budget splits again. If the section `## Human` says to narrow this task, plan the"
-        "\n"
+        "8. `### Parts`, only when the estimate does not fit: at least two parts, each a small\n"
+        "   task of its own that lands and shows in the product by "
+        "itself. Parts preferably run at\n"
+        "   the same time. Each part has a `title`, a `body` (its "
+        "whole description: the person who\n"
+        "   builds it has not seen this plan) and `depends_on`, the "
+        "numbers of earlier parts (1 is\n"
+        "   the first) whose code it needs: it calls, imports, extends or migrates something that\n"
+        "   part creates. Ordering for neatness, a shared document "
+        "or 'reads better in sequence' is\n"
+        "   not a dependency. Every edge carries its reason in `depends_on_reasons`, one line per\n"
+        "   entry in the same order, naming what the other part creates. Files that independent\n"
+        "   parts both touch go in `overlap_risk`, one line naming them, never as an edge: the\n"
+        "   landing queue handles conflicts between independent pull requests. Leave it empty\n"
+        "   otherwise. A migration always has its edge, with a reason. A part's `guard`, with no\n"
+        "   edges, must hold if the part lands alone, in any order "
+        "among its siblings; a guard that\n"
+        "   waits for a sibling is an edge with a reason.\n"
+        "   Write no subtasks then, and `### Subtasks` is not "
+        "needed. A part that is still over the\n"
+        "   size budget splits again. If the section `## Human` says "
+        "to narrow this task, plan the\n"
         "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
         "   commit) is still a subtask of this task, never a part."
     ),
     "{{parts_field}}": (
-        "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
-        "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+        "- `parts`: one entry per part with `title`, `body`, `depends_on` (only for code the part\n"
+        "  needs from an earlier one), `depends_on_reasons` (one "
+        "line per edge) and `overlap_risk`\n"
+        "  (files an independent part also touches, or empty), ONLY when the estimate does not\n"
+        "  fit; then `subtasks` is empty. Empty when the plan fits."
     ),
 }
 
@@ -475,7 +491,7 @@ REMEDY_SENTENCES = (
     "write it as `parts` (see `### Parts`) instead of subtasks",
     "a plan that fits and carries `parts` is refused too",
     "8. `### Parts`, only when the estimate does not fit",
-    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the",
+    "- `parts`: one entry per part with `title`, `body`, `depends_on` (only for code the part",
 )
 
 
@@ -1079,3 +1095,21 @@ def test_preflight_refuses_an_overlay_block_that_would_read_a_placeholder(tmp_pa
     ports = memory_ports(prompts=FilesystemPrompts(tmp_path))
     with pytest.raises(ValueError, match="spec block plan: template"):
         module.refuse_unservable_spec_blocks(ports)
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_the_parts_step_says_parts_run_together_with_reasons_and_overlap_risk(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS
+    ).text
+    flat = " ".join(text.split())
+    assert "Parts preferably run at the same time" in flat
+    assert "whose code it needs" in flat
+    assert "'reads better in sequence' is not a dependency" in flat
+    assert "carries its reason in `depends_on_reasons`" in flat
+    assert "go in `overlap_risk`" in flat and "never as an edge" in flat
+    assert "A migration always has its edge, with a reason" in flat
+    assert "must hold if the part lands alone" in flat
+    assert "chained" not in flat and "until the last slice" not in flat
+    assert "EARLIER" not in flat

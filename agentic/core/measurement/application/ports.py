@@ -3,12 +3,12 @@ and nothing of how either is done. The git adapter is `adapters/git/eval_roots.p
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-from ..domain.issue_listing import ListedIssue
+from ..domain.issue_listing import ListedIssue, PageRecord
 
 
 class EvalRoots(Protocol):
@@ -128,3 +128,25 @@ class IssueListing(Protocol):
     def spent(self) -> Spend:
         """The calls and core points spent so far."""
         ...
+
+
+class ReadCache(Protocol):
+    """The pages of the listing read before, by page number (1-based)."""
+
+    def load(self) -> dict[int, PageRecord]:
+        """Never raises: nothing readable is `{}`."""
+        ...
+
+    def save(self, pages: Mapping[int, PageRecord]) -> None:
+        """Keep `pages` as the whole cache."""
+        ...
+
+
+class NoCache:
+    """A read cache that keeps nothing: every run reads every page."""
+
+    def load(self) -> dict[int, PageRecord]:
+        return {}
+
+    def save(self, pages: Mapping[int, PageRecord]) -> None:
+        return None

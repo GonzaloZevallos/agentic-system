@@ -16,6 +16,7 @@ graph TD
     m_domain__account_reset["domain.account_reset"]
     m_domain__boot["domain.boot"]
     m_domain__exempt_queue["domain.exempt_queue"]
+    m_domain__launch_order["domain.launch_order"]
     m_domain__poller_units["domain.poller_units"]
     m_domain__reaping["domain.reaping"]
     m_domain__retakes["domain.retakes"]

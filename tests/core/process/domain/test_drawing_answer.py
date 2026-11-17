@@ -1,13 +1,21 @@
-"""The drawing-answer domain (GH-766 part 2a-2): which row an answer reaches, when the escalation
-is due, what it says, and which cause a pause carries."""
+"""The drawing-answer domain (GH-766 parts 2a-2, 4a and 5): which row an answer reaches, when the
+escalation is due, what it says, which cause a pause carries, the plan gate and the checks."""
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
-from agentic.core.process.domain import drawing, drawing_answer, escalation_prompts, rules, task
+from agentic.core.process.domain import (
+    document,
+    drawing,
+    drawing_answer,
+    escalation_prompts,
+    rules,
+    task,
+)
+from agentic.core.process.domain.schemas import DrawingCheck, DrawingDeparture
 
 AT = "2026-11-15T10:00:00Z"
 
@@ -58,7 +66,7 @@ def test_applicable_ignores_a_number_without_row_and_an_answered_row():
 
 
 def test_patch_without_spec_has_no_spec_cause_and_no_mechanical_cause():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], AT)
     assert "spec_cause" not in patch
     assert patch["escalation_cause"] is None
     assert patch["escalation_class"] == "questions"
@@ -70,7 +78,7 @@ def test_patch_without_spec_has_no_spec_cause_and_no_mechanical_cause():
 
 def test_patch_with_spec_carries_exactly_the_drawing_spec_cause():
     state = _state(spec=cast(Any, {"issue": 7}))
-    patch = drawing_answer.escalation_patch(state, [_departure("hero")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, [_departure("hero")], AT)
     assert patch["spec_cause"] == "drawing"
     assert patch["escalation_cause"] is None
 
@@ -103,7 +111,7 @@ def test_round_four_is_exhausted_and_records_the_new_rows_unanswered():
     due = drawing_answer.escalation_due(state, new)
     assert isinstance(due, drawing_answer.Exhausted)
     assert (due.round, due.cause) == (4, "drawing_cap")
-    patch = drawing_answer.escalation_patch(state, new, AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, new, AT)
     rows = cast(list[task.DepartureRecord], patch["drawing_departures"])
     assert [(r["number"], r["answer"]) for r in rows] == [(2, None)]
     assert patch["drawing_escalation"] == {"round": 4, "numbers": [1, 2], "cause": "drawing_cap"}
@@ -122,36 +130,43 @@ def test_round_five_is_still_the_cap():
 def test_nothing_unanswered_raises():
     state = _state(drawing_departures=_rows("a", answered=(1,)))
     with pytest.raises(ValueError, match="nothing to escalate"):
-        drawing_answer.escalation_patch(state, [_departure("a")], AT, issue=7)
+        drawing_answer.escalation_patch(state, [_departure("a")], AT)
     with pytest.raises(ValueError):
-        drawing_answer.escalation_patch(_state(), [], AT, issue=7)
+        drawing_answer.escalation_patch(_state(), [], AT)
 
 
 def test_a_contradicted_open_row_gets_its_line_and_a_row_without_one_does_not():
     state = _state(drawing_departures=_rows("a", "b", answered=(2,)))
-    patch = drawing_answer.escalation_patch(
-        state, [], AT, issue=7, contradicted=frozenset({1, 2, 99})
-    )
+    patch = drawing_answer.escalation_patch(state, [], AT, contradicted=frozenset({1, 2, 99}))
     reason = cast(str, patch["escalated"])
     assert "Drawing 1 got both accept and reject in one comment; answer it once." in reason
     assert "Drawing 2 got both" not in reason
     assert "Drawing 99 got both" not in reason
 
 
-def test_commands_carry_the_issue_number_or_n():
+def test_the_reason_carries_the_question_but_no_command():
     state = _state(drawing_departures=_rows("a", "b"))
-    reason = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=42)["escalated"])
-    for n in (1, 2):
-        for template in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT):
-            assert template.format(issue=42).replace("<n>", str(n)) in reason
-    unknown = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=None)["escalated"])
-    assert "agentic resume --issue N --drawing 1=accept" in unknown
-    assert "agentic resume --issue N --drawing 2=reject" in unknown
+    reason = cast(str, drawing_answer.escalation_patch(state, [], AT)["escalated"])
+    assert "Departure #1:" in reason and "Departure #2:" in reason
+    assert "agentic resume" not in reason
+
+
+def test_prompt_lines_are_both_commands_per_open_row_in_number_order():
+    rows = _rows("a", "b", "c", answered=(2,))
+    lines = drawing_answer.prompt_lines(rows[::-1], 42)
+    assert lines == [
+        "agentic resume --issue 42 --drawing 1=accept",
+        "agentic resume --issue 42 --drawing 1=reject",
+        "agentic resume --issue 42 --drawing 3=accept",
+        "agentic resume --issue 42 --drawing 3=reject",
+    ]
+    assert lines[0] == escalation_prompts.DRAWING_ACCEPT.format(issue=42).replace("<n>", "1")
+    assert drawing_answer.prompt_lines([], 42) == []
 
 
 def test_the_internal_key_is_in_no_reason_and_no_section_line():
     state = _with_round(3, "Hero Banner")
-    patch = drawing_answer.escalation_patch(state, [_departure("Footer")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, [_departure("Footer")], AT)
     rows = (
         cast(list[task.DepartureRecord], patch["drawing_departures"]) + state["drawing_departures"]
     )
@@ -166,7 +181,7 @@ def test_the_internal_key_is_in_no_reason_and_no_section_line():
 
 
 def test_an_answered_round_one_row_stays_in_numbers_and_does_not_trigger_alone():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     assert drawing_answer.prompt_cause(state) == "drawing_departure"
     answered = _state(
@@ -177,7 +192,7 @@ def test_an_answered_round_one_row_stays_in_numbers_and_does_not_trigger_alone()
 
 
 def test_prompt_cause_is_none_for_a_tracker_human_pause_with_an_old_unanswered_row():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     other = rules.escalation("questions", "typed items", tracker_human=["h1"])
     paused = _state(**{**state, **other})
@@ -186,7 +201,7 @@ def test_prompt_cause_is_none_for_a_tracker_human_pause_with_an_old_unanswered_r
 
 
 def test_prompt_cause_is_none_for_api_break_missing_with_an_unregistered_unanswered_row():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     first = _answered(state["drawing_departures"][0])
     second = task.departure_records([first], [_departure("b")], AT)[0]
@@ -203,13 +218,13 @@ def test_prompt_cause_is_none_for_api_break_missing_with_an_unregistered_unanswe
 
 
 def test_prompt_cause_is_none_when_the_pause_is_not_a_questions_one():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     assert drawing_answer.prompt_cause(_state(**{**state, "escalation_class": "ci"})) is None
 
 
 def test_the_drawing_escalation_is_a_humans_pause():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     logged = rules.logged(cast(dict[str, Any], patch), at=AT)
     assert rules.pause_kind(logged["pause_log"]) == "human"
     state = _applied(_state(), logged)
@@ -253,3 +268,264 @@ def test_a_part_one_row_with_a_null_answer_loads():
     row = _rows("a")[0]
     assert row["answer"] is None
     assert task.add_drawing_departures(None, [row]) == [row]
+
+
+# --- GH-766 part 4a: the plan gate's verdicts, the stage and the resume patch ------------------
+
+
+def _verdict(row: task.DepartureRecord, verdict: str) -> task.DepartureRecord:
+    return cast(
+        task.DepartureRecord,
+        {**row, "answer": {"verdict": verdict, "by": "comment", "at": "T1"}},
+    )
+
+
+def _split_state(**verdicts: str) -> task.TaskState:
+    """Rows a, b, c numbered 1..3; `verdicts` maps an element to its verdict (absent: open)."""
+    rows = task.departure_records(None, [_departure(e) for e in ("a", "b", "c")], AT)
+    return _state(
+        drawing_departures=[
+            _verdict(r, verdicts[r["element"]]) if r["element"] in verdicts else r for r in rows
+        ]
+    )
+
+
+def test_plan_split_sends_each_departure_to_accepted_rejected_or_open():
+    state = _split_state(a="accept", b="reject")
+    split = drawing_answer.plan_split(
+        state, [_departure("a"), _departure("b"), _departure("c"), _departure("d")]
+    )
+    assert [d.element for d in split.accepted] == ["a"]
+    assert [d.element for d in split.rejected] == ["b"]
+    assert [d.element for d in split.open] == ["c", "d"]  # unanswered, and without a row
+    assert dict(split.rejected_numbers) == {drawing.departure_key("design/home.png", "b"): 2}
+
+
+def test_plan_split_dedupes_by_key_in_order_of_appearance():
+    state = _split_state(b="reject")
+    first = _departure("B ")
+    again = _departure("  b")  # same key as the first
+    split = drawing_answer.plan_split(state, [first, _departure("c"), again, _departure("c")])
+    assert split.rejected == (first,)
+    assert [d.element for d in split.open] == ["c"]
+    assert len(split.rejected_numbers) == 1
+
+
+def test_plan_split_keeps_accepted_and_open_out_of_the_rejected_numbers():
+    state = _split_state(a="accept", b="reject")
+    split = drawing_answer.plan_split(state, [_departure("a"), _departure("c")])
+    assert dict(split.rejected_numbers) == {}
+    with pytest.raises(TypeError):
+        cast(Any, split.rejected_numbers)["x"] = 1
+
+
+def test_plan_split_of_a_state_without_rows_is_all_open_and_split_is_frozen():
+    split = drawing_answer.plan_split(_state(), [_departure("a")])
+    assert [d.element for d in split.open] == ["a"]
+    assert split.accepted == () and split.rejected == ()
+    with pytest.raises(AttributeError):
+        cast(Any, split).open = ()
+
+
+def test_escalation_patch_writes_the_stage_it_is_given_and_the_default_does_not():
+    plan = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, stage="plan")
+    assert plan["drawing_escalation"]["stage"] == "plan"  # type: ignore[index]
+    default = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
+    assert "stage" not in default["drawing_escalation"]  # type: ignore[operator]
+    folded = _applied(_state(), default)
+    assert "stage" not in folded["drawing_escalation"]
+    assert _applied(_state(), plan)["drawing_escalation"].get("stage") == "plan"
+
+
+def _paused(stage: str | None, **over: Any) -> task.TaskState:
+    patch = (
+        drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
+        if stage is None
+        else drawing_answer.escalation_patch(
+            _state(), [_departure("a")], AT, stage=cast(Any, stage)
+        )
+    )
+    state = _applied(_state(), patch)
+    return _state(**{**state, **over})
+
+
+def _answers(state: task.TaskState) -> list[task.DepartureRecord]:
+    return [_answered(r) for r in state["drawing_departures"]]
+
+
+def test_resume_patch_on_a_live_plan_pause_re_plans_even_with_old_subtasks():
+    state = _paused("plan", subtasks={"s": {"status": "approved"}})
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert patch["plan_due"] is True
+    assert patch["drawing_departures"] == _answers(state)
+    resumed = _applied(state, patch)
+    assert rules.resume_target(resumed) == "plan"
+
+
+@pytest.mark.parametrize("stage", [None, "delivery"])
+def test_resume_patch_does_not_re_plan_without_a_plan_stage(stage):
+    state = _paused(stage)
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert "plan_due" not in patch
+
+
+@pytest.mark.parametrize(
+    "pause",
+    [
+        rules.escalation("failure", "x"),
+        rules.escalation("cap", "x"),
+        rules.escalation("estimate", "x"),
+    ],
+)
+def test_resume_patch_ignores_a_stale_plan_record_under_another_pause(pause):
+    state = _paused("plan", **pause)
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert "plan_due" not in patch
+
+
+def test_resume_patch_without_answered_rows_is_exactly_rules_resumed():
+    state = _paused("plan")
+    patch = drawing_answer.resume_patch(state, "ok", 3.0, [], at=AT)
+    assert patch == rules.resumed(state, "ok", 3.0, at=AT)
+    assert "drawing_departures" not in patch
+
+
+def test_resume_patch_after_a_document_round_trip_still_goes_to_plan():
+    state = _paused(
+        "plan", id="T-1", title="t", description="d", subtasks={"s": {"status": "approved"}}
+    )
+    again = cast(task.TaskState, document.parse(document.render(state)))
+    assert again["drawing_escalation"]["stage"] == "plan"
+    patch = drawing_answer.resume_patch(again, "ok", None, _answers(again), at=AT)
+    assert rules.resume_target(_applied(again, patch)) == "plan"
+
+
+# ---- classify (GH-766 part 5.1) -------------------------------------------------------------
+
+
+def _check(
+    verdict: Literal["matches", "departs", "unverified"],
+    ref: str = "home",
+    element: str | None = "Save",
+) -> DrawingCheck:
+    named = verdict != "unverified"
+    return DrawingCheck(
+        subject="screen",
+        ref=ref,
+        verdict=verdict,
+        drawing="design/home.png" if named else None,
+        element=element if named else None,
+    )
+
+
+def _entry(element: str = "Save") -> DrawingDeparture:
+    return DrawingDeparture(
+        drawing="design/home.png",
+        element=element,
+        shows="a blue button",
+        would_ship="a green button",
+        recommendation="keep the drawing",
+        reason="the owner approved it",
+        raised_by="ux_lead_final",
+    )
+
+
+def _row(element: str = "Save", *, verdict: str | None, fix_passes: int = 0):
+    (row,) = task.departure_records(None, [_departure(element)], AT)
+    answer = None if verdict is None else {"verdict": verdict, "by": "comment", "at": "T1"}
+    return cast(task.DepartureRecord, {**row, "answer": answer, "fix_passes": fix_passes})
+
+
+KEY = "design/home.png:save"
+
+
+def test_a_departs_row_with_no_row_is_raised_with_its_departure():
+    result = drawing_answer.classify(_state(), [_check("departs")], [_entry()])
+    assert result.outcomes == {KEY: "raise"}
+    assert result.raised == [
+        drawing.Departure(
+            drawing="design/home.png",
+            element="Save",
+            shows="a blue button",
+            would_ship="a green button",
+            recommendation="keep the drawing",
+            reason="the owner approved it",
+            raised_by="ux_lead_final",
+        )
+    ]
+    assert [c.verdict for c in result.open] == ["departs"]
+
+
+def test_an_unanswered_row_is_raised_again_without_duplicating_the_row():
+    state = _state(drawing_departures=[_row(verdict=None)])
+    result = drawing_answer.classify(state, [_check("departs")], [_entry()])
+    assert result.outcomes == {KEY: "raise"}
+    assert result.raised == []
+
+
+def test_an_unanswered_row_with_no_entry_is_refused_like_a_missing_one():
+    state = _state(drawing_departures=[_row(verdict=None)])
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(state, [_check("departs")], [])
+    assert error.value.cause == "departs_unraised"
+
+
+def test_an_accepted_row_is_settled_and_not_open():
+    state = _state(drawing_departures=[_row(verdict="accept")])
+    result = drawing_answer.classify(state, [_check("departs")], [])
+    assert result.outcomes == {KEY: "settled_accept"}
+    assert result.open == []
+
+
+@pytest.mark.parametrize(
+    ("fix_passes", "outcome"), [(0, "fix_due"), (1, "return_due"), (2, "return_due")]
+)
+def test_a_rejected_row_is_a_fix_then_a_return(fix_passes: int, outcome: str):
+    state = _state(drawing_departures=[_row(verdict="reject", fix_passes=fix_passes)])
+    result = drawing_answer.classify(state, [_check("departs")], [])
+    assert result.outcomes == {KEY: outcome}
+    assert result.raised == []
+    assert [c.verdict for c in result.open] == ["departs"]
+
+
+def test_the_key_ignores_case_and_spaces_of_the_element_and_the_path_spelling():
+    check = DrawingCheck(
+        subject="screen", ref="h", verdict="departs", drawing="./design/home.png", element=" SAVE "
+    )
+    state = _state(drawing_departures=[_row(verdict="accept")])
+    assert drawing_answer.classify(state, [check], []).outcomes == {KEY: "settled_accept"}
+
+
+def test_a_departs_check_with_no_entry_and_no_answered_row_is_refused():
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(_state(), [_check("departs")], [])
+    assert error.value.cause == "departs_unraised"
+    assert KEY in str(error.value) and "departures" in str(error.value)
+    assert isinstance(error.value, ValueError)
+
+
+def test_a_departure_without_its_departs_check_is_refused():
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(_state(), [_check("matches")], [_entry()])
+    assert error.value.cause == "departure_without_check"
+    assert KEY in str(error.value) and "departs" in str(error.value)
+
+
+def test_open_keeps_input_order_with_unverified_and_unsettled_departs_only():
+    state = _state(drawing_departures=[_row("Done", verdict="accept")])
+    checks = [
+        _check("unverified", ref="a"),
+        _check("matches", ref="b"),
+        _check("departs", ref="c", element="Done"),
+        _check("departs", ref="d", element="Save"),
+        _check("unverified", ref="e"),
+    ]
+    result = drawing_answer.classify(state, checks, [_entry("Save")])
+    assert [c.ref for c in result.open] == ["a", "d", "e"]
+    assert result.outcomes == {"design/home.png:done": "settled_accept", KEY: "raise"}
+
+
+def test_an_unverified_check_is_never_turned_into_a_match():
+    result = drawing_answer.classify(_state(), [_check("unverified")], [])
+    assert result.outcomes == {}
+    assert [c.verdict for c in result.open] == ["unverified"]

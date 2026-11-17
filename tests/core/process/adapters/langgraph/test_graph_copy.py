@@ -13,6 +13,7 @@ from langgraph.types import Command
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import landing, merge, poll, resume
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.copy import (
     NO_WRITING_CLAIM,
@@ -262,7 +263,7 @@ def _on_head(ports, head):
 
 
 def _candidates(ports) -> list[int]:
-    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [])
+    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], memo=StackMemo())
 
 
 def _land(ports, tmp_path, launcher):

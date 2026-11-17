@@ -201,3 +201,43 @@ def test_a_classification_pause_without_a_refusal_still_asks_which_type(cfg):
     text = escalate.comment(state("unclear", "classification"), cfg, memory_ports())
 
     assert "Question: Which type is this task?" in text
+
+
+def _drawing_state(cause="drawing_departure", **extra):
+    from agentic.core.process.domain import drawing, drawing_answer
+
+    base = {"id": "GH-12"}
+    departures = [
+        drawing.Departure("design/home.png", e, "blue", "green", "keep", "approved", "dev")
+        for e in ("hero", "footer")
+    ]
+    patch = drawing_answer.escalation_patch(base, departures, "T0")
+    patch["drawing_escalation"] = {**patch["drawing_escalation"], "cause": cause}
+    return {**base, **patch, **extra}
+
+
+def test_a_drawing_pause_shows_the_numbers_and_both_commands_per_number(cfg):
+    asked = _drawing_state(questions_for_human=["1. stray question"])
+    text = escalate.comment(asked, cfg, memory_ports())
+    assert "Departure #1:" in text and "Departure #2:" in text
+    for n in (1, 2):
+        for verdict in ("accept", "reject"):
+            assert f"agentic resume --issue 12 --drawing {n}={verdict}" in text
+    assert "\n1. " not in text and "stray question" not in text
+    assert not [line for line in text.splitlines() if "agentic resume" in line and "<n>" in line]
+
+
+def test_a_drawing_cap_pause_keeps_the_close_option(cfg):
+    text = escalate.comment(_drawing_state("drawing_cap"), cfg, memory_ports())
+    assert "gh issue close 12 --reason 'not planned'" in text
+    assert "--drawing 2=reject" in text
+
+
+def test_a_drawing_pause_with_no_issue_number_shows_only_prose():
+    from tests.fakes import memory_ports as ports_of
+
+    ports = ports_of()
+    ports.inbox.issue_of = lambda task_id: None
+    text = escalate.comment(_drawing_state(), Configuration(product_dir="/tmp/p"), ports)
+    assert "--drawing" not in text.replace("`Drawing <n>", "")
+    assert "agentic resume" not in text.split("Options:")[0]

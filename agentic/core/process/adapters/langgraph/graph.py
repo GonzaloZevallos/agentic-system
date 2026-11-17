@@ -75,7 +75,7 @@ from ...application.split import split
 from ...application.tracker_only import tracker_only
 from ...application.validate_prd import validate_prd
 from ...application.verifiers import Run, verify
-from ...domain import rules
+from ...domain import drawing_answer, rules
 from ...domain.experiment import with_switches
 from ...domain.roles import (
     DEVELOPER,
@@ -276,8 +276,13 @@ def _pause_node(ports_of: PortsOf):
         while rules.tracker_item_pause(state) and not (answer.get("decision") or "").strip():
             answer = interrupt(payload) or {}
         ports = ports_of(cfg, config)
-        resumed = rules.resumed(
-            state, answer.get("decision"), answer.get("estimate"), at=ports.now()
+        # GH-766: the rows `resume.prepare` answered, folded by the field's reducer.
+        resumed = drawing_answer.resume_patch(
+            state,
+            answer.get("decision"),
+            answer.get("estimate"),
+            answer.get("drawing_departures") or [],
+            at=ports.now(),
         )
         # The owner's labels as they are now (GH-591): `path:full` promotes, nothing demotes.
         return apply(resumed, relabelled(state, ports))

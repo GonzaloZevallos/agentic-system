@@ -52,9 +52,26 @@ def test_the_gh407_figures_as_a_depth_one_part_are_refused_and_told_to_write_par
         check(data)
 
 
+def _with_reasons(parts):
+    """The fixture is byte-identical to what GH-407 planned, before parts carried a reason per
+    edge: these reasons were written after the fact for GH-837."""
+    return [
+        {
+            **part,
+            "depends_on_reasons": [f"needs what part {dep} creates" for dep in part["depends_on"]],
+        }
+        for part in parts
+    ]
+
+
+def test_the_fixture_partition_without_reasons_is_refused_for_missing_reasons():
+    with pytest.raises(ValueError, match=r"part \d+ has \d+ depends_on and 0 depends_on_reasons"):
+        parts_check(FIXTURE["parts"])
+
+
 def test_the_fixture_partition_passes_the_parts_check():
-    parts = FIXTURE["parts"]
-    parts_check(parts, one_terminal=True)
+    parts = _with_reasons(FIXTURE["parts"])
+    parts_check(parts)
 
     for part in parts:
         size = size_budget.PlanSize(part["hand_files"], part["hand_lines"], part["test_lines"])
@@ -65,9 +82,9 @@ def test_the_fixture_partition_passes_the_parts_check():
 
 
 def test_the_partition_without_its_conversion_neighbour_is_refused():
-    parts = [dict(part) for part in FIXTURE["parts"]]
-    parts[3]["depends_on"] = []
-    parts[4]["depends_on"] = [2]
-    parts[5]["depends_on"] = [1, 3, 5]
+    parts = _with_reasons(FIXTURE["parts"])
+    parts[3] = {**parts[3], "depends_on": [], "depends_on_reasons": []}
+    parts[4] = {**parts[4], "depends_on": [2], "depends_on_reasons": ["needs part 2"]}
+    parts[5] = {**parts[5], "depends_on": [1, 3, 5], "depends_on_reasons": ["a", "b", "c"]}
     with pytest.raises(ValueError, match="part 4 is a migration with no neighbour"):
         parts_check(parts)

@@ -42,6 +42,7 @@ classDiagram
     class schemas__RoleOutput["RoleOutput"]
     class schemas__Ruling["Ruling"]
     class schemas__SolutionTurn["SolutionTurn"]
+    class schemas__StackProposal["StackProposal"]
     schemas__PRD --|> schemas__RoleOutput
     schemas__PlanCritique --|> schemas__RoleOutput
     schemas__PlanSize --|> schemas__RoleOutput
@@ -50,6 +51,7 @@ classDiagram
     schemas__Reflection --|> schemas__RoleOutput
     schemas__Review --|> schemas__RoleOutput
     schemas__Ruling --|> schemas__RoleOutput
+    schemas__StackProposal --|> schemas__RoleOutput
 ```
 
 ## Relaciones con otras páginas
@@ -73,7 +75,6 @@ classDiagram
   - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
-  - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
   - `schemas.Verdict` hereda de `schemas.RoleOutput`

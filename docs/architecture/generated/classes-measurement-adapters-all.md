@@ -4,6 +4,7 @@ Esta página muestra las clases públicas de todos los módulos de `agentic.core
 
 ```mermaid
 classDiagram
+    class filesystem__read_cache__FilesystemReadCache["FilesystemReadCache"]
     class git__eval_roots__GitEvalRoots["GitEvalRoots"]
     class github__issue_listing__GhIssueListing["GhIssueListing"]
     class langfuse__dashboards__PostgresDashboards["PostgresDashboards"]

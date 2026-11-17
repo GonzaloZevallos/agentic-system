@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -33,6 +33,7 @@ from .task import (
     CarveCause,
     CarveOutcome,
     CarveRecord,
+    DepartureRecord,
     RoleRun,
     assumption_text,
 )
@@ -44,6 +45,9 @@ EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"
+# The departures from an approved drawing (GH-766), derived from `drawing_departures` and never a
+# stored section: `render` writes it, `parse` drops it, every role reads it.
+DRAWING_DEPARTURES = "Drawing departures"
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)
@@ -233,6 +237,69 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def drawing_section(rows: Sequence[DepartureRecord] | None) -> str:
+    """The text of the `Drawing departures` section for `rows`, `""` when there are none. The
+    lines are `drawing_answer.section_lines`; imported here because `drawing_answer` imports
+    `rules`, which imports this module."""
+    from . import drawing_answer
+
+    if not rows:
+        return ""
+    return "\n".join(f"- {line}" for line in drawing_answer.section_lines(rows))
+
+
+_ANSWER_BY = ("comment", "flag")
+
+
+def _departure_rows(raw: object, source: object) -> list[DepartureRecord]:
+    """The stored `drawing_departures` rows, each `answer` validated as `DepartureAnswer | None`
+    (`verdict` accept or reject, `by` comment or flag, `at` a string). Raises `ValueError`."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{source}: drawing_departures is not a list")
+    for row in raw:
+        answer = row.get("answer") if isinstance(row, Mapping) else None
+        if answer is None and isinstance(row, Mapping):
+            continue
+        if not (
+            isinstance(answer, Mapping)
+            and answer.get("verdict") in ("accept", "reject")
+            and answer.get("by") in _ANSWER_BY
+            and isinstance(answer.get("at"), str)
+        ):
+            raise ValueError(f"{source}: drawing_departures has a row with a bad answer: {row!r}")
+    return cast(list[DepartureRecord], raw)
+
+
+_ESCALATION_CAUSES = ("drawing_departure", "drawing_cap")
+_ESCALATION_STAGES = ("plan", "delivery")
+
+
+def _escalation_record(raw: object) -> dict[str, Any] | None:
+    """The stored `drawing_escalation` read back as `{round, numbers, cause}` plus `stage` when it
+    is `plan`; `None` when it is not whole (`round` an int of at least 1, `numbers` a list of
+    ints, `cause` and `stage` from their closed sets), so a hand-edited record is dropped, as
+    an invalid size record is, and never fails the load."""
+    if not isinstance(raw, Mapping):
+        return None
+    round_, numbers, cause, stage = (raw.get(k) for k in ("round", "numbers", "cause", "stage"))
+    if not (
+        isinstance(round_, int)
+        and not isinstance(round_, bool)
+        and round_ >= 1
+        and isinstance(numbers, list)
+        and all(isinstance(n, int) and not isinstance(n, bool) for n in numbers)
+        and cause in _ESCALATION_CAUSES
+        and (stage is None or stage in _ESCALATION_STAGES)
+    ):
+        return None
+    return {
+        "round": round_,
+        "numbers": numbers,
+        "cause": cause,
+        **({"stage": "plan"} if stage == "plan" else {}),
+    }
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -317,6 +384,13 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    if "drawing_departures" in state:
+        state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
+    if "drawing_escalation" in state:
+        if (escalation := _escalation_record(state["drawing_escalation"])) is None:
+            del state["drawing_escalation"]
+        else:
+            state["drawing_escalation"] = escalation
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -475,6 +549,18 @@ def render(
         # there is one, so every document without one is byte-identical to one written before;
         # parsed back under the same name.
         **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
+        # The drawing-departure escalations so far (GH-766): `{round, numbers, cause}` and `stage`
+        # only when it is `plan`, written only when there is one, so a document without one is
+        # byte-identical to one written before; parsed back under the same name.
+        **(
+            {"drawing_escalation": e}
+            if (e := _escalation_record(state.get("drawing_escalation")))
+            else {}
+        ),
+        # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
+        # there and never when it is absent, so a document without it is byte-identical to one
+        # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.
+        **({"drawing_checks": c} if (c := state.get("drawing_checks")) is not None else {}),
         # The landing order's stamp and the head's anchor (GH-588), written only when set.
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
@@ -631,6 +717,8 @@ def render(
     ]
     for name, text in ordered(state.get("sections", {})).items():
         parts.append(f"## {name}\n\n{text.strip()}\n")
+    if departures := drawing_section(state.get("drawing_departures")):
+        parts.append(f"## {DRAWING_DEPARTURES}\n\n{departures}\n")
     return "\n".join(parts)
 
 
@@ -756,4 +844,5 @@ def parse(raw: str, source: object = "document") -> dict[str, Any]:
     raw_frontmatter["sections"] = sections
     data = from_frontmatter(raw_frontmatter, source)
     data["description"] = data["sections"].pop(ORIGINAL, "")
+    data["sections"].pop(DRAWING_DEPARTURES, None)  # derived from the rows on every render
     return data

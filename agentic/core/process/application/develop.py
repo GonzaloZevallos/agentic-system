@@ -23,7 +23,7 @@ from ..domain.gate_priority import gate_priority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from . import archive, ci_flakes, docs_settlement, promotion
+from . import archive, ci_excerpt, ci_flakes, docs_settlement, promotion
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
@@ -111,6 +111,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         notices.append(rules.screens_notice(screens, compare))
     notice_text = "\n\n".join(notices)
     before = ports.workspace.head(checkout.path)
+    # The failed CI jobs' excerpt for a Developer a red CI `full_checks` reopened (GH-743): read
+    # once, in a thread, and handed to `run_role`'s `extra_input` alone. Never state.
+    excerpt = await anyio.to_thread.run_sync(
+        ci_excerpt.developer_excerpt, state, ports, subtask_id, before
+    )
     checks = declared_checks(state, ports)
     # The delivery gate runs the fast tier of a product that declares one (GH-358), the same
     # narrowing `presubmit.delivery_checks` makes over the checks already read here; all of
@@ -259,6 +264,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         resume=resume,
         prompt=prompt,
         cold_prompt=cold_prompt,
+        extra_input=excerpt,
         presubmit=delivery_presubmit,
         delivery_check=None
         if subtask_id == INTEGRATION

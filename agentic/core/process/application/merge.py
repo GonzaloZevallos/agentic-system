@@ -77,6 +77,7 @@ from .ports import (
 from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_after_merge, release_checkout
+from .stack_facts import StackMemo, stack_facts
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
@@ -91,13 +92,47 @@ COMMENTED: tuple[str, ...] = (
     "ci_unknown_names",
     "ci_unreadable",
     "perf_unverified",
+    "drawing_unsettled",
     "criteria_over_cap",
     "criteria_unreadable",
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
     "open_escalation",
+    "stack_base_orphaned",
 )
+
+# The refusals that are not commented (GH-859): each is either not a human's to act on (the landing
+# takes a step, or waits) or already said by the task's own escalation. Every `MergeRefusal` value
+# is in this tuple or in `COMMENTED`, and `test_merge_refusal_tables` fails for a new one that is
+# in neither.
+UNCOMMENTED: tuple[str, ...] = (
+    "not_ready",
+    "pr_not_open",
+    "not_approved",
+    "head_not_reviewed",
+    "open_findings_blocking",
+    "open_findings",
+    "eval_set",
+    "merge_conflict",
+    "master_moved",
+    "ci_blocked_by_conflict",
+    "stack_parent_unmerged",
+    "stack_restack_due",
+)
+
+# What a stacking refusal says in a comment (GH-859): one fixed phrase per value, keyed by the
+# refusal, never a word of the parent, its issue or the record. Only `stack_base_orphaned` is
+# commented; the other two are listed so that no stacking value has a comment without a phrase.
+STACK_EVIDENCE: dict[str, str] = {
+    "stack_parent_unmerged": "The parent this task is stacked on has not merged yet.",
+    "stack_restack_due": "The parent merged; this task takes the base branch in once.",
+    "stack_base_orphaned": (
+        "The commit this task was built on will never reach the base branch: its parent was "
+        "rebuilt, closed without merging, merged without a merge commit, or the record of the "
+        "parent could not be read."
+    ),
+}
 
 LEFT_TO_HUMAN = "Left for the human to merge."
 
@@ -268,6 +303,8 @@ def merge_task(
     # GH-353: the declared globs and each row master's gain, read at most once per verb call.
     globs: list[tuple[str, ...]] = []
     gains: dict[str, tuple[str, ...] | None] = {}
+    # GH-876: the stacking reads of this one call, shared by its re-decisions (invariant 1).
+    stack_memo = StackMemo()
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(
@@ -318,6 +355,19 @@ def merge_task(
             if not criteria:
                 criteria.append(_criteria(ports, head, range_base))
             facts = replace(facts, criteria_regressed=criteria[0])
+        # GH-876: a stacked child's parent facts, read only when every refusal ahead of the
+        # stacking row is ruled out; memoised for the whole call, so the re-decisions after the
+        # checks or a fresh run read nothing again. Like the poller's guard (GH-860) but without
+        # its `unlandable` term, which the verb leaves out on purpose.
+        if (
+            head is not None
+            and facts.stack is not None
+            and facts.stack.record is not None
+            and rules.stack_probe_wanted(facts)
+        ):
+            facts = replace(
+                facts, stack=stack_facts(ports, cfg, facts.stack, master, head, stack_memo)
+            )
         # GH-353: what master gained since the rows' masters, read once and only when no
         # refusal ahead of the checks has ruled the pull request out and the answer would
         # change the decision.
@@ -1583,6 +1633,20 @@ def _perf_evidence(facts: rules.MergeFacts) -> str:
     return f"verdict {facts.perf_verdict or 'none'}"
 
 
+def _drawing_evidence(facts: rules.MergeFacts) -> str:
+    """What a `drawing_unsettled` refusal says, one fixed line from the structured facts: how
+    many rows are open and whether the record's head still covers the pull request's:
+    `current` (`rules.head_reviewed` holds), `unreadable` (it is not a full commit id) or
+    `moved` (anything else)."""
+    if not rules.full_commit_id(facts.drawing_head):
+        head = "unreadable"
+    elif rules.head_reviewed(facts.drawing_head, facts.close_docs, facts.pr_head):
+        head = "current"
+    else:
+        head = "moved"
+    return f"open={facts.drawing_open} head={head}"
+
+
 def _criteria_evidence(facts: rules.MergeFacts) -> str:
     """What a `criteria_over_cap` refusal says: the messages `knowledge` wrote, one per
     line (file, count, cap), and nothing this module counted. An unreadable read has none."""
@@ -1644,12 +1708,16 @@ def _refuse(
             )
         if facts is not None and reason == "perf_unverified":
             text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
+        if facts is not None and reason == "drawing_unsettled":
+            text = "\n\n".join(part for part in (first, _drawing_evidence(facts), closing) if part)
         if facts is not None and reason == "criteria_over_cap":
             text = "\n\n".join(part for part in (first, _criteria_evidence(facts), closing) if part)
         if reason in ("ci_no_verdict", "ci_stale_exhausted", "ci_untrusted_no_dispatch"):
             text = "\n\n".join(
                 part for part in (first, _fresh_run_evidence(reason, facts, cause), closing) if part
             )
+        if reason in STACK_EVIDENCE:
+            text = "\n\n".join(part for part in (first, STACK_EVIDENCE[reason], closing) if part)
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

@@ -31,6 +31,7 @@ graph TD
     m_application__ci_trust["application.ci_trust"]
     m_application__docs_settlement["application.docs_settlement"]
     m_application__landing_body["application.landing_body"]
+    m_application__limits["application.limits"]
     m_application__checkouts --> g_application__support__2
     m_application__checkouts --> g_domain__checks
     m_application__checkouts --> g_domain__roles
@@ -38,6 +39,7 @@ graph TD
     m_application__checkouts --> g_pkg__agentic__shared
     m_application__ci_excerpt --> g_application__support__2
     m_application__ci_excerpt --> g_domain__checks
+    m_application__ci_excerpt --> g_domain__landing
     m_application__ci_excerpt --> g_domain__state
     m_application__ci_push --> g_application__support__2
     m_application__ci_push --> g_domain__checks

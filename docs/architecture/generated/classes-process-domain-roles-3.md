@@ -33,6 +33,7 @@ classDiagram
     class schemas__Diagnosis["Diagnosis"]
     class schemas__DrawingCheck["DrawingCheck"]
     class schemas__DrawingDeparture["DrawingDeparture"]
+    class schemas__FinalDesignReview["FinalDesignReview"]
     class schemas__FinalValidation["FinalValidation"]
     class schemas__FinalValidationWithAssumptions["FinalValidationWithAssumptions"]
     class schemas__Finding["Finding"]
@@ -42,6 +43,7 @@ classDiagram
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
     class schemas__LessonDelta["LessonDelta"]
+    schemas__FinalDesignReview --|> schemas__DesignReview
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 

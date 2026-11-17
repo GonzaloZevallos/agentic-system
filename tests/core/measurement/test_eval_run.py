@@ -425,7 +425,9 @@ async def test_two_drivers_never_exceed_the_cap_and_a_pollers_count_includes_the
     _seed_body(ports, 5)
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path / "a", max_concurrent_runs=1), ports, registry, launcher, NOW)
-    assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+    # The ready issue says why it waits (GH-836): the cap is full.
+    assert lines == ["agentic: poll: launch #5 waiting (no_slot)"]
     assert counted() == 1
 
     def sleep(seconds):

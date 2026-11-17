@@ -3,16 +3,21 @@
 `unanswered` and `applicable` are the only rule of which row an answer reaches;
 `escalation_due` and `escalation_patch` the only place the escalation of departures is decided
 and worded; `prompt_cause` the only reading of which drawing cause a pause carries; and
-`section_lines` the only rendering of the rows a role reads. Imports only the domain's `task`,
-`rules`, `drawing` and `escalation_prompts`."""
+`section_lines` the only rendering of the rows a role reads; `classify` the only rule that
+crosses a `departs` check with `departures` and with `drawing_departures`; `plan_split` the only
+reading of the owner's verdict on a departure the plan declares; `plan_resume` and `resume_patch`
+the only composition of the patch that resumes a pause the owner answered. Imports only the
+domain's `task`, `rules`, `drawing`, `escalation_prompts` and `schemas`."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from types import MappingProxyType
+from typing import Any, Literal
 
 from . import drawing, escalation_prompts, rules, task
+from .schemas import DrawingCheck, DrawingDeparture
 
 Cause = Literal["drawing_departure", "drawing_cap"]
 
@@ -85,12 +90,8 @@ def _history(due: Exhausted, rows: Sequence[task.DepartureRecord]) -> str:
 
 
 def _reason(
-    due: Due | Exhausted,
-    rows: Sequence[task.DepartureRecord],
-    issue: int | None,
-    contradicted: frozenset[int],
+    due: Due | Exhausted, rows: Sequence[task.DepartureRecord], contradicted: frozenset[int]
 ) -> str:
-    shown = "N" if issue is None else str(issue)
     lines = [_history(due, rows)] if isinstance(due, Exhausted) else []
     for row in sorted(rows, key=lambda r: r["number"]):
         if row["answer"] is not None:
@@ -99,9 +100,18 @@ def _reason(
         lines.append(drawing.departure_question(_departure(row), n))
         if n in contradicted:
             lines.append(f"Drawing {n} got both accept and reject in one comment; answer it once.")
-        for command in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT):
-            lines.append(command.format(issue=shown).replace("<n>", str(n)))
     return "\n".join(lines)
+
+
+def prompt_lines(rows: Sequence[task.DepartureRecord], issue: int) -> list[str]:
+    """The `agentic resume --drawing` commands of the open rows in number order, accept then
+    reject each, with `issue` and the number filled. The only place those commands are built."""
+    return [
+        command.format(issue=str(issue)).replace("<n>", str(row["number"]))
+        for row in sorted(rows, key=lambda r: r["number"])
+        if row["answer"] is None
+        for command in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT)
+    ]
 
 
 def escalation_patch(
@@ -109,13 +119,16 @@ def escalation_patch(
     departures: Sequence[drawing.Departure],
     at: str,
     *,
-    issue: int | None,
     contradicted: frozenset[int] = frozenset(),
+    stage: Literal["plan", "delivery"] = "delivery",
 ) -> dict[str, object]:
     """The patch that escalates `departures` (and every row still open) to the owner: the new
     rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
-    escalation worded here. `issue` is the number the resume commands show, `None` shows `N`.
-    Raises `ValueError` when no number remains unanswered.
+    escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
+    comment). Raises `ValueError` when no number remains unanswered.
+
+    `stage` says which gate asked: `plan` is written to the record, `delivery` (the default) is
+    what an absent one reads as.
 
     Called only from the system's serialized turn, never from a branch node: it reads the
     round the whole task has reached."""
@@ -127,17 +140,91 @@ def escalation_patch(
         raise ValueError("no departure is left unanswered: there is nothing to escalate")
     escalation = rules.escalation(
         "questions",
-        _reason(due, rows, issue, contradicted),
+        _reason(due, rows, contradicted),
         spec=state.get("spec"),
         spec_cause="drawing" if rules.spec_delivery(state) else None,
     )
-    return {
-        **escalation,
-        "drawing_departures": new_rows,
-        "drawing_escalation": task.DrawingEscalation(
-            round=due.round, numbers=numbers, cause=due.cause
-        ),
-    }
+    record = task.DrawingEscalation(round=due.round, numbers=numbers, cause=due.cause)
+    if stage == "plan":
+        record["stage"] = "plan"
+    return {**escalation, "drawing_departures": new_rows, "drawing_escalation": record}
+
+
+@dataclass(frozen=True)
+class PlanSplit:
+    """The departures a plan declares, by the owner's verdict on each: `accepted`, `rejected`,
+    and `open` (no row yet, or a row with no answer), each deduplicated by key in order of
+    appearance. `rejected_numbers` maps the key of every rejected one to its number, which is
+    what the plan gate takes; the key never reaches a text."""
+
+    accepted: tuple[drawing.Departure, ...]
+    rejected: tuple[drawing.Departure, ...]
+    open: tuple[drawing.Departure, ...]
+    rejected_numbers: Mapping[str, int]
+
+
+def plan_split(state: task.TaskState, departures: Sequence[drawing.Departure]) -> PlanSplit:
+    """Split `departures` by the verdict held in the `drawing_departures` rows, compared by
+    `drawing.departure_key`. The only place the verdict of a departure of the plan is read."""
+    rows = {r["key"]: r for r in state.get("drawing_departures", [])}
+    accepted: dict[str, drawing.Departure] = {}
+    rejected: dict[str, drawing.Departure] = {}
+    open_: dict[str, drawing.Departure] = {}
+    numbers: dict[str, int] = {}
+    seen: set[str] = set()
+    for d in departures:
+        key = drawing.departure_key(d.drawing, d.element)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = rows.get(key)
+        answer = row["answer"] if row is not None else None
+        if row is None or answer is None:
+            open_[key] = d
+        elif answer["verdict"] == "accept":
+            accepted[key] = d
+        else:
+            rejected[key] = d
+            numbers[key] = row["number"]
+    return PlanSplit(
+        accepted=tuple(accepted.values()),
+        rejected=tuple(rejected.values()),
+        open=tuple(open_.values()),
+        rejected_numbers=MappingProxyType(numbers),
+    )
+
+
+def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> bool:
+    """Whether the owner's answer reopens the plan: the pause is a live drawing one
+    (`prompt_cause`), the resumption answered at least one row, and the gate that asked was the
+    plan's. A stale `plan` record under another pause never does."""
+    record = state.get("drawing_escalation")
+    return (
+        prompt_cause(state) is not None
+        and bool(answered)
+        and record is not None
+        and record.get("stage", "delivery") == "plan"
+    )
+
+
+def resume_patch(
+    state: task.TaskState,
+    decision: str | None,
+    estimate: float | None,
+    answered: Sequence[task.DepartureRecord],
+    *,
+    at: str,
+) -> dict[str, Any]:
+    """The patch that resumes a paused task given the rows the owner `answered` (none for any
+    other pause): `rules.resumed`, told by `plan_resume` whether the plan is owed, plus the
+    answered rows when there are some. The only composition of that patch and the only caller
+    of `plan_resume`, so the only source of `rules.resumed`'s `drawing_plan`."""
+    patch = rules.resumed(
+        state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
+    )
+    if answered:
+        patch["drawing_departures"] = list(answered)
+    return patch
 
 
 def prompt_cause(state: task.TaskState) -> Cause | None:
@@ -183,3 +270,105 @@ def section_lines(rows: Sequence[task.DepartureRecord]) -> list[str]:
         )
         lines.extend(f"#{n} · {name}: {_flat(text)}" for name, text in fields)
     return lines
+
+
+Outcome = Literal["raise", "settled_accept", "fix_due", "return_due"]
+
+
+class ClassifyMismatch(ValueError):
+    """The checks and the departures of a final review do not belong together. `cause` is
+    `departs_unraised` (a `departs` check no departure raises and no row answered) or
+    `departure_without_check` (a departure no `departs` check names)."""
+
+    def __init__(
+        self, cause: Literal["departs_unraised", "departure_without_check"], identity: str
+    ) -> None:
+        self.cause = cause
+        self.identity = identity
+        if cause == "departs_unraised":
+            message = (
+                f"drawing {identity!r} has a `departs` check but no departure: add a "
+                f"departure for it to `departures`, or change the check's verdict"
+            )
+        else:
+            message = (
+                f"drawing {identity!r} has a departure but no `departs` check: add a "
+                f"`departs` drawing check for it, or drop the departure"
+            )
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class Classified:
+    """What `classify` decided: `raised` the departures with no row yet, `outcomes` one per
+    `departs` check keyed by `drawing.departure_key`, and `open` the checks that still block
+    (the `unverified` ones and the `departs` ones not `settled_accept`), in input order."""
+
+    raised: list[drawing.Departure]
+    outcomes: dict[str, Outcome]
+    open: list[DrawingCheck]
+
+
+def _check_identity(check: DrawingCheck) -> str:
+    if check.drawing is None or check.element is None:
+        raise ValueError(f"the departs check {check.ref!r} names no drawing or element")
+    return drawing.departure_key(check.drawing, check.element)
+
+
+def _outcome(row: task.DepartureRecord) -> Outcome:
+    answer = row["answer"]
+    if answer is None:
+        return "raise"
+    if answer["verdict"] == "accept":
+        return "settled_accept"
+    return "fix_due" if row["fix_passes"] == 0 else "return_due"
+
+
+def classify(
+    state: task.TaskState,
+    checks: Sequence[DrawingCheck],
+    departures: Sequence[DrawingDeparture],
+) -> Classified:
+    """The only rule that crosses a `departs` check with `departures` and `drawing_departures`.
+
+    The outcome of a `departs` check depends on the row of its key: no row is `raise` (and
+    its departure joins `raised`); an unanswered row is `raise` too, never duplicated; an
+    accepted one is `settled_accept`; a rejected one is `fix_due` while it has had no fix
+    pass and `return_due` after. Raises `ClassifyMismatch` for a `departs` check with no
+    departure and no answered row, and for a departure with no `departs` check."""
+    rows = {r["key"]: r for r in state.get("drawing_departures", [])}
+    entries: dict[str, DrawingDeparture] = {}
+    for declared in departures:
+        entries.setdefault(drawing.departure_key(declared.drawing, declared.element), declared)
+    named = {_check_identity(c) for c in checks if c.verdict == "departs"}
+    for identity in entries:
+        if identity not in named:
+            raise ClassifyMismatch("departure_without_check", identity)
+    raised: dict[str, drawing.Departure] = {}
+    outcomes: dict[str, Outcome] = {}
+    for check in checks:
+        if check.verdict != "departs":
+            continue
+        identity = _check_identity(check)
+        row = rows.get(identity)
+        if row is not None and row["answer"] is not None:
+            outcomes[identity] = _outcome(row)
+            continue
+        entry = entries.get(identity)
+        if entry is None:
+            raise ClassifyMismatch("departs_unraised", identity)
+        outcomes[identity] = "raise"
+        if row is None:
+            raised.setdefault(identity, drawing.Departure(**entry.model_dump()))
+    return Classified(
+        raised=list(raised.values()),
+        outcomes=outcomes,
+        open=[
+            c
+            for c in checks
+            if drawing.row_is_open(
+                c.verdict,
+                c.verdict == "departs" and outcomes[_check_identity(c)] == "settled_accept",
+            )
+        ],
+    )

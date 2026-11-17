@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
     class size_budget__ActualSize["ActualSize"]

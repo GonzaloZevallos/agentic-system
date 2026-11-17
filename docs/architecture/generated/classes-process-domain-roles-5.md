@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
-    class schemas__StackProposal["StackProposal"]
     class schemas__Subtask["Subtask"]
     class schemas__TechAnswers["TechAnswers"]
     class schemas__TechAnswersWithAssumptions["TechAnswersWithAssumptions"]
@@ -47,7 +46,6 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
-  - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
   - `schemas.Verdict` hereda de `schemas.RoleOutput`

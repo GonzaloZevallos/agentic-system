@@ -2215,7 +2215,9 @@ def _departure_row(number: int, element: str, answer: str | None = None) -> dict
         "reason": "approved",
         "raised_by": "developer",
         "raised_at": "2026-11-15T10:00:00Z",
-        "answer": answer,
+        "answer": (
+            None if answer is None else {"verdict": answer, "by": "comment", "at": "2026-11-15"}
+        ),
         "fix_passes": 1,
     }
 
@@ -2240,6 +2242,56 @@ def test_a_non_empty_departure_record_round_trips_intact():
     assert parsed["drawing_departures"] == rows
 
 
+def _escalation_state(**record: object) -> dict[str, object]:
+    return {**_departure_base(), "drawing_escalation": record}
+
+
+def test_a_state_without_an_escalation_writes_the_frontmatter_it_always_did():
+    plain = document.render(_departure_base())
+    assert "drawing_escalation" not in plain
+    assert document.render({**_departure_base(), "drawing_escalation": {}}) == plain
+    assert "drawing_escalation" not in document.parse(plain)
+
+
+@pytest.mark.parametrize("stage", [None, "plan"])
+def test_an_escalation_round_trips_with_and_without_a_plan_stage(stage):
+    record = {"round": 2, "numbers": [1, 3], "cause": "drawing_cap"}
+    if stage:
+        record["stage"] = stage
+    text = document.render(_escalation_state(**record))
+    parsed = document.parse(text)
+    assert parsed["drawing_escalation"] == record
+    assert ("stage: plan" in text) is bool(stage)
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+def test_a_delivery_stage_is_not_written_so_it_reads_back_as_absent():
+    record = {"round": 1, "numbers": [1], "cause": "drawing_departure", "stage": "delivery"}
+    text = document.render(_escalation_state(**record))
+    assert "stage" not in text
+    assert "stage" not in document.parse(text)["drawing_escalation"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"round": 0, "numbers": [1], "cause": "drawing_departure"},
+        {"round": True, "numbers": [1], "cause": "drawing_departure"},
+        {"round": 1, "numbers": ["1"], "cause": "drawing_departure"},
+        {"round": 1, "numbers": 1, "cause": "drawing_departure"},
+        {"round": 1, "numbers": [1], "cause": "other"},
+        {"round": 1, "numbers": [1], "cause": "drawing_cap", "stage": "later"},
+    ],
+)
+def test_an_invalid_escalation_record_is_dropped_on_load_and_never_written(bad):
+    assert "drawing_escalation" not in document.render(_escalation_state(**bad))
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\ndrawing_escalation: " + str(bad).replace("'", '"') + "\n---\n", 1
+    )
+    assert "drawing_escalation" in stored
+    assert "drawing_escalation" not in document.parse(stored)
+
+
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
 
 
@@ -2254,3 +2306,45 @@ def test_spec_refusal_survives_render_parse_render_byte_for_byte():
     parsed = document.parse(rendered)
     assert parsed["spec_refusal"] == SPEC_REFUSAL
     assert document.render({**golden_state(), **parsed}) == rendered
+
+
+def _section_row(answer=None):
+    return {
+        "number": 1,
+        "key": "design/home.png:hero",
+        "drawing": "design/home.png",
+        "element": "hero",
+        "shows": "blue",
+        "would_ship": "green",
+        "recommendation": "keep",
+        "reason": "approved",
+        "raised_by": "developer",
+        "raised_at": "T0",
+        "answer": answer,
+        "fix_passes": 0,
+    }
+
+
+def _plain_state():
+    return {"id": "GH-1", "title": "t", "description": "d", "status": "open"}
+
+
+def test_a_document_without_departure_rows_has_no_drawing_section():
+    assert "Drawing departures" not in document.render(_plain_state())
+
+
+def test_departure_rows_render_a_section_that_parse_drops_and_keeps_the_rows():
+    rows = [_section_row({"verdict": "accept", "by": "flag", "at": "T1"})]
+    text = document.render({**_plain_state(), "drawing_departures": rows})
+    assert "## Drawing departures\n\n- #1 · design/home.png · hero · accept (flag, T1)" in text
+    parsed = document.parse(text)
+    assert parsed["drawing_departures"] == rows
+    assert "Drawing departures" not in parsed["sections"]
+    assert document.render({**_plain_state(), **parsed}) == text
+
+
+def test_a_departure_row_with_a_bad_answer_is_refused_on_load():
+    bad = [_section_row({"verdict": "maybe", "by": "flag", "at": "T1"})]
+    text = document.render({**_plain_state(), "drawing_departures": bad})
+    with pytest.raises(ValueError, match="bad answer"):
+        document.parse(text)

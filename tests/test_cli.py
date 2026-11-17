@@ -7,7 +7,7 @@ import subprocess
 import weakref
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +18,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli, composition
 from agentic.core.measurement.application.ports import (
+    NoCache,
     Page,
     PageUnreadable,
     QuotaReading,
@@ -4298,6 +4299,54 @@ async def test_poll_a_timed_out_round_prints_its_line_sleeps_and_runs_the_next(
 
 
 @pytest.mark.anyio
+async def test_poll_hands_every_round_the_same_sweep_carry_and_a_dry_round_none(
+    monkeypatch, tmp_path
+):
+    """GH-824: the carry is a local of the loop, not a module global; `_dry_round` has none."""
+    from agentic.core.process.application.worktree_sweep import SweepCarry
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    carries: list[object] = []
+
+    def run_once(*args, **kwargs):
+        carries.append(kwargs.get("sweep_carry", "absent"))
+        return ["agentic: poll: nothing to do"]
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+
+    class Stop(Exception):
+        pass
+
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise Stop()
+
+    with pytest.raises(Stop):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
+    first, second = carries
+    assert isinstance(first, SweepCarry) and first is second
+
+    carries.clear()
+    cli._dry_round(
+        Configuration(product_dir=tmp_path), memory_ports(), MemoryRunRegistry(), FakeLock()
+    )
+    assert carries == ["absent"]
+
+
+@pytest.mark.anyio
 async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import FakeLauncher, MemoryRunRegistry
@@ -4788,16 +4837,22 @@ class FakeListing:
         return Page(chunk, len(chunk))
 
 
+def _state(merged_at):
+    return "open" if merged_at is None else "closed"
+
+
 def listing_of(tracker: FakePullRequestTracker, **kwargs) -> FakeListing:
     """The listing GitHub would give for what `tracker` holds: its pull requests and its
     issue times (an issue it fails to read is not listed)."""
     items = [
-        ListedIssue(pull_request_number(ref), pr.created_at, True, pr.merged_at)
+        ListedIssue(
+            pull_request_number(ref), pr.created_at, True, pr.merged_at, _state(pr.merged_at)
+        )
         for ref, pr in tracker.prs.items()
         if pr is not None
     ]
     items += [
-        ListedIssue(int(task_id.removeprefix("GH-")), created, False, None)
+        ListedIssue(int(task_id.removeprefix("GH-")), created, False, None, "closed")
         for task_id, created in tracker.issue_created.items()
         if task_id not in tracker.issue_created_errors
     ]
@@ -4808,7 +4863,9 @@ def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str, listing=N
     monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
     monkeypatch.setattr(cli.composition, "task_scorer", lambda product: scorer)
     chosen = listing if listing is not None else listing_of(ports.tracker)
-    monkeypatch.setattr(cli.composition, "backfill_listing", lambda product_dir: chosen)
+    monkeypatch.setattr(
+        cli.composition, "backfill_listing", lambda product_dir: (chosen, NoCache())
+    )
     monkeypatch.setattr(
         "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
     )
@@ -5025,7 +5082,7 @@ def test_a_backfill_writes_no_task_document(monkeypatch, tmp_path):
 
 
 def _item(number, created=STARTED, *, pr=False, merged=None):
-    return ListedIssue(number, created, pr, merged)
+    return ListedIssue(number, created, pr, merged, "closed")
 
 
 def test_a_mixed_set_prints_each_outcome_in_order_and_a_missing_number_is_gh_failed(
@@ -5234,6 +5291,118 @@ def test_only_unfinished_documents_make_no_github_call_and_build_no_listing(
     out = capsys.readouterr().out.splitlines()
     assert out[-2] == _cost(0, 0, "unknown")
     assert out[-1].startswith("scored 0, partial 0")
+
+
+# The read cache: the real composition (a GitHub origin on the product dir, the cache under
+# `XDG_CACHE_HOME`) with only the listing and the clock swapped.
+
+
+class Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+NOW = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+
+
+def _cached_backfill(monkeypatch, tmp_path, ports, listing, clock, *extra) -> int:
+    root = tmp_path / "p"
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "remote.origin.url", "https://github.com/Acme/Widgets.git"],
+        cwd=root,
+        check=True,
+    )
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
+    monkeypatch.setattr(cli.composition, "task_scorer", lambda product: FakeScorer())
+    monkeypatch.setattr(cli.composition, "GhIssueListing", lambda gh, key: listing)
+    monkeypatch.setattr(cli.composition, "backfill_clock", lambda: clock)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
+    )
+    return _backfill_exit()
+
+
+def _cache_file(tmp_path):
+    return tmp_path / "xdg" / "agentic" / "scores-reads" / "acme__widgets.json"
+
+
+def test_a_live_run_after_a_dry_run_within_the_window_makes_no_page_call(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 150)
+    items = [_item(number) for number in range(1, 151)]
+    dry = FakeListing(items)
+    clock = Clock(NOW)
+    assert _cached_backfill(monkeypatch, tmp_path, ports, dry, clock, "--dry-run") == 0
+    assert dry.calls == [1, 2]
+    assert _cost(4, 2, 4800) + ", 0 pages from cache\n" in capsys.readouterr().out
+    clock.now = NOW + timedelta(seconds=300)
+    live = FakeListing(items)  # a run builds its own listing, so its spend starts at zero
+    assert _cached_backfill(monkeypatch, tmp_path, ports, live, clock) == 0
+    assert live.calls == [] and live.quota_reads == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[-2:] == [_cost(0, 0, "unknown") + ", 2 pages from cache", out[-1]]
+    assert out[-1].startswith("scored 150")
+
+
+def test_a_reserve_stop_prints_the_resume_line_keeps_the_pages_and_the_rerun_reads_the_rest(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 250)
+    items = [_item(number) for number in range(1, 251)]
+    stopping = FakeListing(
+        items, quotas=[QuotaReading(2000), QuotaReading(1500), QuotaReading(1000)]
+    )
+    clock = Clock(NOW)
+    assert _cached_backfill(monkeypatch, tmp_path, ports, stopping, clock) == 75
+    assert capsys.readouterr().out == (
+        "agentic: stopped reading GitHub: reserve; 2 pages cached, the next run resumes\n"
+        + _cost(5, 2, 1000)
+        + "\n"
+    )
+    assert _cache_file(tmp_path).is_file()
+    clock.now = NOW + timedelta(seconds=30)
+    resuming = FakeListing(items)
+    assert _cached_backfill(monkeypatch, tmp_path, ports, resuming, clock) == 0
+    assert resuming.calls == [3]
+    assert ", 2 pages from cache" in capsys.readouterr().out
+
+
+def test_a_refused_page_after_a_cached_one_exits_1_and_keeps_that_page(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 150)
+    listing = FakeListing([_item(n) for n in range(1, 151)], {2: "refused"})
+    assert _cached_backfill(monkeypatch, tmp_path, ports, listing, Clock(NOW)) == 1
+    assert capsys.readouterr().out == (
+        "agentic: stopped reading GitHub: refused; rerun later; 1 pages cached\n"
+        + _cost(4, 2, 4800)
+        + "\n"
+    )
+    assert list(json.loads(_cache_file(tmp_path).read_text())["pages"]) == ["1"]
+
+
+def test_a_corrupt_cache_file_is_a_miss_and_the_run_rewrites_it(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 3)
+    _cache_file(tmp_path).parent.mkdir(parents=True)
+    _cache_file(tmp_path).write_text("{corrupt")
+    listing = FakeListing([_item(n) for n in range(1, 4)])
+    assert _cached_backfill(monkeypatch, tmp_path, ports, listing, Clock(NOW)) == 0
+    assert listing.calls == [1]
+    assert json.loads(_cache_file(tmp_path).read_text())["v"] == 1
 
 
 def _backfill_exit() -> int:

@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     RawResult,
     Upstream,
 )
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import document, presubmit, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.adr_numbers import Ambiguous, DecidedRenaming, Renaming
@@ -69,7 +70,7 @@ def _doc(ports):
 def _candidates(ports) -> list[int]:
     from tests.core.process.application.test_poll import _Locks
 
-    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [])
+    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], memo=StackMemo())
 
 
 def test_an_outside_finding_files_one_needs_triage_follow_up_and_the_next_decision_merges(tmp_path):
@@ -834,7 +835,8 @@ def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_is_below_the_thresho
     _tick(ports, tmp_path, driver)
 
     assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
-    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+    # The two reads are the poll's own, one per round, for the launch order (GH-836).
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 2
 
 
 def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_at_the_threshold(
@@ -913,7 +915,8 @@ def test_acceptance_failed_local_checks_rerun_green_below_the_threshold_files_no
     _tick(ports, tmp_path, driver)
 
     assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
-    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+    # The two reads are the poll's own, one per round, for the launch order (GH-836).
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 2
 
 
 def test_acceptance_failed_local_checks_rerun_green_files_the_flake_at_the_threshold(tmp_path):
@@ -1415,7 +1418,9 @@ def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_p
     from tests.core.process.application.test_poll import _Locks
 
     lands: list[rules.LandCandidate] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
+    poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT, memo=StackMemo()
+    )
 
     assert lands == [rules.LandCandidate(5, "land_model")]
     assert poll.gather_resumes(ports, LAST_AT + timedelta(days=1)) == []
@@ -1427,7 +1432,9 @@ def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
     from tests.core.process.application.test_poll import _Locks
 
     lands: list[rules.LandCandidate] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
+    poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT, memo=StackMemo()
+    )
 
     assert lands == []
 
@@ -1830,7 +1837,15 @@ def _round(ports, tmp_path, now):
 
     lands: list[rules.LandCandidate] = []
     poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=now, cfg=_cfg(tmp_path)
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands=lands,
+        now=now,
+        cfg=_cfg(tmp_path),
+        memo=StackMemo(),
     )
     return lands
 

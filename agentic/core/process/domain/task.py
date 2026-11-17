@@ -586,6 +586,30 @@ class DepartureRecord(TypedDict):
     fix_passes: int
 
 
+class DrawingRow(TypedDict):
+    """One check of the drawing record as the state keeps it (GH-766 part 5): `subject` and
+    `ref` what was checked, `verdict` its result (`matches`, `departs` or `unverified`) and
+    `settled` whether the owner's answer closed a `departs` one. Whether the row is open is
+    `drawing.row_is_open`, never read off this shape."""
+
+    subject: str
+    ref: str
+    verdict: str
+    settled: NotRequired[bool]
+
+
+class DrawingChecksRecord(TypedDict):
+    """The drawing checks of one verified head (GH-766 part 5): `head` the commit they were
+    made on, `rows` every check and `open` how many are still open. The writer comes in part
+    5.2: it records again on every head the verify node sees, and sets `settled` only from
+    `drawing_answer.classify`'s `settled_accept`. A record read from a document may be
+    malformed; only `rules.drawing_merge_facts` judges it."""
+
+    head: str
+    rows: list[DrawingRow]
+    open: int
+
+
 def departure_records(
     existing: list[DepartureRecord] | None, departures: Sequence[drawing.Departure], at: str
 ) -> list[DepartureRecord]:
@@ -645,33 +669,72 @@ def add_drawing_departures(
 class DrawingEscalation(TypedDict):
     """The record of the drawing-departure escalations of a task: `round` how many there have
     been, `numbers` every number asked so far (sorted) and `cause` `drawing_cap` once the cap
-    was reached, `drawing_departure` before."""
+    was reached, `drawing_departure` before. `stage` says which gate asked, `plan` or `delivery`;
+    absent it reads `delivery`, and a record only carries it when it is `plan`."""
 
     round: int
     numbers: list[int]
     cause: Literal["drawing_departure", "drawing_cap"]
+    stage: NotRequired[Literal["plan", "delivery"]]
+
+
+# Which `stage` wins when two records share a round: the higher rank. `delivery` is the
+# conservative one, and what an absent `stage` reads as.
+_STAGE_RANK = {"plan": 0, "delivery": 1}
+
+
+def _escalation_stage(record: DrawingEscalation) -> Literal["plan", "delivery"]:
+    return record.get("stage", "delivery")
 
 
 def add_drawing_escalation(
     existing: DrawingEscalation | None, new: DrawingEscalation
 ) -> DrawingEscalation:
     """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
-    `drawing_cap` if either has it. Commutative and associative; `existing` may be `None`.
-    The graph's channel starts from the empty `DrawingEscalation()` and may fold an empty
-    update: an empty side is the identity, never an error."""
+    `drawing_cap` if either has it, and the `stage` of the higher round (the higher
+    `_STAGE_RANK` on a tie), kept only when it is `plan`. Commutative and associative;
+    `existing` may be `None`. The graph's channel starts from the empty `DrawingEscalation()`
+    and may fold an empty update: an empty side is the identity, never an error."""
     if not new:
-        return existing if existing is not None else cast(DrawingEscalation, {})
-    if not existing:
-        return DrawingEscalation(
-            round=new["round"], numbers=sorted(set(new["numbers"])), cause=new["cause"]
+        if not existing:
+            return cast(DrawingEscalation, {})
+        return _drawing_escalation(
+            existing["round"],
+            set(existing["numbers"]),
+            existing["cause"],
+            _escalation_stage(existing),
         )
-    return DrawingEscalation(
-        round=max(existing["round"], new["round"]),
-        numbers=sorted({*existing["numbers"], *new["numbers"]}),
-        cause="drawing_cap"
+    if not existing:
+        return _drawing_escalation(
+            new["round"], set(new["numbers"]), new["cause"], _escalation_stage(new)
+        )
+    if existing["round"] != new["round"]:
+        winner = existing if existing["round"] > new["round"] else new
+        stage = _escalation_stage(winner)
+    else:
+        stage = max(
+            _escalation_stage(existing), _escalation_stage(new), key=_STAGE_RANK.__getitem__
+        )
+    return _drawing_escalation(
+        max(existing["round"], new["round"]),
+        {*existing["numbers"], *new["numbers"]},
+        "drawing_cap"
         if "drawing_cap" in (existing["cause"], new["cause"])
         else "drawing_departure",
+        stage,
     )
+
+
+def _drawing_escalation(
+    round: int,
+    numbers: set[int],
+    cause: Literal["drawing_departure", "drawing_cap"],
+    stage: Literal["plan", "delivery"],
+) -> DrawingEscalation:
+    record = DrawingEscalation(round=round, numbers=sorted(numbers), cause=cause)
+    if stage == "plan":
+        record["stage"] = "plan"
+    return record
 
 
 ReviewScope = Literal["carried", "resolution", "full"]
@@ -1604,7 +1667,9 @@ class PartRecord(TypedDict):
     not a part, 2 for a part of a part. Absent on a record written before parts could split
     again, which reads as 1. `kind` (`change` or `migration`) and `guard` (how unfinished
     behaviour stays unreachable, empty for none) are absent on a record written before them
-    (GH-592)."""
+    (GH-592). `depends_on_reasons` (one line per `depends_on` entry, same order) and
+    `overlap_risk` are absent on a record written before GH-837: it loads and resumes as it is,
+    and readers use an empty default."""
 
     title: str
     body: str
@@ -1612,6 +1677,8 @@ class PartRecord(TypedDict):
     depth: NotRequired[int]
     kind: NotRequired[Literal["change", "migration"]]
     guard: NotRequired[str]
+    depends_on_reasons: NotRequired[list[str]]
+    overlap_risk: NotRequired[str]
 
 
 CarveOutcome = Literal["applied", "refused", "failed"]
@@ -1882,6 +1949,17 @@ class MergeRefusalRecord(TypedDict):
     at: str
 
 
+class StackParent(TypedDict):
+    """The parent a stacked task was started on (GH-855): its issue number, its task id, the
+    full commit id of its branch head at the start and the instant it was recorded (ISO-8601).
+    Read only through `stacking.parse_stack_parent`, never with `.get` on the document."""
+
+    issue: int
+    task_id: str
+    head: str
+    started_at: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -2136,6 +2214,9 @@ class TaskState(TaskInput, total=False):
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
     # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
+    # The parent a stacked task was started on (GH-855). Absent for every task that was not
+    # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
+    stack_parent: StackParent
     # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.
@@ -2364,6 +2445,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
+    # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
+    # the merge gate decides as it did before. `document.render` writes it explicitly.
+    drawing_checks: NotRequired[DrawingChecksRecord]
 
 
 def _reducers() -> dict[str, object]:

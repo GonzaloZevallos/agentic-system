@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -444,7 +445,13 @@ def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
 def _split(cost, files, parts=None, **more):
     two = [
         {**PART_DEFAULTS, "title": "One", "body": "First slice.", "depends_on": []},
-        {**PART_DEFAULTS, "title": "Two", "body": "Second slice.", "depends_on": [1]},
+        {
+            **PART_DEFAULTS,
+            "title": "Two",
+            "body": "Second slice.",
+            "depends_on": [1],
+            "depends_on_reasons": ["calls what part 1 creates"],
+        },
     ]
     data = _plan("### Solution", "a")
     return {
@@ -457,8 +464,16 @@ def _split(cost, files, parts=None, **more):
     }
 
 
-def _part(depends_on=(), title="T", body="B"):
-    return {**PART_DEFAULTS, "title": title, "body": body, "depends_on": list(depends_on)}
+def _part(depends_on=(), title="T", body="B", **more):
+    reasons = [f"needs what part {dep} creates" for dep in depends_on]
+    return {
+        **PART_DEFAULTS,
+        "title": title,
+        "body": body,
+        "depends_on": list(depends_on),
+        "depends_on_reasons": reasons,
+        **more,
+    }
 
 
 def test_a_plan_that_does_not_fit_and_builds_whole_is_refused_with_the_split_reason():
@@ -1111,7 +1126,8 @@ def test_the_does_not_fit_refusal_gives_the_action_first_and_the_fixed_sentence(
     with pytest.raises(ValueError, match="does not fit") as e:
         check(_estimated(151.0, 3))
     text = str(e.value)
-    assert "write parts, at least two chained tasks, and no subtasks" in text
+    assert "write parts, at least two tasks, each a task of its own, and no subtasks" in text
+    assert "chained" not in text
     assert text.index("write parts") < text.index(schemas.SPLIT_NOT_WAIVED)
     assert text.endswith(schemas.SPLIT_NOT_WAIVED)
     assert "ADR-0054" in schemas.SPLIT_NOT_WAIVED
@@ -1441,22 +1457,120 @@ def test_a_migration_with_no_neighbour_is_refused_and_one_with_a_neighbour_is_no
     schemas.parts_check(before)
 
 
-def test_a_part_that_splits_needs_exactly_one_terminal_part():
-    two_sinks = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])]
-    schemas.parts_check(two_sinks)  # a task that is not a part may write them
-    with pytest.raises(ValueError, match=r"exactly one terminal part.*2 \(parts 2, 3\)"):
-        schemas.parts_check(two_sinks, one_terminal=True)
-    chain = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1, 2])]
-    schemas.parts_check(chain, one_terminal=True)
-
-
-def test_the_plan_check_asks_for_one_terminal_part_only_of_a_part():
-    data = _split(
-        400.0, 90, [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])], **ZERO_SIZE
-    )
+def test_several_sinks_pass_for_a_part_of_a_split_and_for_any_other_task():
+    sinks = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])]
+    schemas.parts_check(sinks)
+    data = _split(400.0, 90, sinks, **ZERO_SIZE)
     schemas.plan_check_for(_history(1, []), 0.0)(data)
-    with pytest.raises(ValueError, match="exactly one terminal part"):
-        schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
+    schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
+
+
+def test_a_part_of_a_part_plan_of_three_independent_parts_passes():
+    data = _split(400.0, 90, [_piece(), _piece(), _piece()], **ZERO_SIZE)
+    schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
+
+
+def test_parts_without_edges_pass():
+    schemas.parts_check([_part(), _part(), _part()])
+
+
+def test_an_edge_with_its_reason_passes():
+    schemas.parts_check([_part(), _part([1])])
+
+
+def test_a_part_without_the_new_fields_never_raises_key_error():
+    old = {k: v for k, v in _part().items() if k not in ("depends_on_reasons", "overlap_risk")}
+    schemas.parts_check([old, {**old}])
+    with pytest.raises(ValueError, match="part 2 has 1 depends_on and 0 depends_on_reasons"):
+        schemas.parts_check([old, {**old, "depends_on": [1]}])
+
+
+def test_an_edge_without_a_reason_is_refused_and_advises_removing_the_edge():
+    text = _refusal([_part(), _part([1], depends_on_reasons=[])])
+    assert "part 2 has 1 depends_on and 0 depends_on_reasons" in text
+    assert "write the missing reason, naming what that part creates" in text
+    assert "remove the edge if this part can start alone" in text
+
+
+def test_surplus_reasons_are_refused_with_the_other_fix():
+    text = _refusal([_part(), _part(depends_on_reasons=["x"])])
+    assert "part 2 has 0 depends_on and 1 depends_on_reasons" in text
+    assert "remove the extra reason" in text
+
+
+def test_a_misaligned_list_is_refused_by_count():
+    text = _refusal([_part(), _part(), _part([1, 2], depends_on_reasons=["only one"])])
+    assert "part 3 has 2 depends_on and 1 depends_on_reasons" in text
+
+
+def test_a_migration_edge_without_a_reason_never_advises_removing_the_edge():
+    text = _refusal(
+        [_piece(), _piece(kind="migration", depends_on=[1], title="m")][:1]
+        + [{**_piece(kind="migration", depends_on=[1]), "depends_on_reasons": []}]
+    )
+    assert "part 2 has 1 depends_on and 0 depends_on_reasons" in text
+    assert "keeps its edge" in text
+    assert "remove the edge" not in text
+
+
+@pytest.mark.parametrize(
+    ("reason", "broken"),
+    [
+        (" blocked BY: #3", "starts with `Blocked by:`"),
+        ("Blocked by: #3", "starts with `Blocked by:`"),
+        ("two\nlines", "has a newline"),
+        ("one\rline", "has a newline"),
+        ("uses {{placeholder", "has `{{` or `}}`"),
+        ("closes }} here", "has `{{` or `}}`"),
+        ("x" * 241, "has 241 characters, over 240"),
+        ("   ", "is empty"),
+    ],
+)
+def test_a_bad_reason_is_refused_naming_the_part_and_the_field(reason, broken):
+    text = _refusal([_part(), _part([1], depends_on_reasons=[reason])])
+    assert f"part 2 depends_on_reasons[0] {broken}" in text
+    assert "one plain line naming what the other part creates" in text
+
+
+def test_backticks_a_tracker_number_and_240_characters_pass_in_a_reason():
+    schemas.parts_check(
+        [_part(), _part([1], depends_on_reasons=["calls `parts_check` from #4 " + "x" * 200])]
+    )
+    schemas.parts_check([_part(), _part([1], depends_on_reasons=["x" * 240])])
+
+
+def test_a_bad_overlap_risk_is_refused_and_an_empty_one_passes():
+    schemas.parts_check([_part(), _part(overlap_risk="")])
+    schemas.parts_check([_part(), _part(overlap_risk="touches `rules.py` and #4")])
+    for risk, broken in [
+        ("a\nb", "has a newline"),
+        ("{{x}}", "has `{{` or `}}`"),
+        ("x" * 241, "has 241 characters"),
+        ("blocked by: #2", "starts with `Blocked by:`"),
+    ]:
+        text = _refusal([_part(), _part(overlap_risk=risk)])
+        assert f"part 2 overlap_risk {broken}" in text
+        assert "the files another independent part also touches, or empty" in text
+
+
+def test_every_part_missing_a_reason_is_named_in_one_message():
+    text = _refusal(
+        [
+            _part(),
+            _part([1], depends_on_reasons=[]),
+            _part([1, 2], depends_on_reasons=[]),
+            _part([3], depends_on_reasons=[]),
+        ]
+    )
+    assert text.index("part 2 has") < text.index("part 3 has") < text.index("part 4 has")
+
+
+def test_a_reason_fault_and_a_migration_fault_come_in_one_message():
+    parts = [_piece(), _piece(kind="migration"), _piece(depends_on=[1], title="t")]
+    parts[2]["depends_on_reasons"] = []
+    text = _refusal(parts)
+    assert "part 3 has 1 depends_on and 0 depends_on_reasons" in text
+    assert "part 2 is a migration with no neighbour" in text
 
 
 def test_the_tech_plan_exposes_tracker_items_and_no_longer_the_checklist():
@@ -1503,7 +1617,7 @@ def test_a_structural_fault_is_reported_before_a_size_fault():
     assert _refusal([_piece(), _piece(depends_on=[2])]).startswith("part 2 depends on part 2")
 
 
-def test_a_migration_fault_is_still_refused_after_the_size_pass_passes():
+def test_a_migration_fault_is_still_refused_when_the_sizes_pass():
     with pytest.raises(ValueError, match="part 2 is a migration with no neighbour"):
         schemas.parts_check([_piece(), _piece(kind="migration"), _piece(depends_on=[1])])
 
@@ -1693,3 +1807,85 @@ def test_plan_check_for_under_a_spec_accepts_a_plan_that_names_other_files():
 def test_plan_check_for_without_a_spec_accepts_a_plan_that_names_the_path(spec_path):
     check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=spec_path)
     check(_naming(files=[SPEC_PATH], required=[SPEC_PATH]))
+
+
+# The plan gate's rejected departures (GH-766 part 4a): a plan that declares again a departure
+# the owner rejected is refused, and the reason names the path, the element and `#n`.
+
+
+def _departure(drawing="designs/home.png", element="Sales line"):
+    return {
+        "drawing": drawing,
+        "element": element,
+        "shows": "a line chart",
+        "would_ship": "a single figure",
+        "recommendation": "draw the chart",
+        "reason": "cheaper",
+        "raised_by": "tech_lead",
+    }
+
+
+def _with_departures(*departures):
+    return {**_estimated(20.0, 3), "drawing_departures": list(departures)}
+
+
+def test_plan_check_for_rejects_a_departure_the_owner_rejected_without_naming_the_key():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 2})
+    with pytest.raises(ValueError) as refused:
+        check(_with_departures(_departure(element="  sales   LINE ")))
+    reason = str(refused.value)
+    assert "designs/home.png" in reason
+    assert "Sales line" in reason or "sales   LINE" in reason
+    assert "#2" in reason
+    assert key not in reason
+
+
+def test_plan_check_for_accepts_a_departure_that_was_not_rejected():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 2})
+    check(_with_departures(_departure(element="Other element")))  # does not raise
+
+
+def test_plan_check_for_with_an_empty_rejected_map_changes_nothing():
+    plain = schemas.plan_check_for(_history(1, []), 0.0)
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={})
+    check(_with_departures(_departure()))  # does not raise
+    plain(_estimated(20.0, 3))  # a plan without the field passes too
+    check(_estimated(20.0, 3))
+
+
+def test_plan_check_for_default_rejected_map_is_one_immutable_object():
+    default = schemas._NO_REJECTED
+    assert len(default) == 0
+    with pytest.raises(TypeError):
+        cast(Any, default)["a:b"] = 1
+
+
+def test_a_tech_plan_declares_drawing_departures_and_validates_with_them():
+    for model in (schemas.TechPlan, schemas.TechPlanWithAssumptions):
+        field = schemas.json_schema(model, {"touches_ui": "a", "touches_copy": "b"})["properties"][
+            "drawing_departures"
+        ]
+        assert "simplification" in field["description"]
+        assert "numbers" in field["description"]
+    sizes = {"hand_files": 1, "hand_lines": 10, "test_lines": 10}
+    parsed = schemas.validate(schemas.TechPlan, {**_with_departures(_departure()), **sizes}, VOCAB)
+    assert parsed["drawing_departures"][0]["element"] == "Sales line"
+    bare = schemas.validate(schemas.TechPlan, {**_estimated(20.0, 3), **sizes}, VOCAB)
+    assert bare["drawing_departures"] == []
+
+
+def test_plan_check_for_finds_a_rejected_departure_among_several_and_keys_by_drawing():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 4})
+    other_drawing = _departure(drawing="designs/report.png")  # same element, another drawing
+    check(_with_departures(other_drawing))  # does not raise
+    with pytest.raises(ValueError, match="#4"):
+        check(_with_departures(other_drawing, _departure()))

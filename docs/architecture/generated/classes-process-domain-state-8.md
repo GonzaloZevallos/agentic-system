@@ -29,8 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__RestartPending["RestartPending"]
-    class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
     class task__ReviewScopeRecord["ReviewScopeRecord"]
@@ -38,11 +36,15 @@ classDiagram
     class task__SettledRow["SettledRow"]
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
+    class task__StackParent["StackParent"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
     class task__TrackerActionDone["TrackerActionDone"]
     class task__TrackerFailure["TrackerFailure"]
+    class task__TrackerFailureRecord["TrackerFailureRecord"]
+    class task__TrackerPosted["TrackerPosted"]
+    task__TaskState --> task__StackParent
     task__TaskState --|> task__TaskInput
 ```
 

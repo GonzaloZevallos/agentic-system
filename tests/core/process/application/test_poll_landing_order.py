@@ -12,6 +12,7 @@ from agentic.core.process.adapters.filesystem.documents import FilesystemTaskDoc
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import adr_numbers, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.shared.configuration import Configuration
@@ -87,7 +88,9 @@ def _distinct(ports, *numbers: int) -> None:
 def _round(ports, master=MASTER, **more):
     lines: list[str] = []
     lands: list[rules.LandCandidate] = []
-    found = poll.gather_merges(ports, frozenset(), master, _Locks(), lines, lands, **more)
+    found = poll.gather_merges(
+        ports, frozenset(), master, _Locks(), lines, lands, memo=StackMemo(), **more
+    )
     return found, lands, lines
 
 
@@ -221,7 +224,7 @@ def test_a_waiting_task_that_owes_a_resume_is_not_a_land_candidate():
     lands: list[rules.LandCandidate] = []
     # a child works on the older pass: it leads, and the younger one waits behind it
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(alive={"GH-7"}), [], lands, now=NOW
+        ports, frozenset(), MASTER, _Locks(alive={"GH-7"}), [], lands, now=NOW, memo=StackMemo()
     )
 
     assert found == []
@@ -541,6 +544,7 @@ def _lane_round(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",
         busy=frozenset({"GH-7"}),
         cfg=Configuration(product_dir=tmp_path),
         integrating=frozenset(integrating),
+        memo=StackMemo(),
         **more,
     )
     return found, lines
@@ -556,6 +560,7 @@ def _evaluated(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",)
         Configuration(product_dir=tmp_path),
         now,
         integrating=frozenset(integrating),
+        memo=StackMemo(),
     )
 
 
@@ -635,6 +640,7 @@ class TestFastLane:
             [],
             now=NOW,
             cfg=Configuration(product_dir=tmp_path),
+            memo=StackMemo(),
         )
 
         assert found == [7]
@@ -776,6 +782,7 @@ def _idle_round(ports, tmp_path, locks):
         busy=frozenset(),
         cfg=Configuration(product_dir=tmp_path),
         integrating=frozenset({"GH-7"}),
+        memo=StackMemo(),
     )
 
 
@@ -980,6 +987,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             Configuration(product_dir=tmp_path),
             NOW,
             integrating=frozenset(),
+            memo=StackMemo(),
         )
 
         assert lane_reads == []
@@ -1012,6 +1020,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             [],
             now=NOW,
             cfg=Configuration(product_dir=tmp_path),
+            memo=StackMemo(),
         )
 
         assert lines == [

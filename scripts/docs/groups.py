@@ -137,6 +137,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.spec_guard": "support",
     "application.split": "build",
     "application.split_sweep": "lifecycle",
+    "application.stack_facts": "support",
     "application.stack_review": "reflection",
     "application.stage0_escalation": "reflection",
     "application.stage0_failure": "reflection",
@@ -147,6 +148,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "application.verifiers": "checks",
+    "application.worktree_sweep": "lifecycle",
     "domain.account_reset": "machine",
     "domain.adr_dated": "landing",
     "domain.adr_numbers": "landing",
@@ -175,6 +177,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.gate_priority": "landing",
     "domain.landing": "landing",
     "domain.landing_order": "landing",
+    "domain.launch_order": "machine",
     "domain.lead_time": "state",
     "domain.legacy_names": "state",
     "domain.master_gain": "checks",
@@ -210,6 +213,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.speculation": "checks",
     "domain.stack_review": "roles",
     "domain.stack_signals": "roles",
+    "domain.stacking": "landing",
     "domain.stage0_rotation": "machine",
     "domain.stage0_window": "machine",
     "domain.stall": "machine",
@@ -220,6 +224,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.tracker_items": "roles",
     "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
+    "domain.worktree_sweep": "state",
 }
 
 # How the class pages of each layer are grouped, keyed `<context>/<layer>`: `clusters` takes the
