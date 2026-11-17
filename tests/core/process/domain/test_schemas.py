@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -1862,7 +1863,7 @@ def test_plan_check_for_default_rejected_map_is_one_immutable_object():
     default = schemas._NO_REJECTED
     assert len(default) == 0
     with pytest.raises(TypeError):
-        default["a:b"] = 1  # type: ignore[index]
+        cast(Any, default)["a:b"] = 1
 
 
 def test_a_tech_plan_declares_drawing_departures_and_validates_with_them():
