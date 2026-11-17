@@ -511,6 +511,12 @@ def test_entry_of_keeps_every_key_landing_entry_declares():
     assert set(kept) == set(hints)
 
 
+def test_entry_of_keeps_stack_since_only_as_text():
+    since = "2026-11-17T10:00:00+00:00"
+    assert landing.entry_of({"step": "escalate", "stack_since": since})["stack_since"] == since
+    assert "stack_since" not in landing.entry_of({"step": "escalate", "stack_since": 3})
+
+
 def test_entry_of_drops_a_red_checks_that_is_not_shaped_like_one():
     good = [{"name": "tests", "tail": ["a"], "recovered": False}]
     read = [{**good[0], "timed_out": False}]  # GH-585: an entry with no `timed_out` reads False

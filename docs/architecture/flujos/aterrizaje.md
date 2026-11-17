@@ -94,8 +94,13 @@ sequenceDiagram
    con `poll.py:_record_unfetchable` y `record_closure` en el registro `stack_unfetchable`
    `{head, since}` (clave de `document.py:RECORD_KEYS`), solo en una ronda que no está retenida y
    nunca para una tarea ocupada o con lock, que se comprueba otra vez al escribir; un documento sin
-   `stack_parent` no lee ni escribe nada. `poll.py:_landing_step` pasa `stack_since` a
-   `landing.py:already_dispatched`.
+   `stack_parent` no lee ni escribe nada. Al vencer la espera, `landing_step` devuelve `escalate`
+   con `LandingStep.stack_since` (el `since` del registro); `application/landing.py` lo escribe como
+   `stack_since` en la entrada `escalate` de `landing` (`LandingEntry.stack_since`), y
+   `poll.py:_landing_step` y `landing_plan.py:step_for` lo pasan a `landing.py:already_dispatched`,
+   que cuenta esa entrada como tomada solo si el `stack_since` pedido es `None` o igual al suyo. Así
+   una espera liberada por una persona, con la cabeza aún sin poder traerse, empieza otra de 12 h y
+   escala de nuevo, mientras `merge.py` y `resume.py`, que no pasan el valor, la leen como tomada.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

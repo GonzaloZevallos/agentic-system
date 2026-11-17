@@ -1641,6 +1641,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "head_after",
         "api_break_decided",
         "rejected",
+        "stack_since",  # GH-885: the key `already_dispatched` reads must survive a rewrite
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
