@@ -86,6 +86,12 @@ class RecordingPrompts:
     def playbook(self, role: Role) -> Playbook:
         return self.inner.playbook(role)
 
+    def spec_block(self, name: str) -> str:
+        return self.inner.spec_block(name)
+
+    def spec_block_names(self) -> tuple[str, ...]:
+        return self.inner.spec_block_names()
+
 
 def scripted(queues: dict[str, list[RawResult | Exception]]) -> ScriptedRunner:
     """`ScriptedRunner(**queues)`, for queues named by a computed slug."""
