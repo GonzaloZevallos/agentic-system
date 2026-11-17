@@ -103,6 +103,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # `add_tracker_failures`' result. `merge_ci` (GH-463) is the merge gate's fresh-run pairs, which
 # the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
 # one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
+# `stack_pauses` (GH-899) is the list of waits of a stacked child, which the poller's hold replaces
+# whole with `add_stack_pauses`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -122,6 +124,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "head_yields",
         "lane_admitted",
         "lane_merges",
+        "stack_pauses",
         "worktree_release_lapse",
     }
 )

@@ -92,6 +92,7 @@ files = [
     "agentic/core/process/application/landing.py",
     "agentic/core/process/application/landing_plan.py",
     "agentic/core/process/application/stack_facts.py",
+    "agentic/core/process/application/stack_hold.py",
     "agentic/core/process/application/refusal_note.py",
     "agentic/core/process/application/landing_sync.py",
     "agentic/core/process/application/landing_fix.py",
