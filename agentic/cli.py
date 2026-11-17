@@ -605,8 +605,8 @@ def build_parser() -> CommandTree:
         ("dashboards", "apply"),
         dashboards_sub,
         "apply",
-        help="write the product's four dashboards into the local Langfuse's Postgres, "
-        "idempotently (ADR-0051)",
+        help="write the one dashboard, the same for both products, into the local "
+        "Langfuse's Postgres, idempotently (ADR-0051)",
     )
     dashboards_apply.add_argument(
         "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"

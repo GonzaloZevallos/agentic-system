@@ -351,8 +351,8 @@ usage: agentic dashboards [-h] {apply} ...
 
 positional arguments:
   {apply}
-    apply     write the product's four dashboards into the local Langfuse's Postgres, idempotently
-              (ADR-0051)
+    apply     write the one dashboard, the same for both products, into the local Langfuse's
+              Postgres, idempotently (ADR-0051)
 
 options:
   -h, --help  show this help message and exit
