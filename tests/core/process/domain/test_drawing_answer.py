@@ -1,5 +1,5 @@
-"""The drawing-answer domain (GH-766 part 2a-2): which row an answer reaches, when the escalation
-is due, what it says, and which cause a pause carries."""
+"""The drawing-answer domain (GH-766 parts 2a-2, 4a and 5): which row an answer reaches, when the
+escalation is due, what it says, which cause a pause carries, the plan gate and the checks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ from typing import Any, Literal, cast
 
 import pytest
 
-from agentic.core.process.domain import drawing, drawing_answer, escalation_prompts, rules, task
+from agentic.core.process.domain import (
+    document,
+    drawing,
+    drawing_answer,
+    escalation_prompts,
+    rules,
+    task,
+)
 from agentic.core.process.domain.schemas import DrawingCheck, DrawingDeparture
 
 AT = "2026-11-15T10:00:00Z"
@@ -290,6 +297,136 @@ def test_must_match_is_the_rejected_rows_of_the_seat_with_no_fix_pass():
     assert drawing_answer.must_match(state, "pm_interviewee") == {}
     done = _state(drawing_departures=[{**rows[0], "fix_passes": 1}, rows[1]])
     assert drawing_answer.must_match(done, "developer") == {}
+
+
+# --- GH-766 part 4a: the plan gate's verdicts, the stage and the resume patch ------------------
+
+
+def _verdict(row: task.DepartureRecord, verdict: str) -> task.DepartureRecord:
+    return cast(
+        task.DepartureRecord,
+        {**row, "answer": {"verdict": verdict, "by": "comment", "at": "T1"}},
+    )
+
+
+def _split_state(**verdicts: str) -> task.TaskState:
+    """Rows a, b, c numbered 1..3; `verdicts` maps an element to its verdict (absent: open)."""
+    rows = task.departure_records(None, [_departure(e) for e in ("a", "b", "c")], AT)
+    return _state(
+        drawing_departures=[
+            _verdict(r, verdicts[r["element"]]) if r["element"] in verdicts else r for r in rows
+        ]
+    )
+
+
+def test_plan_split_sends_each_departure_to_accepted_rejected_or_open():
+    state = _split_state(a="accept", b="reject")
+    split = drawing_answer.plan_split(
+        state, [_departure("a"), _departure("b"), _departure("c"), _departure("d")]
+    )
+    assert [d.element for d in split.accepted] == ["a"]
+    assert [d.element for d in split.rejected] == ["b"]
+    assert [d.element for d in split.open] == ["c", "d"]  # unanswered, and without a row
+    assert dict(split.rejected_numbers) == {drawing.departure_key("design/home.png", "b"): 2}
+
+
+def test_plan_split_dedupes_by_key_in_order_of_appearance():
+    state = _split_state(b="reject")
+    first = _departure("B ")
+    again = _departure("  b")  # same key as the first
+    split = drawing_answer.plan_split(state, [first, _departure("c"), again, _departure("c")])
+    assert split.rejected == (first,)
+    assert [d.element for d in split.open] == ["c"]
+    assert len(split.rejected_numbers) == 1
+
+
+def test_plan_split_keeps_accepted_and_open_out_of_the_rejected_numbers():
+    state = _split_state(a="accept", b="reject")
+    split = drawing_answer.plan_split(state, [_departure("a"), _departure("c")])
+    assert dict(split.rejected_numbers) == {}
+    with pytest.raises(TypeError):
+        cast(Any, split.rejected_numbers)["x"] = 1
+
+
+def test_plan_split_of_a_state_without_rows_is_all_open_and_split_is_frozen():
+    split = drawing_answer.plan_split(_state(), [_departure("a")])
+    assert [d.element for d in split.open] == ["a"]
+    assert split.accepted == () and split.rejected == ()
+    with pytest.raises(AttributeError):
+        cast(Any, split).open = ()
+
+
+def test_escalation_patch_writes_the_stage_it_is_given_and_the_default_does_not():
+    plan = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, stage="plan")
+    assert plan["drawing_escalation"]["stage"] == "plan"  # type: ignore[index]
+    default = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
+    assert "stage" not in default["drawing_escalation"]  # type: ignore[operator]
+    folded = _applied(_state(), default)
+    assert "stage" not in folded["drawing_escalation"]
+    assert _applied(_state(), plan)["drawing_escalation"].get("stage") == "plan"
+
+
+def _paused(stage: str | None, **over: Any) -> task.TaskState:
+    patch = (
+        drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
+        if stage is None
+        else drawing_answer.escalation_patch(
+            _state(), [_departure("a")], AT, stage=cast(Any, stage)
+        )
+    )
+    state = _applied(_state(), patch)
+    return _state(**{**state, **over})
+
+
+def _answers(state: task.TaskState) -> list[task.DepartureRecord]:
+    return [_answered(r) for r in state["drawing_departures"]]
+
+
+def test_resume_patch_on_a_live_plan_pause_re_plans_even_with_old_subtasks():
+    state = _paused("plan", subtasks={"s": {"status": "approved"}})
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert patch["plan_due"] is True
+    assert patch["drawing_departures"] == _answers(state)
+    resumed = _applied(state, patch)
+    assert rules.resume_target(resumed) == "plan"
+
+
+@pytest.mark.parametrize("stage", [None, "delivery"])
+def test_resume_patch_does_not_re_plan_without_a_plan_stage(stage):
+    state = _paused(stage)
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert "plan_due" not in patch
+
+
+@pytest.mark.parametrize(
+    "pause",
+    [
+        rules.escalation("failure", "x"),
+        rules.escalation("cap", "x"),
+        rules.escalation("estimate", "x"),
+    ],
+)
+def test_resume_patch_ignores_a_stale_plan_record_under_another_pause(pause):
+    state = _paused("plan", **pause)
+    patch = drawing_answer.resume_patch(state, "ok", None, _answers(state), at=AT)
+    assert "plan_due" not in patch
+
+
+def test_resume_patch_without_answered_rows_is_exactly_rules_resumed():
+    state = _paused("plan")
+    patch = drawing_answer.resume_patch(state, "ok", 3.0, [], at=AT)
+    assert patch == rules.resumed(state, "ok", 3.0, at=AT)
+    assert "drawing_departures" not in patch
+
+
+def test_resume_patch_after_a_document_round_trip_still_goes_to_plan():
+    state = _paused(
+        "plan", id="T-1", title="t", description="d", subtasks={"s": {"status": "approved"}}
+    )
+    again = cast(task.TaskState, document.parse(document.render(state)))
+    assert again["drawing_escalation"]["stage"] == "plan"
+    patch = drawing_answer.resume_patch(again, "ok", None, _answers(again), at=AT)
+    assert rules.resume_target(_applied(again, patch)) == "plan"
 
 
 # ---- classify (GH-766 part 5.1) -------------------------------------------------------------

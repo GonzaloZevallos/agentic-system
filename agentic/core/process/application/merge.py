@@ -77,6 +77,7 @@ from .ports import (
 from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_after_merge, release_checkout
+from .stack_facts import StackMemo, stack_facts
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
@@ -302,6 +303,8 @@ def merge_task(
     # GH-353: the declared globs and each row master's gain, read at most once per verb call.
     globs: list[tuple[str, ...]] = []
     gains: dict[str, tuple[str, ...] | None] = {}
+    # GH-876: the stacking reads of this one call, shared by its re-decisions (invariant 1).
+    stack_memo = StackMemo()
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(
@@ -352,6 +355,19 @@ def merge_task(
             if not criteria:
                 criteria.append(_criteria(ports, head, range_base))
             facts = replace(facts, criteria_regressed=criteria[0])
+        # GH-876: a stacked child's parent facts, read only when every refusal ahead of the
+        # stacking row is ruled out; memoised for the whole call, so the re-decisions after the
+        # checks or a fresh run read nothing again. Like the poller's guard (GH-860) but without
+        # its `unlandable` term, which the verb leaves out on purpose.
+        if (
+            head is not None
+            and facts.stack is not None
+            and facts.stack.record is not None
+            and rules.stack_probe_wanted(facts)
+        ):
+            facts = replace(
+                facts, stack=stack_facts(ports, cfg, facts.stack, master, head, stack_memo)
+            )
         # GH-353: what master gained since the rows' masters, read once and only when no
         # refusal ahead of the checks has ruled the pull request out and the answer would
         # change the decision.

@@ -1,5 +1,7 @@
-"""The drawing schema classes (GH-766 parts 1b and 3a): they validate on their own, and only
-`Answers`, `Consultation` and their subclasses carry them, `DefinitionTurn` the `visible` field."""
+"""The drawing schema classes (GH-766 parts 1b, 3a and 4a): they validate on their own, and only
+`Answers`, `Consultation` and their subclasses carry `drawing_checks` and `departures`,
+`DefinitionTurn` the `visible` field. The Tech Lead's plan (`TechPlan` and its subclasses) alone
+declares `drawing_departures`; no role output carries a number or any other drawing field."""
 
 from collections.abc import Iterable
 from typing import Any
@@ -20,6 +22,17 @@ from agentic.core.process.domain.schemas import (
 
 DRAWING_DEFS = {"DrawingDeparture", "DrawingCheck"}
 FORBIDDEN_DEFS = DRAWING_DEFS | {"DefinitionTurn"}
+# What only the plan author may declare, and never a role output besides it.
+FORBIDDEN_FIELDS = {"drawing_departures"}
+PLAN_FIELDS = {"drawing_departures"}
+
+
+def _is_plan(model: type[BaseModel]) -> bool:
+    return issubclass(model, s.TechPlan)
+
+
+def _fields_forbidden_for(model: type[BaseModel]) -> set[str]:
+    return FORBIDDEN_FIELDS - (PLAN_FIELDS if _is_plan(model) else set())
 
 
 def _departure(**over: str) -> dict[str, str]:
@@ -199,8 +212,15 @@ def test_a_role_output_reaches_the_drawing_schemas_only_through_those_fields(
     model: type[BaseModel],
 ):
     titles, _ = _reachable(model)
+    if _is_plan(model):
+        # The plan reaches the departure class through `drawing_departures`, never a check.
+        assert "drawing_departures" in model.model_fields
+        assert not {"drawing_checks", "departures"} & set(model.model_fields)
+        assert DRAWING_DEFS & titles == {"DrawingDeparture"}
+        return
     carries = bool({"drawing_checks", "departures"} & set(model.model_fields))
     assert bool(DRAWING_DEFS & titles) == carries
+    assert not _fields_forbidden_for(model) & set(model.model_fields)
 
 
 def test_the_empty_default_keeps_the_new_fields_out_of_an_existing_payload():
@@ -219,7 +239,10 @@ def _subclasses(cls: type) -> set[type]:
 
 def _writers_of_the_record(classes: Iterable[type[BaseModel]]) -> list[str]:
     return sorted(
-        c.__name__ for c in classes if {"drawing_departures", "number"} & set(c.model_fields)
+        c.__name__
+        for c in classes
+        if ({"drawing_departures", "number"} - (PLAN_FIELDS if _is_plan(c) else set()))
+        & set(c.model_fields)
     )
 
 
@@ -241,3 +264,19 @@ def test_the_writers_check_reports_a_class_with_a_number_or_the_record():
         text: str = ""
 
     assert _writers_of_the_record([WithNumber, WithRecord, Clean]) == ["WithNumber", "WithRecord"]
+
+
+def test_only_the_plan_may_declare_drawing_departures_and_never_a_number():
+    class OtherOutput(s.Delivery):
+        drawing_departures: list[DrawingDeparture] = []
+
+    class PlanWithNumber(s.TechPlan):
+        number: int = 0
+
+    assert _writers_of_the_record([s.TechPlan, s.TechPlanWithAssumptions]) == []
+    assert _writers_of_the_record([OtherOutput, PlanWithNumber]) == [
+        "OtherOutput",
+        "PlanWithNumber",
+    ]
+    assert _fields_forbidden_for(OtherOutput) & set(OtherOutput.model_json_schema()["properties"])
+    assert "drawing_departures" in s.TechPlan.model_fields
