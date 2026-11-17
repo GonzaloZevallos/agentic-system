@@ -247,7 +247,9 @@ Cómo leer la tabla:
   otra fecha no deja dos filas pero conserva la primera `timestamp`, así que no la mueve.
   El backfill retira antes (`DELETE /api/public/scores/{id}` y espera 404, hasta 60 s) los
   scores con fecha de merge de cada documento y recién después los escribe; si se agota el
-  tiempo imprime `skipped:retire_timeout`, no escribe ese documento y sale con 1.
+  tiempo imprime `skipped:retire_timeout`, no escribe ese documento y sale con 1. La misma
+  salida cubre un `DELETE` rechazado o una llamada que falló: la causa exacta va en la línea
+  `Langfuse retire failed for <id>: …` que el adaptador imprime antes.
 - **Rango y semana son de la interfaz**, no de la definición: la fila de un widget o de un
   dashboard no guarda ni granularidad ni rango (ADR-0051, sección 3). El dueño aceptó el
   rango por defecto de Langfuse y el tamaño de barra del selector de fechas.
