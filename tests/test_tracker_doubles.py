@@ -468,3 +468,83 @@ def test_a_closure_that_parses_first_passes_through_every_install_form():
 def test_a_method_whose_first_parameter_is_not_reference_is_not_a_site():
     source = "class Workspace:\n    def merge(self, path, branch):\n        return None\n"
     assert violations(source, "tests/x.py") == []
+
+
+# -- the read counter of `MemoryTracker.issue_state` (GH-898) --------------------------------
+
+FAKES = "tests/fakes.py"
+COUNTER = "issue_state_calls"
+
+
+def _counts_the_call(function: Function, parameter: str) -> bool:
+    """Is `self.issue_state_calls[<parameter>] += 1` the first statement that is not the docstring,
+    so that no raise or return of the method precedes it?"""
+    body = function.body[1:] if function.body and _is_docstring(function.body[0]) else function.body
+    if not body or not isinstance(body[0], ast.AugAssign):
+        return False
+    target = body[0].target
+    return (
+        isinstance(body[0].op, ast.Add)
+        and isinstance(body[0].value, ast.Constant)
+        and body[0].value.value == 1
+        and isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Attribute)
+        and target.value.attr == COUNTER
+        and _is(target.value.value, "self")
+        and _is(target.slice, parameter)
+    )
+
+
+def counter_violations(source: str, path: str) -> list[str]:
+    """The verdict on the second subject of this guard: the double's `issue_state` counts every
+    call, failed ones included, before it can raise or return. One string per violation."""
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as error:
+        return [f"{path}:{error.lineno or 0}: does not parse: {error.msg}"]
+    found: list[Function] = []
+    for klass in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        if klass.name == "MemoryTracker":
+            found = [
+                n
+                for n in klass.body
+                if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == "issue_state"
+            ]
+    if len(found) != 1:
+        return [f"{path}: `MemoryTracker.issue_state` is not defined exactly once"]
+    parameter = _first_parameter(found[0], skip_self=True)
+    if parameter is None or not _counts_the_call(found[0], parameter):
+        return [
+            f"{path}:{found[0].lineno}: MemoryTracker.issue_state does not start with "
+            f"`self.{COUNTER}[{parameter}] += 1`, before any raise or return"
+        ]
+    return []
+
+
+def test_the_memory_tracker_counts_every_issue_state_call_before_it_can_raise():
+    source = (REPO / FAKES).read_text("utf-8")
+    assert counter_violations(source, FAKES) == []
+
+
+def _issue_state_source(first: str, second: str) -> str:
+    return (
+        "class MemoryTracker:\n"
+        "    def issue_state(self, number):\n"
+        f"        {first}\n"
+        f"        {second}\n"
+        "        return None\n"
+    )
+
+
+def test_a_counter_that_comes_after_a_raise_a_return_or_the_wrong_key_is_reported():
+    count = "self.issue_state_calls[number] += 1"
+    assert counter_violations(_issue_state_source(count, "raise ValueError(number)"), "f.py") == []
+    for source in (
+        _issue_state_source("raise ValueError(number)", count),
+        _issue_state_source("if number > 0: return None", count),
+        _issue_state_source("self.issue_state_calls[0] += 1", "pass"),
+        _issue_state_source("self.other[number] += 1", "pass"),
+        _issue_state_source("self.issue_state_calls[number] += 2", "pass"),
+        "class MemoryTracker:\n    pass\n",
+    ):
+        assert counter_violations(source, "f.py"), source

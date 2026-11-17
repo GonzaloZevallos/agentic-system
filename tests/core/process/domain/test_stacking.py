@@ -10,6 +10,7 @@ from agentic.core.process.domain.stacking import (
     Absent,
     StackFacts,
     Unreadable,
+    parent_state_of,
     parse_stack_parent,
     refusal,
 )
@@ -211,3 +212,179 @@ def test_facts_of_an_unreadable_record_has_no_record(value):
 )
 def test_parent_state_of(state, closing, expected):
     assert stacking.parent_state_of(state, closing) == expected
+
+
+# --- the pause predicate (GH-898) --------------------------------------------------------------
+
+
+def _record_of(issue: int) -> StackParent:
+    return StackParent(issue=issue, task_id=f"GH-{issue}", head=HEAD, started_at=STARTED)
+
+
+def _link(
+    issue: int = 7,
+    *,
+    in_upstream: bool | None = False,
+    state: str | None = "OPEN",
+    reason: str | None = "",
+    waits: bool | None = False,
+    stopped: bool | None = False,
+    next_record: Absent | StackParent | Unreadable | None = None,
+) -> stacking.ParentLink:
+    return stacking.ParentLink(
+        record=_record_of(issue),
+        in_upstream=in_upstream,
+        state=state,
+        state_reason=reason,
+        waits_on_human=waits,
+        stopped=stopped,
+        next_record=Absent() if next_record is None else next_record,
+    )
+
+
+def test_an_empty_chain_does_not_pause():
+    assert stacking.pause_cause([]) == "none"
+
+
+def test_an_idle_open_parent_at_the_end_of_the_chain_does_not_pause():
+    assert stacking.pause_cause([_link()]) == "none"
+
+
+@pytest.mark.parametrize(
+    ("link", "cause"),
+    [
+        pytest.param(_link(waits=True), "parent_escalated", id="escalated"),
+        pytest.param(_link(stopped=True), "parent_stopped", id="stopped"),
+        pytest.param(
+            _link(state="CLOSED", reason="NOT_PLANNED"), "parent_abandoned", id="abandoned"
+        ),
+        pytest.param(_link(waits=True, stopped=True), "parent_escalated", id="escalated first"),
+    ],
+)
+def test_each_cause_of_a_parent_is_named(link: stacking.ParentLink, cause: str):
+    assert stacking.pause_cause([link]) == cause
+
+
+def test_a_paused_grandparent_pauses_the_child():
+    parent = _link(7, next_record=_record_of(8))
+    grandparent = _link(8, waits=True)
+    assert stacking.pause_cause([parent, grandparent]) == "parent_escalated"
+
+
+def test_a_merged_parent_ends_the_walk_whatever_else_it_says():
+    merged = _link(
+        in_upstream=True,
+        state="CLOSED",
+        reason="NOT_PLANNED",
+        waits=True,
+        stopped=True,
+        next_record=Unreadable(),
+    )
+    assert stacking.pause_cause([merged]) == "none"
+    assert stacking.pause_cause([merged, _link(8, waits=True)]) == "none"
+
+
+def test_ancestry_that_could_not_be_read_is_unreadable():
+    assert stacking.pause_cause([_link(in_upstream=None)]) == "unreadable"
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        pytest.param(_link(state=None), id="state"),
+        pytest.param(_link(reason=None), id="state reason"),
+        pytest.param(_link(waits=None), id="waits on a person"),
+        pytest.param(_link(stopped=None), id="stopped"),
+        pytest.param(_link(next_record=Unreadable()), id="next record unreadable"),
+    ],
+)
+def test_a_fact_that_could_not_be_read_is_unreadable_never_none(link: stacking.ParentLink):
+    assert stacking.pause_cause([link]) == "unreadable"
+
+
+def test_a_known_cause_wins_over_a_fact_that_could_not_be_read():
+    assert stacking.pause_cause([_link(waits=True, stopped=None)]) == "parent_escalated"
+    assert stacking.pause_cause([_link(state=None, stopped=True)]) == "parent_stopped"
+
+
+def test_a_chain_cut_short_with_a_parent_still_to_read_is_unreadable():
+    assert stacking.pause_cause([_link(7, next_record=_record_of(8))]) == "unreadable"
+
+
+def _chain(length: int) -> list[stacking.ParentLink]:
+    return [
+        _link(n, next_record=_record_of(n + 1) if n < length else None)
+        for n in range(1, length + 1)
+    ]
+
+
+def test_ten_links_are_read_and_eleven_are_unreadable():
+    assert stacking.pause_cause(_chain(10)) == "none"
+    assert stacking.pause_cause(_chain(11)) == "unreadable"
+
+
+def test_a_cause_inside_the_depth_still_answers_before_the_overflow():
+    chain = _chain(11)
+    chain[2] = _link(3, waits=True, next_record=_record_of(4))
+    assert stacking.pause_cause(chain) == "parent_escalated"
+
+
+def test_a_repeated_issue_is_unreadable():
+    chain = [_link(7, next_record=_record_of(8)), _link(8, next_record=_record_of(7)), _link(7)]
+    assert stacking.pause_cause(chain) == "unreadable"
+
+
+def test_the_pause_note_says_the_cause_and_when_it_ends():
+    assert stacking.pause_note(7, "parent_escalated") == (
+        "Paused: stacked on #7, which escalated. Resumes when #7 moves again."
+    )
+    assert stacking.pause_note(7, "parent_stopped") == (
+        "Paused: stacked on #7, which was stopped. Resumes when #7 moves again."
+    )
+    assert stacking.pause_note(12, "parent_abandoned") == (
+        "Paused: stacked on #12, which was closed as not planned. Resumes when #12 moves again."
+    )
+
+
+@pytest.mark.parametrize("in_upstream", [True, False, None])
+@pytest.mark.parametrize("state", ["OPEN", "CLOSED", None])
+@pytest.mark.parametrize("reason", ["", "COMPLETED", "NOT_PLANNED"])
+def test_pause_and_refusal_agree_on_what_each_parent_row_means(
+    in_upstream: bool | None, state: str | None, reason: str
+):
+    """The pair `(pause_cause, refusal)` of an idle parent whose chain ends: the pause is the
+    hold's, the refusal the merge's, and neither answers for the other."""
+    link = _link(in_upstream=in_upstream, state=state, reason=reason)
+    closed = parent_state_of(state or "", "none")
+    facts = StackFacts(
+        record=_record_of(7),
+        parent_state=closed,
+        parent_in_upstream=in_upstream,
+        child_has_parent=None,
+    )
+    cause = stacking.pause_cause([link])
+    if in_upstream is True:
+        assert cause == "none"
+    elif in_upstream is None or state is None:
+        assert cause == "unreadable"
+    elif state == "CLOSED" and reason == "NOT_PLANNED":
+        assert cause == "parent_abandoned"
+    else:
+        assert cause == "none"
+    assert refusal(facts, None) == (
+        "stack_parent_unmerged"
+        if in_upstream is not False or closed != "closed"
+        else "stack_base_orphaned"
+    )
+
+
+def test_a_closed_completed_parent_outside_upstream_does_not_pause_but_is_orphaned():
+    link = _link(state="CLOSED", reason="COMPLETED")
+    facts = StackFacts(_record_of(7), parent_state_of("CLOSED", "none"), False, None)
+    assert (stacking.pause_cause([link]), refusal(facts, None)) == ("none", "stack_base_orphaned")
+
+
+def test_a_reopened_idle_parent_does_not_pause_while_the_merge_is_still_refused():
+    link = _link(state="OPEN", reason="")
+    facts = StackFacts(_record_of(7), parent_state_of("OPEN", "none"), False, None)
+    assert (stacking.pause_cause([link]), refusal(facts, None)) == ("none", "stack_parent_unmerged")

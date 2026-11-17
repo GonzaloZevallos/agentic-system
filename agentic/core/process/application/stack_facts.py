@@ -11,30 +11,51 @@ parent's issue and a tip change between rounds.
 
 A missing object is never `False`. `Workspace.is_ancestor` answers `False` for a sha the checkout
 has no object for, so every sha that goes into it was first confirmed by `fetch_commit`; when
-either is missing the ancestry fact is `None`, which `stacking.refusal` reads as a refusal."""
+either is missing the ancestry fact is `None`, which `stacking.refusal` reads as a refusal.
+
+`parent_link` and `parent_chain` (GH-898) read the same parent for `stacking.pause_cause`: the hold
+part of the poller is their caller, none exists yet. They read the issue, the parent's document and
+its run lock only when ancestry says the recorded head is not in the upstream, each once per issue
+per memo. Whether a parent waits on a person is `landing.waits_on_human`'s alone. A parent whose
+owner already answered stays `parent_escalated` until its own `land` step writes the release and
+the next window frees the child: `poll._released` is deliberately not reproduced here."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from typing import cast
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import stacking
-from .ports import GitError, Ports, TrackerCallFailed
+from ..domain import landing, stacking
+from ..domain.task import StackParent, TaskState
+from . import escalate, landing_plan
+from .ports import GitError, IssueState, LockRecord, Ports, RunLock, TrackerCallFailed
 
-# What the memo keeps of an issue: its state and the merge commit that closed it. A read that
-# failed is kept as `UNREAD`, so a failing tracker is asked once per window, not once per child.
-_UNREAD: tuple[str, str | None] = ("unknown", None)
+
+@dataclass(frozen=True)
+class _Unread:
+    """A read that failed or found nothing, kept in the memo so that a failing tracker, document
+    or lock is asked once per window, not once per child."""
+
+
+_UNREAD = _Unread()
 
 
 @dataclass
 class StackMemo:
     """The reads of one decision window, keyed by what they asked. `exists` is `fetch_commit` by
-    sha; `issue` is the parent issue's `(state, closing_merge_commit)`; the three ancestry maps
-    are keyed `(parent_head, ref)` and hold `None` when git could not tell."""
+    sha; `issue` is the parent issue's whole state; `docs` and `locks` are the parent's document
+    and run lock by parent issue; `links` is `parent_link` by `(issue, recorded head)`, never by
+    issue alone: two chains can name one issue at different heads. The three ancestry maps are
+    keyed `(parent_head, ref)` and hold `None` when git could not tell."""
 
     exists: dict[str, bool] = field(default_factory=dict)
-    issue: dict[int, tuple[str, str | None]] = field(default_factory=dict)
+    issue: dict[int, IssueState | _Unread] = field(default_factory=dict)
+    docs: dict[int, dict[str, object] | _Unread] = field(default_factory=dict)
+    locks: dict[int, LockRecord | None | _Unread] = field(default_factory=dict)
+    links: dict[tuple[int, str], stacking.ParentLink] = field(default_factory=dict)
     in_tip: dict[tuple[str, str], bool | None] = field(default_factory=dict)
     in_head: dict[tuple[str, str], bool | None] = field(default_factory=dict)
     in_merge: dict[tuple[str, str], bool | None] = field(default_factory=dict)
@@ -63,15 +84,23 @@ def _ancestor(
     return seen[key]
 
 
-def _issue(ports: Ports, memo: StackMemo, number: int) -> tuple[str, str | None]:
+def _issue_state(ports: Ports, memo: StackMemo, number: int) -> IssueState | _Unread:
+    """The issue as the tracker states it, read once per memo; `_UNREAD` for a failed read."""
     if number not in memo.issue:
         try:
-            state = ports.tracker.issue_state(number)
+            memo.issue[number] = ports.tracker.issue_state(number)
         except (TrackerCallFailed, ValueError, OSError, KeyError):
             memo.issue[number] = _UNREAD
-        else:
-            memo.issue[number] = (state.state, state.closing_merge_commit)
     return memo.issue[number]
+
+
+def _issue(ports: Ports, memo: StackMemo, number: int) -> tuple[str, str | None]:
+    """What `stack_facts` keeps of an issue: its state and the merge commit that closed it;
+    `unknown` and no merge for a read that failed."""
+    read = _issue_state(ports, memo, number)
+    if isinstance(read, _Unread):
+        return ("unknown", None)
+    return (read.state, read.closing_merge_commit)
 
 
 def _closing(
@@ -128,3 +157,136 @@ def stack_facts(
         parent_in_upstream=in_upstream,
         child_has_parent=has_parent,
     )
+
+
+def _document(ports: Ports, memo: StackMemo, record: StackParent) -> dict[str, object] | _Unread:
+    """The parent's document, read once per parent issue; a missing or unreadable one is
+    `_UNREAD`."""
+    number = record["issue"]
+    if number not in memo.docs:
+        try:
+            loaded = ports.documents.load(record["task_id"])
+        except (OSError, ValueError):
+            loaded = None
+        memo.docs[number] = _UNREAD if loaded is None else loaded
+    return memo.docs[number]
+
+
+def _lock(lock: RunLock, memo: StackMemo, record: StackParent) -> LockRecord | None | _Unread:
+    """The parent's run lock record, read once per parent issue; `None` is no lock."""
+    number = record["issue"]
+    if number not in memo.locks:
+        try:
+            memo.locks[number] = lock.read(record["task_id"])
+        except OSError:
+            memo.locks[number] = _UNREAD
+    return memo.locks[number]
+
+
+def _waits_on_human(
+    ports: Ports, record: StackParent, issue: IssueState | _Unread, doc: dict[str, object] | _Unread
+) -> bool | None:
+    """`landing.waits_on_human` of the parent: the one definition, the head being the last
+    landing entry's. A stranded diagnose nobody was told of is not a person's: the document is
+    read without `escalated`, as the landing order reads it. `None` when the document, the issue
+    or its labels could not be read: an unread label set is not a removed `needs-human`."""
+    if isinstance(doc, _Unread) or isinstance(issue, _Unread) or issue.labels is None:
+        return None
+    entries = landing_plan.all_entries(doc)
+    last = entries[-1].get("head") if entries else None
+    head = last if isinstance(last, str) else None
+    view: Mapping[str, object] = doc
+    if landing_plan.stranded_now(ports, record["task_id"], doc):
+        view = {key: value for key, value in doc.items() if key != "escalated"}
+    return landing.waits_on_human(
+        # `view` is the parent's own document (or it less `escalated`), which is what a
+        # `TaskState` is; `TaskDocuments.load` hands it back as a plain dict.
+        cast(TaskState, view),
+        head,
+        None,
+        spent=landing_plan.spent(doc, head, None),
+        stopped=False,
+        needs_human=escalate.NEEDS_HUMAN in issue.labels,
+        stranded=False,
+    )
+
+
+def _read_link(
+    ports: Ports,
+    cfg: Configuration,
+    lock: RunLock,
+    record: StackParent,
+    tip: str,
+    memo: StackMemo,
+) -> stacking.ParentLink:
+    parent_head = record["head"]
+    in_upstream: bool | None = None
+    if _exists(ports, memo, parent_head):
+        in_upstream = _ancestor(ports, cfg, memo.in_tip, parent_head, tip)
+    if in_upstream is not False:
+        # The parent landed, or git could not tell: nothing else of it is read.
+        return stacking.ParentLink(
+            record, in_upstream, None, None, None, None, stacking.Unreadable()
+        )
+    issue = _issue_state(ports, memo, record["issue"])
+    doc = _document(ports, memo, record)
+    held = _lock(lock, memo, record)
+    return stacking.ParentLink(
+        record=record,
+        in_upstream=in_upstream,
+        state=None if isinstance(issue, _Unread) else issue.state,
+        state_reason=None if isinstance(issue, _Unread) else issue.state_reason,
+        waits_on_human=_waits_on_human(ports, record, issue, doc),
+        stopped=None
+        if isinstance(held, _Unread)
+        else held is not None and held.stopped_deliberately,
+        next_record=stacking.Unreadable()
+        if isinstance(doc, _Unread)
+        else stacking.parse_stack_parent(doc),
+    )
+
+
+def parent_link(
+    ports: Ports,
+    cfg: Configuration,
+    lock: RunLock,
+    record: StackParent,
+    tip: str,
+    memo: StackMemo,
+) -> stacking.ParentLink:
+    """The facts `stacking.pause_cause` reads of one parent, memoised by `(issue, recorded
+    head)`. A parent whose head is in `tip` costs no issue, document or lock read; a fact whose
+    read failed is `None`. The hold part of the poller is the caller; a parent whose owner
+    answered stays escalated until its own `land` step writes the release."""
+    key = (record["issue"], record["head"])
+    if key not in memo.links:
+        memo.links[key] = _read_link(ports, cfg, lock, record, tip, memo)
+    return memo.links[key]
+
+
+def parent_chain(
+    ports: Ports,
+    cfg: Configuration,
+    lock: RunLock,
+    record: StackParent,
+    tip: str,
+    memo: StackMemo,
+) -> list[stacking.ParentLink]:
+    """The links from `record` up through each parent's own `stack_parent`, ending at the first
+    link that has none or cannot be followed. It stops at the first repeated issue and once it
+    has more links than `pause_cause` reads, so that `pause_cause` sees the cycle or the
+    overflow and answers `unreadable`. Reads cost O(distinct ancestors) per memo."""
+    chain: list[stacking.ParentLink] = []
+    seen: set[int] = set()
+    current = record
+    while True:
+        repeated = current["issue"] in seen
+        seen.add(current["issue"])
+        link = parent_link(ports, cfg, lock, current, tip, memo)
+        chain.append(link)
+        following = link.next_record
+        if repeated or len(chain) > stacking.PAUSE_DEPTH:
+            return chain
+        if isinstance(following, stacking.Absent | stacking.Unreadable):
+            return chain
+        current = following
