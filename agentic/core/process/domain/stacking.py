@@ -88,6 +88,19 @@ def parse_stack_parent(raw: Mapping[str, object]) -> Absent | StackParent | Unre
     return StackParent(issue=issue, task_id=task_id, head=head, started_at=started_at)
 
 
+def stacked(raw: Mapping[str, object]) -> bool:
+    """A view of `parse_stack_parent` (GH-897): whether the document is stacked, an unreadable
+    record included. It gates the restack rows, which an orphaned task is owed too."""
+    return not isinstance(parse_stack_parent(raw), Absent)
+
+
+def stacked_on(raw: Mapping[str, object]) -> int | None:
+    """A view of `parse_stack_parent` (GH-897): the parent issue, only for a readable record.
+    It gates the pull request line, which never names a parent it could not read."""
+    parsed = parse_stack_parent(raw)
+    return parsed["issue"] if isinstance(parsed, dict) else None
+
+
 def facts_of(raw: Mapping[str, object]) -> StackFacts | None:
     """The one builder of unread facts (GH-860): `None` for a document that never was stacked,
     so that it makes no stacking read and decides as it always did; otherwise the record (`None`
