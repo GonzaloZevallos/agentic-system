@@ -8,8 +8,9 @@ items:
   - GH-255
   - GH-282
   - GH-474
+  - GH-819
   added_at: '2026-10-26T05:51:14.504+00:00'
-  last_applied: '2026-11-04T04:16:32.166+00:00'
+  last_applied: '2026-11-17T09:56:08.863+00:00'
   in_prompt_since: '2026-10-27T03:49:56.000+00:00'
 - id: developer-2
   lesson: Before you deliver, list each acceptance criterion and full-path scenario in the brief and name the test that asserts it at the declared seam, through to its final outcome, not only the first steps.
@@ -78,8 +79,9 @@ items:
   - GH-860
   - GH-765
   - GH-862
+  - GH-819
   added_at: '2026-10-26T06:06:02.292+00:00'
-  last_applied: '2026-11-17T07:55:28.346+00:00'
+  last_applied: '2026-11-17T09:56:08.863+00:00'
   in_prompt_since: '2026-10-27T03:49:56.000+00:00'
 - id: developer-3
   lesson: Never use cast, a bare ignore or an override to satisfy the type checker. Give the data a precise type at its source, and do not widen a shared signature, which only moves the silencing to every caller.

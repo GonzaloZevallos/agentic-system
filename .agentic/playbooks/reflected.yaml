@@ -1320,3 +1320,21 @@ tasks:
       tasks:
       - GH-862
     decisions: 1
+  GH-819@review:
+    cost_usd: 0.1189
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-819
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-819
+    decisions: 3
