@@ -1082,6 +1082,7 @@ def test_preflight_passes_with_the_five_shipped_blocks(tmp_path):
         "copy_review",
         "plan",
         "pm_consultant",
+        "pm_draft",
         "pm_final",
         "review",
     )

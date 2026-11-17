@@ -10,10 +10,14 @@ pair, its limit and the return are the same; which PM runs is the type's call.""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
 from ..domain.roles import PAIR_PM_PA, PM, PM_BUG, Role
+from ..domain.schemas import VerdictWithSpecDraft
+from ..domain.spec_brief import DRAFT_BLOCK
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_checkout_in_thread
 from .ports import Ports
@@ -36,6 +40,8 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         check=ports.knowledge.approval_check(state.get("type", "")),
         cwd=task.path,
         remaining_changes=remaining,
+        # The draft Spec section rides where the system-written sections of a prompt ride.
+        tiers=draft_section(state, ports),
     )
     if output is None:
         return finish(state, patch, ports)
@@ -76,4 +82,13 @@ def validator_for(state: TaskState) -> Role:
     """Which PM validates this task: the one that rules on a diagnosis for a bug, the one
     that validates a PRD otherwise. Same name, same section, same pair: only the
     schema and the prompt change (issue #65)."""
-    return PM_BUG if state.get("type") == "bug" else PM
+    if state.get("type") == "bug":
+        return PM_BUG
+    # The schema that may carry the draft, only when one is due: the false case is `PM` itself.
+    return replace(PM, schema=VerdictWithSpecDraft) if rules.spec_fallback_due(state) else PM
+
+
+def draft_section(state: TaskState, ports: Ports) -> str:
+    """The constant section that asks PM for the Spec body: the block when a draft is due
+    (`rules.spec_fallback_due`), empty otherwise, so every other prompt is what it was."""
+    return ports.prompts.spec_block(DRAFT_BLOCK) if rules.spec_fallback_due(state) else ""

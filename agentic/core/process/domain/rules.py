@@ -2576,6 +2576,19 @@ def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
     return {"kind": "plan_over_cap", "from_role": "system", "text": None}
 
 
+def spec_fallback_due(state: TaskState) -> bool:
+    """Whether the definition chain ends by producing a draft Spec (GH-594 part 5a): a `feature`
+    on the `full` path (a missing path reads as `full`) with no `state["spec"]`, outside an
+    evaluation run. The only place that decides it: no node, prompt or schema branches on the
+    type, the path or the evaluation on its own."""
+    return (
+        state.get("type") == "feature"
+        and task_path.path_of(state) == "full"
+        and not state.get("spec")
+        and not state.get("evaluation")
+    )
+
+
 def after_classify(state: TaskState) -> str | None:
     """The fork between the paths of README §2. A feature goes through the definition
     stage; a bug through the diagnosis, the same pair without the interview (issue
