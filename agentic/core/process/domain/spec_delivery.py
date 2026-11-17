@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+import unicodedata
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
@@ -28,6 +29,8 @@ SPEC_FENCE = "=== spec data ==="
 SPEC_MAX_BYTES = 65536
 
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
+# What the system did with the draft Spec PM returned (GH-594 part 5a): closed.
+SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent"]
 SpecReadRefusal = Literal["path", "commit", "missing", "not_blob", "oversize", "encoding", "git"]
 SpecReadCause = Literal["spec_unreadable"]
 # Every cause a spec refusal can escalate with (GH-594): the validator's four, the read's one and
@@ -47,6 +50,12 @@ SpecRouteCause = Literal[
 SPEC_PATH = re.compile(r"docs/specs/[A-Za-z0-9][A-Za-z0-9._-]*\.md")
 SPEC_PATH_MAX_CHARS = 255
 SPEC_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+SPEC_DIR = "docs/specs/"
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_NOT_SLUG = re.compile(r"[^a-z0-9]+")
+DRAFT_SLUG_MAX = 60
+DRAFT_SLUG_FALLBACK = "spec"
 
 _LOGIN = re.compile(r"[A-Za-z0-9]+(-[A-Za-z0-9]+)*")
 _AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
@@ -162,6 +171,19 @@ class SpecRefusalRecord(TypedDict):
 
     cause: SpecRouteCause
     detail: list[str]
+
+
+class _SpecDraftOutcome(TypedDict):
+    outcome: SpecDraftOutcome
+
+
+class SpecDraftRecord(_SpecDraftOutcome, total=False):
+    """The `spec_draft` key of a task (GH-594 part 5a): what became of the draft Spec PM
+    returned. `path` and `sha256` (the body hash) are there only for `written`. Distinct from
+    `state["spec"]`: a draft is never a spec delivery's contract."""
+
+    path: str
+    sha256: str
 
 
 class SpecStatePatch(TypedDict):
@@ -295,3 +317,35 @@ def spec_carry_ok(holds: bool, intact: bool) -> bool:
     """Whether a unit may be carried over a moved head: its review still holds and the spec is
     intact at the new head."""
     return holds and intact
+
+
+def draft_valid(result: SpecContract | SpecCause) -> bool:
+    """True only when the validator found a well-formed spec that is not approved yet
+    (`spec_unapproved`): what a draft is. The one place that answer counts as valid; every
+    other cause, and a contract (an approved spec), is not a draft."""
+    return result == "spec_unapproved"
+
+
+def _slug(title: str) -> str:
+    ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    slug = _NOT_SLUG.sub("-", ascii_title.lower()).strip("-")[:DRAFT_SLUG_MAX].strip("-")
+    return slug or DRAFT_SLUG_FALLBACK
+
+
+def draft_path(date: str, title: str, task_id: str, taken: Collection[str]) -> str:
+    """`docs/specs/<yyyy-mm-dd>-<slug>.md` for a draft Spec: the slug is the issue title in ASCII,
+    lowercase, hyphen-separated, at most 60 characters (`spec` when nothing is left). A path in
+    `taken` gets `-<task id>` appended (also slugged), so two tasks never share a file. `ValueError`
+    unless `date` is `yyyy-mm-dd`; the result always satisfies `spec_path_ok`."""
+    if not _DAY.fullmatch(date):
+        raise ValueError(f"date is not yyyy-mm-dd: {date!r}")
+    path = f"{SPEC_DIR}{date}-{_slug(title)}.md"
+    if path in taken:
+        path = f"{SPEC_DIR}{date}-{_slug(title)}-{_slug(task_id)}.md"
+    return path
+
+
+def draft_text(body: str) -> str:
+    """The file text of a draft Spec: the draft front matter, then PM's body. The only place
+    a draft's text is put together, so PM's text never carries the front matter."""
+    return render_draft_front_matter() + body

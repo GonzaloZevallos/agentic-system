@@ -41,7 +41,7 @@ from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
-from .spec_delivery import SpecContract, SpecRefusalRecord
+from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -2142,6 +2142,9 @@ class TaskState(TaskInput, total=False):
     # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
     # round-trip belongs to the part that does.
     spec: Annotated[SpecContract, last]
+    # What the system did with the draft Spec PM returned (GH-594 part 5a): written only by
+    # `application/spec_draft.py`, distinct from `spec`; nothing reads it until the approval part.
+    spec_draft: Annotated[SpecDraftRecord, last]
     # The measurement record that the task was a spec delivery (GH-594): written only by
     # `document.render` (via `spec_delivery.recorded`), sticky, read only by `eval compare`;
     # no rule or node reads it.
