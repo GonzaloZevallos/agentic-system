@@ -207,6 +207,7 @@ def _round(ports, tmp_path, lock=None, busy=frozenset(), held=False, lands=None,
         busy=busy,
         cfg=_cfg(tmp_path),
         held=held,
+        dry_run=False,
         memo=StackMemo(),
     )
     return lines
