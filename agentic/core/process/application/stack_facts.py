@@ -31,7 +31,15 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing, stacking
 from ..domain.task import StackParent, TaskState
 from . import escalate, landing_plan
-from .ports import GitError, IssueState, LockRecord, Ports, RunLock, TrackerCallFailed
+from .ports import (
+    GitError,
+    IssueComment,
+    IssueState,
+    LockRecord,
+    Ports,
+    RunLock,
+    TrackerCallFailed,
+)
 
 
 @dataclass(frozen=True)
@@ -47,14 +55,17 @@ _UNREAD = _Unread()
 class StackMemo:
     """The reads of one decision window, keyed by what they asked. `exists` is `fetch_commit` by
     sha; `issue` is the parent issue's whole state; `docs` and `locks` are the parent's document
-    and run lock by parent issue; `links` is `parent_link` by `(issue, recorded head)`, never by
-    issue alone: two chains can name one issue at different heads. The three ancestry maps are
+    and run lock by parent issue; `comments` are the parent issue's comments, read only for a
+    document of the stranded shape, by parent issue; `links` is `parent_link` by `(issue,
+    recorded head)`, never by issue alone: two chains can name one issue at different heads. The
+    three ancestry maps are
     keyed `(parent_head, ref)` and hold `None` when git could not tell."""
 
     exists: dict[str, bool] = field(default_factory=dict)
     issue: dict[int, IssueState | _Unread] = field(default_factory=dict)
     docs: dict[int, dict[str, object] | _Unread] = field(default_factory=dict)
     locks: dict[int, LockRecord | None | _Unread] = field(default_factory=dict)
+    comments: dict[int, list[IssueComment] | _Unread] = field(default_factory=dict)
     links: dict[tuple[int, str], stacking.ParentLink] = field(default_factory=dict)
     in_tip: dict[tuple[str, str], bool | None] = field(default_factory=dict)
     in_head: dict[tuple[str, str], bool | None] = field(default_factory=dict)
@@ -183,8 +194,28 @@ def _lock(lock: RunLock, memo: StackMemo, record: StackParent) -> LockRecord | N
     return memo.locks[number]
 
 
+def _stranded(ports: Ports, memo: StackMemo, record: StackParent, doc: dict[str, object]) -> bool:
+    """`landing_plan.stranded_now`, with its one tracker read memoised per parent issue: the
+    comments are read only for a document that already has the stranded shape, and a tracker that
+    cannot answer leaves the document escalated (not stranded)."""
+    if not landing.stranded_diagnose(doc, False):
+        return False
+    number = record["issue"]
+    if number not in memo.comments:
+        try:
+            memo.comments[number] = ports.tracker.timestamped_comments(record["task_id"])
+        except (ValueError, OSError):
+            memo.comments[number] = _UNREAD
+    read = memo.comments[number]
+    return not isinstance(read, _Unread) and landing_plan.stranded(doc, read)
+
+
 def _waits_on_human(
-    ports: Ports, record: StackParent, issue: IssueState | _Unread, doc: dict[str, object] | _Unread
+    ports: Ports,
+    memo: StackMemo,
+    record: StackParent,
+    issue: IssueState | _Unread,
+    doc: dict[str, object] | _Unread,
 ) -> bool | None:
     """`landing.waits_on_human` of the parent: the one definition, the head being the last
     landing entry's. A stranded diagnose nobody was told of is not a person's: the document is
@@ -196,7 +227,7 @@ def _waits_on_human(
     last = entries[-1].get("head") if entries else None
     head = last if isinstance(last, str) else None
     view: Mapping[str, object] = doc
-    if landing_plan.stranded_now(ports, record["task_id"], doc):
+    if _stranded(ports, memo, record, doc):
         view = {key: value for key, value in doc.items() if key != "escalated"}
     return landing.waits_on_human(
         # `view` is the parent's own document (or it less `escalated`), which is what a
@@ -236,7 +267,7 @@ def _read_link(
         in_upstream=in_upstream,
         state=None if isinstance(issue, _Unread) else issue.state,
         state_reason=None if isinstance(issue, _Unread) else issue.state_reason,
-        waits_on_human=_waits_on_human(ports, record, issue, doc),
+        waits_on_human=_waits_on_human(ports, memo, record, issue, doc),
         stopped=None
         if isinstance(held, _Unread)
         else held is not None and held.stopped_deliberately,

@@ -475,3 +475,41 @@ def test_a_second_walk_through_a_memoised_link_reads_nothing_on_any_double():
     before = world.reads()
     assert world.cause(parent) == "parent_escalated"
     assert world.reads() == before
+
+
+def test_two_chains_naming_one_stranded_parent_at_two_heads_read_its_comments_once():
+    world = _World()
+    world.parent(9, **_stranded())
+    asked: list[str] = []
+
+    def comments(task_id: str) -> list[IssueComment]:
+        asked.append(task_id)
+        return []
+
+    world.tracker.timestamped_comments = comments  # type: ignore[method-assign]
+    assert world.cause(_record(9, _head(90))) == "none"
+    assert world.cause(_record(9, _head(91))) == "none"
+    assert asked == ["GH-9"]
+    assert world.tracker.issue_state_calls[9] == 1
+
+
+def test_a_failed_comment_read_is_asked_once_and_leaves_the_parent_escalated():
+    world = _World()
+    world.parent(9, **_stranded())
+    asked: list[str] = []
+
+    def failing(task_id: str) -> list[IssueComment]:
+        asked.append(task_id)
+        raise OSError("gh failed")
+
+    world.tracker.timestamped_comments = failing  # type: ignore[method-assign]
+    assert world.cause(_record(9, _head(90))) == "parent_escalated"
+    assert world.cause(_record(9, _head(91))) == "parent_escalated"
+    assert asked == ["GH-9"]
+
+
+def test_a_parent_without_the_stranded_shape_never_reads_comments():
+    world = _World()
+    world.parent(9, escalated="CI red")
+    world.tracker.timestamped_comments = lambda task_id: pytest.fail("read")  # type: ignore[method-assign]
+    assert world.cause(_record(9)) == "parent_escalated"
