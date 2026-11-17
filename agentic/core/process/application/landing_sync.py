@@ -26,7 +26,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-from ..domain import adr_dated, adr_numbers, landing, rules, spec_delivery
+from ..domain import adr_dated, adr_numbers, landing, rules, spec_delivery, stacking
 from ..domain.adr_numbers import Renaming
 from ..domain.docs import Docs, conflict_line
 from ..domain.roles import pair_for
@@ -36,9 +36,11 @@ from ..domain.task import (
     ChangesRequested,
     ReviewScopeRecord,
     ScopeCause,
+    StackRestack,
     Subtask,
     TaskState,
     add_review_scopes,
+    add_stack_restacks,
 )
 from . import docs_settlement, spec_guard
 from . import resume as resuming
@@ -391,22 +393,28 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
         # as unsynced, never resolved, and the verdict is not carried to it.
         if landing.sync_verdict({"step": "sync_master", "upstream": sha}, contains) != "synced":
             unsynced = landing.close_unsynced(written, _now(), cost, sha)
-            ports.documents.save({**state, "landing": unsynced})
+            rows = _restacked(state, written, unsynced)
+            closed: TaskState = {**state, "landing": unsynced}
+            if rows is not None:
+                closed["stack_restacks"] = rows
+            ports.documents.save(closed)
             record_landing(context, unsynced)
             context.log(f"agentic: land: {context.task_id}: sync closed, {merged.head} lacks {sha}")
             return None
         resolved = landing.resolve_open(written, _now(), cost)
+        rows = _restacked(state, written, resolved)
         result = _carries(
             state, unit, reviewed, merged.head, holds=True, cause="clean", ports=ports
         )
-        ports.documents.save(
-            {
-                **state,
-                "subtasks": result.subtasks,
-                "review_scopes": result.scopes,
-                "landing": resolved,
-            }
-        )
+        settled: TaskState = {
+            **state,
+            "subtasks": result.subtasks,
+            "review_scopes": result.scopes,
+            "landing": resolved,
+        }
+        if rows is not None:
+            settled["stack_restacks"] = rows
+        ports.documents.save(settled)
         record_landing(context, resolved)
         if result.carried:
             context.log(
@@ -418,6 +426,20 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
                 "(spec changed, review not carried)"
             )
     return None
+
+
+def _restacked(
+    state: TaskState,
+    before: Sequence[Mapping[str, object]],
+    after: Sequence[Mapping[str, object]],
+) -> list[StackRestack] | None:
+    """The `stack_restacks` to save with the sync that closed between `before` and `after`
+    (GH-897): the existing rows plus this one, through the reducer; `None` for a document
+    without `stack_parent` or an entry that is not a sync closing now, which saves no key."""
+    row = landing.restack_close(before, after, state, stacking.stacked(state))
+    if row is None:
+        return None
+    return add_stack_restacks(state.get("stack_restacks", []), [row])
 
 
 @dataclass(frozen=True)
