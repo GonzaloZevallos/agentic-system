@@ -100,7 +100,7 @@ sequenceDiagram
    `{head, since}` (clave de `document.py:RECORD_KEYS`), solo en una ronda que no está retenida y
    nunca para una tarea ocupada o con lock, que se comprueba otra vez al escribir; un documento sin
    `stack_parent` no lee ni escribe nada. Al vencer la espera, `landing_step` devuelve `escalate`
-   con `LandingStep.stack_since` (el `since` del registro); `application/landing.py` lo escribe como
+   con `LandingStep.stack_since` (el `since` del registro); `agentic/core/process/application/landing.py` lo escribe como
    `stack_since` en la entrada `escalate` de `landing` (`LandingEntry.stack_since`), y
    `poll.py:_landing_step` y `landing_plan.py:pending` lo pasan a `landing.py:already_dispatched`,
    que cuenta esa entrada como tomada solo si el `stack_since` pedido es `None` o igual al suyo. Así
