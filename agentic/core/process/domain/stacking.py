@@ -12,18 +12,39 @@ The landing only adds commits on top of the parent's head (`sync_master` is a me
 rebase), so a landing fix on the parent does not displace it. This assumes the repository merges
 with a merge commit: a squash or rebase merge leaves the recorded head outside upstream, and the
 child is then orphaned.
+
+The wait on an unfetchable head (GH-885): a child whose own head or whose parent's recorded head
+cannot be fetched (`StackFacts.heads_fetched is False`) waits `STACK_UNFETCHABLE_WAIT` from the
+first round that saw it, then the landing escalates it (`stack_parent_unmerged`, class
+`questions`). `unfetchable_patch` is the only writer of the document's `stack_unfetchable:
+{head, since}`, `parse_unfetchable` the only reader and `unfetchable_expired` the only
+comparison of `since` with a clock; all three are pure, `now` is a parameter. The patch's rows,
+in order:
+
+- R1 the document is escalated: clear (no clock runs while a person owns the escalation);
+- R2 `heads_fetched is None`: nothing was read, no change;
+- R3 `heads_fetched is True`: clear;
+- R4 a record of another head than `pr_head`: restart `{pr_head, now}`;
+- R5 a live `landing` entry `escalate`/`stack_parent_unmerged` carries `stack_since` equal to the
+  record's `since`: the wait was released, restart (a release buys a new bounded wait);
+- R6 no record, or an unreadable one: start `{pr_head, now}`, whatever the parent issue state;
+- R7 otherwise: no change.
+
+It returns `{}` whenever the target equals the current state, and clears with
+`{"stack_unfetchable": None}` (`record_closure` cannot delete a key). It reads no `pause_log`, so
+a poller retake never resets the clock.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 # The module, not the names: `rules` imports this one too, and reads it at call time.
 from . import rules
-from .task import StackParent
+from .task import StackParent, StackUnfetchable
 
 
 @dataclass(frozen=True)
@@ -48,6 +69,13 @@ class StackFacts:
     parent_state: Literal["open", "closed", "unknown"]
     parent_in_upstream: bool | None
     child_has_parent: bool | None
+    # GH-885: whether the child's own head and the recorded parent head can both be
+    # fetched (`fetch_commit`); `None` when not read. `unfetchable_expired` and
+    # `unfetchable_since` are the wait's clock read from the document, filled only in a turn where
+    # `heads_fetched is False`. Each `None` changes nothing in the reducer or the decision.
+    heads_fetched: bool | None = None
+    unfetchable_expired: bool | None = None
+    unfetchable_since: str | None = None
 
 
 def _iso8601(value: object) -> bool:
@@ -173,3 +201,79 @@ def base_landed(stack: StackFacts, conflicts: bool | None) -> bool:
 def restack_due(stack: StackFacts, conflicts: bool | None) -> bool:
     """A view of `refusal`: the parent landed and the child must take upstream once."""
     return refusal(stack, conflicts) == "stack_restack_due"
+
+
+STACK_UNFETCHABLE_WAIT = timedelta(hours=12)
+"""How long a child whose head cannot be fetched waits before the landing escalates it (GH-885)."""
+
+
+def _aware(value: object) -> datetime | None:
+    """`value` as an ISO-8601 instant with an offset; `None` for anything else, naive included."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def parse_unfetchable(raw: Mapping[str, object]) -> StackUnfetchable | None | Unreadable:
+    """The document's `stack_unfetchable`, the only reader of it: `None` when the key is missing
+    or `None` (no record), the record when `head` is a str and `since` an ISO-8601 instant with
+    an offset, `Unreadable` otherwise (`{}`, a non-mapping, a naive `since`)."""
+    value = raw.get("stack_unfetchable")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        return Unreadable()
+    head = value.get("head")
+    since = value.get("since")
+    if not isinstance(head, str) or _aware(since) is None or not isinstance(since, str):
+        return Unreadable()
+    return StackUnfetchable(head=head, since=since)
+
+
+def unfetchable_expired(record: StackUnfetchable | None | Unreadable, now: datetime) -> bool:
+    """Whether the wait ran out: `now - since >= STACK_UNFETCHABLE_WAIT`. `False` without a
+    readable record. The only comparison of `since` with a clock."""
+    if record is None or isinstance(record, Unreadable):
+        return False
+    since = _aware(record["since"])
+    return since is not None and now - since >= STACK_UNFETCHABLE_WAIT
+
+
+def _released(raw: Mapping[str, object], record: StackUnfetchable) -> bool:
+    """R5: a live `landing` entry escalated this very clock (`stack_since` is its `since`)."""
+    return any(
+        entry.get("step") == "escalate"
+        and entry.get("refusal") == "stack_parent_unmerged"
+        and entry.get("stack_since") == record["since"]
+        for entry in rules.live_landing(raw)
+    )
+
+
+def unfetchable_patch(
+    raw: Mapping[str, object], facts: StackFacts, pr_head: str | None, now: datetime
+) -> dict[str, object]:
+    """The change to the document's `stack_unfetchable` for this round, the only writer of it
+    (rows R1-R7 in the module docstring). `{}` whenever the target equals the current state, and
+    for a child without a `pr_head`. Pure: `now` (timezone-aware) is the caller's."""
+    if pr_head is None:
+        return {}
+    record = parse_unfetchable(raw)
+    clear: dict[str, object] = {} if record is None else {"stack_unfetchable": None}
+    if raw.get("escalated"):
+        return clear
+    if facts.heads_fetched is None:
+        return {}
+    if facts.heads_fetched:
+        return clear
+    start: dict[str, object] = {
+        "stack_unfetchable": StackUnfetchable(head=pr_head, since=now.isoformat())
+    }
+    if record is None or isinstance(record, Unreadable):
+        return start
+    if record["head"] != pr_head or _released(raw, record):
+        return start
+    return {}

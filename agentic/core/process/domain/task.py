@@ -1960,6 +1960,15 @@ class StackParent(TypedDict):
     started_at: str
 
 
+class StackUnfetchable(TypedDict):
+    """The clock of an unfetchable stacked head (GH-885): the child's pull request head that
+    could not be fetched and the instant (ISO-8601 with an offset) the first round saw it so.
+    Read only through `stacking.parse_unfetchable`, never with `.get` on the document."""
+
+    head: str
+    since: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -2217,6 +2226,10 @@ class TaskState(TaskInput, total=False):
     # The parent a stacked task was started on (GH-855). Absent for every task that was not
     # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
     stack_parent: StackParent
+    # The wait on an unfetchable stacked head (GH-885); `None` (written by `record_closure`, which
+    # cannot delete a key) reads as no record. Written only by `stacking.unfetchable_patch` and
+    # read only through `stacking.parse_unfetchable`.
+    stack_unfetchable: StackUnfetchable | None
     # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.
