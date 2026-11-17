@@ -16,6 +16,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     Upstream,
 )
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import document, exempt_queue, rules
 from tests.core.process.application.test_land_run_kind import _failed_local_check_after_a_rerun
 from tests.core.process.application.test_poll import (
@@ -157,7 +158,7 @@ def test_gather_merges_skips_a_busy_task_before_assessing_it():
     lines: list[str] = []
 
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, busy=frozenset({"GH-5"})
+        ports, frozenset(), MASTER, _Locks(), lines, busy=frozenset({"GH-5"}), memo=StackMemo()
     )
 
     assert found == [6]
@@ -170,7 +171,15 @@ def test_no_issue_is_both_a_merge_and_a_land_candidate():
     lands: list[rules.LandCandidate] = []
 
     merges = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands,
+        live=LIVE,
+        now=ESCALATED_AT,
+        memo=StackMemo(),
     )
 
     # GH-588: only the head of the order (5, the lowest unstamped) is a candidate at all.
@@ -196,13 +205,33 @@ def test_gather_merges_classifies_each_land_by_its_step():
     _unapproved(ports, 6)
     lands: list[rules.LandCandidate] = []
 
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT)
+    poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands,
+        live=LIVE,
+        now=ESCALATED_AT,
+        memo=StackMemo(),
+    )
 
     assert lands == [rules.LandCandidate(5, "land_checks")]  # GH-588: only the head
     ports.documents.record_closure("GH-6", {"landing_queued_at": "2026-11-10T08:00:00+00:00"})
     lands.clear()
 
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT)
+    poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands,
+        live=LIVE,
+        now=ESCALATED_AT,
+        memo=StackMemo(),
+    )
 
     assert lands == [rules.LandCandidate(6, "land_model")]
 

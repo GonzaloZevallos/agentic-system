@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -182,7 +183,30 @@ class FilesystemRunLock:
             record["starttime"] = starttime
         if stopped_deliberately:
             record["stopped_deliberately"] = True
-        self._path(task_id).write_text(json.dumps(record), encoding="utf-8")
+        self._replace(task_id, json.dumps(record))
+
+    def _replace(self, task_id: str, text: str) -> None:
+        """Writes `text` as the record of `task_id` atomically (GH-865): a temporary file in
+        `runs_dir`, with the mode `write_text` would have given the record, renamed over it. A
+        failure (a full disk) removes the temporary file and leaves the previous record, or
+        none, never a truncated `.lock`."""
+        fd, name = tempfile.mkstemp(dir=self.runs_dir, prefix=f".{task_id}.", suffix=".tmp")
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            temporary.write_text(text, encoding="utf-8")
+            temporary.chmod(0o666 & ~_umask())
+            os.replace(temporary, self._path(task_id))
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+
+
+def _umask() -> int:
+    """The process umask; `os.umask` can only be read by setting it, so it is put back at once."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
 
 
 def _now() -> str:

@@ -21,6 +21,7 @@ from . import (
     adr_dated,
     adr_numbers,
     ci,
+    drawing,
     escalation_prompts,
     exempt_queue,
     launch_order,
@@ -29,6 +30,7 @@ from . import (
     restart,
     retakes,
     size_budget,
+    stacking,
     task_path,
     tracker_items,
 )
@@ -5403,6 +5405,14 @@ def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple
     )
 
 
+def sweeps_when_held(held: tuple[str, ...]) -> bool:
+    """Whether a round held by the floor still runs the closed-task worktree sweep (GH-865): when
+    the product volume is among the holds. The sweep starts no child and writes nothing to scratch
+    or `/tmp`, and it is what frees the product volume; scratch usually shares its filesystem, so
+    'held only by the product volume' would never be true. The only place this is decided."""
+    return PRODUCT_VOLUME in held
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
@@ -5789,6 +5799,7 @@ MergeRefusal = Literal[
     "not_approved",
     "head_not_reviewed",
     "perf_unverified",
+    "drawing_unsettled",
     "criteria_over_cap",
     "criteria_unreadable",
     "open_findings_blocking",
@@ -5808,6 +5819,9 @@ MergeRefusal = Literal[
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
+    "stack_parent_unmerged",
+    "stack_restack_due",
+    "stack_base_orphaned",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -5828,10 +5842,16 @@ MergeRefusal = Literal[
   QA Performance run is not `approved`, or it was not measured on the pull request's own head
   (a missing or short sha fails closed). Right after `head_not_reviewed`, so a head nobody
   reviewed is never reported as a performance problem. The landing leaves it to the human.
+- `drawing_unsettled` (GH-766 part 5): the state carries a `drawing_checks` record
+  (`MergeFacts.drawing_checked`) and it does not cover this head, or a row of it is still open.
+  Covering is `full_commit_id(drawing_head)` and `head_reviewed(drawing_head, close_docs,
+  pr_head)`, not `same_commit`: PM's final validation leaves the `close_docs` commit on top of
+  the head the drawing was verified on, and a strict comparison would hold every task with a
+  design. Open is `drawing_open > 0`. Right after `perf_unverified`. Left to the human.
 - `criteria_over_cap` (GH-334): the head puts a criteria document past `CRITERIA_MAX_LINES`
   while making it longer than the merge base had it (`MergeFacts.criteria_regressed`, the
   messages naming file and count). The state master already holds is not refused, only what
-  the pull request adds. Right after `perf_unverified`, before any finding. Left to the human.
+  the pull request adds. Right after `drawing_unsettled`, before any finding. Left to the human.
 - `criteria_unreadable` (GH-334): the criteria documents could not be read at the merge base
   or the head (`criteria_regressed is None`), so nothing proves the head adds no excess. Fails
   closed, same place and same landing step.
@@ -5878,6 +5898,14 @@ MergeRefusal = Literal[
 - `ci_untrusted_no_dispatch` (GH-463): the head touches the CI's own definition and the stack
   declares no `ci_dispatch`: no workflow of the base can judge it and the local suite no
   longer runs for a `ci:` product, so it is left to the human at once.
+- `stack_parent_unmerged` (GH-855): a stacked child whose parent has not reached upstream, or
+  whose ancestry could not be read (`MergeFacts.stack`, `stacking.refusal`). Right after
+  `eval_set`, before any conflict, merge or check outcome, so nothing is run for a child that
+  cannot merge yet.
+- `stack_restack_due` (GH-855): the parent landed and the child does not hold its head; one
+  merge of master, never a rebase, is due. A conflicting head is `merge_conflict` instead.
+- `stack_base_orphaned` (GH-855): the record is unreadable, or the parent closed without its
+  recorded head reaching upstream (rebuilt, not planned, squashed). Left to the human.
 """
 
 
@@ -5989,6 +6017,11 @@ class MergeFacts:
     perf_convened: bool = False
     perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
+    # GH-766 part 5: the `drawing_checks` record, read only by `drawing_merge_facts`. Without
+    # one `drawing_checked` is False and the other two say nothing.
+    drawing_checked: bool = False
+    drawing_head: str | None = None
+    drawing_open: int = 0
     criteria_regressed: tuple[str, ...] | None = ()
     ci_plan_only: tuple[str, ...] = ()
     ci_red_on_base: tuple[str, ...] = ()
@@ -6004,6 +6037,9 @@ class MergeFacts:
     ci_dispatch_declared: bool = False
     ci_covered: bool | None = None
     ci_run_inert: bool | None = None
+    # GH-855: the stacked start's facts; `None` for a task that is not stacked, which decides as
+    # it always did and triggers no stacking read.
+    stack: stacking.StackFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -6187,6 +6223,70 @@ def perf_merge_facts(
     return (True, latest.get("perf_verdict"), latest.get("perf_head"))
 
 
+def _drawing_rows(record: Mapping[str, object]) -> list[Mapping[str, object]] | None:
+    """The rows of a `drawing_checks` record when it is a list of mappings that each carry a
+    `str` verdict, else `None`: the record is malformed."""
+    rows = record.get("rows")
+    if not isinstance(rows, list):
+        return None
+    if not all(isinstance(row, Mapping) and isinstance(row.get("verdict"), str) for row in rows):
+        return None
+    return rows
+
+
+def drawing_merge_facts(state: TaskState) -> tuple[bool, str | None, int]:
+    """`(checked, head, open)` for `MergeFacts`, the only reader of the `drawing_checks` record
+    (GH-766 part 5). `checked` is the record being present at all, so a present one never reads
+    as absent, whatever it holds. `head` is the stored head when it is a `str`. `open` is the
+    larger of the stored count (an `int` >= 0, else 1) and the rows still open by
+    `drawing.row_is_open`, so a stored 0 over an unverified row is open; a `rows` that is not a
+    list of mappings with a `str` verdict makes it at least 1. Nothing but this function
+    judges the record; no record reads `(False, None, 0)`."""
+    if "drawing_checks" not in state:
+        return (False, None, 0)
+    record = state["drawing_checks"]
+    if not isinstance(record, Mapping):
+        return (True, None, 1)
+    head = record.get("head")
+    stored = record.get("open")
+    stored_open = stored if isinstance(stored, int) and not isinstance(stored, bool) else 1
+    rows = _drawing_rows(record)
+    if rows is None or stored_open < 0:
+        return (True, head if isinstance(head, str) else None, max(stored_open, 1))
+    counted = sum(
+        1 for row in rows if drawing.row_is_open(str(row["verdict"]), row.get("settled") is True)
+    )
+    return (True, head if isinstance(head, str) else None, max(stored_open, counted))
+
+
+_DRAWING_REF_MAX = 240
+_DRAWING_UNREADABLE = "Drawing check record unreadable"
+
+
+def drawing_body_lines(state: TaskState) -> list[str]:
+    """One fixed line of the pull request body per open row of the `drawing_checks` record
+    (GH-766 part 5): `Drawing not verified: <subject> <ref>` for an `unverified` row and
+    `Drawing departure not settled: <subject> <ref>` for an open `departs` one, `ref` flattened
+    to one line and cut at 240 characters. A malformed record is the single line `Drawing check
+    record unreadable`; no record, none. A held pull request always says why."""
+    if "drawing_checks" not in state:
+        return []
+    record = state["drawing_checks"]
+    rows = _drawing_rows(record) if isinstance(record, Mapping) else None
+    if rows is None:
+        return [_DRAWING_UNREADABLE]
+    lines: list[str] = []
+    for row in rows:
+        verdict = str(row["verdict"])
+        if not drawing.row_is_open(verdict, row.get("settled") is True):
+            continue
+        head = "Drawing departure not settled:" if verdict == "departs" else "Drawing not verified:"
+        ref = " ".join(str(row.get("ref", "")).split())[:_DRAWING_REF_MAX]
+        subject = " ".join(str(row.get("subject", "")).split())
+        lines.append(f"{head} {subject} {ref}".rstrip())
+    return lines
+
+
 def reviewed_unit(state: TaskState) -> Subtask | None:
     """The subtask whose approval stands for the whole task: the `integration` one when
     the plan had several, else the only one. `None` for several subtasks with no
@@ -6248,9 +6348,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `open_escalation` (the fact is not `False`: `None` is never
     clear, GH-784), `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `criteria_unreadable`
+    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `drawing_unsettled`
+    (only when `drawing_checked`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
-    `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `stacking.refusal` (only when `stack` is
+    not `None`: `stack_parent_unmerged`, `stack_restack_due` or `stack_base_orphaned`, GH-855; a
+    task that is not stacked is decided as it always was), `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and
@@ -6295,6 +6398,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         and same_commit(facts.perf_head, facts.pr_head)
     ):
         return MergeDecision("refuse", "perf_unverified")
+    if facts.drawing_checked and not (
+        full_commit_id(facts.drawing_head)
+        and head_reviewed(facts.drawing_head, facts.close_docs, facts.pr_head)
+        and facts.drawing_open == 0
+    ):
+        return MergeDecision("refuse", "drawing_unsettled")
     if facts.criteria_regressed is None:
         return MergeDecision("refuse", "criteria_unreadable")
     if facts.criteria_regressed:
@@ -6309,6 +6418,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
         return MergeDecision("refuse", "eval_set")
+    if facts.stack is not None and (stacked := stacking.refusal(facts.stack, facts.conflicts)):
+        return MergeDecision("refuse", stacked)
     if facts.conflicts is True:
         return MergeDecision("refuse", "merge_conflict")
     if facts.merge_failures >= MERGE_CALLS_MAX:
@@ -6464,6 +6575,17 @@ def criteria_probe_wanted(facts: MergeFacts) -> bool:
     `criteria_over_cap` already rules the pull request out."""
     return auto_merge_decision(replace(facts, criteria_regressed=("x",))) == MergeDecision(
         "refuse", "criteria_over_cap"
+    )
+
+
+def stack_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether reading the stacking facts is worth it for `facts` (GH-855): the only answer to
+    that question, derived from the order of `auto_merge_decision`. It is worth it exactly when
+    a parent that is not known to have landed would be the decision, that is, when no refusal
+    ahead of the stacking check already rules the pull request out. The placeholder holds a
+    record and no other fact, so it never says a thing the reads would."""
+    return auto_merge_decision(replace(facts, stack=stacking.unread_facts())) == MergeDecision(
+        "refuse", "stack_parent_unmerged"
     )
 
 

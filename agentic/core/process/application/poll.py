@@ -40,6 +40,7 @@ from ..domain import (
     merge_conflict,
     presubmit,
     rules,
+    stacking,
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
@@ -90,6 +91,7 @@ from .ports import (
     Upstream,
 )
 from .registration import REGISTER_WAIT_S, await_registration
+from .stack_facts import StackMemo, stack_facts
 
 # How the system's own auto-resume comment starts (issue #137): registered into
 # `resume.SYSTEM_COMMENTS` by `resume.py` itself (a deferred import there, to avoid the
@@ -309,6 +311,7 @@ def _merge_facts(
     step = checks.get("failed_step")
     partition = rules.important_partition(raw)
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(raw)
+    drawing_checked, drawing_head, drawing_open = rules.drawing_merge_facts(raw)
     # GH-784: the one call of `merge.escalation_hold`, in the assembly the poller and the verb both
     # build their facts on (`merge` imports this module, so the import is late). `comments` is
     # the issue's thread, `None` when it was not read or could not be.
@@ -316,6 +319,7 @@ def _merge_facts(
 
     return rules.MergeFacts(
         task_id=task_id,
+        stack=stacking.facts_of(raw),
         status=raw.get("status"),
         open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
@@ -354,6 +358,9 @@ def _merge_facts(
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
         perf_head=perf_head,
+        drawing_checked=drawing_checked,
+        drawing_head=drawing_head,
+        drawing_open=drawing_open,
         # GH-395: GitHub's reading of this head, off the pull request already read.
         github_conflicting=rules.github_conflicting(pull_request, pr_head),
     )
@@ -679,11 +686,20 @@ def assess_merge(
     number: int,
     eval_set: frozenset[int] | None,
     current_master: str,
+    *,
+    cfg: Configuration | None,
+    memo: StackMemo,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
     unmerged; an unreadable one reads as not open; `StackUnreadable` for a base the stack
-    cannot be read at. The pull request is read here, once."""
+    cannot be read at. The pull request is read here, once.
+
+    A stacked child (a document with `stack_parent`) that reaches the stacking row has its facts
+    read through `stack_facts` (GH-860), once the pair is landable, memoised in `memo`: the
+    caller owns the memo's window (a round, or one call). Without `cfg` there is no checkout to
+    ask, so the facts stay unread and the child is refused; a document without the record makes
+    no stacking read at all."""
     reference = raw.get("pull_request")
     try:
         pull_request = ports.tracker.pull_request(reference) if reference else None
@@ -744,6 +760,21 @@ def assess_merge(
         # findings, the conflict and the CI. Git is asked only now, like the conflict probe.
         facts = replace(
             facts, criteria_regressed=read_criteria(ports, facts.pr_head, current_master)
+        )
+        decision = rules.auto_merge_decision(gated(facts))
+    if (
+        cfg is not None
+        and facts.pr_head is not None
+        and facts.stack is not None
+        and facts.stack.record is not None
+        and not landing_plan.spent(raw, facts.pr_head, None).unlandable
+        and rules.stack_probe_wanted(gated(facts))
+    ):
+        # GH-860: the parent's facts are read only now, with every refusal ahead of the stacking
+        # row ruled out and the pair landable, like the conflict probe below.
+        facts = replace(
+            facts,
+            stack=stack_facts(ports, cfg, facts.stack, current_master, facts.pr_head, memo),
         )
         decision = rules.auto_merge_decision(gated(facts))
     unread = False
@@ -1088,6 +1119,8 @@ def evaluate_landing_order(
     now: datetime | None = None,
     resumes: Sequence[rules.ResumeCandidate] = (),
     integrating: frozenset[str] = frozenset(),
+    *,
+    memo: StackMemo,
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.advance`, the one
@@ -1101,7 +1134,7 @@ def evaluate_landing_order(
     `resumes` are the product's paused tasks, for `account_paused`. `integrating` are the ids with
     a live child of an integrating kind (`landing_order.integrates`): with the head among them
     and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without touching
-    `member` or `turned`."""
+    `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the caller's."""
     now = now or datetime.now(UTC)
     entries: list[OrderEntry] = []
     members: list[landing_order.Member] = []
@@ -1132,7 +1165,9 @@ def evaluate_landing_order(
             add(task_id, number, raw, None, member)
             continue
         try:
-            assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
+            assessed = assess_merge(
+                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo
+            )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
             # no reason to let a younger pull request pass it).
@@ -1335,6 +1370,8 @@ def gather_merges(
     held: bool = False,
     resumes: Sequence[rules.ResumeCandidate] = (),
     integrating: frozenset[str] = frozenset(),
+    *,
+    memo: StackMemo,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1365,14 +1402,15 @@ def gather_merges(
     backoff's end, for any candidate of that pair, goes into `backoff_ends` (when given): the
     starvation clock starts there (`exempt_queue.backoff_ends`). A `held` round (GH-621) observes
     nothing: no turn is charged, seen or yielded and no yield is said (`_record_turn` is not
-    called); it still decides and says its order lines."""
+    called); it still decides and says its order lines. `memo` (GH-860) is the round's one
+    `StackMemo`: the children of one parent share its reads."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
     round_ = evaluate_landing_order(
-        ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating
+        ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating, memo=memo
     )
     if not held:
         # GH-681, informative: the lane's record, never read by a decision. Recording first, so
@@ -2847,9 +2885,10 @@ def run_once(
     sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
     says `would <kind> issue <N>` where `execute`'s lines would stand. The GH-824 worktree sweep
     (`worktree_sweep.sweep`) runs at the tail, after `execute` and before the board mirror,
-    outside the exclusive section, when the round is not held, not dry and `sweep_carry` is
+    outside the exclusive section, when the round is not held or `rules.sweeps_when_held` says its
+    holds include the product volume (GH-865), not dry and `sweep_carry` is
     given: it keeps its memory in the carry, its lines join the notes and it never ends the
-    round. A held round with a carry says once per process that it did not sweep."""
+    round. A held round that did not sweep, with a carry, says once per process that it did not."""
     closes = gather_closes(ports)
     swept: list[str] = []
     dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
@@ -2927,6 +2966,7 @@ def run_once(
             spent, covered = rules.trailing_spend(machine, now)
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         upstream = functools.cache(ports.workspace.upstream)
+        stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
         queue_blockers: dict[int, tuple[int, ...]] = {}
@@ -2971,6 +3011,7 @@ def run_once(
                 bool(held),
                 resumes,
                 integrating=integrating,
+                memo=stack_memo,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -3173,9 +3214,10 @@ def run_once(
                 blockers_by_issue,
             )
     # GH-824: after `execute`, so one slow removal never delays this round's launches or merges;
-    # outside the exclusive section, since it takes no slot and starts no child.
+    # outside the exclusive section, since it takes no slot and starts no child. GH-865: a round
+    # held with the product volume sweeps too, since closed worktrees are what fills that volume.
     if sweep_carry is not None and not dry_run:
-        if not held:
+        if not held or rules.sweeps_when_held(held):
             sweep_lines, sweep_carry.memory = worktree_sweep.sweep(
                 ports,
                 lock,

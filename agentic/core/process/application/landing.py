@@ -30,6 +30,7 @@ from .landing_plan import LandingContext
 from .poll import Abandoned, StackUnreadable, assess_merge, evaluate_landing_order
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
 from .resume import state_from
+from .stack_facts import StackMemo
 
 
 @dataclass(frozen=True)
@@ -115,7 +116,14 @@ def _note_order(
     # The task itself is ours: it is at work, and a task at work is a member. The other tasks'
     # run locks are read as the poller reads them, so the Head is the same one.
     head = evaluate_landing_order(
-        ports, eval_set, upstream.sha, lock, frozenset({task_id}), cfg, datetime.now(UTC)
+        ports,
+        eval_set,
+        upstream.sha,
+        lock,
+        frozenset({task_id}),
+        cfg,
+        datetime.now(UTC),
+        memo=StackMemo(),
     ).head
     if head is not None and head != number:
         log("not the head of the landing order: run by the owner")
@@ -174,7 +182,9 @@ def _land(
     if master is None:
         return LandResult("stopped", "no_upstream")
     try:
-        assessed = assess_merge(ports, task_id, raw, number, eval_set, master)
+        assessed = assess_merge(
+            ports, task_id, raw, number, eval_set, master, cfg=cfg, memo=StackMemo()
+        )
     except StackUnreadable as exc:
         return LandResult("stopped", f"stack_unreadable: {exc}")
     if isinstance(assessed, Abandoned):
@@ -634,6 +644,10 @@ def _dispatch(context: LandingContext) -> None:
         case "escalate":
             if context.step.refusal == "ci_no_verdict":
                 landing_fix.escalate_no_verdict(context)
+            elif context.step.refusal in landing_rules.STACK_ESCALATION or (
+                context.facts.stack is not None and context.step.refusal != "ci_unknown_names"
+            ):
+                landing_fix.escalate_stacked(context)
             else:
                 landing_fix.escalate_red_on_base(context)
         case "land_slice":

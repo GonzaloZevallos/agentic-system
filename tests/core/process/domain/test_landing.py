@@ -8,7 +8,7 @@ from typing import get_args, get_type_hints
 
 import pytest
 
-from agentic.core.process.domain import ci, document, landing, rules
+from agentic.core.process.domain import ci, document, landing, rules, stacking
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.presubmit import RedCheck
 from agentic.core.process.domain.rules import MergeFacts
@@ -89,8 +89,12 @@ EXPECTED = {
     "master_moved": "wait",
     "adr_number_taken": "escalate_adr",
     "perf_unverified": "none",
+    "drawing_unsettled": "none",
     "criteria_over_cap": "none",
     "criteria_unreadable": "none",
+    "stack_parent_unmerged": "wait",
+    "stack_restack_due": "sync_master",
+    "stack_base_orphaned": "none",
 }
 
 
@@ -1457,3 +1461,185 @@ def test_the_no_verdict_and_the_ci_releases_stamp_their_resumed_entry_too():
     assert landing.released_no_verdict(raw, "u" * 40, STAMP)["pause_log"] == [entry]
     assert landing.released_by_ci(raw, "u" * 40, STAMP)["pause_log"] == [entry]
     assert landing.released_no_verdict(raw, None, STAMP, "go")["pause_log"] == [entry]
+
+
+# --- stacked tasks (GH-859) ----------------------------------------------------------------
+
+STACK_REFUSALS = ("stack_parent_unmerged", "stack_restack_due", "stack_base_orphaned")
+
+
+def _stack_facts(record=True, **over) -> stacking.StackFacts:
+    base = stacking.StackFacts(
+        record=stacking.unread_facts().record if record else None,
+        parent_state="unknown",
+        parent_in_upstream=None,
+        child_has_parent=None,
+    )
+    return replace(base, **over)
+
+
+def _stacked(refusal, spent=None, **facts) -> LandingStep:
+    return landing.landing_step(
+        refusal,
+        _facts(stack=_stack_facts(), **facts),
+        spent or _spent(),
+        (),
+        turn="head",
+    )
+
+
+def test_the_three_stacking_values_map_to_wait_sync_master_and_none():
+    assert _step("stack_parent_unmerged").kind == "wait"
+    assert _step("stack_restack_due").kind == "sync_master"
+    assert _step("stack_base_orphaned").kind == "none"
+    assert "stack_base_orphaned" in landing.HUMAN_OWNED_REFUSALS
+
+
+def test_the_two_lists_the_plan_leaves_alone_do_not_hold_a_stacking_value():
+    # GH-859: the stacking refusals are handled in `landing_step`, not in these lists.
+    assert landing.CONFLICTING_SYNC_REFUSALS == ("checks_failed", "merge_conflict")
+    assert not set(STACK_REFUSALS) & set(landing.CONFLICTING_SYNC_REFUSALS)
+    assert not set(STACK_REFUSALS) & set(landing.HUMAN_OWNED_REFUSALS) - {"stack_base_orphaned"}
+
+
+@pytest.mark.parametrize("refusal", ["stack_parent_unmerged", "stack_base_orphaned"])
+def test_waiting_for_the_parent_and_an_orphan_spend_nothing_whatever_the_budgets(refusal):
+    spent = _spent(passes=9, syncs=9, unsynced_for_upstream=9, waited_s=1e6)
+    assert _stacked(refusal, spent).kind == (
+        "wait" if refusal == "stack_parent_unmerged" else "none"
+    )
+
+
+@pytest.mark.parametrize(
+    "over",
+    [{"syncs": landing.LANDING_SYNCS_MAX}, {"unsynced_for_upstream": landing.LANDING_UNSYNCED_MAX}],
+)
+def test_a_restack_past_a_sync_budget_escalates_and_never_diagnoses_or_slices(over):
+    spent = _spent(**over)
+    assert _stacked("stack_restack_due", spent) == LandingStep("escalate", "stack_restack_due")
+    # The same budget without a stack is today's answer.
+    assert _step("stack_restack_due", spent).kind == "diagnose"
+
+
+def test_a_restack_within_its_budgets_is_one_merge_of_master():
+    assert _stacked("stack_restack_due") == LandingStep("sync_master", "stack_restack_due")
+
+
+@pytest.mark.parametrize(
+    "refusal", ["merge_failed", "checks_failed", "merge_conflict", "ci_blocked_by_conflict"]
+)
+def test_a_stacked_exhaustion_is_an_escalation_never_a_diagnose_or_a_slice(refusal):
+    spent = _spent(
+        passes=landing.LANDING_PASSES_MAX,
+        syncs=landing.LANDING_SYNCS_MAX,
+        reruns_on_head=1,
+        checks_rerun_on_head=True,
+        conflict_ci_syncs_on_pair=1,
+    )
+    slicing = landing.Slice(("a",))
+    step = landing.landing_step(
+        refusal, _facts(stack=_stack_facts()), spent, (), turn="head", slicing=slicing
+    )
+    assert step.kind == "escalate" and step.restart_why is None
+    plain = landing.landing_step(refusal, _facts(), spent, (), turn="head", slicing=slicing)
+    assert plain.kind == "land_slice"
+
+
+def test_a_stacked_double_round_escalates_both_times_and_is_then_taken():
+    spent = _spent(syncs=landing.LANDING_SYNCS_MAX)
+    first = _stacked("stack_restack_due", spent)
+    second = _stacked("stack_restack_due", spent)
+    assert first == second == LandingStep("escalate", "stack_restack_due")
+    entry = {"head": HEAD, "step": "escalate", "refusal": "stack_restack_due"}
+    assert not landing.already_dispatched([], HEAD, "escalate", MASTER)
+    assert landing.already_dispatched([entry], HEAD, "escalate", MASTER)
+
+
+def test_every_stacking_value_has_a_fixed_escalation_text_that_names_no_free_text():
+    assert set(landing.STACK_ESCALATION) == set(STACK_REFUSALS)
+    for text in landing.STACK_ESCALATION.values():
+        assert text and "{" not in text
+
+
+def _slice_inputs(**over) -> landing.SliceInputs:
+    base = landing.SliceInputs(
+        approved=tuple(landing.SliceUnit(name) for name in "abc"),
+        carries=dict.fromkeys("abc", True),
+        integration_paths=frozenset({"integration.py"}),
+        unit_paths={name: frozenset({f"{name}.py"}) for name in "abc"},
+        landed=frozenset(),
+        refused={},
+        blocking_units=frozenset(),
+        readable=True,
+    )
+    return replace(base, **over)
+
+
+def test_a_stacked_task_has_no_clean_slice_before_any_unit_is_looked_at():
+    assert landing.slice_or_restart(_slice_inputs()) == landing.Slice(("a", "b"))
+    assert landing.slice_or_restart(_slice_inputs(stacked=True)) == "no_clean_slice"
+    # Not even the facts that restart for another reason come first of an unreadable read.
+    assert landing.slice_or_restart(_slice_inputs(stacked=True, approved=())) == "no_clean_slice"
+    assert landing.slice_or_restart(_slice_inputs(stacked=True, readable=False)) == "unreadable"
+
+
+def _slice_document(**record) -> dict:
+    return {
+        "status": "ready_for_review",
+        "subtasks": {name: {"status": "approved", "reviewed_head": HEAD} for name in "ab"},
+        "findings": [],
+        **record,
+    }
+
+
+def _slice_decision(document) -> rules.MergeDecision:
+    return rules.auto_merge_decision(_slice_built_facts(document))
+
+
+def _slice_built_facts(document) -> rules.MergeFacts:
+    return landing.slice_facts(
+        landing.Slice(("a", "b")),
+        document,
+        task_id="GH-9",
+        slice_head=HEAD,
+        built_clean=True,
+        contains_reviewed={"a": True, "b": True},
+        carries={"a": True, "b": True},
+        pr_state="OPEN",
+        pr_head=HEAD,
+        in_eval_set=False,
+        touched_paths=("a.py",),
+        current_master=MASTER,
+        checks_head=HEAD,
+        checks_master=MASTER,
+        checks_passed=True,
+    )
+
+
+def test_a_slice_builds_its_stack_facts_from_the_document():
+    record = {"issue": 7, "task_id": "GH-7", "head": "d" * 40, "started_at": "2026-11-16T10:00:00"}
+    assert _slice_built_facts(_slice_document()).stack is None
+    stacked = _slice_built_facts(_slice_document(stack_parent=record)).stack
+    assert stacked is not None and stacked.record is not None
+    assert stacked.record == record
+    assert (stacked.parent_state, stacked.parent_in_upstream, stacked.child_has_parent) == (
+        "unknown",
+        None,
+        None,
+    )
+    unreadable = _slice_built_facts(_slice_document(stack_parent="GH-7")).stack
+    assert unreadable is not None and unreadable.record is None
+    assert unreadable.parent_state == "unknown"
+
+
+def test_a_slice_of_a_document_without_a_stack_parent_merges_as_it_did():
+    assert _slice_decision(_slice_document()) == rules.MergeDecision("merge", None)
+
+
+def test_a_slice_of_a_stacked_document_never_merges():
+    record = {"issue": 7, "task_id": "GH-7", "head": "d" * 40, "started_at": "2026-11-16T10:00:00"}
+    readable = _slice_decision(_slice_document(stack_parent=record))
+    assert readable == rules.MergeDecision("refuse", "stack_parent_unmerged")
+    for bad in (None, "GH-7", {**record, "head": "short"}, {**record, "issue": True}):
+        unreadable = _slice_decision(_slice_document(stack_parent=bad))
+        assert unreadable == rules.MergeDecision("refuse", "stack_base_orphaned")

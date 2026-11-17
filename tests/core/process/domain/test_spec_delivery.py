@@ -10,6 +10,7 @@ from agentic.core.process.domain.spec_delivery import (
     SpecLineMalformed,
     SpecRefusal,
     body_sha256,
+    body_source,
     derive_flags,
     normalize_text,
     parse_spec_line,
@@ -356,3 +357,31 @@ def test_spec_intact_refuses_a_record_whose_hash_is_not_the_text() -> None:
 )
 def test_spec_carry_ok_needs_both(holds: bool, intact: bool, expected: bool) -> None:
     assert spec_carry_ok(holds, intact) is expected
+
+
+# GH-809: where `spec_intake` reads the `Spec:` line from.
+_RESUMED = {"kind": "resumed", "at": "2026-11-16T10:00:00+00:00"}
+_ESCALATION = {"kind": "escalation", "value": "classification"}
+
+
+@pytest.mark.parametrize(
+    ("state", "source"),
+    [
+        ({"description": "Spec: docs/specs/a.md\n"}, "description"),
+        ({"description": "Spec: docs/specs/a.md\n", "pause_log": [_ESCALATION]}, "description"),
+        ({"description": "No line.\n", "pause_log": [_ESCALATION, _RESUMED]}, "description"),
+        ({"pause_log": [_RESUMED]}, "description"),
+        ({"description": "Spec: docs/specs/a.md\n", "pause_log": [_ESCALATION, _RESUMED]}, "inbox"),
+        ({"description": "Spec: nope.txt\n", "pause_log": [_ESCALATION, _RESUMED]}, "inbox"),
+    ],
+    ids=[
+        "no_pause_log",
+        "only_escalations",
+        "resumed_no_line",
+        "resumed_no_description",
+        "resumed_well_formed",
+        "resumed_malformed",
+    ],
+)
+def test_body_source_is_the_inbox_only_on_a_resume_with_a_candidate_line(state, source):
+    assert body_source(state) == source

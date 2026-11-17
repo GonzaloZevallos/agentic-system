@@ -4,9 +4,10 @@
 `normalize_drawing` is the only owner of the drawing-path rule and `departure_question` of the
 escalation text of a departure: callers use them, never repeat them. `verdicts` and `answers`
 are the only owners of the comment grammar of the owner's answer, `flag_verdict` and
-`flag_verdicts` of the `--drawing` flag's. `question_numbers` is the only reader of the
-interviewer's `**Qn**` markers and `question_ref` the only builder of a `Q<n>` ref; one private
-classifier reads every line of a comment or an interview. `interviewer_check` and
+`flag_verdicts` of the `--drawing` flag's, `screens_due` of which screens a change owes a
+check for and `row_is_open` of whether a check row still blocks. `question_numbers` is the only
+reader of the interviewer's `**Qn**` markers and `question_ref` the only builder of a `Q<n>` ref;
+one private classifier reads every line of a comment or an interview. `interviewer_check` and
 `interview_check` are the pure rules of the definition interview's drawing checks. The module
 is a leaf: it imports neither `task`, `rules` nor `schemas`, not even inside a function.
 """
@@ -17,10 +18,11 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from types import MappingProxyType
 from typing import Literal, Protocol
 
-from .design import Design
+from .design import Capture, Design
 
 DRAWING_RULE = (
     "Anything visible that departs from an approved drawing is decided by the owner, "
@@ -114,6 +116,28 @@ def departure_question(d: Departure, number: int) -> str:
         f"Recommendation: {d.recommendation}, because {d.reason}. "
         f'Answer with a line "Drawing {number}: accept" or "Drawing {number}: reject".'
     )
+
+
+def screens_due(design: Design, diff_paths: Sequence[str]) -> list[Capture]:
+    """The captures of `design`, in declared order, that this change owes a check for: the ones
+    whose `paths` globs match some path of `diff_paths` (`fnmatch.fnmatchcase`, so case-sensitive
+    and `*` crosses `/`: `src/*.py` matches `src/a/b.py`). A capture with no `paths` is due
+    always, deliberately: the product did not say which code draws it. The identity of a
+    capture is its `image`, so two captures of one `screen` are two screens due. The only
+    decision of which screens are due; a deleted path still matches, textually."""
+    return [
+        capture
+        for capture in design.captures
+        if not capture.paths
+        or any(fnmatchcase(path, glob) for glob in capture.paths for path in diff_paths)
+    ]
+
+
+def row_is_open(verdict: str, settled: bool) -> bool:
+    """Whether a drawing row still blocks: `matches` is closed, `departs` is closed only when
+    `settled`, anything else (`unverified`, an unsettled `departs`, an unknown verdict) is open.
+    The only decision of that."""
+    return not (verdict == "matches" or (verdict == "departs" and settled))
 
 
 Verdict = Literal["accept", "reject"]

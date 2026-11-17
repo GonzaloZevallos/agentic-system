@@ -586,6 +586,30 @@ class DepartureRecord(TypedDict):
     fix_passes: int
 
 
+class DrawingRow(TypedDict):
+    """One check of the drawing record as the state keeps it (GH-766 part 5): `subject` and
+    `ref` what was checked, `verdict` its result (`matches`, `departs` or `unverified`) and
+    `settled` whether the owner's answer closed a `departs` one. Whether the row is open is
+    `drawing.row_is_open`, never read off this shape."""
+
+    subject: str
+    ref: str
+    verdict: str
+    settled: NotRequired[bool]
+
+
+class DrawingChecksRecord(TypedDict):
+    """The drawing checks of one verified head (GH-766 part 5): `head` the commit they were
+    made on, `rows` every check and `open` how many are still open. The writer comes in part
+    5.2: it records again on every head the verify node sees, and sets `settled` only from
+    `drawing_answer.classify`'s `settled_accept`. A record read from a document may be
+    malformed; only `rules.drawing_merge_facts` judges it."""
+
+    head: str
+    rows: list[DrawingRow]
+    open: int
+
+
 def departure_records(
     existing: list[DepartureRecord] | None, departures: Sequence[drawing.Departure], at: str
 ) -> list[DepartureRecord]:
@@ -1886,6 +1910,17 @@ class MergeRefusalRecord(TypedDict):
     at: str
 
 
+class StackParent(TypedDict):
+    """The parent a stacked task was started on (GH-855): its issue number, its task id, the
+    full commit id of its branch head at the start and the instant it was recorded (ISO-8601).
+    Read only through `stacking.parse_stack_parent`, never with `.get` on the document."""
+
+    issue: int
+    task_id: str
+    head: str
+    started_at: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -2140,6 +2175,9 @@ class TaskState(TaskInput, total=False):
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
     # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
+    # The parent a stacked task was started on (GH-855). Absent for every task that was not
+    # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
+    stack_parent: StackParent
     # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.
@@ -2368,6 +2406,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
+    # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
+    # the merge gate decides as it did before. `document.render` writes it explicitly.
+    drawing_checks: NotRequired[DrawingChecksRecord]
 
 
 def _reducers() -> dict[str, object]:

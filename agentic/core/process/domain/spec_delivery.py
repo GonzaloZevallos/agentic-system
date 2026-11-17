@@ -79,6 +79,16 @@ def honoured(reader: object | None, validator: object | None) -> bool:
     return reader is not None and validator is not None
 
 
+def body_source(state: Mapping[str, Any]) -> Literal["description", "inbox"]:
+    """Where `spec_intake` reads the `Spec:` line from (GH-809): `"inbox"` only on a resume
+    (the `pause_log` holds a `resumed` entry) of a task whose `description` had a candidate
+    line, parsed or malformed, because that is the line an owner fixes in the issue; every other
+    case parses `description`. `pause_log` only grows, so the resume is never forgotten."""
+    resumed = any(entry.get("kind") == "resumed" for entry in state.get("pause_log", []))
+    candidate = parse_spec_line(state.get("description", "")) is not None
+    return "inbox" if resumed and candidate else "description"
+
+
 def spec_path_ok(path: str) -> bool:
     """True only for a spec path in its one form (`SPEC_PATH`) of at most 255 characters."""
     return len(path) <= SPEC_PATH_MAX_CHARS and SPEC_PATH.fullmatch(path) is not None
