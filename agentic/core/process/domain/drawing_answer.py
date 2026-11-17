@@ -272,6 +272,29 @@ def section_lines(rows: Sequence[task.DepartureRecord]) -> list[str]:
     return lines
 
 
+def rejected_keys(state: task.TaskState) -> Mapping[str, int]:
+    """Each key whose row the owner rejected, with that row's number: a role may not raise it
+    again as a departure."""
+    return {
+        r["key"]: r["number"]
+        for r in state.get("drawing_departures", [])
+        if r["answer"] is not None and r["answer"]["verdict"] == "reject"
+    }
+
+
+def must_match(state: task.TaskState, seat_slug: str) -> Mapping[str, int]:
+    """Each key the owner rejected on a departure `seat_slug` raised and that has had no fix
+    pass yet, with its number: the seat's next answer must carry a `matches` check for it."""
+    return {
+        r["key"]: r["number"]
+        for r in state.get("drawing_departures", [])
+        if r["answer"] is not None
+        and r["answer"]["verdict"] == "reject"
+        and r["raised_by"] == seat_slug
+        and r["fix_passes"] == 0
+    }
+
+
 Outcome = Literal["raise", "settled_accept", "fix_due", "return_due"]
 
 

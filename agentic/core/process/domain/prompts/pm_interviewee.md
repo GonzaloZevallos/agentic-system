@@ -44,6 +44,7 @@ original request and the product knowledge:
 - Judge the business contribution: a decision that adds scope without value is a no.
 - Do not propose a technical solution.
 - Single turn per round. No tools.
+{{drawing_rule}}
 </Hard Limits>
 
 <Output>
