@@ -1340,3 +1340,5 @@ tasks:
     decisions: 3
   GH-894@review:
     cost_usd: 0.0381
+  GH-646@review:
+    cost_usd: 0.0383
