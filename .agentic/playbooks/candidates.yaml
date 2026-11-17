@@ -2115,3 +2115,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-17T03:04:06.173+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you write a reducer or merge, check each stated invariant (commutativity, normalisation, identity) on every branch, including an empty side, and test both argument orders.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change behaviour that a hand-written flow doc describes, grep the docs for the old behaviour and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  added_at: '2026-11-17T04:35:31.113+00:00'
