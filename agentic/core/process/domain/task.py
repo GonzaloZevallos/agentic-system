@@ -780,6 +780,56 @@ def add_review_scopes(
     return list(joined.values())
 
 
+class StackRestack(TypedDict):
+    """What one restack of a stacked task cost (GH-897): the `sync_master` that merged the
+    upstream into the child. `at` is that entry's `resolved_at`, else its `closed_at`, never a
+    clock reading; `upstream` the master sha it was dispatched for. `conflict` is whether the
+    entry's refusal is in `landing.CONFLICTING_SYNC_REFUSALS`, the same reading as the
+    conflicting-sync budget, not whether git conflicted. `cost_usd` is the whole task spend in
+    the window (failed attempts and residual samples included); `tokens` covers only the
+    recorded role runs in `runs[runs_base:n]`, so the two are not meant to reconcile. A missing
+    `tokens` key is "not measured", never zero. Written only through `add_stack_restacks`; never
+    a metric, a label or a span attribute."""
+
+    at: str
+    upstream: str
+    conflict: bool
+    cost_usd: float
+    tokens: NotRequired[dict[str, int]]
+
+
+def add_stack_restacks(existing: list[StackRestack], new: list[StackRestack]) -> list[StackRestack]:
+    """The restack rows of `existing` and `new` as one list: append-only, one row per
+    `(at, upstream)` (a retried write adds nothing), the first seen kept whole, in arrival
+    order. The only way `stack_restacks` is ever written."""
+    joined: dict[tuple[str, str], StackRestack] = {}
+    for row in (*existing, *new):
+        joined.setdefault((row["at"], row["upstream"]), row)
+    return list(joined.values())
+
+
+class StackPause(TypedDict):
+    """One stretch a stacked task waited on its parent (GH-897): `parent` the parent's issue,
+    `cause` why it waited, `at` when it began and `resumed_at` when it ended (`None` while it
+    lasts). Written only through `add_stack_pauses`; never a metric, a label or a span
+    attribute."""
+
+    parent: int
+    cause: str
+    at: str
+    resumed_at: str | None
+
+
+def add_stack_pauses(existing: list[StackPause], new: list[StackPause]) -> list[StackPause]:
+    """The pause rows of `existing` and `new` as one list: a row is appended, except that one
+    with the `(parent, cause, at)` of an earlier row replaces it in place, so `resumed_at` can be
+    stamped on a row already written. The only way `stack_pauses` is ever written."""
+    joined: dict[tuple[int, str, str], StackPause] = {}
+    for row in (*existing, *new):
+        joined[(row["parent"], row["cause"], row["at"])] = row
+    return list(joined.values())
+
+
 class ArmAssignment(TypedDict):
     """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
 
@@ -1513,6 +1563,9 @@ class LandingEntry(TypedDict, total=False):
     # The task's `cost_usd` when a reopening step was written: the re-delivery subtracts it
     # from its own to get this entry's `cost_usd`.
     cost_base: float
+    # The task's `len(runs)` at the same moment as `cost_base` (GH-897): where the runs of this
+    # entry's window begin, read only by `landing.restack_row`.
+    runs_base: NotRequired[int]
     checks: list[str]
     # Resume children actually spawned for this entry, and when the last one was.
     resume_spawns: int
@@ -2430,6 +2483,12 @@ class TaskState(TaskInput, total=False):
     # Read with `.get("review_scopes", [])`: a document written before this field has none, and
     # no verdict, gate or landing step reads it. Only `landing.scope_patch` writes it.
     review_scopes: Annotated[list[ReviewScopeRecord], add_review_scopes]
+    # What each restack of a stacked task cost and where it waited on its parent (GH-897,
+    # `StackRestack`, `StackPause`), `add_stack_restacks` / `add_stack_pauses`. Absent for a task
+    # that is not stacked, and a document written before them has none: read with
+    # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
+    stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
+    stack_pauses: Annotated[list[StackPause], add_stack_pauses]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
     # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept (`delta`
     # emits the valid rows of those, or `after` as it is when `before` has no key, which `apply`
@@ -2570,6 +2629,18 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             seen = {(r["unit"], r["head"], r["base"]) for r in old}
             if added_scopes := [r for r in value if (r["unit"], r["head"], r["base"]) not in seen]:
                 patch[key] = added_scopes
+        elif reducer is add_stack_restacks:
+            held_restacks = {(r["at"], r["upstream"]) for r in old}
+            if fresh_restacks := [
+                r for r in value if (r["at"], r["upstream"]) not in held_restacks
+            ]:
+                patch[key] = fresh_restacks
+        elif reducer is add_stack_pauses:
+            held_pauses = {(r["parent"], r["cause"], r["at"]): r for r in old}
+            if changed_pauses := [
+                r for r in value if held_pauses.get((r["parent"], r["cause"], r["at"])) != r
+            ]:
+                patch[key] = changed_pauses
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:
