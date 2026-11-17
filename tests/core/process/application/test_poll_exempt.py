@@ -158,7 +158,14 @@ def test_gather_merges_skips_a_busy_task_before_assessing_it():
     lines: list[str] = []
 
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, busy=frozenset({"GH-5"}), memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        busy=frozenset({"GH-5"}),
+        dry_run=False,
+        memo=StackMemo(),
     )
 
     assert found == [6]
@@ -179,6 +186,7 @@ def test_no_issue_is_both_a_merge_and_a_land_candidate():
         lands,
         live=LIVE,
         now=ESCALATED_AT,
+        dry_run=False,
         memo=StackMemo(),
     )
 
@@ -214,6 +222,7 @@ def test_gather_merges_classifies_each_land_by_its_step():
         lands,
         live=LIVE,
         now=ESCALATED_AT,
+        dry_run=False,
         memo=StackMemo(),
     )
 
@@ -230,6 +239,7 @@ def test_gather_merges_classifies_each_land_by_its_step():
         lands,
         live=LIVE,
         now=ESCALATED_AT,
+        dry_run=False,
         memo=StackMemo(),
     )
 

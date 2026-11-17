@@ -74,7 +74,8 @@ def test_a_pr_that_grows_a_document_past_the_cap_is_refused_with_the_file_and_th
     found, lines = _merges(ports)
 
     assert found == []
-    [line] = lines
+    line, noted = lines  # GH-895: the poller also comments it once and says so
+    assert noted == "agentic: poll: auto-merge #5 -> refusal noted: criteria_over_cap"
     assert line.startswith("agentic: poll: auto-merge #5 -> left to the human: criteria_over_cap (")
     assert f"`{DOC}`: {CAP + 5} lines (cap {CAP})" in line
 
@@ -110,7 +111,10 @@ def test_documents_git_cannot_read_are_refused_as_unreadable():
 
     assert _merges(ports) == (
         [],
-        ["agentic: poll: auto-merge #5 -> left to the human: criteria_unreadable"],
+        [
+            "agentic: poll: auto-merge #5 -> left to the human: criteria_unreadable",
+            "agentic: poll: auto-merge #5 -> refusal noted: criteria_unreadable",
+        ],
     )
 
 

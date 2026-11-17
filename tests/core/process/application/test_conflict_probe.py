@@ -78,7 +78,7 @@ def test_a_refusal_ahead_of_the_conflict_makes_no_probe_in_the_poller_or_land(re
     ports.workspace.conflict_answers[(HEAD, MASTER)] = True
 
     lines: list[str] = []
-    poll.gather_merges(ports, eval_set, MASTER, _Locks(), lines, memo=StackMemo())
+    poll.gather_merges(ports, eval_set, MASTER, _Locks(), lines, dry_run=False, memo=StackMemo())
     landing.land(
         "GH-5",
         _cfg(tmp_path),

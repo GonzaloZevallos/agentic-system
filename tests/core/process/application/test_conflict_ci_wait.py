@@ -67,7 +67,9 @@ def test_a_conflicting_head_with_no_ci_is_handed_to_the_sync_in_the_same_round(t
     lands: list = []
     lines: list[str] = []
 
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
+    found = poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), lines, lands, dry_run=False, memo=StackMemo()
+    )
 
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: ci_blocked_by_conflict"]
@@ -109,7 +111,9 @@ def test_a_mergeable_head_with_a_missing_check_still_waits(tmp_path):
     lines: list[str] = []
     lands: list = []
 
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
+    poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), lines, lands, dry_run=False, memo=StackMemo()
+    )
 
     assert lines == ["agentic: poll: auto-merge #5 -> waiting: ci missing web (60s of 3600)"]
     assert lands == []
