@@ -9,6 +9,7 @@ from agentic.core.process.domain.design import Capture, Design
 from agentic.core.process.domain.drawing import (
     DEPARTURE_ESCALATIONS_MAX,
     DRAWING_RULE,
+    DRAWING_SEATS,
     Departure,
     Verdicts,
     answers,
@@ -31,12 +32,12 @@ from agentic.core.process.domain.drawing import (
 
 def test_a_declared_design_has_the_rule():
     design = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
-    assert rule_for(design) == DRAWING_RULE
+    assert rule_for(design, "tech_lead") == DRAWING_RULE
     assert "owner" in DRAWING_RULE and "never by a role" in DRAWING_RULE
 
 
 def test_no_design_has_no_rule():
-    assert rule_for(None) == ""
+    assert rule_for(None, "tech_lead") == ""
 
 
 def _departure(**over: str) -> Departure:
@@ -517,3 +518,30 @@ def test_the_schema_classes_fit_the_protocols():
         raised_by="e",
     )
     assert interview_check([1], [check], [departure], DESIGN, {}, {}) is None
+
+
+_DESIGN = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
+
+
+def test_the_seats_table_has_exactly_the_two_definition_interview_seats():
+    assert dict(DRAWING_SEATS) == {
+        "product_analyst_interviewer": "interviewer",
+        "pm_interviewee": "interviewee",
+    }
+
+
+def test_the_rule_has_one_line_variant_per_seat_and_the_base_for_any_other_slug():
+    interviewer = rule_for(_DESIGN, "product_analyst_interviewer")
+    interviewee = rule_for(_DESIGN, "pm_interviewee")
+    assert interviewer.startswith(DRAWING_RULE) and "`visible`" in interviewer
+    assert interviewee.startswith(DRAWING_RULE) and "`departures`" in interviewee
+    assert "assumption" in interviewee
+    for line in (interviewer, interviewee):
+        assert "\n" not in line
+    assert rule_for(_DESIGN, "tech_lead") == DRAWING_RULE
+    assert rule_for(_DESIGN, "pm_consultant") == DRAWING_RULE
+
+
+def test_without_a_design_no_slug_has_a_rule():
+    for slug in (*DRAWING_SEATS, "tech_lead"):
+        assert rule_for(None, slug) == ""

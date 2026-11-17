@@ -19,5 +19,6 @@ Esta página muestra las clases públicas de los módulos del grupo `definition`
 ```mermaid
 classDiagram
     class interview__Transcript["Transcript"]
+    class interview_drawing__Collector["Collector"]
     class qa_performance__Row["Row"]
 ```

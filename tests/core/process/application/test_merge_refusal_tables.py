@@ -8,7 +8,7 @@ from typing import get_args
 
 import pytest
 
-from agentic.core.process.application import merge
+from agentic.core.process.application import merge, refusal_note
 from agentic.core.process.domain import exempt_queue, landing, rules
 from agentic.core.process.domain.landing import LandingSpent
 from agentic.core.process.domain.rules import MergeFacts
@@ -81,9 +81,9 @@ def test_the_three_stacking_values_are_handled_in_one_place_and_in_no_list_that_
 
 
 def test_each_stacking_value_has_a_fixed_evidence_phrase_and_escalation_text():
-    assert set(merge.STACK_EVIDENCE) == set(STACK)
+    assert set(refusal_note.STACK_EVIDENCE) == set(STACK)
     assert set(landing.STACK_ESCALATION) == set(STACK)
-    for table in (merge.STACK_EVIDENCE, landing.STACK_ESCALATION):
+    for table in (refusal_note.STACK_EVIDENCE, landing.STACK_ESCALATION):
         assert all(text and "{" not in text for text in table.values())
 
 

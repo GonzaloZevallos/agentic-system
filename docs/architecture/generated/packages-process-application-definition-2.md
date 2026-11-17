@@ -23,15 +23,11 @@ graph TD
     g_domain__roles["roles (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
-    m_application__discard["application.discard"]
     m_application__final_validation["application.final_validation"]
     m_application__interview["application.interview"]
+    m_application__interview_drawing["application.interview_drawing"]
     m_application__qa_performance["application.qa_performance"]
     m_application__validate_prd["application.validate_prd"]
-    m_application__discard --> g_application__support
-    m_application__discard --> g_domain__roles
-    m_application__discard --> g_domain__state
-    m_application__discard --> g_pkg__agentic__shared
     m_application__final_validation --> g_application__support
     m_application__final_validation --> g_domain__landing
     m_application__final_validation --> g_domain__roles
@@ -41,6 +37,10 @@ graph TD
     m_application__interview --> g_domain__roles
     m_application__interview --> g_domain__state
     m_application__interview --> g_pkg__agentic__shared
+    m_application__interview --> m_application__interview_drawing
+    m_application__interview_drawing --> g_application__support
+    m_application__interview_drawing --> g_domain__roles
+    m_application__interview_drawing --> g_domain__state
     m_application__qa_performance --> g_application__checks
     m_application__qa_performance --> g_application__support
     m_application__qa_performance --> g_domain__checks

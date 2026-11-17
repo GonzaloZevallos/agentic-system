@@ -402,3 +402,55 @@ fila de la tabla de «Qué lee cada widget».
 - **Riesgos.** Un proveedor o familia nuevos caen en `other` hasta que se agregue un
   miembro. Los documentos anteriores al 2026-09-14, que no tienen `cost_by_model`, no
   aportan nada: ese score se omite, nunca se escribe en 0.
+
+## Adenda (2026-11-16, GH-819): un solo dashboard, «¿Dónde se va el tiempo?», reemplaza a los cuatro
+
+El texto anterior no se edita. Los cuatro dashboards por producto (Panorama, Mejora del
+sistema, Operación, Dónde va la plata) que `agentic dashboards apply` escribía se borraron
+a mano el 2026-11-14; esta adenda los reemplaza por uno solo para los dos productos.
+
+- **El reemplazo.** `build_dashboards()` devuelve un dashboard (`time`), sin producto. El
+  producto es la barra de filtros de Langfuse sobre `environment`; ningún widget lleva un
+  filtro `environment` y `dashboards.filters` queda en `[]`. Los ids salen de
+  `uuid5(NAMESPACE, "all/<dashboard>/<widget>")` y la marca es
+  `[agentic-dashboards scope=all]`. `plan` borra solo las filas cuya descripción termina en
+  esa marca y que ningún dashboard deseado tiene; las filas con la marca vieja
+  `product=…`, sin marca, de otro proyecto o los cinco dashboards propios de Langfuse
+  (`project_id` NULL) nunca se leen, escriben ni borran. Los constructores de los cuatro
+  dashboards salieron del código, así que un `apply` posterior no los trae de vuelta; las
+  filas viejas que quedaran en la base no se borran.
+- **Aprobación del dueño.** El dueño revisó la maqueta con datos de mentira en el proyecto
+  `maqueta-tiempo`, dashboard `3d725557-359f-54bf-ade9-6858b4cd144c`, y decidió: barras
+  horizontales en horas, de mayor a menor y con etiquetas de valor, más una torta de las
+  mismas horas al lado (un widget no divide, así que no hay porcentaje); las diez barras de
+  un solo color (no se pintan por barra); y el rango por defecto de Langfuse con el tamaño de
+  barra del selector de fechas. Por eso la definición no guarda ni rango ni granularidad
+  (sección 3).
+- **Scores con fecha de merge.** `cycle_h`, `stage_h.*`, `cycle_active_h`,
+  `stage_split_known` y `slowest_stage.*` se fechan en el merge del pull request
+  (`task_scores.score_time`), para que la tendencia semanal y el rango pongan la tarea en la
+  semana en que se mergeó. Resultado del experimento en el entorno `agentic-gate-probe`,
+  textual: «re-posting an id with a later timestamp leaves one row under `final`, but that
+  row keeps the FIRST timestamp (2026-11-13). The second post's timestamp is ignored.»
+  (`1`, sin duplicado, salida de `scripts/score_redate_spike.py`). Por eso el backfill retira
+  el id (`DELETE`, espera 404) y recién después lo escribe con la fecha nueva. Que retirar
+  y volver a escribir mueve el score al día del merge lo prueba, contra un doble local de la
+  API de scores que registra las llamadas en orden,
+  `test_retire_then_repost_moves_the_merge_dated_scores_to_the_merge_day_and_only_those`
+  (`tests/core/measurement/adapters/test_langfuse_scores.py`); la corrida con las claves
+  del entorno de prueba la hace el orquestador tras el merge.
+- **Claves de la definición.** Del golden (`tests/fixtures/langfuse_dashboards/golden.json`):
+  las vistas `SCORES_NUMERIC` y `SCORES_BOOLEAN`, los tipos `NUMBER`, `HORIZONTAL_BAR`,
+  `PIE`, `BAR_TIME_SERIES` y `PIVOT_TABLE`, las agregaciones `sum`, `p50`, `max` y `count`,
+  las dimensiones `name` y `traceName`, el filtro `booleanValue` (`=`) y `row_limit`. Del
+  bundle de `langfuse-web` (4.35.0, esquema zod): `show_value_labels` (solo
+  `HORIZONTAL_BAR`) y `defaultSort` (`{column, order}`, solo `PIVOT_TABLE`, con la columna
+  `max_value`); el orden de mayor a menor de las barras lo da Langfuse por defecto
+  (`needsTopN`). El golden no se recapturó.
+- **Límite de la tabla.** Una tabla de Langfuse admite a lo sumo dos dimensiones
+  (`MAX_PIVOT_TABLE_DIMENSIONS` = 2), así que «Las 10 tareas más lentas» muestra tarea
+  (`traceName`), etapa más larga (`name` de `slowest_stage.*`) y horas de ciclo; el
+  producto se filtra con la barra del dashboard y no es una columna.
+- **Orden manual tras el merge** (riesgo 3): (1) fijar de nuevo stage0; (2)
+  `agentic scores backfill --product-dir <dir>` en los dos productos; (3)
+  `agentic dashboards apply --verify`.

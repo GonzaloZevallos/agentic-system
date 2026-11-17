@@ -295,6 +295,11 @@ def add(current: float, new: float) -> float:
     return current + new
 
 
+def sticky_true(current: bool, new: bool) -> bool:
+    """Once true, always true: no patch takes a mark back (the `spec_delivery` record)."""
+    return bool(current) or bool(new)
+
+
 def last[T](current: T, new: T) -> T:
     """The latest write wins. Developers running in parallel each stamp the role and
     the status; without a reducer the graph refuses two writes in one step."""
@@ -427,6 +432,21 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+class RefusalNoted(TypedDict):
+    """The record that the poller commented a refusal (GH-885): the pull request head, the
+    refusal and when (ISO UTC)."""
+
+    head: str
+    reason: str
+    at: str
+
+
+def refusal_noted_record(head: str, reason: str, at: str) -> RefusalNoted:
+    """The `RefusalNoted` row for `(head, reason)` at `at`, which the caller reads from its own
+    clock: this reads none."""
+    return {"head": head, "reason": reason, "at": at}
 
 
 HEAD_YIELDS_MAX = 10
@@ -2175,6 +2195,10 @@ class TaskState(TaskInput, total=False):
     # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
     # round-trip belongs to the part that does.
     spec: Annotated[SpecContract, last]
+    # The measurement record that the task was a spec delivery (GH-594): written only by
+    # `document.render` (via `spec_delivery.recorded`), sticky, read only by `eval compare`;
+    # no rule or node reads it.
+    spec_delivery: Annotated[bool, sticky_true]
     # The delivery assumptions (GH-594), `add_assumptions`: one row per canonical text. Read
     # with `.get("assumptions", [])`: a document written before this field has none.
     assumptions: Annotated[list[AssumptionRow], add_assumptions]

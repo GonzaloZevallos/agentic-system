@@ -134,7 +134,14 @@ def test_the_poller_round_gives_its_children_one_memo(tmp_path):
     calls = _count(ports)
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, cfg=_cfg(tmp_path), memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        cfg=_cfg(tmp_path),
+        dry_run=False,
+        memo=StackMemo(),
     )
     assert found == []
     assert calls["issue_state"] == 1

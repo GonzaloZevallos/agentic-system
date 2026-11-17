@@ -590,6 +590,8 @@ def _print_path_report(
         print("lead_time_h: n/a (no closed task with a recorded path)")
     print("promoted: " + ", ".join(f"{kind}={count}" for kind, count in report.promotions.items()))
     print("excluded: " + ", ".join(f"{why}={count}" for why, count in report.exclusions))
+    n, m = report.spec_deliveries
+    print(f"spec_delivery: {n} of {m}")
 
 
 ArmGroup = tuple[str, str, list[tuple[str, scorecard.TaskFigures]]]

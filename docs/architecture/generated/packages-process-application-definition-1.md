@@ -28,6 +28,7 @@ graph TD
     m_application__define["application.define"]
     m_application__design["application.design"]
     m_application__diagnose["application.diagnose"]
+    m_application__discard["application.discard"]
     m_application__classify --> g_application__support
     m_application__classify --> g_domain__roles
     m_application__classify --> g_domain__state
@@ -51,4 +52,8 @@ graph TD
     m_application__diagnose --> g_domain__roles
     m_application__diagnose --> g_domain__state
     m_application__diagnose --> g_pkg__agentic__shared
+    m_application__discard --> g_application__support
+    m_application__discard --> g_domain__roles
+    m_application__discard --> g_domain__state
+    m_application__discard --> g_pkg__agentic__shared
 ```
