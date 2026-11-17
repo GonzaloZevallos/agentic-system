@@ -100,6 +100,7 @@ def test_reducers_are_read_from_the_annotations():
         "spec_cause",
         "spec_refusal",
         "spec",
+        "spec_delivery",
         "assumptions",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
