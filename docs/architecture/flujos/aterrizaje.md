@@ -79,9 +79,10 @@ sequenceDiagram
    `StackMemo` sin valor por defecto, que `assess_merge`, `evaluate_landing_order` y
    `gather_merges` reciben como parámetro: uno por ronda en `poll.py:run_once`, de modo que los
    hijos de un mismo padre comparten la lectura, y uno nuevo por llamada en `landing.py:land`
-   (una para `_note_order`, otra para `_land`) y en `resume.py`. El verbo `agentic merge` aún no
-   lee esos hechos y rechaza un registro con hechos sin leer como `stack_parent_unmerged`; su
-   lectura llega con #876.
+   (una para `_note_order`, otra para `_land`) y en `resume.py`. El verbo `merge`
+   (`agentic/core/process/application/merge.py:merge_task`, GH-876) lee los mismos hechos a través
+   de `stack_facts` con su propio `StackMemo` por llamada, compartido por sus nuevas decisiones,
+   bajo la misma guarda menos el término `unlandable`.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

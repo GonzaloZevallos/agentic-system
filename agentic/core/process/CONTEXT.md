@@ -829,6 +829,6 @@ _Avoid_: pila de PR, rama dependiente
 _Campo_: sin término de arte
 
 **Memo de pila** (`StackMemo`):
-Los mapas de lecturas de una ventana de decisión que `stack_facts` recibe sin valor por defecto y que nunca es global de módulo: existencia por sha (`fetch_commit`), estado y merge de cierre por issue, y tres de ascendencia con clave `(cabeza del padre, referencia)` (tip, cabeza del PR, merge de cierre). Dura una ronda en el poller y una decisión por llamada a `assess_merge` en `land` y `resume`; nunca se arrastra entre rondas. La vida del memo del verbo `merge` llega con #876.
+Los mapas de lecturas de una ventana de decisión que `stack_facts` recibe sin valor por defecto y que nunca es global de módulo: existencia por sha (`fetch_commit`), estado y merge de cierre por issue, y tres de ascendencia con clave `(cabeza del padre, referencia)` (tip, cabeza del PR, merge de cierre). Dura una ronda en el poller y una decisión por llamada a `assess_merge` en `land` y `resume`; nunca se arrastra entre rondas. En el verbo `merge` dura una llamada a `merge_task`, compartido por sus nuevas decisiones (GH-876).
 _Avoid_: caché de pila
 _Campo_: sin término de arte
