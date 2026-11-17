@@ -41,7 +41,9 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         check=ports.knowledge.approval_check(state.get("type", "")),
         cwd=task.path,
         remaining_changes=remaining,
-        # The draft Spec section rides where the system-written sections of a prompt ride.
+        # `tiers` is run_role's slot for a system-written section appended after the playbook (its
+        # docstring names the GH-358 check tier); the draft Spec section rides there, and is
+        # empty unless `rules.spec_fallback_due`.
         tiers=draft_section(state, ports),
     )
     if output is None:
