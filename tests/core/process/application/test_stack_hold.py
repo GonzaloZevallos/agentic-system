@@ -222,6 +222,14 @@ def test_free_writer_reads_a_dead_lock_as_free_and_a_live_one_as_not():
     assert stack_hold.free_writer("GH-21", frozenset({"GH-21"}), _Lock()) is False
 
 
+def test_free_writer_reads_a_lock_that_cannot_be_read_as_not_free():
+    class _Unreadable(_Lock):
+        def refusal(self, task_id: str) -> str | None:
+            raise OSError("lock file unreadable")
+
+    assert stack_hold.free_writer("GH-20", frozenset(), _Unreadable()) is False
+
+
 # --- write_episodes: the table, one test per row ------------------------------------------------
 
 
