@@ -37,18 +37,17 @@ classDiagram
     class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]
     class size_budget__PlanSize["PlanSize"]
+    class spec_approval__ApprovalReading["ApprovalReading"]
+    class spec_approval__Comment["Comment"]
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
     class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
     class spec_delivery__SpecLine["SpecLine"]
     class spec_delivery__SpecLineMalformed["SpecLineMalformed"]
     class spec_delivery__SpecRefusal["SpecRefusal"]
-    class spec_delivery__SpecRefusalRecord["SpecRefusalRecord"]
-    class spec_delivery__SpecStatePatch["SpecStatePatch"]
-    spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `spec_route.SpecRefusalPatch` se asocia con `spec_delivery.SpecRefusalRecord`
+  - `spec_delivery.SpecStatePatch` se asocia con `spec_delivery.SpecContract`
