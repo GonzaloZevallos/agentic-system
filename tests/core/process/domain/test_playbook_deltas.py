@@ -12,6 +12,7 @@ from dataclasses import replace
 import pytest
 
 from agentic.core.process.domain import playbook as pb
+from agentic.core.process.domain import playbook_candidates as pc
 from agentic.core.process.domain.playbook import (
     GRACE_TASKS,
     Applied,
@@ -402,3 +403,14 @@ def test_files_using_nothing_new_round_trip_byte_identical():
     assert "in_prompt_since" not in text and "last_applied" not in text
     landed = render_file(playbook(LANDED))
     assert render_file(parse(landed, "developer")) == landed
+
+
+def test_candidates_and_archived_files_using_nothing_new_round_trip_byte_identical():
+    waiting = Pending("developer", CATEGORY, LESSON, "low", ("GH-1",), ("review",), ADDED)
+    candidates = pc.render_candidates([waiting, replace(waiting, lesson="Another lesson.")])
+    assert pc.render_candidates(pc.parse_candidates(candidates)) == candidates
+    archived = pc.render_archived([shelved(1, ("GH-1",)), Archived(LEGACY, "stale", ADDED)])
+    assert pc.render_archived(pc.parse_archived(archived)) == archived
+    legacy_only = pc.render_archived([Archived(LEGACY, "stale", ADDED)])
+    assert "last_applied" not in legacy_only and "in_prompt_since" not in legacy_only
+    assert pc.render_archived(pc.parse_archived(legacy_only)) == legacy_only
