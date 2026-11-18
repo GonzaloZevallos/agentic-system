@@ -147,11 +147,25 @@ def test_the_headline_numbers_are_the_two_medians_and_the_count_of_tasks_without
     ]
 
 
-def test_the_weekly_trend_stacks_the_ten_stages_placed_by_the_merge():
+def test_the_weekly_trend_stacks_the_eleven_stages_placed_by_the_merge():
     trend = by_key("hours_by_stage_per_week")
     assert trend.row().chart_type == "BAR_TIME_SERIES"
-    assert trend.scores == task_scores.FAMILIES["stage_h"] and len(trend.scores) == 10
+    assert trend.scores == task_scores.FAMILIES["stage_h"] and len(trend.scores) == 11
     assert trend.placed_by == "pr_merged_at"
+
+
+def test_the_held_stage_is_among_the_widget_series_and_aggregates_by_sum_or_max():
+    """A task scored before `held` has no `stage_h.held`: it reads as 0 because the stage hours
+    are summed and the slowest stage is the max, so no history is rewritten."""
+    stage_widgets = [
+        w for w in widgets() if w.row().filters[0]["value"] == list(task_scores.FAMILIES["stage_h"])
+    ]
+    assert stage_widgets
+    assert all(w.row().metrics == [{"measure": "value", "agg": "sum"}] for w in stage_widgets)
+    assert "stage_h.held" in task_scores.FAMILIES["stage_h"]
+    slowest = by_key("slowest_tasks").row()
+    assert slowest.metrics == [{"measure": "value", "agg": "max"}]
+    assert "slowest_stage.held" in slowest.filters[0]["value"]
 
 
 def test_the_slowest_table_lists_ten_tasks_by_cycle_hours_with_their_slowest_stage():

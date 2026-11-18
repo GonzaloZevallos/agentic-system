@@ -23,6 +23,7 @@ graph TD
     m_domain__escalation_prompts["domain.escalation_prompts"]
     m_domain__experiment["domain.experiment"]
     m_domain__finding_location["domain.finding_location"]
+    m_domain__hold_record["domain.hold_record"]
     m_domain__lead_time["domain.lead_time"]
     m_domain__legacy_names["domain.legacy_names"]
     m_domain__restart["domain.restart"]

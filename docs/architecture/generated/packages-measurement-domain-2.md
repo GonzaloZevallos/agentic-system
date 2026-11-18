@@ -30,6 +30,7 @@ graph TD
     m_domain__shadow_report --> g_pkg__agentic__core__process
     m_domain__shadow_report --> m_domain__cycle
     m_domain__stage_report --> m_domain__stages
+    m_domain__stages --> g_pkg__agentic__core__process
     m_domain__stages --> m_domain__cycle
     m_domain__stages --> m_domain__parallel_factor
     m_domain__task_scores --> g_pkg__agentic__core__process

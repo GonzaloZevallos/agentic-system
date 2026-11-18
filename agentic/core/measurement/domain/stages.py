@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, get_args
 
+from agentic.core.process.domain import hold_record
+
 from . import cycle, parallel_factor
 
 CycleStage = Literal[
@@ -27,6 +29,7 @@ CycleStage = Literal[
     "checks",
     "human_wait",
     "account_limit",
+    "held",
     "landing",
     "other",
 ]
@@ -42,6 +45,7 @@ StageUnknownCause = Literal[
     "ci_wait_unknown",
     "run_unbounded",
     "bounds_reversed",
+    "hold_unknown",
 ]
 
 
@@ -132,6 +136,7 @@ STAGE_PRECEDENCE: tuple[CycleStage, ...] = (
     "development",
     "plan",
     "definition",
+    "held",
     "queue",
     "other",
 )
@@ -140,7 +145,16 @@ OTHER_ORDER: tuple[OtherCause, ...] = get_args(OtherCause)
 # The causes of a mechanical escalation that wait on CI (`CiCause`, prefixed `ci_`).
 _CI_CAUSES = frozenset({"ci_gh_unavailable", "ci_gh_unreadable", "ci_run_unfinished"})
 
-RANK_HUMAN, RANK_ACCOUNT, RANK_PAUSE, RANK_LANDING, RANK_CI, RANK_RUN, RANK_QUEUE = range(1, 8)
+(
+    RANK_HUMAN,
+    RANK_ACCOUNT,
+    RANK_PAUSE,
+    RANK_LANDING,
+    RANK_CI,
+    RANK_RUN,
+    RANK_HELD,
+    RANK_QUEUE,
+) = range(1, 9)
 
 
 def key(claim: Claim) -> tuple[int, int, int]:
@@ -278,11 +292,13 @@ def claims(
     `no_merge`); a merge before the issue's creation, or a pull request created after the merge
     (`bounds_reversed`); a pause still open or unreadable (`pause_open`); a failure or a run
     with a missing, unparsable or reversed bound (`failure_unbounded`, `run_unbounded`); a CI
-    wait that cannot be derived (`ci_wait_unknown`).
+    wait that cannot be derived (`ci_wait_unknown`); a holds record that is unreadable or
+    unpaired (`hold_unknown`, read by `hold_record.read`, last, so a document that gave another
+    cause before still gives it).
 
     The ranks: 1 a human pause, 2 an account-limit pause, 3 the other closed pauses (CI ones to
     `checks`, the rest to `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to
-    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the queue.
+    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
 
     `parallel_factor.clip` drops the empty claims silently. The inputs that would invert a range
     are caught first by the validation above, so no claim is ever inverted. The later sweep must
@@ -314,6 +330,9 @@ def claims(
     runs = _read_runs(document)
     if runs is None:
         return StageUnknown("run_unbounded")
+    holds = hold_record.read(document)
+    if isinstance(holds, hold_record.HoldUnknown):
+        return StageUnknown("hold_unknown")
 
     found: list[Claim] = []
 
@@ -337,6 +356,8 @@ def claims(
     for timed in [*runs, *failures]:
         stage, cause = _run_claim(timed.slug)
         add((timed.start, timed.end), RANK_RUN, stage, cause)
+    for span in holds or ():
+        add(span, RANK_HELD, "held")
     for span in _queue_claims(runs, created):
         add(span, RANK_QUEUE, "queue")
     return found
