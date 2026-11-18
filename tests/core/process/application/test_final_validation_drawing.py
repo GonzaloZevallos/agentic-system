@@ -350,3 +350,19 @@ async def test_two_elements_of_one_image_leave_one_row_and_one_claim(tmp_path):
     assert len(patch["drawing_checks"]["rows"]) == 1 and patch["drawing_checks"]["open"] == 1
     claims = [f["claim"] for f in patch["findings"]]
     assert len(claims) == 1 and "Save" in claims[0] and "Cancel" not in claims[0]
+
+
+async def test_the_fill_instructions_reach_both_leads_only_with_a_comparable_design(tmp_path):
+    # They live in the turn facts (not the prompt) so the prompt without design stays master's.
+    script = runner(lead([]), lead([check("matches")]))
+    await run(state(), script, tmp_path, design())
+    for slug in ("ux_lead_final", "ui_lead_final"):
+        facts = script.prompts(slug)[0]
+        assert "exactly one check per due screen" in facts and "same drawing and element" in facts
+    bare = runner(lead([]), lead([]))
+    await run(state(), bare, tmp_path, None)
+    assert not any(
+        "exactly one check" in p
+        for s in ("ux_lead_final", "ui_lead_final")
+        for p in bare.prompts(s)
+    )
