@@ -558,3 +558,30 @@ def test_an_unverified_check_is_never_turned_into_a_match():
     result = drawing_answer.classify(_state(), [_check("unverified")], [])
     assert result.outcomes == {}
     assert [c.verdict for c in result.open] == ["unverified"]
+
+
+@pytest.mark.parametrize("flip", [False, True], ids=["ux-first", "ui-first"])
+def test_merge_checks_keeps_the_gravest_verdict_per_image_in_either_order(flip: bool):
+    ux = [_check("matches", ref="home.png"), _check("unverified", ref="list.png")]
+    ui = [_check("departs", ref="home.png"), _check("matches", ref="list.png")]
+    merged = drawing_answer.merge_checks(*((ui, ux) if flip else (ux, ui)))
+    assert {c.ref: c.verdict for c in merged} == {"home.png": "departs", "list.png": "unverified"}
+    assert len(merged) == 2
+
+
+def test_merge_checks_with_one_side_empty_is_the_other_side_once_per_image():
+    twice = [_check("matches", ref="a.png"), _check("matches", ref="a.png")]
+    assert [c.ref for c in drawing_answer.merge_checks([], twice)] == ["a.png"]
+
+
+def test_fix_pass_rows_raises_fix_passes_to_one_for_fix_due_only():
+    fix = _row("Save", verdict="reject")
+    back = _row("Cancel", verdict="reject", fix_passes=1)
+    state = _state(drawing_departures=[fix, back])
+    outcomes: dict[str, drawing_answer.Outcome] = {
+        fix["key"]: "fix_due",
+        back["key"]: "return_due",
+    }
+    rows = drawing_answer.fix_pass_rows(state, outcomes)
+    assert [(r["key"], r["fix_passes"]) for r in rows] == [(fix["key"], 1)]
+    assert drawing_answer.fix_pass_rows(state, {back["key"]: "return_due"}) == []

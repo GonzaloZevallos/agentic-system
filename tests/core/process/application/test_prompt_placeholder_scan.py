@@ -45,7 +45,10 @@ ENTRY_POINTS = "tests.core.process.application.test_prompt_render_entry_points"
 # expression as written>`; value: the dotted path of that test.
 ALLOWLIST: dict[str, str] = {
     "design.py:_lead_walk:widened": f"{ENTRY_POINTS}.test_design_widened_renders_prompt",
-    "final_validation.py:_ui_lead_final:widened": (
+    "final_validation.py:_ux_lead_final:role": (
+        f"{ENTRY_POINTS}.test_final_validation_widened_renders_prompt"
+    ),
+    "final_validation.py:_ui_lead_final:role": (
         f"{ENTRY_POINTS}.test_final_validation_widened_renders_prompt"
     ),
     "review.py:run_reviewer:reviewer": f"{ENTRY_POINTS}.test_review_renders_prompt",
