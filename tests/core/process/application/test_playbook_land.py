@@ -320,11 +320,11 @@ def test_the_diff_is_read_against_the_master_the_caller_gave_at_the_ci_head():
 def test_a_head_behind_master_waits_unless_master_gained_only_inert_paths():
     world = World()
     world.workspace.contains_answer = "no"
-    world.workspace.gains[("base", MASTER)] = ("docs/a.md",)
+    world.workspace.gains[("base", MASTER)] = ("inert/a.md",)
     world.workspace.merge_bases[(HEAD, MASTER)] = "base"
 
     stale, _ = world.land()
-    world.stack.declared_merge_inert = ("docs/**",)
+    world.stack.declared_merge_inert = ("inert/**",)
     inert, _ = world.land()
 
     assert stale == pl.Wait("stale_base")
@@ -334,7 +334,7 @@ def test_a_head_behind_master_waits_unless_master_gained_only_inert_paths():
 def test_a_gain_that_cannot_be_read_is_not_covered():
     world = World()
     world.workspace.contains_answer = "no"
-    world.stack.declared_merge_inert = ("docs/**",)
+    world.stack.declared_merge_inert = ("inert/**",)
 
     verdict, _ = world.land()
 
