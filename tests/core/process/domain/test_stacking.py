@@ -583,3 +583,11 @@ def test_held_does_not_depend_on_conflicts_for_any_row():
     for _, facts, _want in HELD_ROWS:
         verdicts = {refusal(facts, c) == "stack_parent_unmerged" for c in (True, False, None)}
         assert verdicts == {stacking.held(facts)}
+
+
+def test_an_expired_unfetchable_head_never_holds_a_row_that_refusal_does_not_hold():
+    for _, facts, want in HELD_ROWS:
+        expired = replace(facts, heads_fetched=False, unfetchable_expired=True)
+        assert stacking.held(expired) is False
+        waiting = replace(facts, heads_fetched=False, unfetchable_expired=False)
+        assert stacking.held(waiting) is want
