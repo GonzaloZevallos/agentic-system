@@ -2174,3 +2174,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-18T04:27:03.824+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test enforces a rule by inspecting source, put the check in a helper and add a case that feeds it a violating input and shows it rejects; make the match exact, not a prefix.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test comment or name claims to check all calls of a kind, assert the full list of those calls, not just a count of one; remove helpers you wrote and left unused.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
