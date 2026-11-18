@@ -157,6 +157,8 @@ def test_after_that_merge_the_new_lesson_reaches_the_role_prompt_with_no_human_m
         {".agentic/playbooks-x/a": "x"},
         {".agentic/playbooks/../stack.yaml": "x"},
         {"agentic/cli.py": "x"},
+        {"/etc/passwd": "x"},
+        {PATH: PLAYBOOK, "docs/renamed-from.md": None},  # a rename lists its old path too
         {pc.CANDIDATES_FILE: None},  # deleting anything but a role playbook
     ],
 )
