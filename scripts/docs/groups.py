@@ -183,6 +183,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.launch_order": "machine",
     "domain.lead_time": "state",
     "domain.legacy_names": "state",
+    "domain.lesson_decision": "playbook",
     "domain.master_gain": "checks",
     "domain.merge_ci": "checks",
     "domain.merge_conflict": "checks",

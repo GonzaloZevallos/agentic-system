@@ -30,20 +30,25 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
 
 ```mermaid
 classDiagram
+    class lesson_decision__Cluster["Cluster"]
+    class lesson_decision__ClusterVerdict["ClusterVerdict"]
+    class lesson_decision__Decision["Decision"]
+    class lesson_decision__DecisionRequest["DecisionRequest"]
+    class lesson_decision__DuplicateKey["DuplicateKey"]
+    class lesson_decision__NewCandidate["NewCandidate"]
+    class lesson_decision__OverCap["OverCap"]
+    class lesson_decision__RawDecision["RawDecision"]
+    class lesson_decision__RawDecisions["RawDecisions"]
+    class lesson_decision__RawVerdict["RawVerdict"]
+    class lesson_decision__Report["Report"]
+    class lesson_decision__Settled["Settled"]
+    class lesson_decision__Similar["Similar"]
     class playbook__Applied["Applied"]
     class playbook__Archived["Archived"]
-    class playbook__Backing["Backing"]
-    class playbook__Delta["Delta"]
-    class playbook__Demotion["Demotion"]
-    class playbook__Evidence["Evidence"]
-    class playbook__Item["Item"]
-    class playbook__Pending["Pending"]
-    playbook__Archived --> playbook__Item
-    playbook__Demotion --> playbook__Delta
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - `playbook.Applied` se asocia con `playbook.Playbook`
-  - `playbook.Refusal` se asocia con `playbook.Delta`
+  - `playbook.Archived` se asocia con `playbook.Item`

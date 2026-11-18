@@ -13,9 +13,11 @@ Esta página muestra los módulos del grupo `playbook` de `domain` y los imports
 graph TD
     g_domain__roles["roles (grupo)"]
     g_domain__state["state (grupo)"]
+    m_domain__lesson_decision["domain.lesson_decision"]
     m_domain__playbook["domain.playbook"]
     m_domain__playbook_candidates["domain.playbook_candidates"]
     m_domain__system_lessons["domain.system_lessons"]
+    m_domain__lesson_decision --> m_domain__playbook
     m_domain__playbook --> g_domain__roles
     m_domain__playbook --> g_domain__state
     m_domain__playbook_candidates --> g_domain__roles

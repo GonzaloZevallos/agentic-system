@@ -1,0 +1,44 @@
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 8 de 8, con las clases en orden alfabético por módulo y clase.
+
+- Padre: [Clases de application](classes-process-application.md)
+- Hermanas:
+  - [application: build](classes-process-application-build.md)
+  - [application: checks](classes-process-application-checks.md)
+  - [application: definition](classes-process-application-definition.md)
+  - [application: landing](classes-process-application-landing.md)
+  - [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
+  - [application: lifecycle (parte 2)](classes-process-application-lifecycle-2.md)
+  - [application: reflection](classes-process-application-reflection.md)
+  - [application: support (parte 1)](classes-process-application-support-1.md)
+  - [application: support (parte 2)](classes-process-application-support-2.md)
+  - [application: support (parte 3)](classes-process-application-support-3.md)
+  - [application: support (parte 4)](classes-process-application-support-4.md)
+  - [application: support (parte 5)](classes-process-application-support-5.md)
+  - [application: support (parte 6)](classes-process-application-support-6.md)
+  - [application: support (parte 7)](classes-process-application-support-7.md)
+
+```mermaid
+classDiagram
+    class run_role__GuardChain["GuardChain"]
+    class run_role__Output["Output"]
+    class run_role__PromptFailure["PromptFailure"]
+    class run_role__RoleFailure["RoleFailure"]
+    class run_role__TaskCapReached["TaskCapReached"]
+    class spec_guard__Changed["Changed"]
+    class spec_guard__Intact["Intact"]
+    class spec_guard__Unreadable["Unreadable"]
+    class stack_facts__StackMemo["StackMemo"]
+```
+
+## Relaciones con otras páginas
+
+- [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
+  - `plan_carve_out.Judged` se asocia con `run_role.Output`
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `run_role.Output` se asocia con `ports.CheckRuns`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `run_role.GuardChain` agrega a `ports.SchemaGuard`
+- [application: support (parte 7)](classes-process-application-support-7.md)
+  - `run_role.PromptFailure` hereda de `run_role.Escalating`
+  - `run_role.RoleFailure` hereda de `run_role.Escalating`
+  - `run_role.TaskCapReached` hereda de `run_role.Escalating`
