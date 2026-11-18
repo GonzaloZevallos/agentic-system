@@ -31,6 +31,18 @@ SPEC_MAX_BYTES = 65536
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
 # What the system did with the draft Spec PM returned (GH-594 part 5a): closed.
 SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent"]
+# Why a draft Spec body is refused (GH-594 part 5c-1), by stage: the body alone, the draft read by
+# the validator, and the approved preview of it. Closed; `DRAFT_REFUSAL_REASONS` has one sentence each.
+DraftCause = Literal[
+    "draft_empty",
+    "draft_front_matter",
+    "draft_unhashable",
+    "draft_invalid",
+    "draft_not_draft",
+    "preview_slice_missing",
+    "preview_invalid",
+    "preview_unapproved",
+]
 SpecReadRefusal = Literal["path", "commit", "missing", "not_blob", "oversize", "encoding", "git"]
 SpecReadCause = Literal["spec_unreadable"]
 # Every cause a spec refusal can escalate with (GH-594): the validator's four, the read's one and
@@ -188,11 +200,14 @@ class _SpecDraftOutcome(TypedDict):
 
 class SpecDraftRecord(_SpecDraftOutcome, total=False):
     """The `spec_draft` key of a task (GH-594 part 5a): what became of the draft Spec PM
-    returned. `path` and `sha256` (the body hash) are there only for `written`. Distinct from
-    `state["spec"]`: a draft is never a spec delivery's contract."""
+    returned. `path`, `sha256` (the body hash) and `commit` are there only for `written`; `commit`
+    is a full sha at which `path` holds exactly the text whose body hash is `sha256` (a record
+    from before it existed has none). Distinct from `state["spec"]`: a draft is never a spec
+    delivery's contract."""
 
     path: str
     sha256: str
+    commit: str
 
 
 class SpecStatePatch(TypedDict):
@@ -328,11 +343,90 @@ def spec_carry_ok(holds: bool, intact: bool) -> bool:
     return holds and intact
 
 
-def draft_valid(result: SpecContract | SpecCause) -> bool:
-    """True only when the validator found a well-formed spec that is not approved yet
-    (`spec_unapproved`): what a draft is. The one place that answer counts as valid; every
-    other cause, and a contract (an approved spec), is not a draft."""
-    return result == "spec_unapproved"
+@dataclass(frozen=True)
+class DraftReading:
+    """What a draft Spec reading came to: `ok`, or refused with a `DraftCause`."""
+
+    ok: bool
+    cause: DraftCause | None = None
+
+
+def draft_body_refusal(body: object) -> DraftCause | None:
+    """Why PM's draft body is refused before any validator sees it, or `None`: not a string or
+    blank, a body that opens its own front matter, or one whose hash cannot be computed."""
+    if not isinstance(body, str) or not body.strip():
+        return "draft_empty"
+    if split_front_matter(body) is not None:
+        return "draft_front_matter"
+    try:
+        sha256 = body_sha256(draft_text(body))
+    except UnicodeError:
+        return "draft_unhashable"
+    return "draft_unhashable" if sha256 is None else None
+
+
+def draft_reading(
+    draft_result: SpecContract | SpecCause, preview_result: SpecContract | SpecCause | None
+) -> DraftReading:
+    """The one reading of the validator on a draft Spec (the only place its answer counts as a
+    draft): the draft must be `spec_unapproved`; then the approved preview, when given, must be a
+    contract read with `slice_id=None`, so a draft with more than one slice is `slice_missing`.
+    The draft is judged before the preview. A validator verdict never depends on the path."""
+    if draft_result == "spec_invalid":
+        return DraftReading(False, "draft_invalid")
+    if draft_result != "spec_unapproved":
+        return DraftReading(False, "draft_not_draft")
+    if preview_result is None or not isinstance(preview_result, str):
+        return DraftReading(True)
+    if preview_result == "slice_missing":
+        return DraftReading(False, "preview_slice_missing")
+    if preview_result == "spec_unapproved":
+        return DraftReading(False, "preview_unapproved")
+    return DraftReading(False, "preview_invalid")
+
+
+def approved_contract(result: SpecContract | SpecCause) -> SpecContract | SpecCause:
+    """The contract of an approved spec, or the cause the validator refused it with."""
+    return result
+
+
+DRAFT_PREVIEW_PATH = f"{SPEC_DIR}draft.md"
+
+# What PM is told when its draft is refused, one fixed sentence per cause: never validator detail,
+# a path or a section list (those belong to Knowledge; the draft prompt block names them).
+DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
+    "draft_empty": "the draft Spec body is empty; return the body as text, without front matter.",
+    "draft_front_matter": "the draft Spec body must not open its own front matter; the system adds it.",
+    "draft_unhashable": "the draft Spec body cannot be encoded as text; return plain UTF-8 text.",
+    "draft_invalid": (
+        "the draft Spec body lacks the structure required by the draft Spec section of your "
+        "prompt (pm_draft); return every section that block names, in order, with no front matter."
+    ),
+    "draft_not_draft": "the draft Spec body must read as an unapproved draft; return only the body.",
+    "preview_slice_missing": "the draft Spec must have exactly one slice.",
+    "preview_invalid": "the draft Spec body must still validate once it is approved.",
+    "preview_unapproved": "the draft Spec could not be previewed as approved; return the body again.",
+}
+
+
+def draft_refusal_message(cause: DraftCause) -> str:
+    return f"draft Spec refused: {cause}: {DRAFT_REFUSAL_REASONS[cause]}"
+
+
+def login_ok(login: str | None) -> bool:
+    """True only for a non-empty string in the form of a GitHub login."""
+    return isinstance(login, str) and _LOGIN.fullmatch(login) is not None
+
+
+def approval_instant(now: str) -> str:
+    """The clock's instant in the form approval writes: the clock (`Ports.now`) ends in `+00:00`,
+    the approved front matter in `Z`. Anything else is returned as it is, for `instant_ok` to judge."""
+    return f"{now.removesuffix('+00:00')}Z" if now.endswith("+00:00") else now
+
+
+def instant_ok(at: str) -> bool:
+    """True only for an ISO-8601 UTC instant ending in `Z`, the form approval writes."""
+    return isinstance(at, str) and _AT.fullmatch(at) is not None
 
 
 def _slug(title: str) -> str:

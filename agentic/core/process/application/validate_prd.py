@@ -11,18 +11,29 @@ pair, its limit and the return are the same; which PM runs is the type's call.""
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import rules, spec_approval
 from ..domain.roles import PAIR_PM_PA, PM, PM_BUG, Role
 from ..domain.schemas import VerdictWithSpecDraft
 from ..domain.spec_brief import DRAFT_BLOCK
+from ..domain.spec_delivery import (
+    DRAFT_PREVIEW_PATH,
+    approval_instant,
+    draft_body_refusal,
+    draft_reading,
+    draft_refusal_message,
+    draft_text,
+    instant_ok,
+    login_ok,
+)
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from . import spec_draft
 from .checkouts import SetupFailed, task_checkout_in_thread
-from .ports import Ports
-from .run_role import finish, run_role
+from .ports import Checkout, Ports
+from .run_role import Check, finish, run_role
 
 
 async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -38,7 +49,7 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         role,
         cfg,
         ports,
-        check=ports.knowledge.approval_check(state.get("type", "")),
+        check=_check(state, task, cfg, ports),
         cwd=task.path,
         remaining_changes=remaining,
         # `tiers` is run_role's slot for a system-written section appended after the playbook (its
@@ -97,3 +108,43 @@ def draft_section(state: TaskState, ports: Ports) -> str:
     """The constant section that asks PM for the Spec body: the block when a draft is due
     (`rules.spec_fallback_due`), empty otherwise, so every other prompt is what it was."""
     return ports.prompts.spec_block(DRAFT_BLOCK) if rules.spec_fallback_due(state) else ""
+
+
+def _check(state: TaskState, task: Checkout, cfg: Configuration, ports: Ports) -> Check:
+    """`run_role`'s check: the knowledge's approval check as it is, and, only when a draft Spec is
+    due (`rules.spec_fallback_due`), that check followed by the draft pre-check."""
+    approval = ports.knowledge.approval_check(state.get("type", ""))
+    if not rules.spec_fallback_due(state):
+        return approval
+    return _with_draft_check(approval, task, cfg, ports)
+
+
+def _with_draft_check(approval: Check, task: Checkout, cfg: Configuration, ports: Ports) -> Check:
+    """`approval`, then a synchronous check of the draft body PM approved, so a body `deliver`
+    would refuse goes back to PM once, with the reason, before the verdict counts. It raises
+    `ValueError` (what `run_role` retries on) with the fixed sentence of the cause. The preview of
+    the draft approved by the owner runs only with a well-formed `owner_login` and clock; without
+    them it is skipped, never an error. Nothing is read from the checkout and nothing is written."""
+    validator = ports.spec_validator
+    login = cfg.owner_login if login_ok(cfg.owner_login) else None
+
+    def check(data: dict[str, Any]) -> None:
+        approval(data)
+        if validator is None or data.get("verdict") != "approved":
+            return
+        body = data.get("spec_draft")
+        cause = draft_body_refusal(body)
+        if cause is None and isinstance(body, str):
+            text = draft_text(body)
+            draft = validator.validate(text, DRAFT_PREVIEW_PATH, task.base, None, login)
+            preview = None
+            instant = approval_instant(ports.now())
+            if login is not None and instant_ok(instant):
+                approved = spec_approval.approve(text, login, instant)
+                preview = validator.validate(approved, DRAFT_PREVIEW_PATH, task.base, None, login)
+            reading = draft_reading(draft, preview)
+            cause = reading.cause
+        if cause is not None:
+            raise ValueError(draft_refusal_message(cause))
+
+    return check

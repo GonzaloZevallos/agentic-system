@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.application.checkouts import task_checkout_in_thread
 from agentic.core.process.application.ports import RawResult, Upstream
+from agentic.core.process.application.spec_draft import deliver
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain.spec_delivery import (
     body_sha256,
@@ -19,6 +21,7 @@ from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
+    CommittingWorkspace,
     FakeSpecValidator,
     MemoryWorkspace,
     ScriptedRunner,
@@ -79,7 +82,7 @@ def ports_for(*results: RawResult, validator=None, workspace=None, now: str = NO
     return memory_ports(
         ScriptedRunner(pm=list(results)),
         spec_validator=validator,
-        workspace=workspace,
+        workspace=workspace if workspace is not None else CommittingWorkspace(),
         now=lambda: now,
     )
 
@@ -96,6 +99,7 @@ async def test_an_approved_valid_draft_is_written_committed_and_recorded(root, c
         "outcome": "written",
         "path": DRAFT,
         "sha256": body_sha256(text),
+        "commit": f"{2:040x}",
     }
     assert "spec" not in patch  # a draft is not a spec delivery
     assert "spec" not in apply(STATE, patch)
@@ -264,7 +268,7 @@ async def test_a_recorded_path_that_is_not_a_spec_path_is_not_followed(root, cfg
 
 
 async def test_a_name_taken_in_the_upstream_gets_the_task_id(root, cfg):
-    workspace = MemoryWorkspace()
+    workspace = CommittingWorkspace()
     workspace.upstream_answer = Upstream("origin/master", "f" * 40, None)
     workspace.files[("f" * 40, DRAFT)] = "---\nstatus: approved\n---\nsomeone else's\n"
     ports = ports_for(
@@ -279,7 +283,7 @@ async def test_a_name_taken_in_the_checkout_gets_the_task_id(root, cfg):
     # Someone else's file, already in the base: not this task's own draft.
     (root / "docs/specs").mkdir(parents=True)
     (root / DRAFT).write_text("---\nstatus: approved\n---\nothers\n", encoding="utf-8")
-    workspace = MemoryWorkspace()
+    workspace = CommittingWorkspace()
     workspace.files[("base0", DRAFT)] = "---\nstatus: approved\n---\nothers\n"
     ports = ports_for(
         returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace
@@ -287,3 +291,56 @@ async def test_a_name_taken_in_the_checkout_gets_the_task_id(root, cfg):
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"]["path"] == TAKEN_AS
     assert (root / DRAFT).read_text(encoding="utf-8").endswith("others\n")
+
+
+async def test_a_draft_committed_twice_records_the_second_commit_and_hash(root, cfg):
+    ports = ports_for(validator=FakeSpecValidator("spec_unapproved"))
+    task = await task_checkout_in_thread(STATE, cfg, ports)
+    first = deliver(STATE, {"spec_draft": BODY}, task, cfg, ports)
+    again = BODY + "\nMore.\n"
+    second = deliver(
+        {**STATE, "spec_draft": first}, {"spec_draft": again}, task, cfg, ports
+    )
+    assert first["outcome"] == second["outcome"] == "written"
+    assert first["path"] == second["path"] == DRAFT
+    assert first["commit"] == f"{1:040x}" and second["commit"] == f"{2:040x}"
+    assert second["sha256"] == body_sha256(draft_text(again)) != first["sha256"]
+    # Each commit still holds the text it recorded.
+    workspace = ports.workspace
+    assert workspace.show(second["commit"], DRAFT) == draft_text(again)
+    assert workspace.show(first["commit"], DRAFT) == draft_text(BODY)
+
+
+async def test_a_commit_that_added_nothing_records_the_head_that_holds_the_text(root, cfg):
+    sha = "9" * 40
+    workspace = CommittingWorkspace(pinned_head=sha)
+    workspace.files[(sha, DRAFT)] = draft_text(BODY)
+    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace)
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {
+        "outcome": "written",
+        "path": DRAFT,
+        "sha256": body_sha256(draft_text(BODY)),
+        "commit": sha,
+    }
+
+
+@pytest.mark.parametrize("held", [None, "---\nstatus: draft\n---\nsomething else\n"])
+async def test_a_head_that_does_not_hold_the_written_text_is_not_recorded(root, cfg, held):
+    sha = "9" * 40
+    workspace = CommittingWorkspace(pinned_head=sha)
+    if held is not None:
+        workspace.files[(sha, DRAFT)] = held
+    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace)
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {"outcome": "invalid"}
+    assert patch["status"] == "definition_ready"
+
+
+async def test_a_symlink_at_the_target_is_invalid(root, cfg):
+    (root / "docs/specs").mkdir(parents=True)
+    (root / DRAFT).symlink_to(root / "elsewhere.md")
+    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"))
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {"outcome": "invalid"}
+    assert not (root / "elsewhere.md").exists()
