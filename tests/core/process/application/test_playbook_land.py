@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.playbook_land import land_playbook
 from agentic.core.process.application.ports import ListedPullRequest
 from agentic.core.process.application.reflect_run import BRANCH
@@ -136,6 +137,7 @@ def test_after_that_merge_the_new_lesson_reaches_the_role_prompt_with_no_human_m
         def merge(
             self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
         ) -> str:
+            pull_request_number(reference)  # the adapter's own strictness, as every double has it
             # The merge brings the head's playbook file to the product checkout, as master does.
             target = product / PATH
             target.parent.mkdir(parents=True)
@@ -387,7 +389,13 @@ def test_the_saved_attempt_follows_next_attempt_across_runs():
     world.tracker.ci_reports = [report(check(None))]
     world.land()
     waiting = world.saved
+    world.tracker.ci_reports = [report(check("FAILURE"))]
+    world.land()
+    again = world.saved
 
     assert (red.verdict, red.cause, red.streak) == ("refuse", "ci_red", 2)
-    assert (waiting.verdict, waiting.cause, waiting.streak) == ("wait", "ci_pending", 2)
-    assert [attempt.head for _, attempt in world.record.saved] == [HEAD] * 3
+    # A wait while a refusal stands keeps that refusal and its streak (next_attempt).
+    assert (waiting.verdict, waiting.cause, waiting.streak) == ("refuse", "ci_red", 2)
+    assert (again.verdict, again.cause, again.streak) == ("refuse", "ci_red", 3)
+    assert pl.land_halted(again)
+    assert [attempt.head for _, attempt in world.record.saved] == [HEAD] * 4
