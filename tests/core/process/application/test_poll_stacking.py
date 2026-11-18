@@ -134,7 +134,14 @@ def test_the_poller_round_gives_its_children_one_memo(tmp_path):
     calls = _count(ports)
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, cfg=_cfg(tmp_path), memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        cfg=_cfg(tmp_path),
+        dry_run=False,
+        memo=StackMemo(),
     )
     assert found == []
     assert calls["issue_state"] == 1
@@ -177,3 +184,168 @@ def test_the_verb_reads_the_parent_once_and_refuses_it_as_unmerged(tmp_path):
     )
     assert "stack_parent_unmerged" in repr(result)
     assert calls["issue_state"] == 1
+
+
+# GH-885: the wait on an unfetchable head, written by the round.
+NOW = datetime(2026, 11, 17, 9, 0, tzinfo=UTC)
+
+
+def _unfetchable(ports, missing: str = PARENT) -> None:
+    ports.workspace.fetch_commit = lambda sha: sha != missing
+
+
+def _round(ports, tmp_path, lock=None, busy=frozenset(), held=False, lands=None, now=NOW):
+    lines: list[str] = []
+    poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        lock or _Locks(),
+        lines,
+        lands,
+        now=now,
+        busy=busy,
+        cfg=_cfg(tmp_path),
+        held=held,
+        dry_run=False,
+        memo=StackMemo(),
+    )
+    return lines
+
+
+def _written(ports, number: int = 5):
+    return ports.documents.closures.get(f"GH-{number}", {}).get("stack_unfetchable", "unwritten")
+
+
+def test_a_stacked_child_with_an_unfetchable_parent_head_writes_since(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    _round(ports, tmp_path)
+    assert _written(ports) == {"head": HEAD, "since": NOW.isoformat()}
+
+
+def test_a_waiting_child_writes_since_and_runs_no_step(tmp_path):
+    ports = _stacked(5, 6)
+    _unfetchable(ports)
+    lands: list = []
+    _round(ports, tmp_path, lands=lands)
+    assert _written(ports, 5) == {"head": HEAD, "since": NOW.isoformat()}
+    assert _written(ports, 6) == {"head": HEAD, "since": NOW.isoformat()}
+    assert lands == []
+
+
+def test_a_second_round_with_the_record_in_place_writes_nothing(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    _round(ports, tmp_path)
+    writes: list = []
+    record = ports.documents.record_closure
+    ports.documents.record_closure = lambda t, v: writes.append(dict(v)) or record(t, v)
+    _round(ports, tmp_path, now=NOW.replace(hour=10))
+    assert not [w for w in writes if "stack_unfetchable" in w]
+    assert _written(ports) == {"head": HEAD, "since": NOW.isoformat()}
+
+
+def test_a_held_round_writes_nothing(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    _round(ports, tmp_path, held=True)
+    assert _written(ports) == "unwritten"
+
+
+def test_a_busy_task_writes_nothing(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    _round(ports, tmp_path, busy=frozenset({"GH-5"}))
+    assert _written(ports) == "unwritten"
+
+
+def test_a_locked_task_writes_nothing(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    _round(ports, tmp_path, lock=_Locks(alive={"GH-5"}))
+    assert _written(ports) == "unwritten"
+
+
+class _LockAppearing(_Locks):
+    """Reads free through the assessment, alive from the first read after it was asked once
+    more: the lock appears between the assessment and the write."""
+
+    def __init__(self):
+        super().__init__()
+        self.asked = 0
+
+    def refusal(self, task_id):
+        self.asked += 1
+        return "held" if self.asked > 1 else None
+
+
+def test_a_lock_appearing_between_assessment_and_write_blocks_the_write(tmp_path):
+    ports = _stacked(5)
+    _unfetchable(ports)
+    lock = _LockAppearing()
+    _round(ports, tmp_path, lock=lock)
+    assert lock.asked >= 2
+    assert _written(ports) == "unwritten"
+
+
+def test_an_escalated_child_with_a_record_writes_null_once_and_nothing_after(tmp_path):
+    record = {"head": HEAD, "since": NOW.isoformat()}
+    ports = _stacked(5, escalated={"class": "questions"}, stack_unfetchable=record)
+    _unfetchable(ports)
+    _round(ports, tmp_path)
+    assert _written(ports) is None
+    ports.documents.closures["GH-5"]["marker"] = 1
+    _round(ports, tmp_path)
+    assert ports.documents.closures["GH-5"] == {"stack_unfetchable": None, "marker": 1}
+
+
+def test_a_document_without_stack_parent_reads_no_heads_and_writes_nothing(tmp_path, monkeypatch):
+    ports = _ports(5)
+    _forbid_stack_facts(monkeypatch)
+    writes: list = []
+    record = ports.documents.record_closure
+    ports.documents.record_closure = lambda t, v: writes.append(dict(v)) or record(t, v)
+    assert _assess(ports).unfetchable is None
+    _round(ports, tmp_path)
+    assert not [w for w in writes if "stack_unfetchable" in w]
+    assert _written(ports) == "unwritten"
+
+
+def test_the_assessment_carries_expiry_only_when_a_head_was_read_missing():
+    record = {"head": HEAD, "since": (NOW - poll.stacking.STACK_UNFETCHABLE_WAIT).isoformat()}
+    missing = _stacked(5, stack_unfetchable=record)
+    _unfetchable(missing)
+    stack = poll.assess_merge(
+        missing,
+        "GH-5",
+        missing.documents.load("GH-5"),
+        5,
+        frozenset(),
+        MASTER,
+        cfg=_cfg(Path("/p")),
+        memo=StackMemo(),
+        now=NOW,
+    ).facts.stack
+    assert (stack.heads_fetched, stack.unfetchable_expired) == (False, True)
+    assert stack.unfetchable_since == record["since"]
+    fetched = _stacked(5, stack_unfetchable=record)
+    stack = _assess(fetched).facts.stack
+    assert (stack.heads_fetched, stack.unfetchable_expired, stack.unfetchable_since) == (
+        True,
+        None,
+        None,
+    )
+
+
+def test_a_failing_write_is_said_in_one_line_and_does_not_end_the_round(tmp_path):
+    ports = _stacked(5, 6)
+    _unfetchable(ports)
+
+    def broken(task_id, values):
+        raise OSError("disk")
+
+    ports.documents.record_closure = broken
+    lines = _round(ports, tmp_path)
+    assert sum("stack_unfetchable not recorded" in line for line in lines) == 2
+    assert any("auto-merge #5" in line for line in lines)

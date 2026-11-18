@@ -39,26 +39,18 @@ classDiagram
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
     class task__StackParent["StackParent"]
+    class task__StackPause["StackPause"]
+    class task__StackRestack["StackRestack"]
+    class task__StackUnfetchable["StackUnfetchable"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
-    class task__TaskState["TaskState"]
-    class task__TrackerActionDone["TrackerActionDone"]
-    class task__TrackerFailure["TrackerFailure"]
-    task__TaskState --> task__StackParent
-    task__TaskState --|> task__TaskInput
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
-  - `task.TaskState` se asocia con `task.InterviewStats`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
-  - `task.TaskState` se asocia con `task.PlanRoute`
+- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
+  - `stacking.ParentLink` se asocia con `task.StackParent`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` se asocia con `task_path.Promotion`
+  - `task.TaskState` hereda de `task.TaskInput`
+  - `task.TaskState` se asocia con `task.StackParent`

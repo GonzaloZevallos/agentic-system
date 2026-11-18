@@ -106,6 +106,11 @@ def closes_line(description: str) -> str:
     return f"Closes #{match.group(1)}" if match else ""
 
 
+def stacked_line(parent: int | None) -> str:
+    """The fixed line a stacked task's pull request carries (GH-897), or `""` without a parent."""
+    return "" if parent is None else f"Stacked on #{parent}: merges only after it."
+
+
 def github_length(text: str) -> int:
     """The unit GitHub's limit is in: UTF-16 code units, so an emoji counts two."""
     return len(text.encode("utf-16-le")) // 2

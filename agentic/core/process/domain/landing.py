@@ -47,6 +47,7 @@ from .task import (
     ReviewScopeRecord,
     ScopeCause,
     SlicesClosedPatch,
+    StackRestack,
     Subtask,
     SubtaskStatus,
     TaskState,
@@ -129,8 +130,9 @@ here: the task is not yet at the landing, and nobody has anything to decide."""
 
 STACK_ESCALATION: dict[rules.MergeRefusal, str] = {
     "stack_parent_unmerged": (
-        "The parent this task is stacked on has not reached the base branch. Merge the parent "
-        "by hand, or relaunch this task from the base branch."
+        "The parent this task is stacked on has not reached the base branch, or a head it "
+        "needs, the parent's or this task's own, can no longer be fetched. Merge the parent by "
+        "hand, or relaunch this task from the base branch."
     ),
     "stack_restack_due": (
         "The parent landed, but taking the base branch into this task's branch did not settle "
@@ -297,6 +299,10 @@ class LandingStep:
     restart_why: RestartWhy | None = None
     # Only on the `escalate` of `ci_unknown_names` (GH-485): the sorted names no check run carries.
     names: tuple[str, ...] = ()
+    # Only on the `escalate` of `stack_parent_unmerged` (GH-885): the `since` of the
+    # unfetchable-head clock that ran out, so a released wait that expires again is asked again on
+    # the same head.
+    stack_since: str | None = None
 
 
 @dataclass(frozen=True)
@@ -688,6 +694,10 @@ def landing_step(
             return step("wait")
         case "stack_parent_unmerged":
             # GH-859: waiting for the parent costs nothing; a slow Head yields by `HEAD_BUDGET`.
+            # GH-885: a head that cannot be fetched is waited on for `STACK_UNFETCHABLE_WAIT` only
+            # (the caller computed `unfetchable_expired`), then it is the stacked escalation.
+            if facts.stack is not None and facts.stack.unfetchable_expired is True:
+                return LandingStep("escalate", refusal, stack_since=facts.stack.unfetchable_since)
             return step("wait")
         case "stack_restack_due":
             # GH-859: one merge of master into the child, never a rebase (the parent's commits
@@ -1291,6 +1301,7 @@ def already_dispatched(
     unstarted: bool = False,
     names: Sequence[str] = (),
     decision_at: str | None = None,
+    stack_since: str | None = None,
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -1309,7 +1320,10 @@ def already_dispatched(
     that recorded the same names, so a new set of wrong names is asked again on the same head. An
     `escalate_adr` is taken as `adr_asked` says (GH-544), and an `apply_adr_decision` only by an
     entry of the same head recorded for the same `decision_at`, or, with no `decision_at`, by the
-    rule's own (`decided_by: rule`, D-be76583a)."""
+    rule's own (`decided_by: rule`, D-be76583a). An `escalate` of
+    `stack_parent_unmerged` that carries `stack_since` (GH-885) is taken when the caller passes no
+    `stack_since` or the entry's own, and not taken for another one: a released wait that ran out
+    again is asked again on the same head. An entry without `stack_since` is taken as before."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -1341,6 +1355,12 @@ def already_dispatched(
             return bool(entry.get("resolved_at"))  # GH-610: asked only once the comment is posted
         if step == "renumber":
             return entry.get("outcome") != "retry"  # GH-611: a transient end is tried again
+        if (
+            step == "escalate"
+            and entry.get("refusal") == "stack_parent_unmerged"
+            and "stack_since" in entry
+        ):
+            return stack_since is None or entry["stack_since"] == stack_since
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -1622,6 +1642,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "head_after",
         "api_break_decided",
         "rejected",
+        "stack_since",  # GH-885: the key `already_dispatched` reads must survive a rewrite
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
@@ -1635,6 +1656,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["cost_usd"] = float(cost)
     if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
         out["cost_base"] = float(base)
+    if isinstance(runs_base := raw.get("runs_base"), int) and not isinstance(runs_base, bool):
+        out["runs_base"] = runs_base
     if isinstance(checks := raw.get("checks"), list) and all(isinstance(c, str) for c in checks):
         out["checks"] = [c for c in checks if isinstance(c, str)]
     if isinstance(spawns := raw.get("resume_spawns"), int) and not isinstance(spawns, bool):
@@ -2506,13 +2529,19 @@ def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
 
 
 def with_cost_base(
-    entries: Sequence[Mapping[str, object]], head: str, step: str, cost_base: float
+    entries: Sequence[Mapping[str, object]],
+    head: str,
+    step: str,
+    cost_base: float,
+    runs_base: int,
 ) -> list[LandingEntry]:
-    """`entries` with `cost_base` set on the last entry, when it is keyed `(head, step)`;
-    an earlier entry is never written to (GH-267)."""
+    """`entries` with `cost_base` and `runs_base` (the task's `len(runs)` read with the same
+    state as the cost, GH-897) set on the last entry, when it is keyed `(head, step)`; an earlier
+    entry is never written to (GH-267)."""
     out = [entry_of(entry) for entry in entries]
     if out and out[-1].get("head") == head and out[-1].get("step") == step:
         out[-1]["cost_base"] = cost_base
+        out[-1]["runs_base"] = runs_base
     return out
 
 
@@ -2543,6 +2572,59 @@ def close_unsynced(
     out[-1]["lacks"] = lacks
     out[-1]["cost_usd"] = _spent_since_base(out[-1], cost_now)
     return out
+
+
+def restack_row(
+    entry: Mapping[str, object], runs: Sequence[Mapping[str, object]], stacked: bool
+) -> StackRestack | None:
+    """The restack a closed `sync_master` entry records for a stacked task (GH-897), or `None`
+    for a task that is not stacked, another step or an entry still open. `at` is the entry's own
+    close stamp, `cost_usd` what it recorded. `tokens` is the sum of the runs' `tokens` over
+    `runs[runs_base:n]`, `n = len(runs)` read once; with `runs_base` absent, negative or past `n`
+    the key is left out ("not measured"), and a valid empty window gives `{}`."""
+    if not stacked or entry.get("step") != "sync_master" or not rules.entry_closed(entry):
+        return None
+    at = entry.get("resolved_at") or entry.get("closed_at")
+    upstream = entry.get(UPSTREAM_KEY)
+    cost = entry.get("cost_usd")
+    row: StackRestack = {
+        "at": at if isinstance(at, str) else "",
+        "upstream": upstream if isinstance(upstream, str) else "",
+        "conflict": entry.get("refusal") in CONFLICTING_SYNC_REFUSALS,
+        "cost_usd": float(cost)
+        if isinstance(cost, int | float) and not isinstance(cost, bool)
+        else 0.0,
+    }
+    n = len(runs)
+    base = entry.get("runs_base")
+    if isinstance(base, int) and not isinstance(base, bool) and 0 <= base <= n:
+        tokens: dict[str, int] = {}
+        for run in runs[base:n]:
+            counted = run.get("tokens")
+            for key, count in counted.items() if isinstance(counted, Mapping) else ():
+                tokens[key] = tokens.get(key, 0) + count
+        row["tokens"] = tokens
+    return row
+
+
+def restack_close(
+    before: Sequence[Mapping[str, object]],
+    after: Sequence[Mapping[str, object]],
+    state: Mapping[str, object],
+    stacked: bool,
+) -> StackRestack | None:
+    """The row for the sync that closed between `before` and `after` (GH-897): `restack_row` of
+    `after`'s last entry, only when `before`'s last entry was open and `after`'s is closed. The
+    one caller of `restack_row` outside tests; `state` is the one `cost_usd` was read from."""
+    if (
+        not before
+        or not after
+        or rules.entry_closed(before[-1])
+        or not rules.entry_closed(after[-1])
+    ):
+        return None
+    runs = state.get("runs", [])
+    return restack_row(after[-1], runs if isinstance(runs, list) else [], stacked)
 
 
 def _spent_since_base(entry: LandingEntry, cost_now: float) -> float:

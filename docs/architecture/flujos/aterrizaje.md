@@ -58,8 +58,10 @@ sequenceDiagram
    Tres rechazos son de una tarea apilada (GH-855, GH-859; `agentic/core/process/domain/stacking.py:refusal`
    es su única tabla de verdad; `stacking.facts_of` arma los hechos sin leer y no da nada para un
    documento sin `stack_parent`, que no hace ninguna lectura y decide como siempre): `stack_parent_unmerged` (el padre no llegó al upstream, o
-   no se pudo leer la ascendencia) da `wait`, sin tope propio: una Cabeza lenta cede por
-   `HEAD_BUDGET`; `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
+   no se pudo leer la ascendencia) da `wait`: una Cabeza lenta cede por `HEAD_BUDGET`; si una
+   cabeza que necesita (la del padre o la del propio hijo) no se puede traer, la espera vence a las
+   12 h (`stacking.py:STACK_UNFETCHABLE_WAIT`, GH-885) y `landing_step` da `escalate` (clase
+   `questions`); `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
    `sync_master`, un solo merge de master, nunca un rebase; `stack_base_orphaned` (registro ilegible,
    o padre reconstruido, cerrado como NOT_PLANNED o fusionado con squash) es del humano y da
    `none`, con una frase fija en el comentario del rechazo. Un padre fusionado con squash o rebase
@@ -68,6 +70,11 @@ sequenceDiagram
    `escalate`, con un texto fijo por rechazo (`landing.py:STACK_ESCALATION`), sin palabras del
    padre, del issue ni del registro. Tampoco corta un slice: `slice_or_restart` responde
    `no_clean_slice` sin mirar ninguna unidad, y `slice_facts` de una tarea apilada nunca mergea.
+   La entrada `escalate` de `stack_parent_unmerged` (GH-885) lleva `stack_since`, el `since` del reloj
+   `stack_unfetchable` por el que se pidió, y `landing.already_dispatched` la toma como ya
+   despachada sólo para ese reloj: tras liberarla con la cabeza todavía sin poder traerse, el reloj
+   nuevo vuelve a escalar sobre la misma cabeza. Quien no pasa `stack_since` (`merge`, `resume`) la
+   lee siempre como tomada; una entrada sin `stack_since` se toma como antes.
    La liberación de ese escalado por restack agotado llega con una parte posterior; mientras tanto la
    salida es mergear a mano o relanzar.
    Los hechos del hijo apilado los lee el poller (GH-860): `agentic/core/process/application/poll.py:assess_merge`
@@ -83,6 +90,22 @@ sequenceDiagram
    (`agentic/core/process/application/merge.py:merge_task`, GH-876) lee los mismos hechos a través
    de `stack_facts` con su propio `StackMemo` por llamada, compartido por sus nuevas decisiones,
    bajo la misma guarda menos el término `unlandable`.
+   La espera de una cabeza que no se puede traer (GH-885) la corre el poller: `stack_facts` fija
+   `heads_fetched` según las dos comprobaciones de existencia; `poll.py:assess_merge` recibe el `now`
+   de la ronda (lo pasa `evaluate_landing_order`) y calcula una vez `stacking.unfetchable_patch` para
+   un hijo apilado, con o sin sonda, y la lleva en `MergeAssessment.unfetchable` (`None` si no cambia
+   nada); solo cuando `heads_fetched` es `False` llena `unfetchable_expired` y `unfetchable_since`
+   desde el registro resultante, que `landing_step` lee. `poll.py:gather_merges` escribe el parche
+   con `poll.py:_record_unfetchable` y `record_closure` en el registro `stack_unfetchable`
+   `{head, since}` (clave de `document.py:RECORD_KEYS`), solo en una ronda que no está retenida y
+   nunca para una tarea ocupada o con lock, que se comprueba otra vez al escribir; un documento sin
+   `stack_parent` no lee ni escribe nada. Al vencer la espera, `landing_step` devuelve `escalate`
+   con `LandingStep.stack_since` (el `since` del registro); `agentic/core/process/application/landing.py` lo escribe como
+   `stack_since` en la entrada `escalate` de `landing` (`LandingEntry.stack_since`), y
+   `poll.py:_landing_step` y `landing_plan.py:pending` lo pasan a `landing.py:already_dispatched`,
+   que cuenta esa entrada como tomada solo si el `stack_since` pedido es `None` o igual al suyo. Así
+   una espera liberada por una persona, con la cabeza aún sin poder traerse, empieza otra de 12 h y
+   escala de nuevo, mientras `merge.py` y `resume.py`, que no pasan el valor, la leen como tomada.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

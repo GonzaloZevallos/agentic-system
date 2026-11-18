@@ -56,7 +56,9 @@ from ..domain.task import (
     PullRequest,
     TaskState,
     add_head_yield,
+    add_tracker_failures,
     apply,
+    refusal_noted_record,
 )
 from . import (
     adr_collision,
@@ -90,7 +92,7 @@ from .ports import (
     TrackerTimedOut,
     Upstream,
 )
-from .refusal_note import read_comments
+from .refusal_note import POLLER_NOTED, note_refusal, read_comments, said
 from .registration import REGISTER_WAIT_S, await_registration
 from .stack_facts import StackMemo, stack_facts
 
@@ -506,6 +508,7 @@ def _landing_step(
         step.kind,
         facts.current_master,
         names=step.names,
+        stack_since=step.stack_since,
     ):
         return None
     return step
@@ -669,6 +672,8 @@ class MergeAssessment:
     conflict_unread: bool = False
     # Where a `True` conflict was read (GH-326), for the log line only.
     conflict_source: ConflictSource | None = None
+    # GH-885: `stacking.unfetchable_patch` of this assessment, `None` when it changes nothing.
+    unfetchable: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +694,7 @@ def assess_merge(
     *,
     cfg: Configuration | None,
     memo: StackMemo,
+    now: datetime | None = None,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
@@ -777,6 +783,13 @@ def assess_merge(
             stack=stack_facts(ports, cfg, facts.stack, current_master, facts.pr_head, memo),
         )
         decision = rules.auto_merge_decision(gated(facts))
+    clock: dict[str, object] | None = None
+    if facts.stack is not None:
+        # GH-885: the wait on an unfetchable head. The patch is computed once, with or without the
+        # probe (an escalated child's record is cleared even when nothing was read); the expiry
+        # facts are filled only in a turn where a head was read missing. `landing_step` reads them,
+        # the decision does not.
+        clock, facts = _unfetchable_clock(raw, facts, now or datetime.now(UTC))
     unread = False
     source: ConflictSource | None = None
     if (
@@ -804,7 +817,38 @@ def assess_merge(
             facts = with_recorded_red(facts)
             decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
-        facts, decision, report, pull_request, unread, source if facts.conflicts else None
+        facts,
+        decision,
+        report,
+        pull_request,
+        unread,
+        source if facts.conflicts else None,
+        unfetchable=clock or None,
+    )
+
+
+def _unfetchable_clock(
+    raw: TaskState, facts: rules.MergeFacts, now: datetime
+) -> tuple[dict[str, object], rules.MergeFacts]:
+    """`stacking.unfetchable_patch` for a stacked child, and `facts` with the expiry read from the
+    record the patch leaves, only when `heads_fetched is False` (the only turn `landing_step`
+    asks it). The patch is `{}` when nothing changes."""
+    stack = facts.stack
+    if stack is None:
+        return {}, facts
+    patch = stacking.unfetchable_patch(raw, stack, facts.pr_head, now)
+    if stack.heads_fetched is not False:
+        return patch, facts
+    after = apply(raw, patch) if patch else raw
+    record = stacking.parse_unfetchable(after)
+    since = None if record is None or isinstance(record, stacking.Unreadable) else record["since"]
+    return patch, replace(
+        facts,
+        stack=replace(
+            stack,
+            unfetchable_expired=stacking.unfetchable_expired(record, now),
+            unfetchable_since=since,
+        ),
     )
 
 
@@ -1166,7 +1210,7 @@ def evaluate_landing_order(
             continue
         try:
             assessed = assess_merge(
-                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo
+                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo, now=now
             )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
@@ -1353,6 +1397,95 @@ def _record_turn(
     return True
 
 
+def _record_unfetchable(
+    ports: Ports,
+    entry: OrderEntry,
+    busy: frozenset[str],
+    lock: RunLock,
+    out: list[str],
+) -> bool:
+    """The one writer of `stack_unfetchable` (GH-885), through `record_closure`: what
+    `stacking.unfetchable_patch` made of this round's assessment, when it is not `{}`. The task is
+    checked again at write time (a child or a lock that appeared since the assessment owns the
+    document now). A write that fails is one line and never ends the round: the patch is computed
+    again next round. True when written."""
+    assessed = entry.outcome
+    if not isinstance(assessed, MergeAssessment) or assessed.unfetchable is None:
+        return False
+    if entry.task_id in busy or lock.refusal(entry.task_id) is not None:
+        return False
+    try:
+        ports.documents.record_closure(entry.task_id, assessed.unfetchable)
+    except (ValueError, OSError) as exc:
+        out.append(f"agentic: poll: #{entry.number} -> stack_unfetchable not recorded: {exc}")
+        return False
+    return True
+
+
+def _already_noted(raw: TaskState, head: str, reason: str) -> bool:
+    """Whether the document's `refusal_noted` is this (head, reason): the head by
+    `rules.same_commit`, the reason by equality. An absent or unreadable record is not."""
+    stored = raw.get("refusal_noted")
+    if not isinstance(stored, Mapping):
+        return False
+    return stored.get("reason") == reason and rules.same_commit(_text(stored.get("head")), head)
+
+
+def _note_refusal(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    facts: rules.MergeFacts,
+    reason: rules.MergeRefusal | None,
+    turn: Turn,
+    now: datetime,
+    out: list[str],
+    *,
+    acts: bool,
+    dry_run: bool,
+) -> None:
+    """GH-885: comments one of the four `POLLER_NOTED` refusals on the issue once per
+    (head, reason) and records it in `refusal_noted`. `acts` is the round's: not held and the
+    task not at work. The issue thread is the memory (`said`: any earlier comment of this head
+    and reason, ever; the verb's own rule skips only after the LAST refusal comment, so A, B, A
+    posts twice here); the record only avoids the read, so a pair unchanged costs no tracker
+    call. A failed read posts and records nothing; a failed post lands in `tracker_failures`
+    and records nothing; the next round tries again. The poller never posts a `Landing:` line:
+    the closing sentence is `refusal_note.closing_for` over the step the table gives."""
+    head = facts.pr_head
+    if not acts or dry_run or reason is None or reason not in POLLER_NOTED or head is None:
+        return
+    if _already_noted(raw, head, reason):
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        out.append(f"agentic: poll: auto-merge #{number} -> refusal note unread")
+        return
+    bodies = [comment.body for comment in comments]
+    failure = None
+    if not said(bodies, head, reason):
+        step = landing_plan.step_for(raw, reason, facts, turn=turn)
+        failure = note_refusal(ports, task_id, head, reason, facts, step, bodies)
+    try:
+        if failure is not None:
+            # A fresh load: a row written since `raw` was read is not lost by this write.
+            stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+            rows = add_tracker_failures(
+                stored if isinstance(stored, list) else [], [failure.record()]
+            )
+            ports.documents.record_closure(task_id, {"tracker_failures": rows})
+            return
+        at = now.astimezone(UTC).isoformat()
+        ports.documents.record_closure(
+            task_id, {"refusal_noted": refusal_noted_record(head, reason, at)}
+        )
+    except (ValueError, OSError):
+        out.append(f"agentic: poll: auto-merge #{number} -> refusal note not recorded")
+        return
+    out.append(f"agentic: poll: auto-merge #{number} -> refusal noted: {reason}")
+
+
 def gather_merges(
     ports: Ports,
     eval_set: frozenset[int] | None,
@@ -1372,6 +1505,7 @@ def gather_merges(
     integrating: frozenset[str] = frozenset(),
     *,
     memo: StackMemo,
+    dry_run: bool,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1412,12 +1546,13 @@ def gather_merges(
     round_ = evaluate_landing_order(
         ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating, memo=memo
     )
+
+    def at_work(task_id: str) -> bool:
+        return task_id in busy or lock.refusal(task_id) is not None
+
     if not held:
         # GH-681, informative: the lane's record, never read by a decision. Recording first, so
         # clearing never takes an admission a merge followed; a task at work is never written.
-        def at_work(task_id: str) -> bool:
-            return task_id in busy or lock.refusal(task_id) is not None
-
         landing_lane.record_lane_merges(
             ports, [entry.task_id for entry in round_.entries], now, at_work, out
         )
@@ -1433,6 +1568,7 @@ def gather_merges(
         assessed = entry.outcome
         if not held:
             _record_turn(ports, entry, round_, now, out)
+            _record_unfetchable(ports, entry, busy, lock, out)
         if assessed is None:
             continue  # busy or locked: a child already works on it
         if isinstance(assessed, StackUnreadable):
@@ -1501,6 +1637,19 @@ def gather_merges(
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"
             out.append(line)
+            _note_refusal(
+                ports,
+                task_id,
+                number,
+                raw,
+                facts,
+                decision.reason,
+                turn,
+                now,
+                out,
+                acts=not held and not at_work(task_id),
+                dry_run=dry_run,
+            )
             if lands is not None and decision.reason is not None and turn == "head":
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
@@ -3012,6 +3161,7 @@ def run_once(
                 resumes,
                 integrating=integrating,
                 memo=stack_memo,
+                dry_run=dry_run,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

@@ -49,7 +49,9 @@ def test_a_conflicting_pull_request_with_no_ci_is_refused_on_the_first_poll(tmp_
 
     lands: list = []
     lines: list[str] = []
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
+    found = poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), lines, lands, dry_run=False, memo=StackMemo()
+    )
 
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_conflict (github)"]

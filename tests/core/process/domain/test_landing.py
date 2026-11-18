@@ -511,6 +511,12 @@ def test_entry_of_keeps_every_key_landing_entry_declares():
     assert set(kept) == set(hints)
 
 
+def test_entry_of_keeps_stack_since_only_as_text():
+    since = "2026-11-17T10:00:00+00:00"
+    assert landing.entry_of({"step": "escalate", "stack_since": since})["stack_since"] == since
+    assert "stack_since" not in landing.entry_of({"step": "escalate", "stack_since": 3})
+
+
 def test_entry_of_drops_a_red_checks_that_is_not_shaped_like_one():
     good = [{"name": "tests", "tail": ["a"], "recovered": False}]
     read = [{**good[0], "timed_out": False}]  # GH-585: an entry with no `timed_out` reads False
@@ -534,7 +540,7 @@ _RESUME = {"resume_spawns": 1, "resume_spawned_at": "2026-10-14T12:00:00+00:00"}
 
 def test_with_cost_base_preserves_the_resume_keys():
     entries = [{"head": HEAD, "step": "re_review", **_RESUME, "cost_base": 1.0}]
-    (out,) = landing.with_cost_base(entries, HEAD, "re_review", 2.5)
+    (out,) = landing.with_cost_base(entries, HEAD, "re_review", 2.5, 0)
     assert out["cost_base"] == 2.5
     assert out["resume_spawns"] == 1
     assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
@@ -1099,12 +1105,12 @@ def test_with_cost_base_writes_only_the_last_entry_and_only_when_it_matches():
         {"head": HEAD, "step": "sync_master", "cost_usd": 1.0},
         {"head": HEAD, "step": "sync_master"},
     ]
-    first, last = landing.with_cost_base(entries, HEAD, "sync_master", 7.0)
+    first, last = landing.with_cost_base(entries, HEAD, "sync_master", 7.0, 2)
     assert "cost_base" not in first
     assert last["cost_base"] == 7.0
-    untouched = landing.with_cost_base(entries, HEAD, "fix", 7.0)
+    untouched = landing.with_cost_base(entries, HEAD, "fix", 7.0, 2)
     assert all("cost_base" not in e for e in untouched)
-    assert landing.with_cost_base([entries[0]], "z" * 40, "sync_master", 7.0) == [entries[0]]
+    assert landing.with_cost_base([entries[0]], "z" * 40, "sync_master", 7.0, 2) == [entries[0]]
 
 
 def test_the_second_unsynced_pass_for_one_upstream_is_the_diagnose():
@@ -1643,3 +1649,72 @@ def test_a_slice_of_a_stacked_document_never_merges():
     for bad in (None, "GH-7", {**record, "head": "short"}, {**record, "issue": True}):
         unreadable = _slice_decision(_slice_document(stack_parent=bad))
         assert unreadable == rules.MergeDecision("refuse", "stack_base_orphaned")
+
+
+# --- the bounded wait on an unfetchable stacked head (GH-885) -------------------------------
+
+SINCE = "2026-11-17T08:00:00+00:00"
+
+
+def _unfetchable(expired, since=SINCE):
+    return _stack_facts(heads_fetched=False, unfetchable_expired=expired, unfetchable_since=since)
+
+
+def _unmerged(stack, turn="head") -> LandingStep:
+    return landing.landing_step(
+        "stack_parent_unmerged", _facts(stack=stack), _spent(waited_s=1e6), (), turn=turn
+    )
+
+
+def test_an_unfetchable_head_waits_before_the_expiry_and_escalates_after_it():
+    assert _unmerged(_unfetchable(False)).kind == "wait"
+    assert _unmerged(_unfetchable(None)).kind == "wait"
+    assert _unmerged(_stack_facts()).kind == "wait"
+    assert _unmerged(_unfetchable(True)) == LandingStep(
+        "escalate", "stack_parent_unmerged", stack_since=SINCE
+    )
+
+
+def test_a_waiting_task_gets_a_wait_even_when_its_wait_expired():
+    assert _unmerged(_unfetchable(True), turn="waiting") == LandingStep(
+        "wait", "stack_parent_unmerged"
+    )
+
+
+def test_an_expired_wait_never_escalates_another_refusal():
+    step = landing.landing_step(
+        "stack_restack_due", _facts(stack=_unfetchable(True)), _spent(), (), turn="head"
+    )
+    assert step.kind == "sync_master" and step.stack_since is None
+
+
+def _stack_entry(since=SINCE, **over):
+    base = {
+        "head": HEAD,
+        "step": "escalate",
+        "refusal": "stack_parent_unmerged",
+        "stack_since": since,
+    }
+    return {**base, **over}
+
+
+def test_an_escalation_of_one_clock_is_not_taken_by_another():
+    other = "2026-11-18T08:00:00+00:00"
+    entries = [_stack_entry()]
+    assert not landing.already_dispatched(entries, HEAD, "escalate", MASTER, stack_since=other)
+    assert landing.already_dispatched(entries, HEAD, "escalate", MASTER, stack_since=SINCE)
+    # A caller that passes no clock never escalates twice.
+    assert landing.already_dispatched(entries, HEAD, "escalate", MASTER)
+
+
+def test_an_entry_without_stack_since_is_taken_as_before():
+    entry = _stack_entry()
+    del entry["stack_since"]
+    assert landing.already_dispatched([entry], HEAD, "escalate", MASTER, stack_since=SINCE)
+    assert landing.already_dispatched([entry], HEAD, "escalate", MASTER)
+
+
+def test_the_stack_escalation_text_names_an_unfetchable_head_and_no_free_text():
+    text = landing.STACK_ESCALATION["stack_parent_unmerged"]
+    assert "can no longer be fetched" in text and "base branch" in text
+    assert "merge the parent by hand" in text.lower()

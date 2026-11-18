@@ -70,7 +70,9 @@ def _doc(ports):
 def _candidates(ports) -> list[int]:
     from tests.core.process.application.test_poll import _Locks
 
-    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], memo=StackMemo())
+    return poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], dry_run=False, memo=StackMemo()
+    )
 
 
 def test_an_outside_finding_files_one_needs_triage_follow_up_and_the_next_decision_merges(tmp_path):
@@ -1419,7 +1421,15 @@ def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_p
 
     lands: list[rules.LandCandidate] = []
     poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT, memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands=lands,
+        now=LAST_AT,
+        dry_run=False,
+        memo=StackMemo(),
     )
 
     assert lands == [rules.LandCandidate(5, "land_model")]
@@ -1433,7 +1443,15 @@ def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
 
     lands: list[rules.LandCandidate] = []
     poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT, memo=StackMemo()
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        [],
+        lands=lands,
+        now=LAST_AT,
+        dry_run=False,
+        memo=StackMemo(),
     )
 
     assert lands == []
@@ -1845,6 +1863,7 @@ def _round(ports, tmp_path, now):
         lands=lands,
         now=now,
         cfg=_cfg(tmp_path),
+        dry_run=False,
         memo=StackMemo(),
     )
     return lands

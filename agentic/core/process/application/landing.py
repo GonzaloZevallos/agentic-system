@@ -327,6 +327,7 @@ def _land(
         unstarted=landing_rules.landing_pass(current) == "unstarted",
         names=step.names,
         decision_at=decision_at,
+        stack_since=step.stack_since,
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -360,6 +361,10 @@ def _land(
         entry["checks"] = list(dict.fromkeys(verdict.red_names if verdict else ()))
         if step.names:
             entry["names"] = list(step.names)
+        if step.stack_since is not None:
+            # GH-885: the unfetchable-head clock this escalation was asked for, so a released
+            # wait that runs out again is asked again (`already_dispatched`).
+            entry["stack_since"] = step.stack_since
         if upstream.sha is not None:
             entry[UPSTREAM_KEY] = upstream.sha
         if step.refusal == "ci_no_verdict":

@@ -56,7 +56,15 @@ def _plan(ports, now: datetime, master: str = MASTER) -> rules.PollPlan:
     """What the next round decides: `gather_merges` splits the backoff from the merges."""
     backed_off: list[int] = []
     merges = poll.gather_merges(
-        ports, frozenset(), master, _Locks(), [], now=now, backed_off=backed_off, memo=StackMemo()
+        ports,
+        frozenset(),
+        master,
+        _Locks(),
+        [],
+        now=now,
+        backed_off=backed_off,
+        dry_run=False,
+        memo=StackMemo(),
     )
     return rules.poll_plan(
         closes=[],
@@ -116,6 +124,7 @@ def test_the_refusal_is_not_honoured_once_the_head_moves(tmp_path):
         lines,
         now=NOW + timedelta(minutes=5),
         backed_off=backed_off,
+        dry_run=False,
         memo=StackMemo(),
     )
 

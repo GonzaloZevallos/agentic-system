@@ -52,6 +52,7 @@ def _round(ports, minutes: float, **more):
         _Locks(),
         lines,
         now=T0 + timedelta(minutes=minutes),
+        dry_run=False,
         memo=StackMemo(),
         **more,
     )

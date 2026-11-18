@@ -119,7 +119,11 @@ def _reopen_and_resume(
     then the resume. `landing_sync.reopen` leaves `changes_requested` alone."""
     reopened = landing_sync.reopen(raw, context.step.units, reason, category, "returned")
     marked = landing_rules.with_cost_base(
-        landing_plan.all_entries(raw), context.head, context.step.kind, raw.get("cost_usd", 0.0)
+        landing_plan.all_entries(raw),
+        context.head,
+        context.step.kind,
+        raw.get("cost_usd", 0.0),
+        len(raw.get("runs", [])),
     )
     context.ports.documents.save({**reopened, "landing": marked})
     landing_sync.record_landing(context, marked)

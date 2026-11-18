@@ -395,3 +395,30 @@ def classify(
             )
         ],
     )
+
+
+_GRAVITY: Mapping[str, int] = MappingProxyType({"matches": 0, "unverified": 1, "departs": 2})
+
+
+def merge_checks(ux: Sequence[DrawingCheck], ui: Sequence[DrawingCheck]) -> list[DrawingCheck]:
+    """The checks of the two final leads as one row per `ref` (the image): the gravest verdict
+    wins, `departs` over `unverified` over `matches`, whatever the order of the arguments; at
+    equal gravity the first seen stays. The only place that decides which verdict wins."""
+    merged: dict[str, DrawingCheck] = {}
+    for check in (*ux, *ui):
+        held = merged.get(check.ref)
+        if held is None or _GRAVITY[check.verdict] > _GRAVITY[held.verdict]:
+            merged[check.ref] = check
+    return list(merged.values())
+
+
+def fix_pass_rows(
+    state: task.TaskState, outcomes: Mapping[str, Outcome]
+) -> list[task.DepartureRecord]:
+    """The rows of the `fix_due` outcomes with `fix_passes` at least 1: the return that asks for
+    the fix is its first pass, so the next rejected pass of the row is `return_due`."""
+    return [
+        task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+        for row in state.get("drawing_departures", [])
+        if outcomes.get(row["key"]) == "fix_due"
+    ]

@@ -1,6 +1,8 @@
 """GH-859: the stacking truth table and the `stack_parent` parser, pure. Each row is a record or a
 `StackFacts` built by hand and the one answer it must give."""
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import pytest
@@ -10,8 +12,12 @@ from agentic.core.process.domain.stacking import (
     Absent,
     StackFacts,
     Unreadable,
+    parent_state_of,
     parse_stack_parent,
+    parse_unfetchable,
     refusal,
+    unfetchable_expired,
+    unfetchable_patch,
 )
 from agentic.core.process.domain.task import StackParent
 
@@ -211,3 +217,323 @@ def test_facts_of_an_unreadable_record_has_no_record(value):
 )
 def test_parent_state_of(state, closing, expected):
     assert stacking.parent_state_of(state, closing) == expected
+
+
+# --- the unfetchable-head clock (GH-885) -----------------------------------------------------
+
+PR_HEAD = "b" * 40
+OTHER_HEAD = "c" * 40
+T0 = datetime(2026, 11, 17, 8, 0, tzinfo=UTC)
+WAIT = timedelta(hours=12)
+
+
+def _record_at(since: datetime = T0, head: str = PR_HEAD) -> dict[str, str]:
+    return {"head": head, "since": since.isoformat()}
+
+
+def _fetched(
+    value: bool | None, state: Literal["open", "closed", "unknown"] = "open"
+) -> StackFacts:
+    return replace(_facts(state), heads_fetched=value)
+
+
+def _start(now: datetime = T0, head: str = PR_HEAD) -> dict[str, Any]:
+    return {"stack_unfetchable": {"head": head, "since": now.isoformat()}}
+
+
+CLEAR: dict[str, Any] = {"stack_unfetchable": None}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param("x", id="not a mapping"),
+        pytest.param({"head": 5, "since": T0.isoformat()}, id="head not a str"),
+        pytest.param({"head": PR_HEAD}, id="since missing"),
+        pytest.param({"head": PR_HEAD, "since": "yesterday"}, id="since not a date"),
+        pytest.param({"head": PR_HEAD, "since": 5}, id="since not a str"),
+        pytest.param({"head": PR_HEAD, "since": "2026-11-17T08:00:00"}, id="naive since"),
+    ],
+)
+def test_an_unreadable_unfetchable_record_is_unreadable(value):
+    assert isinstance(parse_unfetchable({"stack_unfetchable": value}), Unreadable)
+
+
+def test_a_missing_or_none_unfetchable_record_is_no_record():
+    assert parse_unfetchable({}) is None
+    assert parse_unfetchable({"stack_unfetchable": None}) is None
+
+
+def test_a_valid_unfetchable_record_is_returned_as_it_is():
+    raw = _record_at()
+    assert parse_unfetchable({"stack_unfetchable": raw}) == raw
+
+
+def test_escalated_clears_a_record_and_an_absent_one_writes_nothing():
+    raw = {"escalated": True, "stack_unfetchable": _record_at()}
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0) == CLEAR
+    assert unfetchable_patch({"escalated": True}, _fetched(False), PR_HEAD, T0) == {}
+    assert (
+        unfetchable_patch(
+            {"escalated": True, "stack_unfetchable": None}, _fetched(False), PR_HEAD, T0
+        )
+        == {}
+    )
+
+
+def test_fetched_clears_and_clearing_twice_writes_nothing():
+    raw: dict[str, Any] = {"stack_unfetchable": _record_at()}
+    patch = unfetchable_patch(raw, _fetched(True), PR_HEAD, T0)
+    assert patch == CLEAR
+    assert unfetchable_patch({**raw, **patch}, _fetched(True), PR_HEAD, T0) == {}
+    assert unfetchable_patch({}, _fetched(True), PR_HEAD, T0) == {}
+
+
+def test_heads_fetched_none_changes_nothing():
+    for raw in ({}, {"stack_unfetchable": _record_at()}, {"stack_unfetchable": {}}):
+        assert unfetchable_patch(raw, _fetched(None), PR_HEAD, T0 + WAIT) == {}
+
+
+@pytest.mark.parametrize("state", States)
+def test_each_parent_state_starts_the_clock(state):
+    assert unfetchable_patch({}, _fetched(False, state), PR_HEAD, T0) == _start()
+
+
+def test_a_new_head_that_is_still_unfetchable_restarts_the_clock():
+    raw = {"stack_unfetchable": _record_at(head=OTHER_HEAD)}
+    later = T0 + timedelta(hours=3)
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, later) == _start(later)
+
+
+def test_a_standing_record_on_the_same_head_changes_nothing():
+    raw = {"stack_unfetchable": _record_at()}
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0 + WAIT) == {}
+
+
+def test_no_pr_head_writes_nothing():
+    assert unfetchable_patch({}, _fetched(False), None, T0) == {}
+
+
+def _released(since: datetime = T0) -> dict[str, Any]:
+    entry = {
+        "head": PR_HEAD,
+        "step": "escalate",
+        "refusal": "stack_parent_unmerged",
+        "stack_since": since.isoformat(),
+    }
+    return {"stack_unfetchable": _record_at(since), "landing": [entry]}
+
+
+def test_a_released_wait_restarts_once_and_the_next_call_holds():
+    raw = _released()
+    later = T0 + WAIT
+    patch = unfetchable_patch(raw, _fetched(False), PR_HEAD, later)
+    assert patch == _start(later)
+    assert unfetchable_patch({**raw, **patch}, _fetched(False), PR_HEAD, later) == {}
+
+
+def test_an_escalate_entry_of_another_clock_does_not_restart():
+    raw = _released(since=T0 - WAIT)
+    raw["stack_unfetchable"] = _record_at()
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0) == {}
+
+
+def test_an_entry_hidden_by_a_restoration_does_not_restart():
+    raw = _released()
+    raw["restorations"] = [{"landing_cut": 1}]
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0 + WAIT) == {}
+
+
+def test_a_naive_since_restarts_once_then_holds():
+    raw: dict[str, Any] = {"stack_unfetchable": {"head": PR_HEAD, "since": "2026-11-17T08:00:00"}}
+    patch = unfetchable_patch(raw, _fetched(False), PR_HEAD, T0)
+    assert patch == _start()
+    assert unfetchable_patch({**raw, **patch}, _fetched(False), PR_HEAD, T0) == {}
+
+
+def test_expiry_is_exactly_at_twelve_hours():
+    record = parse_unfetchable({"stack_unfetchable": _record_at()})
+    assert unfetchable_expired(record, T0 + WAIT) is True
+    assert unfetchable_expired(record, T0 + WAIT - timedelta(seconds=1)) is False
+
+
+def test_no_record_or_an_unreadable_one_never_expires():
+    assert unfetchable_expired(None, T0 + WAIT) is False
+    assert unfetchable_expired(Unreadable(), T0 + WAIT) is False
+
+
+# --- the pause predicate (GH-898) --------------------------------------------------------------
+
+
+def _record_of(issue: int) -> StackParent:
+    return StackParent(issue=issue, task_id=f"GH-{issue}", head=HEAD, started_at=STARTED)
+
+
+def _link(
+    issue: int = 7,
+    *,
+    in_upstream: bool | None = False,
+    state: str | None = "OPEN",
+    reason: str | None = "",
+    waits: bool | None = False,
+    stopped: bool | None = False,
+    next_record: Absent | StackParent | Unreadable | None = None,
+) -> stacking.ParentLink:
+    return stacking.ParentLink(
+        record=_record_of(issue),
+        in_upstream=in_upstream,
+        state=state,
+        state_reason=reason,
+        waits_on_human=waits,
+        stopped=stopped,
+        next_record=Absent() if next_record is None else next_record,
+    )
+
+
+def test_an_empty_chain_does_not_pause():
+    assert stacking.pause_cause([]) == "none"
+
+
+def test_an_idle_open_parent_at_the_end_of_the_chain_does_not_pause():
+    assert stacking.pause_cause([_link()]) == "none"
+
+
+@pytest.mark.parametrize(
+    ("link", "cause"),
+    [
+        pytest.param(_link(waits=True), "parent_escalated", id="escalated"),
+        pytest.param(_link(stopped=True), "parent_stopped", id="stopped"),
+        pytest.param(
+            _link(state="CLOSED", reason="NOT_PLANNED"), "parent_abandoned", id="abandoned"
+        ),
+        pytest.param(_link(waits=True, stopped=True), "parent_escalated", id="escalated first"),
+    ],
+)
+def test_each_cause_of_a_parent_is_named(link: stacking.ParentLink, cause: str):
+    assert stacking.pause_cause([link]) == cause
+
+
+def test_a_paused_grandparent_pauses_the_child():
+    parent = _link(7, next_record=_record_of(8))
+    grandparent = _link(8, waits=True)
+    assert stacking.pause_cause([parent, grandparent]) == "parent_escalated"
+
+
+def test_a_merged_parent_ends_the_walk_whatever_else_it_says():
+    merged = _link(
+        in_upstream=True,
+        state="CLOSED",
+        reason="NOT_PLANNED",
+        waits=True,
+        stopped=True,
+        next_record=Unreadable(),
+    )
+    assert stacking.pause_cause([merged]) == "none"
+    assert stacking.pause_cause([merged, _link(8, waits=True)]) == "none"
+
+
+def test_ancestry_that_could_not_be_read_is_unreadable():
+    assert stacking.pause_cause([_link(in_upstream=None)]) == "unreadable"
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        pytest.param(_link(state=None), id="state"),
+        pytest.param(_link(reason=None), id="state reason"),
+        pytest.param(_link(waits=None), id="waits on a person"),
+        pytest.param(_link(stopped=None), id="stopped"),
+        pytest.param(_link(next_record=Unreadable()), id="next record unreadable"),
+    ],
+)
+def test_a_fact_that_could_not_be_read_is_unreadable_never_none(link: stacking.ParentLink):
+    assert stacking.pause_cause([link]) == "unreadable"
+
+
+def test_a_known_cause_wins_over_a_fact_that_could_not_be_read():
+    assert stacking.pause_cause([_link(waits=True, stopped=None)]) == "parent_escalated"
+    assert stacking.pause_cause([_link(state=None, stopped=True)]) == "parent_stopped"
+
+
+def test_a_chain_cut_short_with_a_parent_still_to_read_is_unreadable():
+    assert stacking.pause_cause([_link(7, next_record=_record_of(8))]) == "unreadable"
+
+
+def _chain(length: int) -> list[stacking.ParentLink]:
+    return [
+        _link(n, next_record=_record_of(n + 1) if n < length else None)
+        for n in range(1, length + 1)
+    ]
+
+
+def test_ten_links_are_read_and_eleven_are_unreadable():
+    assert stacking.pause_cause(_chain(10)) == "none"
+    assert stacking.pause_cause(_chain(11)) == "unreadable"
+
+
+def test_a_cause_inside_the_depth_still_answers_before_the_overflow():
+    chain = _chain(11)
+    chain[2] = _link(3, waits=True, next_record=_record_of(4))
+    assert stacking.pause_cause(chain) == "parent_escalated"
+
+
+def test_a_repeated_issue_is_unreadable():
+    chain = [_link(7, next_record=_record_of(8)), _link(8, next_record=_record_of(7)), _link(7)]
+    assert stacking.pause_cause(chain) == "unreadable"
+
+
+def test_the_pause_note_says_the_cause_and_when_it_ends():
+    assert stacking.pause_note(7, "parent_escalated") == (
+        "Paused: stacked on #7, which escalated. Resumes when #7 moves again."
+    )
+    assert stacking.pause_note(7, "parent_stopped") == (
+        "Paused: stacked on #7, which was stopped. Resumes when #7 moves again."
+    )
+    assert stacking.pause_note(12, "parent_abandoned") == (
+        "Paused: stacked on #12, which was closed as not planned. Resumes when #12 moves again."
+    )
+
+
+@pytest.mark.parametrize("in_upstream", [True, False, None])
+@pytest.mark.parametrize("state", ["OPEN", "CLOSED", None])
+@pytest.mark.parametrize("reason", ["", "COMPLETED", "NOT_PLANNED"])
+def test_pause_and_refusal_agree_on_what_each_parent_row_means(
+    in_upstream: bool | None, state: str | None, reason: str
+):
+    """The pair `(pause_cause, refusal)` of an idle parent whose chain ends: the pause is the
+    hold's, the refusal the merge's, and neither answers for the other."""
+    link = _link(in_upstream=in_upstream, state=state, reason=reason)
+    closed = parent_state_of(state or "", "none")
+    facts = StackFacts(
+        record=_record_of(7),
+        parent_state=closed,
+        parent_in_upstream=in_upstream,
+        child_has_parent=None,
+    )
+    cause = stacking.pause_cause([link])
+    if in_upstream is True:
+        assert cause == "none"
+    elif in_upstream is None or state is None:
+        assert cause == "unreadable"
+    elif state == "CLOSED" and reason == "NOT_PLANNED":
+        assert cause == "parent_abandoned"
+    else:
+        assert cause == "none"
+    assert refusal(facts, None) == (
+        "stack_parent_unmerged"
+        if in_upstream is not False or closed != "closed"
+        else "stack_base_orphaned"
+    )
+
+
+def test_a_closed_completed_parent_outside_upstream_does_not_pause_but_is_orphaned():
+    link = _link(state="CLOSED", reason="COMPLETED")
+    facts = StackFacts(_record_of(7), parent_state_of("CLOSED", "none"), False, None)
+    assert (stacking.pause_cause([link]), refusal(facts, None)) == ("none", "stack_base_orphaned")
+
+
+def test_a_reopened_idle_parent_does_not_pause_while_the_merge_is_still_refused():
+    link = _link(state="OPEN", reason="")
+    facts = StackFacts(_record_of(7), parent_state_of("OPEN", "none"), False, None)
+    assert (stacking.pause_cause([link]), refusal(facts, None)) == ("none", "stack_parent_unmerged")

@@ -606,8 +606,8 @@ class DesignReview(RoleOutput):
 
 class FinalDesignReview(DesignReview):
     """A final-validation design review that also reports the drawing checks it made and
-    the departures it found (GH-766 part 5). No role uses it yet: `roles.py` keeps
-    `DesignReview`. Both lists are required and may be empty."""
+    the departures it found (GH-766 part 5): the schema of the two final leads. Both lists
+    are required and may be empty."""
 
     drawing_checks: list[DrawingCheck] = Field(
         description="One check per question or screen compared against its approved "

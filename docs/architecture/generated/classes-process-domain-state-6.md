@@ -52,6 +52,6 @@ classDiagram
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`

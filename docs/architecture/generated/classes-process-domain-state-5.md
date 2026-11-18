@@ -52,5 +52,5 @@ classDiagram
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
