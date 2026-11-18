@@ -10,10 +10,12 @@ from typing import Any
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, LockRecord
 from agentic.core.process.application.stack_facts import StackMemo
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.task import StackParent
-from tests.core.process.application.test_poll import _cfg, _Locks, _round
+from tests.core.process.application.test_poll import _cfg, _Locks, _no_sleep, _round, _seed_body
+from tests.core.process.application.test_poll_arm import _declaration
 from tests.core.process.application.test_poll_merge import MASTER, _ports, _ready
-from tests.fakes import FakeLauncher, MemoryRunRegistry
+from tests.fakes import FakeExperimentFile, FakeLauncher, MemoryRunRegistry, memory_ports
 
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
 PARENT = 7
@@ -56,9 +58,29 @@ def test_an_escalated_parent_leaves_the_child_with_no_action_and_one_note(tmp_pa
     assert len(_notes(ports, CHILD)) == 1
 
 
-def _stack_calls(ports) -> list[str]:
-    """The tracker and git reads and writes a round made, in order, as names."""
-    return [*ports.tracker.events]
+def _spy(ports) -> list[str]:
+    """Wraps every public method of the tracker and the workspace; the list fills, in order, with
+    `owner.name(args)` for each call the round itself makes (a double calling its own method is
+    not one)."""
+    calls: list[str] = []
+    depth = [0]
+    for label, owner in (("tracker", ports.tracker), ("workspace", ports.workspace)):
+        for name in dir(owner):
+            member = getattr(owner, name)
+            if name.startswith("_") or not callable(member):
+                continue
+
+            def recorded(*args: Any, _m: Any = member, _l: str = label, _n: str = name, **kw: Any):
+                if depth[0] == 0:
+                    calls.append(f"{_l}.{_n}{args}")
+                depth[0] += 1
+                try:
+                    return _m(*args, **kw)
+                finally:
+                    depth[0] -= 1
+
+            setattr(owner, name, recorded)
+    return calls
 
 
 def test_a_second_round_writes_no_second_note(tmp_path):
@@ -115,11 +137,19 @@ def test_a_held_child_with_a_dead_lock_is_not_retaken_and_nothing_is_read_for_it
     )
     assert (retakes, lines, spent, seen, reported) == ([], [], {}, {}, set())
     assert f"GH-{CHILD}" not in locks.reads
+    calls = _spy(ports)
     lines, launcher = _go(tmp_path, ports, lock=locks)
     assert launcher.spawned == []
     assert not any("retake" in line or "resume" in line for line in lines)
     assert ports.documents.load(task_id).get("blocker_reports") is None
-    assert len(_notes(ports, CHILD)) == 1  # the only call the tracker saw
+    about_child = [
+        c for c in calls if f"'{task_id}'" in c or f"({CHILD}," in c or f"({CHILD})" in c
+    ]
+    assert [c.split("(")[0] for c in about_child] == [
+        "tracker.timestamped_comments",  # the pause marker's own read
+        "tracker.note",  # the one note
+    ]
+    assert len(_notes(ports, CHILD)) == 1
 
 
 def test_gather_resumes_skips_a_held_issue_before_reading_its_comments():
@@ -182,22 +212,7 @@ def _recorded_round(tmp_path, monkeypatch, *, without_hold: bool) -> list[str]:
     ports.tracker._queue = [5, 6]
     for n in (5, 6):
         ports.tracker.states[n] = IssueState("OPEN", "", (), None)
-    calls: list[str] = []
-
-    def wrap(owner: Any, label: str) -> None:
-        for name in dir(owner):
-            member = getattr(owner, name)
-            if name.startswith("_") or not callable(member):
-                continue
-
-            def recorded(*args: Any, _m: Any = member, _n: str = name, **kw: Any) -> Any:
-                calls.append(f"{label}.{_n}{args}")
-                return _m(*args, **kw)
-
-            setattr(owner, name, recorded)
-
-    wrap(ports.tracker, "tracker")
-    wrap(ports.workspace, "workspace")
+    calls = _spy(ports)
     if without_hold:
         monkeypatch.setattr(poll.stack_hold, "compute", lambda *a, **k: poll.stack_hold.StackHold())
         monkeypatch.setattr(poll.stack_hold, "write_episodes", lambda *a, **k: [])
@@ -265,3 +280,65 @@ def test_the_final_filter_drops_an_action_a_gatherer_still_planned_for_a_held_is
     lines, launcher = _go(tmp_path, ports)
     assert launcher.spawned == []
     assert not any(f"merge issue {CHILD}" in line for line in lines)
+
+
+# The poller's own functions, taken before any test wraps them.
+_ARM_COUNTS = poll._arm_counts
+_DEPENDENTS = poll.launch_order.dependents
+
+
+def _launch_round(tmp_path, monkeypatch, *, without_hold: bool):
+    """A round with two plain launches beside a held stacked child that already has its arm and
+    whose open issue says `Blocked by: #5`; what `_arm_counts` and `launch_order.dependents`
+    answered, and what was spawned."""
+    ports = memory_ports(experiment=FakeExperimentFile(_declaration()))
+    ports.tracker._queue = [5, 6, CHILD]
+    for number in (5, 6, CHILD, PARENT):
+        ports.tracker.states[number] = IssueState("OPEN", "", (), None, ())
+    for number in (5, 6):
+        _seed_body(ports, number)
+    ports.documents.save({"id": f"GH-{PARENT}", "escalated": "CI red"})
+    ports.documents.save(
+        {
+            "id": f"GH-{CHILD}",
+            "status": "developing",
+            "stack_parent": dict(_record()),
+            "assignment": {"experiment": "light-vs-default", "switches": {}, "arm": "control"},
+        }
+    )
+    ports.inbox.refs = [
+        IssueRef(f"https://github.com/o/r/issues/{CHILD}", "child", "Blocked by: #5"),
+    ]
+    counts: list[dict[str, int]] = []
+    dependents: list[dict[int, int]] = []
+    arm_counts, order = _ARM_COUNTS, _DEPENDENTS
+
+    def counted(*args: Any) -> dict[str, int]:
+        counts.append(dict(arm_counts(*args)))
+        return arm_counts(*args)
+
+    def ordered(edges: Any) -> dict[int, int]:
+        dependents.append(dict(order(edges)))
+        return order(edges)
+
+    monkeypatch.setattr(poll, "_arm_counts", counted)
+    monkeypatch.setattr(poll.launch_order, "dependents", ordered)
+    if without_hold:
+        monkeypatch.setattr(poll.stack_hold, "compute", lambda *a, **k: poll.stack_hold.StackHold())
+        monkeypatch.setattr(poll.stack_hold, "write_episodes", lambda *a, **k: [])
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, NOW, sleep=_no_sleep)
+    return counts, dependents, launcher.spawned, ports
+
+
+def test_arm_counts_and_launch_weights_with_a_held_child_equal_the_round_without_the_hold(
+    tmp_path, monkeypatch
+):
+    held = _launch_round(tmp_path, monkeypatch, without_hold=False)
+    free = _launch_round(tmp_path, monkeypatch, without_hold=True)
+    assert held[:3] == free[:3]
+    assert held[0] == [{"control": 1}]  # the held child's own arm is counted, once
+    assert held[1] == [{}]  # its issue has a document: it adds no edge to #5
+    # one slot: #5 launches, with the arm that is behind (control holds the child's one)
+    assert [argv[3:6] for argv in held[2]] == [["5", "--arm", "light"]]
+    assert len(_notes(held[3], CHILD)) == 1 and _notes(free[3], CHILD) == []
