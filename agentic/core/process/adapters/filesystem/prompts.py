@@ -11,7 +11,8 @@ of the one table, `SPEC_BLOCKS`, is read when the adapter is built, from
 `.agentic/prompts/spec/<name>.md` of the product or else `prompts/spec/<name>.md` of the
 system, and a read error is kept and raised by `spec_block` for that name. A name that fails
 `block_name_ok` is never joined into a path. With the table empty no file under `spec/` is
-opened. `blocks` exists for the tests of the adapter; no production code passes it."""
+opened. `blocks` and `draft_block` (the PM draft block, `None` for none) exist for the tests of the
+adapter; no production code passes them."""
 
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 from ...domain import playbook
 from ...domain.playbook import Playbook
 from ...domain.roles import PROMPTS_DIR, ROLES, Role
-from ...domain.spec_brief import SPEC_BLOCKS, block_name_ok
+from ...domain.spec_brief import DRAFT_BLOCK, SPEC_BLOCKS, block_name_ok
 
 OVERLAY_SUBDIR = Path(".agentic/prompts")
 PLAYBOOKS_SUBDIR = Path(".agentic/playbooks")
@@ -34,13 +35,15 @@ class FilesystemPrompts:
         product_dir: Path,
         system_dir: Path = PROMPTS_DIR,
         blocks: Mapping[str, str] = SPEC_BLOCKS,
+        draft_block: str | None = DRAFT_BLOCK,
     ):
         self.product_dir = product_dir
         self._read: dict[str, tuple[str, Path] | OSError | UnicodeDecodeError] = {
             slug: self._snapshot(slug, system_dir) for slug in {role.slug for role in ROLES}
         }
         self._blocks: dict[str, str | OSError | UnicodeDecodeError | ValueError] = {
-            name: self._snapshot_block(name, system_dir) for name in set(blocks.values())
+            name: self._snapshot_block(name, system_dir)
+            for name in set(blocks.values()) | ({draft_block} if draft_block else set())
         }
 
     def _snapshot_block(

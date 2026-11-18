@@ -12,7 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
-  - [domain: playbook](classes-process-domain-playbook.md)
+  - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
+  - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
@@ -29,6 +30,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksJob["FullChecksJob"]
@@ -43,13 +45,14 @@ classDiagram
     class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
-    class task__MergeCiRecord["MergeCiRecord"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`

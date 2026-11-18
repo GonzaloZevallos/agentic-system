@@ -145,7 +145,9 @@ def write_block(directory, name, text):
 def test_a_block_is_read_from_the_system_snapshot(tmp_path):
     system = tmp_path / "system"
     write_block(system, "build", "System block.")
-    prompts = FilesystemPrompts(tmp_path / "product", system, blocks={"developer": "build"})
+    prompts = FilesystemPrompts(
+        tmp_path / "product", system, draft_block=None, blocks={"developer": "build"}
+    )
     assert prompts.spec_block("build") == "System block."
     assert prompts.spec_block_names() == ("build",)
 
@@ -154,14 +156,16 @@ def test_the_product_overlay_of_a_block_wins(tmp_path):
     system, product = tmp_path / "system", tmp_path / "product"
     write_block(system, "build", "System block.")
     write_block(product / ".agentic/prompts", "build", "Product block.")
-    prompts = FilesystemPrompts(product, system, blocks={"developer": "build"})
+    prompts = FilesystemPrompts(product, system, draft_block=None, blocks={"developer": "build"})
     assert prompts.spec_block("build") == "Product block."
 
 
 def test_a_block_edited_or_deleted_after_construction_still_serves_the_old_text(tmp_path):
     system = tmp_path / "system"
     path = write_block(system, "build", "Old.")
-    prompts = FilesystemPrompts(tmp_path / "product", system, blocks={"developer": "build"})
+    prompts = FilesystemPrompts(
+        tmp_path / "product", system, draft_block=None, blocks={"developer": "build"}
+    )
     path.write_text("New.", encoding="utf-8")
     assert prompts.spec_block("build") == "Old."
     path.unlink()
@@ -171,7 +175,9 @@ def test_a_block_edited_or_deleted_after_construction_still_serves_the_old_text(
 
 
 def test_a_missing_block_file_raises_on_the_call_and_not_on_construction(tmp_path):
-    prompts = FilesystemPrompts(tmp_path, tmp_path / "system", blocks={"pm": "ghost", "dev": "ok"})
+    prompts = FilesystemPrompts(
+        tmp_path, tmp_path / "system", draft_block=None, blocks={"pm": "ghost", "dev": "ok"}
+    )
     with pytest.raises(OSError):
         prompts.spec_block("ghost")
     assert prompts.spec_block_names() == ("ghost", "ok")
@@ -180,7 +186,9 @@ def test_a_missing_block_file_raises_on_the_call_and_not_on_construction(tmp_pat
 def test_a_block_that_is_not_utf8_raises_on_the_call(tmp_path):
     path = write_block(tmp_path / "system", "bad", "x")
     path.write_bytes(b"\xff\xfe not utf-8")
-    prompts = FilesystemPrompts(tmp_path, tmp_path / "system", blocks={"pm": "bad"})
+    prompts = FilesystemPrompts(
+        tmp_path, tmp_path / "system", draft_block=None, blocks={"pm": "bad"}
+    )
     with pytest.raises(UnicodeDecodeError):
         prompts.spec_block("bad")
 
@@ -191,7 +199,7 @@ def test_a_bad_name_is_kept_as_a_value_error_and_no_path_is_built_for_it(tmp_pat
         stray.parent.mkdir(parents=True, exist_ok=True)
         stray.write_text("never read", encoding="utf-8")
     table = {"pm": "../secret", "dev": "../../secret", "x": "A"}
-    prompts = FilesystemPrompts(product, system, blocks=table)
+    prompts = FilesystemPrompts(product, system, draft_block=None, blocks=table)
     assert prompts.spec_block_names() == ("../../secret", "../secret", "A")
     for name in prompts.spec_block_names():
         with pytest.raises(ValueError, match="not a valid spec block name"):
@@ -199,7 +207,7 @@ def test_a_bad_name_is_kept_as_a_value_error_and_no_path_is_built_for_it(tmp_pat
 
 
 def test_a_name_outside_the_snapshot_is_a_value_error_not_a_key_error(tmp_path):
-    prompts = FilesystemPrompts(tmp_path, tmp_path / "system", blocks={})
+    prompts = FilesystemPrompts(tmp_path, tmp_path / "system", draft_block=None, blocks={})
     with pytest.raises(ValueError, match="build"):
         prompts.spec_block("build")
     assert prompts.spec_block_names() == ()
@@ -214,7 +222,7 @@ def test_an_empty_table_means_construction_opens_nothing_under_spec(monkeypatch,
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", spy)
-    prompts = FilesystemPrompts(tmp_path, blocks={})
+    prompts = FilesystemPrompts(tmp_path, draft_block=None, blocks={})
     assert prompts.spec_block_names() == ()
     assert not [p for p in opened if "spec" in p.parts]
 
@@ -224,7 +232,7 @@ def test_both_implementations_serve_spec_blocks_alike(tmp_path):
         system = tmp / "system"
         for name in set(table.values()):
             write_block(system, name, f"text of {name}")
-        return FilesystemPrompts(tmp / "product", system, blocks=table)
+        return FilesystemPrompts(tmp / "product", system, draft_block=None, blocks=table)
 
     def memory(tmp: Path, table: Mapping[str, str]) -> Prompts:
         return MemoryPrompts(blocks={name: f"text of {name}" for name in set(table.values())})

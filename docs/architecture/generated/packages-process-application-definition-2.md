@@ -27,6 +27,7 @@ graph TD
     m_application__interview["application.interview"]
     m_application__interview_drawing["application.interview_drawing"]
     m_application__qa_performance["application.qa_performance"]
+    m_application__spec_draft["application.spec_draft"]
     m_application__validate_prd["application.validate_prd"]
     m_application__final_validation --> g_application__support
     m_application__final_validation --> g_domain__landing
@@ -47,8 +48,12 @@ graph TD
     m_application__qa_performance --> g_domain__roles
     m_application__qa_performance --> g_domain__state
     m_application__qa_performance --> g_pkg__agentic__shared
+    m_application__spec_draft --> g_application__support
+    m_application__spec_draft --> g_domain__state
+    m_application__spec_draft --> g_pkg__agentic__shared
     m_application__validate_prd --> g_application__support
     m_application__validate_prd --> g_domain__roles
     m_application__validate_prd --> g_domain__state
     m_application__validate_prd --> g_pkg__agentic__shared
+    m_application__validate_prd --> m_application__spec_draft
 ```

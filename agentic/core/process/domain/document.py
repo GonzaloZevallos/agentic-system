@@ -126,6 +126,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "lane_merges",
         "stack_pauses",
         "worktree_release_lapse",
+        "stack_unfetchable",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
@@ -656,6 +657,8 @@ def render(
         **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
         # Why a spec was refused (GH-594), written only when set.
         **({"spec_refusal": e} if (e := state.get("spec_refusal")) else {}),
+        # What became of the draft Spec PM returned (GH-594 part 5a), written only when set.
+        **({"spec_draft": e} if (e := state.get("spec_draft")) else {}),
         # The measurement record of a spec delivery (GH-594), kept once written even without
         # `state["spec"]`; read only by `eval compare`.
         **({"spec_delivery": True} if spec_delivery.recorded(state) else {}),

@@ -12,7 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
-  - [domain: playbook](classes-process-domain-playbook.md)
+  - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
+  - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
@@ -38,17 +39,16 @@ classDiagram
     class size_budget__PlanSize["PlanSize"]
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
+    class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
     class spec_delivery__SpecLine["SpecLine"]
     class spec_delivery__SpecLineMalformed["SpecLineMalformed"]
     class spec_delivery__SpecRefusal["SpecRefusal"]
     class spec_delivery__SpecRefusalRecord["SpecRefusalRecord"]
     class spec_delivery__SpecStatePatch["SpecStatePatch"]
-    class spec_route__SpecRefusalPatch["SpecRefusalPatch"]
     spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
-    spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 4)](classes-process-domain-state-4.md)
+  - `spec_route.SpecRefusalPatch` se asocia con `spec_delivery.SpecRefusalRecord`

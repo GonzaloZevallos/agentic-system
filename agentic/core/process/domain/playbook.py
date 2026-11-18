@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any, Literal, get_args
 
 import yaml
@@ -33,8 +34,12 @@ from .task import INTEGRATION, CopyCategory, FindingCategory
 
 # At most this many items per role, and at most this many characters in one lesson: the
 # section rides in the role's system prompt, so both are hard.
-PLAYBOOK_MAX_ITEMS = 12
+PLAYBOOK_MAX_ITEMS = 15
+PLAYBOOK_MAX_CHARS = 6000
 LESSON_MAX_CHARS = 240
+# A lesson is in grace until its role ran this many closed tasks since it reached a prompt:
+# `in_grace` is the only comparison, and a lesson in grace is never demoted.
+GRACE_TASKS = 5
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
 # What a lesson can be about: a finding category, or what a finding category cannot say
@@ -251,6 +256,9 @@ class Pending:
     seen_in: tuple[str, ...]
     sources: tuple[str, ...]
     added_at: str
+    # Set only on a lesson a cap demotion sent back here: how many tasks had cited it then.
+    # `keep` alone reads it, so the lesson returns only when a new task cites it.
+    demoted_at_seen: int | None = None
 
     @property
     def seen(self) -> int:
@@ -267,10 +275,19 @@ class Archived:
     archived_at: str
 
 
-def keep(confidence: Confidence, seen: int, sources: Collection[str]) -> bool:
+def keep(
+    confidence: Confidence,
+    seen: int,
+    sources: Collection[str],
+    *,
+    demoted_at_seen: int | None = None,
+) -> bool:
     """Whether a rated lesson enters the playbook: confidence is `KEEP_CONFIDENCE`, or it
     appeared in `KEEP_MIN_TASKS` tasks. A lesson only human decisions back needs the tasks
-    whatever its confidence: one escalation can be about that task alone."""
+    whatever its confidence: one escalation can be about that task alone. A lesson a cap
+    demotion sent back (`demoted_at_seen`) waits until a task it had not counted cites it."""
+    if demoted_at_seen is not None and seen <= demoted_at_seen:
+        return False
     if sources and all(source == "human_decision" for source in sources):
         return seen >= KEEP_MIN_TASKS
     return confidence == KEEP_CONFIDENCE or seen >= KEEP_MIN_TASKS
@@ -298,6 +315,56 @@ def section(playbook: Playbook) -> str:
         f"- {i.lesson} ({i.category})" for i in sorted(playbook.items, key=lambda i: _number(i.id))
     ]
     return SECTION_TITLE + "\n" + "\n".join(lines)
+
+
+def over_cap(playbook: Playbook) -> bool:
+    """Whether the playbook exceeds the role cap: more than `PLAYBOOK_MAX_ITEMS` items or a
+    section longer than `PLAYBOOK_MAX_CHARS`. The only place the cap is compared. The
+    character axis is a backstop for hand-edited files: through validated lessons (at most
+    `LESSON_MAX_CHARS` each) 15 items stay near 4,100 characters."""
+    return len(playbook.items) > PLAYBOOK_MAX_ITEMS or len(section(playbook)) > PLAYBOOK_MAX_CHARS
+
+
+def in_grace(item: Item, role_tasks_since: Mapping[str, int]) -> bool:
+    """Whether `item` is too new to demote: it never reached a prompt (`in_prompt_since`
+    empty), its id is not in `role_tasks_since`, or its role ran fewer than `GRACE_TASKS`
+    tasks since. The only place `GRACE_TASKS` is compared."""
+    if not item.in_prompt_since or item.id not in role_tasks_since:
+        return True
+    return role_tasks_since[item.id] < GRACE_TASKS
+
+
+def demotion_pick(
+    playbook: Playbook,
+    role_tasks_since: Mapping[str, int],
+    score: Callable[[Item], int] | None = None,
+) -> str | None:
+    """The id of the item to demote, or `None` when every item is in grace: among the items
+    out of grace, the lowest `score` (`None` scores every item equal), then the oldest
+    `in_prompt_since`, then the id number (never plain string order, so x-2 precedes x-10).
+    `role_tasks_since` is keyed by item id and is a different map from `archive_stale`'s
+    `(int, bool)` one: the caller must take the int from the same count."""
+    due = [i for i in playbook.items if not in_grace(i, role_tasks_since)]
+    if not due:
+        return None
+    rank = score or (lambda _item: 0)
+    return min(due, key=lambda i: (rank(i), i.in_prompt_since, _number(i.id))).id
+
+
+def demote(item: Item, slug: str) -> Pending:
+    """The candidate an item becomes when the cap takes it out of the prompt: low confidence,
+    no sources, the tasks that had cited it, and `demoted_at_seen` so `keep` waits for one
+    more."""
+    return Pending(
+        slug=slug,
+        category=item.category,
+        lesson=item.lesson,
+        confidence="low",
+        seen_in=item.seen_in,
+        sources=(),
+        added_at=item.added_at,
+        demoted_at_seen=len(item.seen_in),
+    )
 
 
 _ITEM_KEYS = ("id", "lesson", "category", "since", "seen_in", "added_at")
@@ -447,12 +514,25 @@ class Refusal:
     reason: str
 
 
+_NO_COUNTS: Mapping[str, int] = MappingProxyType({})
+
+
+@dataclass(frozen=True)
+class Demotion:
+    """A lesson an add took out of the playbook to make room, and the delta that did it."""
+
+    item_id: str
+    by: Delta
+
+
 @dataclass(frozen=True)
 class Applied:
     """`applied` carries the effective deltas: an add that matched an existing item is
     recorded as the bump it became, so a summary counts what really happened. An add
     that promoted a candidate or restored an archived item stays an `add` and keeps the
-    `seen_in` it had. `held` are the adds `keep` sent to `candidates`; `candidates` and
+    `seen_in` it had. `held` are the adds that wait in `candidates`: `keep` sent them
+    there, or (`capped`, a subset of `held`) the cap had no lesson out of grace to demote.
+    `demoted` lists every lesson an add sent back to `candidates`; `candidates` and
     `archived` are the whole lists after the run."""
 
     playbook: Playbook
@@ -461,15 +541,21 @@ class Applied:
     held: tuple[Delta, ...] = ()
     candidates: tuple[Pending, ...] = ()
     archived: tuple[Archived, ...] = ()
+    demoted: tuple[Demotion, ...] = ()
+    capped: tuple[Delta, ...] = ()
 
 
 @dataclass(frozen=True)
 class _Shelves:
-    """What one run of the curator carries from delta to delta."""
+    """What one run of the curator carries from delta to delta. `high_water` is the highest
+    id number the run has seen or given out, so a demotion never frees a number for reuse."""
 
     playbook: Playbook
     candidates: tuple[Pending, ...]
     archived: tuple[Archived, ...]
+    high_water: int
+    demotions: tuple[Demotion, ...] = ()
+    capped: tuple[Delta, ...] = ()
 
 
 def apply(
@@ -482,17 +568,24 @@ def apply(
     now: str,
     candidates: Sequence[Pending] = (),
     archived: Sequence[Archived] = (),
+    role_tasks_since: Mapping[str, int] = _NO_COUNTS,
+    score: Callable[[Item], int] | None = None,
 ) -> Applied:
     """Fold `deltas` into `playbook`, one at a time, each against the playbook the
     earlier ones left. Never mutates, never touches an item a delta does not name.
     `section_hash` is what a new item records as `since`; `now` is stored as `added_at`
-    and `last_applied`. An add `keep` does not pass goes to `candidates`."""
-    current = _Shelves(playbook, tuple(candidates), tuple(archived))
+    and `last_applied`. An add `keep` does not pass goes to `candidates`. An add that
+    would pass the cap demotes lessons out of grace (`role_tasks_since`, `score`) until it
+    fits; when it cannot fit it waits in `candidates` and the playbook stays as it was."""
+    high_water = _highest(i.id for i in (*playbook.items, *(a.item for a in archived)))
+    current = _Shelves(playbook, tuple(candidates), tuple(archived), high_water)
     applied: list[Delta] = []
     refused: list[Refusal] = []
     held: list[Delta] = []
     for delta in deltas:
-        outcome = _apply_one(current, delta, evidence, rejected, section_hash, now)
+        outcome = _apply_one(
+            current, delta, evidence, rejected, section_hash, now, role_tasks_since, score
+        )
         if isinstance(outcome, str):
             refused.append(Refusal(delta, outcome))
             continue
@@ -505,7 +598,14 @@ def apply(
         tuple(held),
         current.candidates,
         current.archived,
+        current.demotions,
+        current.capped,
     )
+
+
+def _highest(ids: Iterable[str]) -> int:
+    """The highest id number among `ids`; an id without one counts for nothing."""
+    return max((n for n in (_number(i)[0] for i in ids) if n < 10**9), default=0)
 
 
 def _apply_one(
@@ -515,12 +615,14 @@ def _apply_one(
     rejected: Sequence[Rejected],
     section_hash: str,
     now: str,
+    role_tasks_since: Mapping[str, int],
+    score: Callable[[Item], int] | None,
 ) -> str | tuple[_Shelves, Delta, bool]:
     playbook = shelves.playbook
     if delta.slug != playbook.slug:
         return f"the delta is for slug {delta.slug}, this is {playbook.slug}"
     if delta.op == "add":
-        return _add(shelves, delta, evidence, rejected, section_hash, now)
+        return _add(shelves, delta, evidence, rejected, section_hash, now, role_tasks_since, score)
     target = next((i for i in playbook.items if i.id == delta.item_id), None)
     if target is None:
         return f"there is no item {delta.item_id!r}"
@@ -571,6 +673,8 @@ def _add(
     rejected: Sequence[Rejected],
     section_hash: str,
     now: str,
+    role_tasks_since: Mapping[str, int],
+    score: Callable[[Item], int] | None,
 ) -> str | tuple[_Shelves, Delta, bool]:
     playbook = shelves.playbook
     if delta.category not in LESSON_CATEGORIES:
@@ -596,6 +700,29 @@ def _add(
         bumped = replace(same, seen_in=same.seen_in + new_ids, last_applied=now)
         effective = replace(delta, op="bump", item_id=same.id)
         return replace(shelves, playbook=_replace_items(playbook, same, bumped)), effective, False
+    waiting = next(
+        (
+            p
+            for p in shelves.candidates
+            if p.slug == delta.slug and normalise(p.lesson) == text and p.category == delta.category
+        ),
+        None,
+    )
+    if waiting is not None and all(t in waiting.seen_in for t in tasks):
+        return "nothing to add: the candidate already counts every cited task"
+    waiting_seen = waiting.seen_in if waiting else ()
+    seen_in = tuple(dict.fromkeys((*waiting_seen, *tasks)))
+    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
+    confidence = _top(delta.confidence, waiting.confidence if waiting else "low")
+    others = tuple(p for p in shelves.candidates if p is not waiting)
+    if waiting is None:
+        pending = Pending(delta.slug, delta.category, lesson, confidence, seen_in, all_sources, now)
+        waits = (*shelves.candidates, pending)
+    else:
+        grown = replace(waiting, confidence=confidence, seen_in=seen_in, sources=all_sources)
+        waits = tuple(grown if p is waiting else p for p in shelves.candidates)
+    held = replace(shelves, candidates=waits)
+    capped = replace(held, capped=(*held.capped, delta))
     shelf = next(
         (
             a
@@ -608,46 +735,25 @@ def _add(
     )
     if shelf is not None:
         # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites.
-        if len(playbook.items) >= PLAYBOOK_MAX_ITEMS:
-            return f"the playbook has {PLAYBOOK_MAX_ITEMS} items: merge or retire first"
-        seen_in = tuple(dict.fromkeys((*shelf.item.seen_in, *tasks)))
-        restored = replace(shelf.item, seen_in=seen_in, last_applied=now, in_prompt_since="")
-        out = _Shelves(
-            Playbook(playbook.slug, playbook.items + (restored,)),
-            shelves.candidates,
-            tuple(a for a in shelves.archived if a is not shelf),
+        restored = replace(
+            shelf.item,
+            seen_in=tuple(dict.fromkeys((*shelf.item.seen_in, *seen_in))),
+            last_applied=now,
+            in_prompt_since="",
         )
-        return out, delta, False
-    waiting = next(
-        (
-            p
-            for p in shelves.candidates
-            if p.slug == delta.slug and normalise(p.lesson) == text and p.category == delta.category
-        ),
-        None,
-    )
-    seen_in = tuple(dict.fromkeys((*(waiting.seen_in if waiting else ()), *tasks)))
-    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
-    confidence = _top(delta.confidence, waiting.confidence if waiting else "low")
-    others = tuple(p for p in shelves.candidates if p is not waiting)
-    if not keep(confidence, len(seen_in), all_sources):
-        if waiting is None:
-            fresh = Pending(
-                delta.slug, delta.category, lesson, confidence, seen_in, all_sources, now
-            )
-            return replace(shelves, candidates=(*shelves.candidates, fresh)), delta, True
-        if all(t in waiting.seen_in for t in tasks):
-            return "nothing to add: the candidate already counts every cited task"
-        grown = replace(waiting, confidence=confidence, seen_in=seen_in, sources=all_sources)
-        grown_all = tuple(grown if p is waiting else p for p in shelves.candidates)
-        return replace(shelves, candidates=grown_all), delta, True
-    if len(playbook.items) >= PLAYBOOK_MAX_ITEMS:
-        return f"the playbook has {PLAYBOOK_MAX_ITEMS} items: merge or retire first"
-    numbers = [_number(i.id)[0] for i in playbook.items]
-    numbers += [_number(a.item.id)[0] for a in shelves.archived]
-    number = max((n for n in numbers if n < 10**9), default=0)
+        off_shelf = replace(
+            shelves,
+            candidates=others,
+            archived=tuple(a for a in shelves.archived if a is not shelf),
+        )
+        placed = _place(off_shelf, restored, delta, role_tasks_since, score)
+        return (placed, delta, False) if placed else (capped, delta, True)
+    demoted_at_seen = waiting.demoted_at_seen if waiting else None
+    if not keep(confidence, len(seen_in), all_sources, demoted_at_seen=demoted_at_seen):
+        return held, delta, True
+    on_shelves = _highest(i.id for i in (*playbook.items, *(a.item for a in shelves.archived)))
     item = Item(
-        id=f"{playbook.slug}-{number + 1}",
+        id=f"{playbook.slug}-{max(shelves.high_water, on_shelves) + 1}",
         lesson=lesson,
         category=delta.category,
         since=section_hash,
@@ -655,8 +761,66 @@ def _add(
         added_at=now,
         last_applied=now,
     )
-    out = _Shelves(Playbook(playbook.slug, playbook.items + (item,)), others, shelves.archived)
-    return out, delta, False
+    placed = _place(replace(shelves, candidates=others), item, delta, role_tasks_since, score)
+    return (placed, delta, False) if placed else (capped, delta, True)
+
+
+def _place(
+    shelves: _Shelves,
+    newcomer: Item,
+    delta: Delta,
+    role_tasks_since: Mapping[str, int],
+    score: Callable[[Item], int] | None,
+) -> _Shelves | None:
+    """The shelves with `newcomer` in the playbook, after demoting lessons out of grace
+    until the cap holds; `None`, with nothing changed, when no lesson is left to demote.
+    `newcomer` has no `in_prompt_since`, so it is in grace and never its own victim."""
+    plan = Playbook(shelves.playbook.slug, shelves.playbook.items + (newcomer,))
+    candidates = shelves.candidates
+    demotions = shelves.demotions
+    high_water = max(shelves.high_water, _highest([newcomer.id]))
+    while over_cap(plan):
+        pick = demotion_pick(plan, role_tasks_since, score)
+        if pick is None:
+            return None
+        victim = next(i for i in plan.items if i.id == pick)
+        plan = _replace_items(plan, victim, None)
+        candidates = _shelve(candidates, demote(victim, plan.slug))
+        demotions = (*demotions, Demotion(pick, delta))
+        high_water = max(high_water, _highest([pick]))
+    return replace(
+        shelves,
+        playbook=plan,
+        candidates=candidates,
+        high_water=high_water,
+        demotions=demotions,
+    )
+
+
+def _shelve(candidates: tuple[Pending, ...], pending: Pending) -> tuple[Pending, ...]:
+    """`pending` among `candidates`: folded into a twin (same slug, category and normalised
+    text) with the union of `seen_in` and the larger `demoted_at_seen`, the twin's
+    confidence and sources kept; otherwise appended."""
+    text = normalise(pending.lesson)
+    twin = next(
+        (
+            p
+            for p in candidates
+            if p.slug == pending.slug
+            and p.category == pending.category
+            and normalise(p.lesson) == text
+        ),
+        None,
+    )
+    if twin is None:
+        return (*candidates, pending)
+    marks = [m for m in (twin.demoted_at_seen, pending.demoted_at_seen) if m is not None]
+    folded = replace(
+        twin,
+        seen_in=tuple(dict.fromkeys((*twin.seen_in, *pending.seen_in))),
+        demoted_at_seen=max(marks, default=None),
+    )
+    return tuple(folded if p is twin else p for p in candidates)
 
 
 def _top(first: Confidence, second: Confidence) -> Confidence:

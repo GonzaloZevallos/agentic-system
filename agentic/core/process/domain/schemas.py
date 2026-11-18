@@ -117,6 +117,17 @@ class Verdict(RoleOutput):
     )
 
 
+class VerdictWithSpecDraft(Verdict):
+    """`Verdict` when a draft Spec is due (`rules.spec_fallback_due`, GH-594 part 5a): PM may
+    also return the Spec body. Body only: the system writes the front matter and the status."""
+
+    spec_draft: str | None = Field(
+        default=None,
+        description="The Spec body only, in Markdown, with no front matter block: the system "
+        "writes `status`. Leave it out on `returned`",
+    )
+
+
 class Diagnosis(RoleOutput):
     """The Product Analyst's ruling on a bug (README.md, 2 and 4; issue #65): what it
     saw when it reproduced, against which definition, and what it makes of it.
@@ -595,8 +606,8 @@ class DesignReview(RoleOutput):
 
 class FinalDesignReview(DesignReview):
     """A final-validation design review that also reports the drawing checks it made and
-    the departures it found (GH-766 part 5). No role uses it yet: `roles.py` keeps
-    `DesignReview`. Both lists are required and may be empty."""
+    the departures it found (GH-766 part 5): the schema of the two final leads. Both lists
+    are required and may be empty."""
 
     drawing_checks: list[DrawingCheck] = Field(
         description="One check per question or screen compared against its approved "

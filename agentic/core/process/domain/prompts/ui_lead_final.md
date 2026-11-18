@@ -31,6 +31,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
   PM's decision, nothing else.
 - You never return to a Developer and you never change the human's design.
 - You have up to {{max_turns}} turns.
+{{drawing_rule}}
 </Hard Limits>
 
 <Output>

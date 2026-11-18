@@ -35,6 +35,7 @@ from .schemas import (
     DesignDraft,
     DesignReview,
     Diagnosis,
+    FinalDesignReview,
     FinalValidation,
     LandingDiagnosis,
     PlanCritique,
@@ -434,6 +435,7 @@ UX_LEAD_FINAL = replace(
     UX_LEAD,
     name="UX Lead: final walk",
     slug="ux_lead_final",
+    schema=FinalDesignReview,
     reads=(
         ORIGINAL,
         "Product Analyst",
@@ -444,6 +446,7 @@ UX_LEAD_FINAL = replace(
         "UI Lead",
         "PM: consolidation",
         "Tech Lead",
+        "Drawing departures",
         "UX Lead: final walk",
     ),
 )
@@ -452,6 +455,7 @@ UI_LEAD_FINAL = replace(
     UI_LEAD,
     name="UI Lead: final comparisons",
     slug="ui_lead_final",
+    schema=FinalDesignReview,
     reads=(
         ORIGINAL,
         "Product Analyst",
@@ -462,6 +466,7 @@ UI_LEAD_FINAL = replace(
         "UI Lead",
         "PM: consolidation",
         "Tech Lead",
+        "Drawing departures",
         "UI Lead: final comparisons",
     ),
 )

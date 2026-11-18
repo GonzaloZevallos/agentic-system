@@ -12,7 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
-  - [domain: playbook](classes-process-domain-playbook.md)
+  - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
+  - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
@@ -35,12 +36,14 @@ classDiagram
     class schemas__TechPlan["TechPlan"]
     class schemas__TechPlanWithAssumptions["TechPlanWithAssumptions"]
     class schemas__Verdict["Verdict"]
+    class schemas__VerdictWithSpecDraft["VerdictWithSpecDraft"]
     class stack_signals__Signals["Signals"]
     class tracker_items__CommentItem["CommentItem"]
     class tracker_items__HumanItem["HumanItem"]
     class tracker_items__OpenIssueItem["OpenIssueItem"]
     schemas__TechAnswersWithAssumptions --|> schemas__TechAnswers
     schemas__TechPlanWithAssumptions --|> schemas__TechPlan
+    schemas__VerdictWithSpecDraft --|> schemas__Verdict
 ```
 
 ## Relaciones con otras páginas

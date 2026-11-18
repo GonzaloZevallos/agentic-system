@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `playbook` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo.
+Esta página muestra las clases públicas de los módulos del grupo `playbook` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 2, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
@@ -33,19 +34,16 @@ classDiagram
     class playbook__Archived["Archived"]
     class playbook__Backing["Backing"]
     class playbook__Delta["Delta"]
+    class playbook__Demotion["Demotion"]
     class playbook__Evidence["Evidence"]
     class playbook__Item["Item"]
     class playbook__Pending["Pending"]
-    class playbook__Playbook["Playbook"]
-    class playbook__Refusal["Refusal"]
-    class playbook__Rejected["Rejected"]
-    class playbook_candidates__Add["Add"]
-    class playbook_candidates__Candidate["Candidate"]
-    class playbook_candidates__Entry["Entry"]
-    class playbook_candidates__Ledger["Ledger"]
-    class playbook_candidates__Record["Record"]
-    playbook__Applied --> playbook__Playbook
     playbook__Archived --> playbook__Item
-    playbook__Refusal --> playbook__Delta
-    playbook_candidates__Candidate --> playbook_candidates__Record
+    playbook__Demotion --> playbook__Delta
 ```
+
+## Relaciones con otras páginas
+
+- [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
+  - `playbook.Applied` se asocia con `playbook.Playbook`
+  - `playbook.Refusal` se asocia con `playbook.Delta`
