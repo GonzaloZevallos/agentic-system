@@ -194,6 +194,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.plan_view": "landing",
     "domain.playbook": "playbook",
     "domain.playbook_candidates": "playbook",
+    "domain.playbook_land": "playbook",
     "domain.poller_units": "machine",
     "domain.presubmit": "checks",
     "domain.pull_request": "landing",
