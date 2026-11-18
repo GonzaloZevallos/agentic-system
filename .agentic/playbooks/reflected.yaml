@@ -1386,3 +1386,5 @@ tasks:
   GH-839@decision:
     cost_usd: 0.0243
     decisions: 1
+  GH-917@review:
+    cost_usd: 0.0388
