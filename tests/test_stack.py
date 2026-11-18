@@ -243,7 +243,9 @@ def test_every_mypy_file_exists():
 # The two paths under `tests/` the checked scope admits: the in-memory doubles and the module
 # that assigns them to their ports (GH-227, the 2026-10-08 addendum to ADR-0021). Nothing else
 # under `tests/` is checked, so nothing else is admitted.
-MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
+MYPY_TEST_ENTRIES = frozenset(
+    {"tests/fakes.py", "tests/conformance.py", "tests/lesson_decision_checks.py"}
+)
 # The scripts the scope admits: the read-only poller-journal measure (GH-362) and the gate
 # duration by concurrency table (GH-361), and the pure renderer and the stale check of the
 # docs generator (GH-400; `generate.py` imports `render` by name and stays out), its phase
