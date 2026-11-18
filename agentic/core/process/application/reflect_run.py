@@ -26,7 +26,7 @@ from ..domain import system_lessons as sl
 from ..domain.reaping import ReapedProcess
 from .closed import closed_documents as closed_documents  # re-exported: plan.py reads it here
 from .ports import GitError, Inbox, ListedPullRequest, Ports, Tracker
-from .reflect import Reflected, backings, reflect_task
+from .reflect import Reflected, reflect_task
 from .release import release_task, summary
 
 TASK_ID = "playbook"
@@ -357,11 +357,11 @@ def _archive_stale(
 ) -> tuple[pb.Archived, ...]:
     """Move every item that stopped applying out of its playbook, in place, into the
     archive. `playbook.archive_due` decides; this counts the role's tasks since the item
-    reached a prompt and whether one backed or cited it. The count is the ledger's
+    reached a prompt. The count is the ledger's
     (`reflected_tasks`) over the role's tasks: one not reflected yet, or waiting for a
     retry, does not age an item."""
     for slug, playbook in list(playbooks.items()):
-        aging: dict[str, tuple[int, bool]] = {}
+        aging: dict[str, int] = {}
         for item in playbook.items:
             if not item.in_prompt_since:
                 continue
@@ -370,12 +370,9 @@ def _archive_stale(
                 for d in documents
                 if slug in (d.get("prompts") or {}) and _ended(d) > item.in_prompt_since
             ]
-            backed = item.last_applied > item.in_prompt_since or any(
-                b.slug == slug and b.category == item.category for d in ran for b in backings(d)
-            )
             ids = {str(d.get("id") or "") for d in ran}
             mine = {k: e for k, e in tasks.items() if pc.split_key(k)[0] in ids}
-            aging[item.id] = (pc.reflected_tasks(pc.Ledger(tasks=mine)), backed)
+            aging[item.id] = pc.reflected_tasks(pc.Ledger(tasks=mine))
         playbooks[slug], archived = pb.archive_stale(playbook, archived, aging, now=now)
     return archived
 

@@ -22,7 +22,7 @@ import re
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, get_args
+from typing import Any, Final, Literal, get_args
 
 import yaml
 
@@ -205,6 +205,15 @@ KEEP_MIN_TASKS = 2
 # A lesson in the prompt that no task of its role backed or cited in this many of the
 # role's tasks leaves the prompt for `archived.yaml`: `archive_due` is the only comparison.
 ARCHIVE_AFTER = 20
+# A lesson starts at `SCORE_START`; each exclusive task that ran with it and returned nothing
+# in its category adds one helpful (at most `HELPFUL_CAP`), each exclusive return adds one
+# harmful. `score` is the only place the two counters are combined.
+SCORE_START = 2
+HELPFUL_CAP = 3
+# Why an item left the prompt: the only texts an `Archived.reason` is written with here.
+ARCHIVE_STALE: Final = "stale"
+ARCHIVE_SCORE: Final = "score"
+ArchiveCause = Literal["stale", "score"]
 
 Confidence = Literal["low", "medium", "high"]
 CONFIDENCES: tuple[str, ...] = get_args(Confidence)
@@ -226,6 +235,11 @@ class Item:
     # `added_at`. An item with no `in_prompt_since` has not been in a prompt, so it never ages.
     last_applied: str = ""
     in_prompt_since: str = ""
+    # Counters of the tasks that ran with it (see `score_task`), and the `_mark` of the last
+    # task that was scored, so a task counts once. All three are omitted at their default.
+    helpful: int = 0
+    harmful: int = 0
+    scored_until: str = ""
 
     @property
     def seen(self) -> int:
@@ -276,12 +290,28 @@ def keep(confidence: Confidence, seen: int, sources: Collection[str]) -> bool:
     return confidence == KEEP_CONFIDENCE or seen >= KEEP_MIN_TASKS
 
 
-def archive_due(item: Item, role_tasks_since: int, backed: bool) -> bool:
-    """Whether `item` leaves the prompt: it has been in one (`in_prompt_since`), the role
-    ran `ARCHIVE_AFTER` tasks since, and none of them backed or cited it (`backed`)."""
-    if not item.in_prompt_since or backed:
-        return False
-    return role_tasks_since >= ARCHIVE_AFTER
+def score(item: Item) -> int:
+    """The lesson's score: `SCORE_START` plus what helped minus what harmed."""
+    return SCORE_START + item.helpful - item.harmful
+
+
+def day(text: str) -> str:
+    """The calendar day of a date or an instant: the only way the two are compared."""
+    return text[:10]
+
+
+def archive_due(item: Item, role_tasks_since: int | None) -> ArchiveCause | None:
+    """Why `item` leaves the prompt, or `None`. `score`: its score is 0 or less, whether or
+    not it ever reached a prompt. `stale`: it has been in one (`in_prompt_since`), the role
+    ran `ARCHIVE_AFTER` tasks since (`role_tasks_since`, `None` when unknown), and no merge or
+    bump moved `last_applied` past the day it entered."""
+    if score(item) <= 0:
+        return ARCHIVE_SCORE
+    if role_tasks_since is None or not item.in_prompt_since:
+        return None
+    if role_tasks_since >= ARCHIVE_AFTER and not day(item.last_applied) > day(item.in_prompt_since):
+        return ARCHIVE_STALE
+    return None
 
 
 def _number(item_id: str) -> tuple[int, str]:
@@ -301,7 +331,8 @@ def section(playbook: Playbook) -> str:
 
 
 _ITEM_KEYS = ("id", "lesson", "category", "since", "seen_in", "added_at")
-_ITEM_OPTIONAL = ("last_applied", "in_prompt_since")
+_ITEM_OPTIONAL = ("last_applied", "in_prompt_since", "helpful", "harmful", "scored_until")
+_ITEM_COUNTERS = ("helpful", "harmful")
 
 
 def item_data(item: Item) -> dict[str, Any]:
@@ -319,6 +350,12 @@ def item_data(item: Item) -> dict[str, Any]:
         data["last_applied"] = item.last_applied
     if item.in_prompt_since:
         data["in_prompt_since"] = item.in_prompt_since
+    if item.helpful:
+        data["helpful"] = item.helpful
+    if item.harmful:
+        data["harmful"] = item.harmful
+    if item.scored_until:
+        data["scored_until"] = item.scored_until
     return data
 
 
@@ -372,8 +409,16 @@ def parse_item(entry: Any, slug: str) -> Item:
     if missing:
         raise ValueError(f"playbook {slug}: item {label} is missing {missing[0]}")
     for key in (*_ITEM_KEYS, *(k for k in _ITEM_OPTIONAL if k in entry)):
-        if key != "seen_in" and not isinstance(entry[key], str):
+        if key in _ITEM_COUNTERS:
+            count = entry[key]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError(
+                    f"playbook {slug}: item {label}: {key} is not a whole number of 0 or more"
+                )
+        elif key != "seen_in" and not isinstance(entry[key], str):
             raise ValueError(f"playbook {slug}: item {label}: {key} is not text")
+    if entry.get("scored_until") and "|" not in entry["scored_until"]:
+        raise ValueError(f"playbook {slug}: item {label}: scored_until is not ended|task_id")
     seen = entry["seen_in"]
     if not isinstance(seen, list) or not all(isinstance(t, str) for t in seen):
         raise ValueError(f"playbook {slug}: item {label}: seen_in is not a list of task ids")
@@ -390,6 +435,9 @@ def parse_item(entry: Any, slug: str) -> Item:
         added_at=entry["added_at"],
         last_applied=entry.get("last_applied", ""),
         in_prompt_since=entry.get("in_prompt_since", ""),
+        helpful=entry.get("helpful", 0),
+        harmful=entry.get("harmful", 0),
+        scored_until=entry.get("scored_until", ""),
     )
 
 
@@ -596,6 +644,14 @@ def _add(
         bumped = replace(same, seen_in=same.seen_in + new_ids, last_applied=now)
         effective = replace(delta, op="bump", item_id=same.id)
         return replace(shelves, playbook=_replace_items(playbook, same, bumped)), effective, False
+    waiting = next(
+        (
+            p
+            for p in shelves.candidates
+            if p.slug == delta.slug and normalise(p.lesson) == text and p.category == delta.category
+        ),
+        None,
+    )
     shelf = next(
         (
             a
@@ -606,29 +662,43 @@ def _add(
         ),
         None,
     )
-    if shelf is not None:
-        # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites.
-        if len(playbook.items) >= PLAYBOOK_MAX_ITEMS:
-            return f"the playbook has {PLAYBOOK_MAX_ITEMS} items: merge or retire first"
-        seen_in = tuple(dict.fromkeys((*shelf.item.seen_in, *tasks)))
-        restored = replace(shelf.item, seen_in=seen_in, last_applied=now, in_prompt_since="")
-        out = _Shelves(
-            Playbook(playbook.slug, playbook.items + (restored,)),
-            shelves.candidates,
-            tuple(a for a in shelves.archived if a is not shelf),
-        )
-        return out, delta, False
-    waiting = next(
-        (
-            p
-            for p in shelves.candidates
-            if p.slug == delta.slug and normalise(p.lesson) == text and p.category == delta.category
-        ),
-        None,
-    )
-    seen_in = tuple(dict.fromkeys((*(waiting.seen_in if waiting else ()), *tasks)))
-    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
+    carried = waiting.seen_in if waiting else ()
     confidence = _top(delta.confidence, waiting.confidence if waiting else "low")
+    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
+    if shelf is not None:
+        if shelf.reason == ARCHIVE_SCORE:
+            # Back after a score archive only on evidence it did not have: a task already in
+            # its `seen_in` is not new, and the waiting candidate's tasks are filtered alike.
+            tasks = tuple(t for t in tasks if t not in shelf.item.seen_in)
+            carried = tuple(t for t in carried if t not in shelf.item.seen_in)
+            if not tasks:
+                return f"nothing to add on {shelf.item.id}: every cited task is already counted"
+            restorable = keep(confidence, len(dict.fromkeys((*carried, *tasks))), all_sources)
+        else:
+            restorable = True  # as before: no new evidence needed, the waiting candidate stays
+            carried = ()
+        consumed = waiting if shelf.reason == ARCHIVE_SCORE else None
+        if restorable:
+            # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites.
+            if len(playbook.items) >= PLAYBOOK_MAX_ITEMS:
+                return f"the playbook has {PLAYBOOK_MAX_ITEMS} items: merge or retire first"
+            seen_in = tuple(dict.fromkeys((*shelf.item.seen_in, *carried, *tasks)))
+            restored = replace(
+                shelf.item,
+                seen_in=seen_in,
+                last_applied=now,
+                in_prompt_since="",
+                helpful=0,
+                harmful=0,
+                scored_until="",
+            )
+            out = _Shelves(
+                Playbook(playbook.slug, playbook.items + (restored,)),
+                tuple(p for p in shelves.candidates if p is not consumed),
+                tuple(a for a in shelves.archived if a is not shelf),
+            )
+            return out, delta, False
+    seen_in = tuple(dict.fromkeys((*carried, *tasks)))
     others = tuple(p for p in shelves.candidates if p is not waiting)
     if not keep(confidence, len(seen_in), all_sources):
         if waiting is None:
@@ -666,19 +736,95 @@ def _top(first: Confidence, second: Confidence) -> Confidence:
 def archive_stale(
     playbook: Playbook,
     archived: Sequence[Archived],
-    aging: Mapping[str, tuple[int, bool]],
+    aging: Mapping[str, int],
     *,
     now: str,
 ) -> tuple[Playbook, tuple[Archived, ...]]:
     """Move every item `archive_due` says is due out of the playbook, into the archive
-    with the reason `stale`; nothing is deleted. `aging` maps an item id to
-    `(role_tasks_since, backed)`; an item it does not name does not age."""
-    due = [i for i in playbook.items if i.id in aging and archive_due(i, *aging[i.id])]
+    with its cause as the reason; nothing is deleted. `aging` maps an item id to the role's
+    tasks since it entered a prompt; an item it does not name has no count, so only the
+    `score` cause can reach it."""
+    due = [(i, cause) for i in playbook.items if (cause := archive_due(i, aging.get(i.id)))]
     if not due:
         return playbook, tuple(archived)
-    gone = {i.id for i in due}
+    gone = {i.id for i, _ in due}
     kept = Playbook(playbook.slug, tuple(i for i in playbook.items if i.id not in gone))
-    return kept, (*archived, *(Archived(i, "stale", now) for i in due))
+    return kept, (*archived, *(Archived(i, cause, now) for i, cause in due))
+
+
+def returned_categories(
+    entries: Sequence[Mapping[str, Any]], task_type: str, slug: str
+) -> frozenset[str]:
+    """The categories of the task's returns that `return_backing` attributes to `slug`:
+    every pair counts, not only the Tech Lead's review (`accountable`)."""
+    backings = (return_backing(entry, task_type) for entry in entries)
+    return frozenset(b.category for b in backings if b is not None and b.slug == slug)
+
+
+@dataclass(frozen=True)
+class ScoredTask:
+    """The facts of one closed task of the role that `score_task` reads, built by the caller:
+    `ended` is its last run's end (empty while unreadable), `first_run_at` the start of its
+    first run of the role, `playbook_changed` whether the task changed the role's playbook,
+    `returned` the lesson categories its returns are attributable to."""
+
+    task_id: str
+    ended: str
+    first_run_at: str
+    playbook_changed: bool
+    returned: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Scored:
+    """The playbook after the task, and whether a lesson the task covers was shared by 2 or
+    more lessons of the role, so no counter could move (the caller prints it)."""
+
+    playbook: Playbook
+    unattributed: bool
+
+
+def _mark(ended: str, task_id: str) -> str:
+    return f"{ended}|{task_id}"
+
+
+def _after_mark(item: Item, ended: str, task_id: str) -> bool:
+    """Whether the task is later than the last one `item` was scored on, by `(ended, id)`."""
+    if not item.scored_until:
+        return True
+    mark_ended, _, mark_id = item.scored_until.partition("|")
+    return (ended, task_id) > (mark_ended, mark_id)
+
+
+def score_task(playbook: Playbook, task: ScoredTask) -> Scored:
+    """Move the counters for one closed task. A lesson counts the task when it was in the
+    prompt the task ran with and the task did not change the playbook; it moves only when no
+    other lesson of the role has its category: a return in it is `harmful`, none is `helpful`
+    (up to `HELPFUL_CAP`). A lesson sharing its category moves nothing."""
+    if not task.ended:
+        return Scored(playbook, False)
+    mark = _mark(task.ended, task.task_id)
+    unattributed = False
+    items: list[Item] = []
+    for item in playbook.items:
+        eligible = bool(
+            item.in_prompt_since
+            and task.first_run_at > item.in_prompt_since
+            and not task.playbook_changed
+            and _after_mark(item, task.ended, task.task_id)
+        )
+        if not eligible:
+            items.append(item)
+            continue
+        if sum(1 for other in playbook.items if other.category == item.category) > 1:
+            unattributed = True
+            items.append(replace(item, scored_until=mark))
+        elif item.category in task.returned:
+            items.append(replace(item, harmful=item.harmful + 1, scored_until=mark))
+        else:
+            helpful = min(item.helpful + 1, HELPFUL_CAP)
+            items.append(replace(item, helpful=helpful, scored_until=mark))
+    return Scored(Playbook(playbook.slug, tuple(items)), unattributed)
 
 
 def screen_system(
