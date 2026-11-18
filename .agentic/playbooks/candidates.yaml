@@ -2144,3 +2144,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-17T18:33:25.133+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change adds or alters a persisted key, a read or write, or a flow that a doc under docs/architecture describes, update that doc in the same change and grep every function name it cites.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you write a new key into a persisted record, declare it in that record's typed definition and in the helper that copies the record, so a later rewrite does not drop it and readers need no untyped access.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
