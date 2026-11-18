@@ -280,9 +280,11 @@ _ESCALATION_STAGES = ("plan", "delivery")
 
 def _escalation_record(raw: object) -> dict[str, Any] | None:
     """The stored `drawing_escalation` read back as `{round, numbers, cause}` plus `stage` when it
-    is `plan`; `None` when it is not whole (`round` an int of at least 1, `numbers` a list of
-    ints, `cause` and `stage` from their closed sets), so a hand-edited record is dropped, as
-    an invalid size record is, and never fails the load."""
+    is `plan`, `unverified` (a list of strings) and `unverified_at` (a string) when present;
+    `None` when it is not whole (`round` an int of at least 1, `numbers` a list of ints, `cause`
+    and `stage` from their closed sets), so a hand-edited record is dropped, as an invalid size
+    record is, and never fails the load. A malformed `unverified` or `unverified_at` is dropped
+    alone, as a bad optional field, and the record stays."""
     if not isinstance(raw, Mapping):
         return None
     round_, numbers, cause, stage = (raw.get(k) for k in ("round", "numbers", "cause", "stage"))
@@ -301,6 +303,18 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
         "numbers": numbers,
         "cause": cause,
         **({"stage": "plan"} if stage == "plan" else {}),
+        **(
+            {"unverified": unverified}
+            if isinstance(unverified := raw.get("unverified"), list)
+            and unverified
+            and all(isinstance(p, str) for p in unverified)
+            else {}
+        ),
+        **(
+            {"unverified_at": at}
+            if isinstance(at := raw.get("unverified_at"), str) and at
+            else {}
+        ),
     }
 
 

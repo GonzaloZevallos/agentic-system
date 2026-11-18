@@ -1,4 +1,5 @@
 import ast
+import json
 from pathlib import Path
 from typing import get_args, get_type_hints
 
@@ -18,6 +19,7 @@ from agentic.core.process.domain import (
 )
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing_order import YieldReason
+from agentic.core.process.domain.task import DrawingEscalation
 from tests.gh150_stranded import GH150_STRANDED
 
 
@@ -2291,6 +2293,66 @@ def test_an_invalid_escalation_record_is_dropped_on_load_and_never_written(bad):
     )
     assert "drawing_escalation" in stored
     assert "drawing_escalation" not in document.parse(stored)
+
+
+_UNVERIFIED_AT = "2026-11-18T10:00:00.001+00:00"
+_FULL_ESCALATION = {
+    "round": 2,
+    "numbers": [1, 3],
+    "cause": "drawing_cap",
+    "stage": "plan",
+    "unverified": ["pantallas/Home.png", ""],
+    "unverified_at": _UNVERIFIED_AT,
+}
+
+
+def test_an_escalation_with_unverified_asks_round_trips_intact():
+    text = document.render(_escalation_state(**_FULL_ESCALATION))
+    parsed = document.parse(text)
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+def test_every_key_of_the_escalation_record_has_a_sample_that_round_trips():
+    assert set(_FULL_ESCALATION) == set(DrawingEscalation.__annotations__)
+    parsed = document.parse(document.render(_escalation_state(**_FULL_ESCALATION)))
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+
+
+@pytest.mark.parametrize(
+    ("bad", "dropped"),
+    [
+        ({"unverified": "x"}, "unverified"),
+        ({"unverified": [1]}, "unverified"),
+        ({"unverified": ["a.png", 2]}, "unverified"),
+        ({"unverified_at": 3}, "unverified_at"),
+        ({"unverified_at": ["x"]}, "unverified_at"),
+    ],
+)
+def test_a_malformed_unverified_field_is_dropped_and_the_record_survives(bad, dropped):
+    base = {"round": 1, "numbers": [1], "cause": "drawing_departure"}
+    assert document.parse(document.render(_escalation_state(**base, **bad)))[
+        "drawing_escalation"
+    ] == (base)
+    stored = document.render(_escalation_state(**base)).replace(
+        "\n---\n", "\ndrawing_escalation: " + json.dumps({**base, **bad}) + "\n---\n", 1
+    )
+    assert dropped in stored
+    assert document.parse(stored)["drawing_escalation"] == base
+
+
+@pytest.mark.parametrize("stage", [None, "plan"])
+def test_a_record_without_the_new_fields_rewrites_identically_with_no_such_keys(stage):
+    record = {"round": 2, "numbers": [1], "cause": "drawing_departure"}
+    if stage:
+        record["stage"] = stage
+    text = document.render(_escalation_state(**record))
+    assert "unverified" not in text
+    parsed = document.parse(text)["drawing_escalation"]
+    assert parsed == record
+    assert document.render(
+        {**_departure_base(), "drawing_escalation": parsed}
+    ) == text
 
 
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}

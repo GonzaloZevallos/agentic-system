@@ -7,6 +7,7 @@ are the only owners of the comment grammar of the owner's answer, `flag_verdict`
 `flag_verdicts` of the `--drawing` flag's, `screens_due` of which screens a change owes a
 check for and `row_is_open` of whether a check row still blocks. `question_numbers` is the only
 reader of the interviewer's `**Qn**` markers and `question_ref` the only builder of a `Q<n>` ref;
+`unverified_lines` the only builder of the lines for questions whose drawing could not be compared;
 one private classifier reads every line of a comment or an interview. `interviewer_check` and
 `interview_check` are the pure rules of the definition interview's drawing checks. The module
 is a leaf: it imports neither `task`, `rules` nor `schemas`, not even inside a function.
@@ -271,6 +272,31 @@ class CheckLike(Protocol):
     def drawing(self) -> str | None: ...
     @property
     def element(self) -> str | None: ...
+
+
+@dataclass(frozen=True)
+class UnverifiedAsk:
+    """A question whose approved drawing could not be compared, asked of the owner: `ref` the
+    check's ref, `path` the normalized drawing path (`""` when the check names none) and `line`
+    the text for the human."""
+
+    ref: str
+    path: str
+    line: str
+
+
+def unverified_lines(checks: Sequence[CheckLike]) -> list[UnverifiedAsk]:
+    """One ask per `question` check whose verdict is `unverified`, in input order. The only
+    builder of those lines and the only place their path is normalized."""
+    return [
+        UnverifiedAsk(
+            ref=c.ref,
+            path="" if c.drawing is None else normalize_drawing(c.drawing),
+            line=unverified_question(c.ref, c.drawing),
+        )
+        for c in checks
+        if c.subject == "question" and c.verdict == "unverified"
+    ]
 
 
 class DepartureLike(Protocol):
