@@ -31,6 +31,7 @@ from agentic.core.process.application.ports import (
     Inbox,
     LabelTimeline,
     Launcher,
+    LessonDecider,
     LoadReader,
     PerfLock,
     PerfRunner,
@@ -51,6 +52,7 @@ from agentic.core.process.application.ports import (
     Tracker,
     Workspace,
 )
+from agentic.core.process.domain.lesson_decision import RawDecisions
 from agentic.core.process.domain.roles import Role
 from tests.fakes import (
     FakeBoard,
@@ -61,6 +63,7 @@ from tests.fakes import (
     FakeFreeSpace,
     FakeLabelTimeline,
     FakeLauncher,
+    FakeLessonDecider,
     FakeLoadReader,
     FakePerfLock,
     FakePerfRunner,
@@ -114,6 +117,7 @@ _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
+_lesson_decider: LessonDecider = FakeLessonDecider(RawDecisions((), ()))
 
 
 def ports_of_doubles() -> Ports:
@@ -137,6 +141,7 @@ def ports_of_doubles() -> Ports:
         free_space=_free_space,
         spec_reader=_spec_reader,
         spec_validator=_spec_validator,
+        lesson_decider=_lesson_decider,
     )
 
 
@@ -171,6 +176,7 @@ COVERED: dict[str, type] = {
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
     "LabelTimeline": FakeLabelTimeline,
+    "LessonDecider": FakeLessonDecider,
 }
 
 

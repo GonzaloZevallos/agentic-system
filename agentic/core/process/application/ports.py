@@ -22,6 +22,7 @@ from ..domain.design import Design, NotReady
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
+from ..domain.lesson_decision import DecisionRequest, Settled
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
@@ -2559,6 +2560,31 @@ def utc_now() -> str:
 
 
 @dataclass(frozen=True)
+class Decided:
+    """What a `LessonDecider` came back with: the settled answer and what it cost, or the
+    reason it has none. Branch on `ok`: a `Decided` that is not `ok` is a failure."""
+
+    settled: Settled | None
+    cost_usd: float
+    error: str | None
+
+    @property
+    def ok(self) -> bool:
+        return self.settled is not None and self.error is None and self.cost_usd >= 0
+
+
+class LessonDecider(Protocol):
+    """Decides what becomes of new lessons, given the lessons they resemble (GH-881)."""
+
+    async def decide(self, request: DecisionRequest) -> Decided:
+        """The model's answer to `request`, already settled (`lesson_decision.settle`): never
+        the raw output. Branch on `Decided.ok`; one that is not `ok` is a failure and carries
+        `error`, which comes back after one retry. A candidate in `Settled.undecided` stays on
+        its shelf and is asked about again next run. Never raises."""
+        ...
+
+
+@dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
     documents: TaskDocuments
@@ -2610,6 +2636,9 @@ class Ports:
     # Decides whether the text a `SpecReader` read is an approved spec (GH-594). `None` decides
     # nothing, which is how every round ran before it existed; both are needed to honour a spec.
     spec_validator: SpecValidator | None = None
+    # Decides what becomes of new lessons (GH-881). `None` decides nothing and nothing calls it
+    # yet, which is how every round ran before it existed.
+    lesson_decider: LessonDecider | None = None
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now

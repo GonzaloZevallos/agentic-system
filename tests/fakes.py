@@ -33,6 +33,7 @@ from agentic.core.process.application.ports import (
     CiLogs,
     CommandResult,
     Commands,
+    Decided,
     ExperimentFile,
     FastForwardView,
     FlagVocabulary,
@@ -44,6 +45,7 @@ from agentic.core.process.application.ports import (
     IssueRow,
     IssueState,
     LaunchAttempt,
+    LessonDecider,
     ListedPullRequest,
     LoadReader,
     MergeCallFailed,
@@ -92,6 +94,7 @@ from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
+from agentic.core.process.domain.lesson_decision import DecisionRequest, RawDecisions, settle
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import (
@@ -2515,6 +2518,23 @@ class FakeCiLogs:
         return [(job, []) for job in jobs]
 
 
+class FakeLessonDecider:
+    """GH-918: no test calls a model to decide lessons. `decide` settles `script` over the
+    request it is given, as a real decider settles the model's answer, or fails with `script`
+    when that is a string. Counts the requests it was asked."""
+
+    def __init__(self, script: RawDecisions | str, cost_usd: float = 0.0) -> None:
+        self.script = script
+        self.cost_usd = cost_usd
+        self.requests: list[DecisionRequest] = []
+
+    async def decide(self, request: DecisionRequest) -> Decided:
+        self.requests.append(request)
+        if isinstance(self.script, str):
+            return Decided(None, self.cost_usd, self.script)
+        return Decided(settle(request, self.script), self.cost_usd, None)
+
+
 class FakeExperimentFile:
     """GH-470: no test reads a real `.agentic/experiment.yaml`. `read` answers `data` (`None`
     declares no experiment) or raises `error` as the adapter does for an unreadable file, and
@@ -2804,6 +2824,7 @@ def memory_ports(
     experiment: ExperimentFile | None = None,
     spec_reader: SpecReader | None = None,
     spec_validator: SpecValidator | None = None,
+    lesson_decider: LessonDecider | None = None,
     now: Callable[[], str] | None = None,
 ) -> Ports:
     return Ports(
@@ -2834,6 +2855,7 @@ def memory_ports(
         experiment=experiment,
         spec_reader=spec_reader,
         spec_validator=spec_validator,
+        lesson_decider=lesson_decider,
     )
 
 

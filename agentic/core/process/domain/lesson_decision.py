@@ -125,9 +125,7 @@ def _first_repeat(keys: list[str]) -> str:
 def pending_id(pending: Pending) -> str:
     """The id a candidate lesson is offered under: the same (slug, category, normalised text)
     identity `playbook` deduplicates candidates by, so it changes if the lesson is edited."""
-    identity = _SEPARATOR.join(
-        (pending.slug, pending.category, playbook.normalise(pending.lesson))
-    )
+    identity = _SEPARATOR.join((pending.slug, pending.category, playbook.normalise(pending.lesson)))
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     return "".join((_PENDING_PREFIX, digest))
 

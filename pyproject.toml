@@ -124,6 +124,7 @@ files = [
     "scripts/ci_flakes.py",
     "tests/fakes.py",
     "tests/conformance.py",
+    "tests/lesson_decision_checks.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
