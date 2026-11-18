@@ -141,3 +141,16 @@ sequenceDiagram
    hay) y `agentic/core/process/adapters/langgraph/graph.py:_pause_node` las pliega con el
    reducer en el mismo patch, que arma `agentic/core/process/domain/drawing_answer.py:resume_patch`
    sobre `rules.resumed`; el cli nunca las siembra.
+
+   Esta pausa también nace en el plan, antes de construir nada. Con un `design` declarado en el
+   commit base, `agentic/core/process/application/plan.py:_finished` mira, antes de la promoción
+   y de `agentic/core/process/application/plan.py:_asked`, el plan que queda en pie: si trae
+   `subtasks` (sin `parts` y no solo de tracker) y
+   `agentic/core/process/domain/drawing_answer.py:plan_split` deja desviaciones abiertas, devuelve
+   el patch sin `subtasks`, sin `plan_promote_request` y sin `plan_due`, más
+   `agentic/core/process/domain/drawing_answer.py:escalation_patch` con `stage: plan`, que escribe
+   `drawing_escalation`, el texto (`agentic/core/process/domain/drawing.py:departure_question`) y,
+   en una tarea con spec, `spec_cause: drawing`. Nada se despacha ni se promueve; la respuesta
+   del dueño vuelve a `plan` por la regla de 5. Sin `design` esta puerta no corre. La
+   reanudación de una excepción de tracker (carve-out) llama a `_finished` sin `design`, así
+   que esa ruta no pasa por esta puerta.

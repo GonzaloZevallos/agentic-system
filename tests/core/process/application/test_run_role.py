@@ -2555,24 +2555,26 @@ async def test_a_body_that_carries_the_line_fills_it_once_and_the_block_adds_non
     assert system.endswith("Block start\nBlock end")
 
 
+async def _written_hash(tmp_path, monkeypatch, design, block):
+    """The prompt hash `run_role` itself wrote to the patch, with every attempt cut."""
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead", "build")
+    prompts = MemoryPrompts(blocks={"build": block})
+    runner = ScriptedRunner(tech_lead=[AttemptFailed("x"), AttemptFailed("y")])
+    ports = memory_ports(runner, prompts=prompts, stack=CountingStack(design=design))
+    state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
+    cfg = Configuration(product_dir=tmp_path, role_retries=1)
+    _, patch = await run_role(cast(Any, state), TECH_LEAD, cfg, ports, **PLACEHOLDERS)
+    return patch["prompts"]["tech_lead"], runner.calls[0]["system_prompt"]
+
+
 async def test_the_block_fill_never_enters_the_hash(tmp_path, monkeypatch):
-    hashes = []
-    for design in (DESIGN, None):
-        monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead", "build")
-        prompts = MemoryPrompts(blocks={"build": BLOCK_WITH_RULE})
-        ports = memory_ports(ScriptedRunner(), prompts=prompts, stack=CountingStack(design=design))
-        state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
-        with pytest.raises(AssertionError, match="no scripted result"):
-            await run_role(
-                cast(Any, state),
-                TECH_LEAD,
-                Configuration(product_dir=tmp_path),
-                ports,
-                **PLACEHOLDERS,
-            )
-        raw, _ = prompts.raw(TECH_LEAD)
-        hashes.append(prompt_hash(raw + "\n" + BLOCK_WITH_RULE))
-    assert hashes[0] == hashes[1]
+    with_design, text_with = await _written_hash(tmp_path, monkeypatch, DESIGN, BLOCK_WITH_RULE)
+    without, text_without = await _written_hash(tmp_path, monkeypatch, None, BLOCK_WITH_RULE)
+    assert text_with != text_without  # the fill did reach the text
+    assert with_design == without  # and never the hash
+    # The hash does follow the raw block: another raw block moves it.
+    other, _ = await _written_hash(tmp_path, monkeypatch, DESIGN, BLOCK_WITH_RULE + "\nmore")
+    assert other != with_design
 
 
 async def test_an_unreadable_stack_is_a_prompt_failure_never_no_design(tmp_path, monkeypatch):
