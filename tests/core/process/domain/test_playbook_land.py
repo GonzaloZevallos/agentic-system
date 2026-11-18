@@ -13,7 +13,7 @@ from agentic.core.process.domain import playbook_land as pl
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 
 HEAD = "a" * 40
-PATH = ".agentic/playbooks/developer.yaml"
+PATH = pc.playbook_file("developer")
 NAMES = ("check",)
 
 
@@ -79,8 +79,8 @@ def test_each_gate_gives_its_closed_cause(kwargs, expected):
         ".agentic/playbooks-x/a",
         ".agentic/playbooks/../stack.yaml",
         ".agentic/playbooks/a/../../stack.yaml",
-        "a/../.agentic/playbooks/developer.yaml",
-        "/.agentic/playbooks/developer.yaml",
+        f"a/../{PATH}",
+        f"/{PATH}",
         ".agentic/playbooks",
         "",
         ".agentic/stack.yaml",
@@ -154,7 +154,7 @@ VALID_RECORDS = {
 
 def test_every_row_of_the_table_passes_with_a_valid_file():
     files: dict[str, str | None] = {at("developer.yaml"): role_text(2), **VALID_RECORDS}
-    files[at("summaries/3.md")] = "# a summary\n"
+    files[pc.summary_file(3)] = "# a summary\n"
     files[at("tech_lead.yaml")] = None
     assert pl.content_verdict(files) == "ok"
 
@@ -179,7 +179,7 @@ def test_a_file_that_fails_its_own_parser_is_invalid(path):
         (pc.REJECTED_FILE, None),
         (pc.LEDGER_FILE, None),
         (pc.CANDIDATES_FILE, None),
-        (at("summaries/3.md"), None),
+        (pc.summary_file(3), None),
         (at("unknown.yaml"), "items: []\n"),
         (at("summaries/x.md"), "text"),
         (at("summaries/3.md.bak"), "text"),
