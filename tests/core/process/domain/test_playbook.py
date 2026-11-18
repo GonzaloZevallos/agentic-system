@@ -7,8 +7,10 @@ from agentic.core.process.domain import roles
 from agentic.core.process.domain.playbook import (
     ACCOUNTABLE,
     ARCHIVE_AFTER,
+    GRACE_TASKS,
     KEEP_CONFIDENCE,
     KEEP_MIN_TASKS,
+    PLAYBOOK_MAX_CHARS,
     PLAYBOOK_MAX_ITEMS,
     PLAYBOOK_ROLES,
     REVIEW_PAIR,
@@ -17,6 +19,7 @@ from agentic.core.process.domain.playbook import (
     Backing,
     Confidence,
     Delta,
+    Demotion,
     Evidence,
     Item,
     Pending,
@@ -27,9 +30,13 @@ from agentic.core.process.domain.playbook import (
     archive_due,
     archive_stale,
     attribute,
+    demote,
+    demotion_pick,
+    in_grace,
     keep,
     lesson_refusal,
     normalise,
+    over_cap,
     parse,
     render_file,
     return_backing,
@@ -84,6 +91,7 @@ def run(
     ev: dict[str, Evidence] | None = None,
     candidates: tuple[Pending, ...] = (),
     archived: tuple[Archived, ...] = (),
+    counts: dict[str, int] | None = None,
 ) -> Applied:
     return apply(
         playbook or empty(),
@@ -94,6 +102,7 @@ def run(
         now=NOW,
         candidates=candidates,
         archived=archived,
+        role_tasks_since=counts or {},
     )
 
 
@@ -288,13 +297,6 @@ def test_a_task_cited_twice_grows_seen_once():
     assert again.playbook.items[0].seen == 1
     assert again.applied == ()
     assert "already counted" in again.refused[0].reason
-
-
-def test_the_cap_refuses_an_add_with_merge_or_retire_first():
-    full = full_playbook()
-    result = run([add("One more distinct lesson.")], full)
-    assert len(result.playbook.items) == PLAYBOOK_MAX_ITEMS
-    assert "merge or retire first" in result.refused[0].reason
 
 
 def test_retiring_frees_room_for_a_later_add_in_the_same_batch():
@@ -761,3 +763,338 @@ def test_a_restore_needs_the_same_slug_and_category_as_the_archived_item():
     result = run([add(LESSON, "GH-1")], ev={"GH-1": evidence("process-suite-red")}, archived=shelf)
     assert [i.id for i in result.playbook.items] == ["developer-5"]
     assert result.archived == shelf
+
+
+# ---- the cap, grace and demotion pick (GH-881 part 1) ---------------------------------
+
+
+def aged(n: int, since: str = "", **extra: Any) -> Item:
+    return replace(item(n, f"Lesson number {n}."), in_prompt_since=since, **extra)
+
+
+def test_a_file_without_the_new_keys_round_trips_byte_identical_and_empty_has_no_section():
+    text = render_file(Playbook("developer", (item(1), item(2, "Another lesson."))))
+    assert render_file(parse(text, "developer")) == text
+    assert "demoted_at_seen" not in text
+    assert section(empty()) == ""
+    assert render_file(empty()) == render_file(parse(render_file(empty()), "developer"))
+
+
+def test_over_cap_on_the_item_axis_is_more_than_the_maximum():
+    assert PLAYBOOK_MAX_ITEMS == 15
+    assert not over_cap(full_playbook())
+    over = Playbook("developer", (*full_playbook().items, item(99, "One more lesson.")))
+    assert over_cap(over)
+
+
+def test_over_cap_on_the_character_axis_with_items_built_directly_not_through_validation():
+    # A hand-edited file can hold lessons longer than LESSON_MAX_CHARS; the section is the cap.
+    long = "x" * 1500
+    few = Playbook("developer", tuple(item(n, f"{n}{long}") for n in range(1, 4)))
+    assert len(section(few)) <= PLAYBOOK_MAX_CHARS
+    assert not over_cap(few)
+    many = Playbook("developer", tuple(item(n, f"{n}{long}") for n in range(1, 6)))
+    assert len(many.items) <= PLAYBOOK_MAX_ITEMS
+    assert len(section(many)) > PLAYBOOK_MAX_CHARS
+    assert over_cap(many)
+
+
+@pytest.mark.parametrize(
+    ("since", "counts", "expected"),
+    [
+        ("", {"developer-1": 99}, True),  # never landed
+        ("2026-10-01", {}, True),  # id missing from the map
+        ("2026-10-01", {"developer-1": GRACE_TASKS - 1}, True),
+        ("2026-10-01", {"developer-1": GRACE_TASKS}, False),
+    ],
+)
+def test_in_grace(since, counts, expected):
+    assert in_grace(aged(1, since), counts) is expected
+
+
+def test_the_grace_period_is_five_tasks():
+    assert GRACE_TASKS == 5
+
+
+def test_demotion_pick_takes_the_lowest_score_among_items_out_of_grace():
+    pb_ = Playbook(
+        "developer", (aged(1, "2026-10-01"), aged(2, "2026-10-01"), aged(3, "2026-10-01"))
+    )
+    counts = {"developer-1": 9, "developer-2": 9, "developer-3": 9}
+    scores = {"developer-1": 3, "developer-2": 1, "developer-3": 2}
+    assert demotion_pick(pb_, counts, lambda i: scores[i.id]) == "developer-2"
+
+
+def test_demotion_pick_never_picks_an_item_in_grace_even_with_the_lowest_score():
+    pb_ = Playbook("developer", (aged(1, "2026-10-01"), aged(2, "2026-10-01")))
+    counts = {"developer-1": 9, "developer-2": 1}
+    assert demotion_pick(pb_, counts, lambda i: 0 if i.id == "developer-2" else 5) == "developer-1"
+
+
+def test_without_a_score_every_item_scores_equal_and_the_oldest_in_prompt_since_goes():
+    pb_ = Playbook(
+        "developer", (aged(1, "2026-10-05"), aged(2, "2026-10-01"), aged(3, "2026-10-03"))
+    )
+    counts = {i.id: 9 for i in pb_.items}
+    assert demotion_pick(pb_, counts) == "developer-2"
+
+
+def test_ties_break_by_the_id_number_not_by_string_order():
+    pb_ = Playbook("developer", (aged(10, "2026-10-01"), aged(2, "2026-10-01")))
+    counts = {i.id: 9 for i in pb_.items}
+    assert demotion_pick(pb_, counts) == "developer-2"
+
+
+def test_demotion_pick_is_none_when_every_item_is_in_grace():
+    pb_ = Playbook("developer", (aged(1, "2026-10-01"), aged(2)))
+    assert demotion_pick(pb_, {"developer-1": 2}) is None
+    assert demotion_pick(empty(), {}) is None
+
+
+def test_demote_makes_a_low_candidate_that_remembers_how_many_tasks_had_cited_it():
+    old = aged(4, "2026-10-01", seen_in=("GH-1", "GH-2", "GH-3"), last_applied="x")
+    pending = demote(old, "developer")
+    assert pending == Pending(
+        slug="developer",
+        category=old.category,
+        lesson=old.lesson,
+        confidence="low",
+        seen_in=old.seen_in,
+        sources=(),
+        added_at=old.added_at,
+        demoted_at_seen=3,
+    )
+
+
+def test_keep_refuses_a_demoted_lesson_until_one_more_task_cites_it():
+    assert not keep("high", 3, ("finding",), demoted_at_seen=3)
+    assert not keep("high", 2, ("finding",), demoted_at_seen=3)
+    assert keep("high", 4, ("finding",), demoted_at_seen=3)
+    assert keep("low", 4, ("finding",), demoted_at_seen=3)  # four tasks pass the plain rule
+    assert not keep("low", 1, ("finding",), demoted_at_seen=0)  # one task, low: today's rule
+    assert keep("high", 1, ("finding",), demoted_at_seen=0)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "seen", "sources"),
+    [("high", 1, ()), ("low", 1, ()), ("low", 2, ("finding",)), ("high", 1, ("human_decision",))],
+)
+def test_keep_without_demoted_at_seen_is_unchanged(confidence, seen, sources):
+    plain = keep(confidence, seen, sources)
+    assert keep(confidence, seen, sources, demoted_at_seen=None) is plain
+
+
+# ---- apply: the cap demotes instead of refusing -------------------------------------
+
+
+def seasoned(ids: range) -> Playbook:
+    """Items that reached a prompt on rising days: the lowest id is the oldest."""
+    items = tuple(
+        replace(item(n, f"Lesson number {n}."), in_prompt_since=f"2026-09-{n:02d}") for n in ids
+    )
+    return Playbook("developer", items)
+
+
+def ran(book: Playbook) -> dict[str, int]:
+    return {i.id: GRACE_TASKS + 4 for i in book.items}
+
+
+def test_an_add_at_the_cap_demotes_the_lesson_the_pick_names_and_records_why():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    new = add("One more distinct lesson.")
+    result = run([new], book, counts=ran(book))
+    assert result.refused == () and result.held == () and result.capped == ()
+    assert result.applied == (new,)
+    assert len(result.playbook.items) == PLAYBOOK_MAX_ITEMS
+    ids = {i.id for i in result.playbook.items}
+    assert "developer-1" not in ids and "developer-16" in ids
+    assert result.demoted == (Demotion("developer-1", new),)
+    gone = result.candidates[0]
+    assert (gone.lesson, gone.confidence, gone.seen_in, gone.demoted_at_seen) == (
+        "Lesson number 1.",
+        "low",
+        ("GH-1",),
+        1,
+    )
+
+
+def test_the_cap_with_every_lesson_in_grace_holds_the_add_and_leaves_the_playbook_intact():
+    full = full_playbook()
+    new = add("One more distinct lesson.")
+    result = run([new], full)
+    assert result.playbook == full
+    assert result.applied == () and result.refused == () and result.demoted == ()
+    assert result.held == (new,) and result.capped == (new,)
+    assert [(p.lesson, p.demoted_at_seen) for p in result.candidates] == [
+        ("One more distinct lesson.", None)
+    ]
+
+
+def test_a_demotion_that_cannot_make_the_playbook_fit_is_discarded_whole():
+    # Two over the cap, only one lesson out of grace: demoting it is not enough.
+    over = Playbook(
+        "developer",
+        (
+            *(item(n, f"Lesson number {n}.") for n in range(1, PLAYBOOK_MAX_ITEMS + 1)),
+            replace(item(30, "Old lesson."), in_prompt_since="2026-09-01"),
+        ),
+    )
+    result = run([add("One more distinct lesson.")], over, counts={"developer-30": 9})
+    assert result.playbook == over and result.demoted == ()
+    assert len(result.capped) == 1 and len(result.candidates) == 1
+
+
+def test_the_loop_demotes_as_many_lessons_as_it_takes_to_fit():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 3))  # a hand-edited file, two over
+    new = add("One more distinct lesson.")
+    result = run([new], book, counts=ran(book))
+    assert [d.item_id for d in result.demoted] == ["developer-1", "developer-2", "developer-3"]
+    assert {d.by for d in result.demoted} == {new}
+    assert len(result.playbook.items) == PLAYBOOK_MAX_ITEMS
+    assert not over_cap(result.playbook)
+
+
+def test_the_new_lesson_is_in_grace_so_it_is_never_its_own_victim():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    result = run([add("One more distinct lesson.")], book, counts=ran(book))
+    assert "One more distinct lesson." in {i.lesson for i in result.playbook.items}
+
+
+def test_the_score_decides_before_the_age():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    result = apply(
+        book,
+        [add("One more distinct lesson.")],
+        EVIDENCE,
+        (),
+        section_hash="abc123",
+        now=NOW,
+        role_tasks_since=ran(book),
+        score=lambda i: 0 if i.id == "developer-9" else 5,
+    )
+    assert [d.item_id for d in result.demoted] == ["developer-9"]
+
+
+def archived_lesson(n: int) -> tuple[Archived, ...]:
+    old = replace(item(n, LESSON, ("GH-1", "GH-2")), in_prompt_since="2026-08-01")
+    return (Archived(old, "stale", "2026-10-01"),)
+
+
+def test_a_restore_at_the_cap_demotes_another_lesson_and_lists_it():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    ev = {"GH-3": evidence("process-suite-red")}
+    new = add(LESSON, "GH-3")
+    result = run([new], book, ev=ev, archived=archived_lesson(40), counts=ran(book))
+    assert result.applied == (new,) and result.archived == ()
+    assert result.demoted == (Demotion("developer-1", new),)
+    restored = next(i for i in result.playbook.items if i.id == "developer-40")
+    assert restored.seen_in == ("GH-1", "GH-2", "GH-3") and restored.in_prompt_since == ""
+    assert len(result.playbook.items) == PLAYBOOK_MAX_ITEMS
+
+
+def test_a_restore_that_cannot_fit_leaves_the_playbook_and_the_archive_identical():
+    full = full_playbook()
+    shelf = archived_lesson(40)
+    ev = {"GH-3": evidence("process-suite-red")}
+    new = add(LESSON, "GH-3")
+    result = run([new], full, ev=ev, archived=shelf)
+    assert result.playbook == full and result.archived == shelf
+    assert result.applied == () and result.demoted == ()
+    assert result.held == (new,) and result.capped == (new,)
+    assert [p.lesson for p in result.candidates] == [LESSON]
+
+
+def test_a_new_id_never_reuses_the_number_of_a_lesson_demoted_earlier_in_the_apply():
+    # developer-16 is the oldest: the restore of developer-1 demotes it, and the add after
+    # it must number from 17, not from the 15 left in the playbook.
+    book = seasoned(range(2, PLAYBOOK_MAX_ITEMS + 2))
+    book = replace(
+        book,
+        items=tuple(
+            replace(i, in_prompt_since="2026-08-01") if i.id == "developer-16" else i
+            for i in book.items
+        ),
+    )
+    ev = {"GH-3": evidence("process-suite-red")}
+    restore, fresh = add(LESSON, "GH-3"), add("One more distinct lesson.", "GH-3")
+    result = run([restore, fresh], book, ev=ev, archived=archived_lesson(1), counts=ran(book))
+    assert result.demoted[0] == Demotion("developer-16", restore)
+    assert "developer-17" in {i.id for i in result.playbook.items}
+    assert "developer-16" not in {i.id for i in result.playbook.items}
+
+
+def test_two_adds_at_the_cap_in_one_apply_take_two_ids_and_apply_in_delta_order():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    first, second = add("First new lesson."), add("Second new lesson.")
+    result = run([first, second], book, counts=ran(book))
+    assert result.applied == (first, second)
+    assert [d.by for d in result.demoted] == [first, second]
+    assert [d.item_id for d in result.demoted] == ["developer-1", "developer-2"]
+    new = {
+        i.lesson: i.id for i in result.playbook.items if i.id in ("developer-16", "developer-17")
+    }
+    assert new == {"First new lesson.": "developer-16", "Second new lesson.": "developer-17"}
+
+
+def test_a_demoted_lesson_folds_into_its_twin_candidate():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    twin = Pending(
+        "developer",
+        "process-suite-red",
+        "  LESSON number 1.",
+        "medium",
+        ("GH-9",),
+        ("finding",),
+        NOW,
+        demoted_at_seen=0,
+    )
+    result = run([add("One more distinct lesson.")], book, candidates=(twin,), counts=ran(book))
+    assert len(result.candidates) == 1
+    merged = result.candidates[0]
+    assert merged.lesson == twin.lesson and merged.confidence == "medium"
+    assert merged.sources == ("finding",) and merged.seen_in == ("GH-9", "GH-1")
+    assert merged.demoted_at_seen == 1
+
+
+def test_running_again_over_the_output_of_a_demotion_changes_nothing():
+    book = seasoned(range(1, PLAYBOOK_MAX_ITEMS + 1))
+    new = add("One more distinct lesson.")
+    first = run([new], book, counts=ran(book))
+    again = run(
+        [new],
+        first.playbook,
+        candidates=first.candidates,
+        archived=first.archived,
+        counts=ran(first.playbook),
+    )
+    assert "nothing to bump" in again.refused[0].reason
+    assert again.applied == again.held == again.capped == again.demoted == ()
+    assert again.playbook == first.playbook and again.candidates == first.candidates
+
+
+def test_a_held_back_add_twice_is_refused_the_second_time_and_records_no_new_cap():
+    full = full_playbook()
+    new = add("One more distinct lesson.")
+    first = run([new], full)
+    again = run([new], full, candidates=first.candidates)
+    assert "nothing to add" in again.refused[0].reason
+    assert again.applied == again.held == again.capped == again.demoted == ()
+    assert again.candidates == first.candidates
+
+
+def test_a_demoted_lesson_waits_for_a_task_it_had_not_counted_then_returns():
+    ev = {"GH-1": evidence("process-suite-red"), "GH-2": evidence("process-suite-red")}
+    gone = Pending(
+        "developer", "process-suite-red", LESSON, "low", ("GH-1",), (), NOW, demoted_at_seen=1
+    )
+    same_task = run([add(LESSON, "GH-1")], ev=ev, candidates=(gone,))
+    assert "nothing to add" in same_task.refused[0].reason
+    back = run([add(LESSON, "GH-2")], ev=ev, candidates=(gone,))
+    assert back.playbook.items[0].seen_in == ("GH-1", "GH-2") and back.candidates == ()
+    stays = replace(gone, demoted_at_seen=2, seen_in=("GH-1", "GH-2"))
+    held = run([add(LESSON, "GH-2")], ev=ev, candidates=(replace(stays, seen_in=("GH-1",)),))
+    assert held.playbook.items == () and held.capped == ()
+    assert held.candidates[0].demoted_at_seen == 2 and held.candidates[0].seen_in == (
+        "GH-1",
+        "GH-2",
+    )

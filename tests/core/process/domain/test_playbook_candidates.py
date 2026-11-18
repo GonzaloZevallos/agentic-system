@@ -478,3 +478,25 @@ def test_a_marker_block_written_before_adr_0056_reads_the_same():
         1,
         10,
     )
+
+
+def test_demoted_at_seen_is_written_only_when_set_and_read_back():
+    plain = pb.Pending("developer", "spec-scope", LESSON, "low", ("GH-1",), (), "d")
+    text = pc.render_candidates([plain])
+    assert "demoted_at_seen" not in text
+    assert pc.parse_candidates(text) == [plain]
+    assert pc.render_candidates(pc.parse_candidates(text)) == text
+    demoted = pb.Pending(
+        "developer", "spec-scope", LESSON, "low", ("GH-1", "GH-2"), (), "d", demoted_at_seen=2
+    )
+    assert pc.parse_candidates(pc.render_candidates([demoted])) == [demoted]
+    zero = pb.Pending("developer", "spec-scope", LESSON, "low", (), (), "d", demoted_at_seen=0)
+    assert pc.parse_candidates(pc.render_candidates([zero])) == [zero]
+
+
+@pytest.mark.parametrize("bad", ["'2'", "true", "-1", "[1]"])
+def test_a_demoted_at_seen_that_is_not_a_count_is_refused(bad):
+    pending = pb.Pending("developer", "spec-scope", LESSON, "low", ("GH-1",), (), "d")
+    text = pc.render_candidates([pending]) + f"  demoted_at_seen: {bad}\n"
+    with pytest.raises(ValueError):
+        pc.parse_candidates(text)

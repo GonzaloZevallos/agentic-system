@@ -515,19 +515,34 @@ def in_prompt_since(
 # ---- candidates.yaml and archived.yaml -----------------------------------------------
 
 
+def _candidate_data(p: pb.Pending) -> dict[str, Any]:
+    """A candidate as the file carries it: the optional key only when set, so a file with
+    none of them is byte-identical to one written before."""
+    data: dict[str, Any] = {
+        "slug": p.slug,
+        "category": p.category,
+        "lesson": p.lesson,
+        "confidence": p.confidence,
+        "seen_in": list(p.seen_in),
+        "sources": list(p.sources),
+        "added_at": p.added_at,
+    }
+    if p.demoted_at_seen is not None:
+        data["demoted_at_seen"] = p.demoted_at_seen
+    return data
+
+
+def _demoted_at_seen(row: Mapping[str, Any]) -> int | None:
+    raw = row.get("demoted_at_seen")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise ValueError(f"demoted_at_seen {raw!r} is not a count")
+    return raw
+
+
 def render_candidates(pending: Sequence[pb.Pending]) -> str:
-    data = [
-        {
-            "slug": p.slug,
-            "category": p.category,
-            "lesson": p.lesson,
-            "confidence": p.confidence,
-            "seen_in": list(p.seen_in),
-            "sources": list(p.sources),
-            "added_at": p.added_at,
-        }
-        for p in pending
-    ]
+    data = [_candidate_data(p) for p in pending]
     text: str = yaml.safe_dump(
         {"candidates": data}, sort_keys=False, allow_unicode=True, width=10**6
     )
@@ -558,6 +573,7 @@ def parse_candidates(text: str) -> list[pb.Pending]:
                     seen_in=tuple(dict.fromkeys(str(t) for t in row.get("seen_in") or [])),
                     sources=tuple(str(x) for x in row.get("sources") or []),
                     added_at=str(row.get("added_at") or ""),
+                    demoted_at_seen=_demoted_at_seen(row),
                 )
             )
         except (KeyError, TypeError, ValueError) as error:
