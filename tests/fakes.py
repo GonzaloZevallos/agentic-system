@@ -1775,6 +1775,9 @@ class MemoryTracker:
         self.close_comments: dict[str, str] = {}
         self.close_issue_failures: list[Exception] = []
         self.queue_error: Exception | None = None
+        # GH-839: the issues `held_issues` answers, and the error it raises instead.
+        self.held: set[int] = set()
+        self.held_issues_error: Exception | None = None
         self.states: dict[int, IssueState] = {}
         # GH-137 blocking finding: a number here makes `issue_state` raise `ValueError`
         # (`gh`'s own failure shape, `GhTracker._gh`) instead of answering, so a
@@ -2112,6 +2115,11 @@ class MemoryTracker:
         if self.queue_error is not None:
             raise self.queue_error
         return sorted(self._queue)
+
+    def held_issues(self) -> frozenset[int]:
+        if self.held_issues_error is not None:
+            raise self.held_issues_error
+        return frozenset(self.held)
 
     def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         if self.close_issue_failures:

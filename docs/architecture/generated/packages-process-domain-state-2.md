@@ -18,6 +18,7 @@ graph TD
     g_domain__state__1["state parte 1 (grupo)"]
     m_domain__signals["domain.signals"]
     m_domain__size_budget["domain.size_budget"]
+    m_domain__spec_approval["domain.spec_approval"]
     m_domain__spec_assumptions["domain.spec_assumptions"]
     m_domain__spec_brief["domain.spec_brief"]
     m_domain__spec_delivery["domain.spec_delivery"]
@@ -27,6 +28,7 @@ graph TD
     m_domain__tracker_refs["domain.tracker_refs"]
     m_domain__worktree_sweep["domain.worktree_sweep"]
     m_domain__size_budget --> g_domain__checks
+    m_domain__spec_approval --> m_domain__spec_delivery
     m_domain__spec_assumptions --> g_domain__roles
     m_domain__spec_assumptions --> g_domain__state__1
     m_domain__spec_assumptions --> m_domain__task

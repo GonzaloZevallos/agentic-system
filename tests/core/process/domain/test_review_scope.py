@@ -166,3 +166,18 @@ def test_the_record_appends_through_apply_and_a_retry_adds_nothing():
 def test_a_document_without_the_key_loads_unchanged():
     assert "review_scopes" not in apply({"id": "GH-1"}, {})
     assert landing.review_scope is review_scope
+
+
+# --- GH-838 part 2: what a restack of a stacked child costs the review -------------------------
+
+
+def test_a_restack_after_the_approved_head_is_carried_with_the_cause_clean():
+    # The accepted tip holds the child's own commits; the only step after it is the one clean
+    # merge of upstream `sync_master` makes. The ADR of the stacked start cites this.
+    verdict = review_scope(facts(merge_step("")))
+    assert (verdict.scope, verdict.cause) == ("carried", "clean")
+
+
+def test_a_restack_over_own_commits_the_review_never_accepted_is_a_full_review():
+    verdict = review_scope(facts(own_step(), merge_step()))
+    assert (verdict.scope, verdict.cause) == ("full", "own_before_merge")

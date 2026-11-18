@@ -882,6 +882,13 @@ class TrackerCallFailed(ValueError):
         self.status = status
 
 
+class HeldListMayBeCut(TrackerCallFailed):
+    """`Tracker.held_issues` returned a page of exactly `HELD_LIMIT` held issues, so the list
+    may be cut and a held issue could be past it (GH-839). Not a transport failure: it does not
+    clear on a retry, only when holds are released or `HELD_LIMIT` is raised. A
+    `TrackerCallFailed`, so a round that ends on one names the one class."""
+
+
 class TrackerTimedOut(TrackerCallFailed):
     """A `gh` call ran out of time (GH-266). Declared here so `application/` and `cli.py`
     can name it without importing an adapter. The message names the call and the bound,
@@ -1871,6 +1878,12 @@ class Tracker(Protocol):
         ascending (GH-137): the poller's own candidate pool, so "primero el número más
         bajo" is decided here and not left to however `gh issue list` happens to order
         a page today."""
+        ...
+
+    def held_issues(self) -> frozenset[int]:
+        """The open issues labelled `HOLD_LABEL` (GH-839), one bounded `gh issue list`. Raises
+        `TrackerCallFailed` when the read fails or cannot be trusted: `HeldListMayBeCut` for a
+        page of exactly `HELD_LIMIT` rows, which may be a cut list."""
         ...
 
     def issue_state(self, number: int) -> IssueState:

@@ -40,5 +40,6 @@ classDiagram
     class playbook_land__Merge["Merge"]
     class playbook_land__Refuse["Refuse"]
     class playbook_land__Wait["Wait"]
+    class playbook_similarity__Lesson["Lesson"]
     playbook_candidates__Candidate --> playbook_candidates__Record
 ```

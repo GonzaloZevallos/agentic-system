@@ -17,6 +17,7 @@ graph TD
     m_domain__playbook["domain.playbook"]
     m_domain__playbook_candidates["domain.playbook_candidates"]
     m_domain__playbook_land["domain.playbook_land"]
+    m_domain__playbook_similarity["domain.playbook_similarity"]
     m_domain__system_lessons["domain.system_lessons"]
     m_domain__playbook --> g_domain__roles
     m_domain__playbook --> g_domain__state

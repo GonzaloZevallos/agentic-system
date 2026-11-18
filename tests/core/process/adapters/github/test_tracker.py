@@ -11,7 +11,9 @@ from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github import tracker as tracker_module
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
+    HeldListMayBeCut,
     MergeCallFailed,
+    TrackerCallFailed,
     TrackerTimedOut,
     TrackerUnreachable,
 )
@@ -23,6 +25,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
+from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
@@ -589,6 +592,92 @@ def test_queue_is_every_open_agentic_issue_sorted_ascending():
             "500",
         ]
     ]
+
+
+HELD_ARGV = [
+    "gh",
+    "issue",
+    "list",
+    "--label",
+    HOLD_LABEL,
+    "--state",
+    "open",
+    "--json",
+    "number",
+    "--limit",
+    str(HELD_LIMIT),
+]
+
+
+def _held_rows(count: int) -> str:
+    return json.dumps([{"number": number} for number in range(1, count + 1)])
+
+
+def test_held_issues_asks_for_the_open_held_issues_in_one_bounded_page():
+    run = Recorder(stdout=_held_rows(3))
+    assert GhTracker(Path("/p"), run).held_issues() == frozenset({1, 2, 3})
+    assert run.calls == [HELD_ARGV]
+
+
+def test_no_held_issue_is_an_empty_set():
+    assert GhTracker(Path("/p"), Recorder(stdout="[]")).held_issues() == frozenset()
+
+
+def test_a_page_one_row_short_of_the_limit_is_a_complete_list():
+    held = GhTracker(Path("/p"), Recorder(stdout=_held_rows(HELD_LIMIT - 1))).held_issues()
+    assert len(held) == HELD_LIMIT - 1
+
+
+def test_a_page_of_exactly_the_limit_may_be_cut_and_raises():
+    with pytest.raises(HeldListMayBeCut):
+        GhTracker(Path("/p"), Recorder(stdout=_held_rows(HELD_LIMIT))).held_issues()
+
+
+def test_a_full_page_raises_even_when_it_holds_a_duplicate():
+    rows = [{"number": number} for number in range(1, HELD_LIMIT)] + [{"number": 1}]
+    assert len(rows) == HELD_LIMIT
+    with pytest.raises(HeldListMayBeCut):
+        GhTracker(Path("/p"), Recorder(stdout=json.dumps(rows))).held_issues()
+
+
+def test_a_duplicate_inside_a_short_page_collapses():
+    rows = [{"number": number} for number in range(1, HELD_LIMIT - 1)] + [{"number": 1}]
+    assert len(rows) == HELD_LIMIT - 1
+    held = GhTracker(Path("/p"), Recorder(stdout=json.dumps(rows))).held_issues()
+    assert len(held) == HELD_LIMIT - 2
+
+
+def test_a_failed_gh_call_raises_tracker_call_failed_naming_no_stderr():
+    with pytest.raises(TrackerCallFailed) as raised:
+        GhTracker(Path("/p"), Recorder(fail=True)).held_issues()
+    assert not isinstance(raised.value, HeldListMayBeCut)
+    assert "no auth" not in str(raised.value)
+    assert isinstance(raised.value.__cause__, ValueError)
+
+
+def test_a_stalled_gh_call_passes_through_as_tracker_timed_out():
+    with pytest.raises(TrackerTimedOut):
+        GhTracker(Path("/p"), _stalls_at("issue", "list")).held_issues()
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not json",
+        "",
+        json.dumps({"number": 3}),
+        json.dumps([3]),
+        json.dumps([{"title": "x"}]),
+        json.dumps([{"number": "3"}]),
+        json.dumps([{"number": True}]),
+        json.dumps([{"number": 3.0}]),
+    ],
+)
+def test_an_unreadable_or_mis_shaped_answer_raises_tracker_call_failed(stdout):
+    with pytest.raises(TrackerCallFailed) as raised:
+        GhTracker(Path("/p"), Recorder(stdout=stdout)).held_issues()
+    assert type(raised.value) is TrackerCallFailed
+    assert not isinstance(raised.value, HeldListMayBeCut)
 
 
 def test_issue_state_reads_blocked_by_state_reason_and_the_closing_merge_commit():

@@ -18,6 +18,7 @@ from typing import Literal
 
 from ...application.ports import (
     BranchPullRequest,
+    HeldListMayBeCut,
     IssueComment,
     IssueState,
     ListedPullRequest,
@@ -30,6 +31,7 @@ from ...application.ports import (
     TrackerUnreachable,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from ...domain.hold import HELD_LIMIT, HOLD_LABEL
 from ...domain.presubmit import ApiBreakLine
 from ...domain.task import (
     PullRequest,
@@ -219,6 +221,20 @@ query($id: ID!) {
 """
 
 _RED = frozenset({"FAILURE", "TIMED_OUT", "STARTUP_FAILURE"})
+
+
+def _held_numbers(rows: object) -> list[int] | None:
+    """The issue numbers of a `gh issue list --json number` page, or `None` when the page is
+    not a list of objects each with an integer `number` (a `bool` is not one)."""
+    if not isinstance(rows, list):
+        return None
+    numbers: list[int] = []
+    for row in rows:
+        number = row.get("number") if isinstance(row, dict) else None
+        if not isinstance(number, int) or isinstance(number, bool):
+            return None
+        numbers.append(number)
+    return numbers
 
 
 def _failed_step_in(answer: dict) -> str | None:
@@ -785,6 +801,37 @@ class GhTracker:
             "500",
         )
         return sorted(item["number"] for item in json.loads(raw))
+
+    def held_issues(self) -> frozenset[int]:
+        try:
+            raw = self._gh_read(
+                "issue",
+                "list",
+                "--label",
+                HOLD_LABEL,
+                "--state",
+                "open",
+                "--json",
+                "number",
+                "--limit",
+                str(HELD_LIMIT),
+            )
+        except TrackerCallFailed:
+            raise  # a stall or an unreachable GitHub keeps its own class
+        except ValueError as exc:  # `gh` failed: its stderr stays out of the message
+            raise TrackerCallFailed("gh issue list (held) failed") from exc
+        try:
+            rows = json.loads(raw)
+        except ValueError as exc:
+            raise TrackerCallFailed("gh issue list (held) answered unparsable JSON") from exc
+        numbers = _held_numbers(rows)
+        if numbers is None:
+            raise TrackerCallFailed("gh issue list (held) answered an unexpected shape")
+        if len(rows) == HELD_LIMIT:  # rows counted before deduplication
+            raise HeldListMayBeCut(
+                "gh issue list (held) returned a full page: the held list may be cut"
+            )
+        return frozenset(numbers)
 
     def issue_state(self, number: int) -> IssueState:
         fields = "state,stateReason,blockedBy,closedByPullRequestsReferences,labels"
