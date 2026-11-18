@@ -117,6 +117,17 @@ class Verdict(RoleOutput):
     )
 
 
+class VerdictWithSpecDraft(Verdict):
+    """`Verdict` when a draft Spec is due (`rules.spec_fallback_due`, GH-594 part 5a): PM may
+    also return the Spec body. Body only: the system writes the front matter and the status."""
+
+    spec_draft: str | None = Field(
+        default=None,
+        description="The Spec body only, in Markdown, with no front matter block: the system "
+        "writes `status`. Leave it out on `returned`",
+    )
+
+
 class Diagnosis(RoleOutput):
     """The Product Analyst's ruling on a bug (README.md, 2 and 4; issue #65): what it
     saw when it reproduced, against which definition, and what it makes of it.

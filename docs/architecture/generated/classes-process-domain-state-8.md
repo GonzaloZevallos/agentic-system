@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__RestartPending["RestartPending"]
     class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
@@ -43,24 +44,13 @@ classDiagram
     class task__StackUnfetchable["StackUnfetchable"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
-    class task__TaskState["TaskState"]
-    task__TaskState --> task__StackParent
-    task__TaskState --|> task__TaskInput
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
-  - `task.TaskState` se asocia con `task.InterviewStats`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
-  - `task.TaskState` se asocia con `task.PlanRoute`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` se asocia con `task_path.Promotion`
+  - `task.TaskState` hereda de `task.TaskInput`
+  - `task.TaskState` se asocia con `task.StackParent`

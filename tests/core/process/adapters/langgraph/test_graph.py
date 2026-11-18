@@ -1969,6 +1969,10 @@ async def test_a_stage0_update_between_two_nodes_changes_nothing_the_later_one_r
     system.mkdir()
     for source in PROMPTS_DIR.glob("*.md"):
         (system / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    # A full feature asks PM for the draft Spec: the block is served from the same directory.
+    (system / "spec").mkdir()
+    for source in (PROMPTS_DIR / "spec").glob("*.md"):
+        (system / "spec" / source.name).write_text(source.read_text(encoding="utf-8"), "utf-8")
     original = (system / "pm.md").read_text(encoding="utf-8")
     script = _StageZeroUpdate(system, **script_for(**technical()).queues)
     fakes = Fakes()
@@ -1984,7 +1988,9 @@ async def test_a_stage0_update_between_two_nodes_changes_nothing_the_later_one_r
 
     assert "{{docs_review}}" in (system / "pm.md").read_text(encoding="utf-8")
     assert final["status"] == "ready_for_review"
-    assert final["prompts"]["pm"] == prompt_hash(original)
+    # The draft block of a full feature is part of what PM ran with, and so of the hash.
+    draft = (system / "spec" / "pm_draft.md").read_text(encoding="utf-8")
+    assert final["prompts"]["pm"] == prompt_hash(original + "\n" + draft)
     assert "{{docs_review}}" not in script.calls[5]["system_prompt"]
 
 

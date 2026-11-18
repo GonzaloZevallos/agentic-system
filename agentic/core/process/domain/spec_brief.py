@@ -44,6 +44,11 @@ SPEC_BLOCKS: dict[str, str] = {
     "tech_writer_review": "copy_review",
 }
 
+# The block PM's validation carries when a draft Spec is due (GH-594 part 5a,
+# `rules.spec_fallback_due`): a name, not a table entry, because it belongs to no role that meets
+# a slice. The adapter serves it with the table's blocks and preflight refuses it the same way.
+DRAFT_BLOCK = "pm_draft"
+
 DataRefusal = Literal["line_break", "fence", "template", "comment", "oversize"]
 BlockRefusal = Literal["template", "fence"]
 

@@ -2419,3 +2419,20 @@ def test_the_record_is_read_by_no_decision_and_survives_a_closure():
     text = document.render(_SPEC_STATE)
     closed = document.record_closure(text, {"closed_at": "2026-09-21T10:00:00Z"})
     assert document.parse(closed)["spec_delivery"] is True
+
+
+_WRITTEN_DRAFT = {"outcome": "written", "path": "docs/specs/2026-11-17-x.md", "sha256": "c" * 64}
+
+
+def test_the_spec_draft_record_round_trips_and_is_distinct_from_the_spec():
+    """GH-594 part 5a: `spec_draft` is written only when set, comes back as it was, and neither
+    makes the task a spec delivery nor reads as `spec`."""
+    plain = document.render(_base_state())
+    assert document.render(_base_state(spec_draft=None)) == plain
+    assert "spec_draft" not in plain
+    for record in (_WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
+        text = document.render(_base_state(spec_draft=record))
+        loaded = document.parse(text)
+        assert loaded["spec_draft"] == record
+        assert "spec" not in loaded and "spec_delivery" not in text
+        assert document.render(_base_state(**loaded)) == text
