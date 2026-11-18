@@ -62,7 +62,8 @@ def _greater(x: _Score, y: _Score) -> bool:
 
 
 def _at_least(x: _Score, minimum: Fraction) -> bool:
-    return x[0] * minimum.denominator >= minimum.numerator * x[1]
+    """Whether score x reaches ``minimum``; an empty union scores 0."""
+    return x[0] * minimum.denominator >= minimum.numerator * max(x[1], 1)
 
 
 def jaccard(a: frozenset[str], b: frozenset[str]) -> Fraction:
@@ -134,11 +135,9 @@ def cluster(
 
 def _linkage(g: list[int], h: list[int], pair: dict[tuple[int, int], _Score]) -> _Score:
     """Complete linkage: the lowest pairwise score between two clusters."""
-    low: _Score | None = None
-    for i in g:
-        for j in h:
-            s = pair[(i, j)] if i < j else pair[(j, i)]
-            if low is None or _greater(low, s):
-                low = s
-    assert low is not None
+    scores = [pair[(i, j)] if i < j else pair[(j, i)] for i in g for j in h]
+    low = scores[0]
+    for s in scores[1:]:
+        if _greater(low, s):
+            low = s
     return low

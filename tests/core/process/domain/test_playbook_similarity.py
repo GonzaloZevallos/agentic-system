@@ -232,6 +232,13 @@ def test_cluster_rejects_duplicate_ids() -> None:
         cluster([GH585, Item("GH-585", "other")])
 
 
+def test_all_stopword_lessons_do_not_cluster() -> None:
+    # Both word sets are empty, which jaccard scores 0, below the threshold.
+    pair = [Item("s1", "When you do the"), Item("s2", "and the of it")]
+    assert words(pair[0].lesson) == words(pair[1].lesson) == frozenset()
+    assert cluster(pair) == (("s1",), ("s2",))
+
+
 def test_cluster_empty_input() -> None:
     assert cluster([]) == ()
 
