@@ -121,7 +121,7 @@ def escalation_patch(
     *,
     contradicted: frozenset[int] = frozenset(),
     stage: Literal["plan", "delivery"] = "delivery",
-) -> dict[str, object]:
+) -> task.DrawingEscalationPatch:
     """The patch that escalates `departures` (and every row still open) to the owner: the new
     rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
     escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
@@ -422,3 +422,23 @@ def fix_pass_rows(
         for row in state.get("drawing_departures", [])
         if outcomes.get(row["key"]) == "fix_due"
     ]
+
+
+def fold_raised(state: task.TaskState, merged: task.TaskState, at: str) -> task.TaskState:
+    """`merged` (the patch a verifier set returns, on the snapshot `state`) without the
+    transient `drawing_raised` the final leads left: the escalation of those departures built by
+    `escalation_patch`, applied on top of `merged` so a sibling's deltas survive (ADR-0084).
+
+    Decided by whether the key is present, never by whether the list is empty: a raise with no
+    new departure still escalates the row left open. Without the key `merged` is returned as it
+    is. When a sibling already escalated, this pass's departures are dropped: they are found
+    again on the head the resume verifies, never remembered. A raise always leaves an open
+    number, so the `ValueError` of `escalation_patch` is unreachable here and is not caught."""
+    if "drawing_raised" not in merged:
+        return merged
+    folded = merged.copy()
+    raised = folded.pop("drawing_raised")
+    held = task.apply(state, folded)
+    if held.get("escalated"):
+        return folded
+    return task.apply(folded, escalation_patch(held, raised, at))

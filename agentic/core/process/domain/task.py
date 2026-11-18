@@ -1281,6 +1281,15 @@ class EscalationPatch(TypedDict):
     spec_cause: NotRequired[SpecEscalationCause | None]
 
 
+class DrawingEscalationPatch(EscalationPatch):
+    """What `drawing_answer.escalation_patch` writes to ask the owner about drawing departures
+    (GH-766): the escalation keys plus the new rows and the round record. A partial patch, so
+    `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    drawing_departures: list[DepartureRecord]
+    drawing_escalation: DrawingEscalation
+
+
 class SlicesClosedPatch(TypedDict):
     """What `record_closure` writes to close a task its slices carried to master (GH-334):
     the time and the slices' pull requests. Never a `delivery_outcome`."""
@@ -2553,6 +2562,11 @@ class TaskState(TaskInput, total=False):
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
     drawing_checks: NotRequired[DrawingChecksRecord]
+    # The departures a final-leads pass raised and nobody has asked the owner yet (GH-766 part
+    # 5.2b): transient, written only by the final-leads branch of `final_validation` (even when
+    # empty) and removed only by `drawing_answer.fold_raised`, which `verify` calls before
+    # anything is written. Never rendered into the document and never in `_BRANCH_LOCAL`.
+    drawing_raised: NotRequired[list[drawing.Departure]]
 
 
 def _reducers() -> dict[str, object]:
@@ -2565,7 +2579,9 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
+def apply(
+    state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch | DrawingEscalationPatch
+) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
     patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
     checked."""
