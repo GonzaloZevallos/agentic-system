@@ -245,19 +245,25 @@ def next_attempt(
     prior: LandAttempt | None, verdict: Verdict, head: str, at: str, master_sha: str | None
 ) -> LandAttempt:
     """The record after `verdict`: a refusal for the cause the prior attempt refused for adds one
-    to its streak, a refusal for another cause starts at 1, a merge resets to 0; a wait or a
-    failed call leaves the streak as it was. `escalated_at` survives only while the streak does."""
-    streak = 0 if prior is None else prior.streak
-    escalated_at = None if prior is None else prior.escalated_at
+    to its streak, a refusal for another cause starts at 1, a merge resets to 0. A wait or a
+    failed call leaves the streak as it was: while a refusal stands (the prior attempt is one) the
+    record keeps its verdict, cause, streak and `escalated_at` and only moves `head`, `at` and
+    `master_sha`, so a refuse, wait, refuse sequence for one cause still counts 1, 1, 2 and can
+    halt. `escalated_at` survives only while the streak does."""
     if isinstance(verdict, Refuse):
         same = prior is not None and prior.verdict == "refuse" and prior.cause == verdict.cause
-        streak = streak + 1 if same else 1
-        escalated_at = escalated_at if same else None
+        streak = prior.streak + 1 if prior is not None and same else 1
+        escalated_at = prior.escalated_at if prior is not None and same else None
         return LandAttempt(head, at, "refuse", verdict.cause, streak, master_sha, escalated_at)
     if isinstance(verdict, Merge):
         return LandAttempt(head, at, "merge", None, 0, master_sha, None)
+    if prior is not None and prior.verdict == "refuse":
+        return LandAttempt(
+            head, at, "refuse", prior.cause, prior.streak, master_sha, prior.escalated_at
+        )
     name: Literal["wait", "failed"] = "wait" if isinstance(verdict, Wait) else "failed"
-    return LandAttempt(head, at, name, verdict.cause, streak, master_sha, escalated_at)
+    streak = 0 if prior is None else prior.streak
+    return LandAttempt(head, at, name, verdict.cause, streak, master_sha, None)
 
 
 def land_halted(attempt: LandAttempt | None) -> bool:
