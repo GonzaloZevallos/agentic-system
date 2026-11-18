@@ -298,9 +298,7 @@ async def test_a_draft_committed_twice_records_the_second_commit_and_hash(root, 
     task = await task_checkout_in_thread(STATE, cfg, ports)
     first = deliver(STATE, {"spec_draft": BODY}, task, cfg, ports)
     again = BODY + "\nMore.\n"
-    second = deliver(
-        {**STATE, "spec_draft": first}, {"spec_draft": again}, task, cfg, ports
-    )
+    second = deliver({**STATE, "spec_draft": first}, {"spec_draft": again}, task, cfg, ports)
     assert first["outcome"] == second["outcome"] == "written"
     assert first["path"] == second["path"] == DRAFT
     assert first["commit"] == f"{1:040x}" and second["commit"] == f"{2:040x}"
@@ -315,7 +313,9 @@ async def test_a_commit_that_added_nothing_records_the_head_that_holds_the_text(
     sha = "9" * 40
     workspace = CommittingWorkspace(pinned_head=sha)
     workspace.files[(sha, DRAFT)] = draft_text(BODY)
-    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace)
+    ports = ports_for(
+        returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace
+    )
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"] == {
         "outcome": "written",
@@ -331,7 +331,9 @@ async def test_a_head_that_does_not_hold_the_written_text_is_not_recorded(root, 
     workspace = CommittingWorkspace(pinned_head=sha)
     if held is not None:
         workspace.files[(sha, DRAFT)] = held
-    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace)
+    ports = ports_for(
+        returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace
+    )
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"] == {"outcome": "invalid"}
     assert patch["status"] == "definition_ready"

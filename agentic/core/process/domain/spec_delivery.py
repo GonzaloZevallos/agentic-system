@@ -32,7 +32,7 @@ SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_m
 # What the system did with the draft Spec PM returned (GH-594 part 5a): closed.
 SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent"]
 # Why a draft Spec body is refused (GH-594 part 5c-1), by stage: the body alone, the draft read by
-# the validator, and the approved preview of it. Closed; `DRAFT_REFUSAL_REASONS` has one sentence each.
+# the validator, and the approved preview of it. Closed; `DRAFT_REFUSAL_REASONS` has one each.
 DraftCause = Literal[
     "draft_empty",
     "draft_front_matter",
@@ -396,16 +396,16 @@ DRAFT_PREVIEW_PATH = f"{SPEC_DIR}draft.md"
 # a path or a section list (those belong to Knowledge; the draft prompt block names them).
 DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
     "draft_empty": "the draft Spec body is empty; return the body as text, without front matter.",
-    "draft_front_matter": "the draft Spec body must not open its own front matter; the system adds it.",
+    "draft_front_matter": "the draft Spec body must not open front matter; the system adds it.",
     "draft_unhashable": "the draft Spec body cannot be encoded as text; return plain UTF-8 text.",
     "draft_invalid": (
         "the draft Spec body lacks the structure required by the draft Spec section of your "
         "prompt (pm_draft); return every section that block names, in order, with no front matter."
     ),
-    "draft_not_draft": "the draft Spec body must read as an unapproved draft; return only the body.",
+    "draft_not_draft": "the draft Spec body must read as an unapproved draft; return the body.",
     "preview_slice_missing": "the draft Spec must have exactly one slice.",
     "preview_invalid": "the draft Spec body must still validate once it is approved.",
-    "preview_unapproved": "the draft Spec could not be previewed as approved; return the body again.",
+    "preview_unapproved": "the draft Spec could not be previewed as approved; try again.",
 }
 
 
@@ -420,7 +420,7 @@ def login_ok(login: str | None) -> bool:
 
 def approval_instant(now: str) -> str:
     """The clock's instant in the form approval writes: the clock (`Ports.now`) ends in `+00:00`,
-    the approved front matter in `Z`. Anything else is returned as it is, for `instant_ok` to judge."""
+    the approved front matter in `Z`. Anything else is returned as is, for `instant_ok` to judge."""
     return f"{now.removesuffix('+00:00')}Z" if now.endswith("+00:00") else now
 
 

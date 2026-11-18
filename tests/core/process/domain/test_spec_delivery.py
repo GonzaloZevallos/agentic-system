@@ -13,8 +13,8 @@ from agentic.core.process.domain.spec_delivery import (
     SpecLine,
     SpecLineMalformed,
     SpecRefusal,
-    body_sha256,
     approved_contract,
+    body_sha256,
     body_source,
     derive_flags,
     draft_body_refusal,
@@ -451,7 +451,9 @@ CONTRACT: Any = {
 )
 def test_draft_reading_judges_the_draft_then_the_preview(draft, preview, expected) -> None:
     reading = draft_reading(draft, preview)
-    assert reading == (DraftReading(True, None) if expected is None else DraftReading(False, expected))
+    assert reading == (
+        DraftReading(True, None) if expected is None else DraftReading(False, expected)
+    )
 
 
 @pytest.mark.parametrize(
