@@ -141,6 +141,15 @@ def body_sha256(text: str) -> str | None:
     return None if split is None else hashlib.sha256(split[1].encode("utf-8")).hexdigest()
 
 
+def owner_matches(author: str, owner_login: str | None) -> bool:
+    """True only when `author` is the owner: the one login comparison for specs (invariant 1),
+    used by the approval reader and by the validator. A missing, empty or blank `owner_login`
+    matches nobody; otherwise the logins are compared with `casefold`."""
+    if not owner_login or not owner_login.strip():
+        return False
+    return author.casefold() == owner_login.casefold()
+
+
 def derive_flags(screens: Sequence[Screen]) -> tuple[bool, bool]:
     """(touches_ui, touches_copy): any screen at all; any screen with a non-blank copy string."""
     return bool(screens), any(c.strip() for s in screens for c in s["copy"])

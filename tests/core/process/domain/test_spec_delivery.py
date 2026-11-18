@@ -13,6 +13,7 @@ from agentic.core.process.domain.spec_delivery import (
     body_source,
     derive_flags,
     normalize_text,
+    owner_matches,
     parse_spec_line,
     protected,
     render_approved_front_matter,
@@ -385,3 +386,21 @@ _ESCALATION = {"kind": "escalation", "value": "classification"}
 )
 def test_body_source_is_the_inbox_only_on_a_resume_with_a_candidate_line(state, source):
     assert body_source(state) == source
+
+
+@pytest.mark.parametrize(
+    ("author", "login", "expected"),
+    [
+        ("Owner", "owner", True),
+        ("owner", "OWNER", True),
+        ("other", "owner", False),
+        ("owner", None, False),
+        ("owner", "", False),
+        ("owner", "   ", False),
+        ("", "", False),
+    ],
+)
+def test_owner_matches_compares_with_casefold_and_refuses_a_blank_login(
+    author: str, login: str | None, expected: bool
+) -> None:
+    assert owner_matches(author, login) is expected
