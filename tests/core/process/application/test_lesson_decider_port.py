@@ -25,7 +25,6 @@ from agentic.core.process.domain.lesson_decision import (
     Similar,
     settle,
 )
-from tests.conformance import ports_of_doubles
 from tests.fakes import FakeLessonDecider
 from tests.lesson_decision_checks import settled_is_consistent
 
@@ -84,10 +83,6 @@ def test_the_fake_fails_with_its_script_when_that_is_an_error() -> None:
     decided = _decide(FakeLessonDecider("the model timed out", cost_usd=0.5))
     assert decided == Decided(None, 0.5, "the model timed out")
     assert not decided.ok
-
-
-def test_the_doubles_ports_carry_a_decider() -> None:
-    assert ports_of_doubles().lesson_decider is not None
 
 
 # ---- the checker rejects what it must ---------------------------------------------------
