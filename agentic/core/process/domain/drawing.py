@@ -425,7 +425,6 @@ for _reason, _names in (
         "pending GH-766 part 3",
         "pm_consultant pm_bug spec/pm_consultant spec/pm_draft",
     ),
-    ("pending GH-766 part 4", "tech_lead spec/plan"),
     (
         "covered by tech_lead",
         "developer developer_integrator tech_lead_review tech_lead_review_light",

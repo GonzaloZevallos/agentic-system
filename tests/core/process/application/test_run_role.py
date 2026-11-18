@@ -2370,7 +2370,10 @@ class _PlaybookPrompts(FilesystemPrompts):
 async def test_with_a_spec_each_mapped_role_ends_its_system_prompt_with_its_block(tmp_path, slug):
     role = next(role for role in ROLES if role.slug == slug)
     prompts = _PlaybookPrompts(tmp_path)
-    block = prompts.spec_block(spec_brief.SPEC_BLOCKS[slug])
+    # Without a design the block's `{{drawing_rule}}` line, when it has one, is dropped.
+    block = prompts.spec_block(spec_brief.SPEC_BLOCKS[slug]).replace(
+        spec_brief.RULE_LINE + "\n", ""
+    )
     runner = ScriptedRunner()
     state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
     with pytest.raises(AssertionError, match="no scripted result"):  # the call was recorded
@@ -2531,8 +2534,10 @@ async def test_the_block_line_is_filled_with_the_plan_rule_only_with_a_design(
 ):
     from agentic.core.process.domain.drawing import rule_for
 
-    with_design = await _system_prompt_with_block(tmp_path, monkeypatch, design=DESIGN)
-    without = await _system_prompt_with_block(tmp_path, monkeypatch, design=None)
+    # A body without the line, so the rule comes through the block.
+    body = "You are the tech lead."
+    with_design = await _system_prompt_with_block(tmp_path, monkeypatch, design=DESIGN, body=body)
+    without = await _system_prompt_with_block(tmp_path, monkeypatch, design=None, body=body)
     assert with_design.endswith(
         "Block start\n" + rule_for(DESIGN, "tech_lead", plan=True) + "\nBlock end"
     )

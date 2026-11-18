@@ -1153,7 +1153,7 @@ async def run_role(
             ports,
             vocabulary,
             drawing_rule_for=lambda: drawing.rule_for(
-                ports.stack.design(task_base(state, ports)), role.slug
+                ports.stack.design(task_base(state, ports)), role.slug, plan=True
             ),
             **placeholders,
         )

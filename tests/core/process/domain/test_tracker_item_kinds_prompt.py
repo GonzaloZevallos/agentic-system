@@ -79,6 +79,7 @@ def test_the_prompt_renders_as_it_did_before_the_placeholder(name, human_only):
     values = {
         **preflight.PLACEHOLDERS,
         "date": "2026-01-01",
+        "drawing_rule": "",
         "tracker_item_kinds": tracker_items.kinds_text(),
     }
     new = roles.render(raw, roles.PROMPTS_DIR / f"{name}.md", **values)
