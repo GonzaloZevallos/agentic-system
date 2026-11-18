@@ -125,7 +125,7 @@ def test_tech_plan_subtasks_are_slugs_with_seams_and_known_dependencies():
 
 
 def test_subtasks_merge_per_key_like_the_other_maps():
-    assert REDUCERS["subtasks"].__name__ == "merge"
+    assert REDUCERS["subtasks"].__name__ == "merge_subtasks"
     state = {"subtasks": {"a": {"status": "pending"}, "b": {"status": "pending"}}}
     merged = apply(state, {"subtasks": {"a": {"status": "delivered"}}})
     assert merged["subtasks"] == {"a": {"status": "delivered"}, "b": {"status": "pending"}}
