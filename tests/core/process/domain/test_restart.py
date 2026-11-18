@@ -357,3 +357,22 @@ def test_a_row_settled_as_owner_decision_reads_dismissed_below_the_bar_and_open_
         ]
         by_place = {row["location"]: row["status"] for row in rules.findings_rows(state)}
         assert by_place == {"x.py:1": "dismissed", "y.py:2": "open", "z.py:3": "open"}
+
+
+def test_every_owner_decision_cause_has_a_questions_prompt_with_the_exact_texts():
+    from agentic.core.process.domain import escalation_prompts as prompts
+    from agentic.core.process.domain.task import OwnerDecisionCause
+
+    for cause in get_args(OwnerDecisionCause):
+        assert ("questions", cause) in prompts.ESCALATION_PROMPTS
+    assert prompts.prompt_for("questions", "owner_decision") == (
+        "The decision was not applied: this task cannot be routed back automatically. Comment a "
+        "new `Decision:` and the task is planned again with it.",
+        prompts.DECIDE,
+        (prompts.DECIDE, prompts.CLOSE_UNPLANNED),
+    )
+    assert prompts.prompt_for("questions", "spec_owned") == (
+        "The Spec is the owner's file: edit it and resume.",
+        prompts.RESUME,
+        (prompts.RESUME, prompts.CLOSE_UNPLANNED),
+    )

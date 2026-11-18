@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Final, Literal, get_args
 
 from .spec_delivery import SpecRouteCause
-from .task import EscalationClass, MechanicalCause
+from .task import EscalationClass, MechanicalCause, OwnerDecisionCause
 
 RESUME: Final = "agentic resume --issue {issue}"
 RESUME_ESTIMATE: Final = "agentic resume --issue {issue} --estimate {usd}"
@@ -26,7 +26,7 @@ AskedCause = Literal["api_break_missing", "drawing_departure", "drawing_cap"]
 `MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer.
 `drawing_departure` and `drawing_cap` (GH-766) are answered by number: `drawing_answer.prompt_cause`
 selects their rows and `drawing_answer.prompt_lines` builds the per-number `--drawing` commands."""
-PromptCause = MechanicalCause | AskedCause | SpecRouteCause
+PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause
 
 _RETRY: Final[Prompt] = (
     "Should the task try again now?",
@@ -104,6 +104,17 @@ ESCALATION_PROMPTS[("questions", "drawing_cap")] = (
     "number (comment `Drawing <n>: accept` or `Drawing <n>: reject`), or close the issue.",
     _DRAWING_ANSWER,
     (_DRAWING_ANSWER, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("questions", "owner_decision")] = (
+    "The decision was not applied: this task cannot be routed back automatically. Comment a new "
+    "`Decision:` and the task is planned again with it.",
+    DECIDE,
+    (DECIDE, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("questions", "spec_owned")] = (
+    "The Spec is the owner's file: edit it and resume.",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
 )
 for _cause in get_args(MechanicalCause):
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY

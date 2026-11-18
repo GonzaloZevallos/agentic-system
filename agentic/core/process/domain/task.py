@@ -203,6 +203,11 @@ MechanicalCause = Literal[
     "ci_run_unfinished",
     "delivery_transient",
 ]
+# The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
+# `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
+# Not a `MechanicalCause`: the poller never retakes them, they wait for the owner. Lives here, not
+# in its own module, because `rules` imports `escalation_prompts`.
+OwnerDecisionCause = Literal["owner_decision", "spec_owned"]
 # What the poller's calendar and cap are keyed by (`rules.auto_resumable`): a failed attempt's
 # `FailureReason` or an escalation's `MechanicalCause`. One union, one place that maps either
 # to a calendar (`rules.schedule_for`) or a cap (`rules.auto_resume_limit`).
