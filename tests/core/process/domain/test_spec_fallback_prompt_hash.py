@@ -19,7 +19,8 @@ from agentic.shared.configuration import Configuration
 
 ROOT = Path(__file__).resolve().parents[4]
 VOCABULARY = {"touches_ui": "The task adds or changes a screen", "touches_copy": "It changes text"}
-PLACEHOLDERS = {"remaining_changes": 2, "max_rounds": 4, "round": 1}
+# `{{date}}` is today by default and the pinned digests hold the day they were computed.
+PLACEHOLDERS = {"remaining_changes": 2, "max_rounds": 4, "round": 1, "date": "2026-11-17"}
 
 
 class Ports:
