@@ -26,6 +26,12 @@ def _open_pull_request(ports: Ports) -> ListedPullRequest | None:
     return next((pr for pr in listed if pr.branch == BRANCH and pr.state == "OPEN"), None)
 
 
+def _held_at(ports: Ports, head: str, path: str) -> bool:
+    """Whether the tree of `head` holds `path` (`GitError` when git cannot say)."""
+    directory, _, name = path.rpartition("/")
+    return name in ports.workspace.tree_names(head, directory)
+
+
 def _contents(
     ports: Ports, master_sha: str, head: str
 ) -> tuple[tuple[str, ...], dict[str, str | None]] | None:
@@ -40,7 +46,10 @@ def _contents(
         for path in paths:
             # Only a path already inside the directory is read: any other is refused by name.
             inside = path.startswith(_PREFIX) and posixpath.normpath(path) == path
-            files[path] = ports.workspace.show(head, path) if inside else None
+            text = ports.workspace.show(head, path) if inside else None
+            if inside and text is None and _held_at(ports, head, path):
+                return None  # present at `head` yet unreadable: a failed read is not a deletion
+            files[path] = text
     except GitError:
         return None
     return paths, files

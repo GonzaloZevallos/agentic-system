@@ -94,6 +94,9 @@ class World:
         for path, text in files.items():
             if text is not None:
                 self.workspace.files[(HEAD, path)] = text
+        self.workspace.master_trees[HEAD] = tuple(
+            p for p, text in files.items() if text is not None
+        )
 
     def land(
         self, names: tuple[str, ...] = NAMES, master: str | None = MASTER
@@ -187,6 +190,16 @@ def test_a_role_playbook_can_be_deleted():
     verdict, _ = world.land()
 
     assert verdict == pl.Merge(HEAD)
+
+
+def test_a_role_playbook_that_exists_but_cannot_be_read_is_paths_unreadable_not_deleted():
+    world = World()
+    del world.workspace.files[(HEAD, PATH)]  # `git show` fails, yet the head's tree holds it
+
+    verdict, _ = world.land()
+
+    assert verdict == pl.Refuse("paths_unreadable")
+    never_acted(world)
 
 
 @pytest.mark.parametrize("cross_repository", [True, None])
