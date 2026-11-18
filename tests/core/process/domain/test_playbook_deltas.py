@@ -112,12 +112,21 @@ def reword(item_id: str = "developer-1", task: str = "GH-2") -> Delta:
 # ---- grace ----------------------------------------------------------------------------
 
 
-def test_in_grace_reads_never_landed_legacy_and_the_count():
-    assert in_grace(NEVER_LANDED, None) is True
-    assert in_grace(LEGACY, 0) is False
-    assert in_grace(LANDED, None) is False
-    assert in_grace(LANDED, GRACE_TASKS - 1) is True
-    assert in_grace(LANDED, GRACE_TASKS) is False
+def test_in_grace_for_a_merge_reads_never_landed_legacy_and_the_count():
+    def young(item: Item, *count: int) -> bool:
+        return in_grace(item, {item.id: c for c in count}, rewording=True)
+
+    assert young(NEVER_LANDED) is True
+    assert young(LEGACY) is False
+    assert young(LANDED) is False  # no count for its id
+    assert young(LANDED, GRACE_TASKS - 1) is True
+    assert young(LANDED, GRACE_TASKS) is False
+
+
+def test_the_demotion_reading_of_in_grace_keeps_an_item_with_no_count_young():
+    assert in_grace(LEGACY, {}) is True
+    assert in_grace(LANDED, {}) is True
+    assert in_grace(LANDED, {LANDED.id: GRACE_TASKS}) is False
 
 
 def test_an_out_of_grace_merge_keeps_the_lesson_byte_identical_and_grows_seen_in():
@@ -414,3 +423,13 @@ def test_candidates_and_archived_files_using_nothing_new_round_trip_byte_identic
     legacy_only = pc.render_archived([Archived(LEGACY, "stale", ADDED)])
     assert "last_applied" not in legacy_only and "in_prompt_since" not in legacy_only
     assert pc.render_archived(pc.parse_archived(legacy_only)) == legacy_only
+
+
+def test_a_demoted_candidate_whose_evidence_is_gone_restarts_as_a_plain_candidate():
+    demoted = Pending(
+        "developer", CATEGORY, LESSON, "low", ("GH-70", "GH-71"), (), ADDED, demoted_at_seen=2
+    )
+    delta = replace(add_of("GH-3"), confidence="low")
+    result = run([delta], playbook(), facts=facts("GH-1"), candidates=(demoted,))
+    [kept] = result.candidates
+    assert (kept.seen_in, kept.demoted_at_seen) == (("GH-3",), None)

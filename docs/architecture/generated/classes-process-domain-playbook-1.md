@@ -35,10 +35,12 @@ classDiagram
     class playbook__Backing["Backing"]
     class playbook__CitationFacts["CitationFacts"]
     class playbook__Delta["Delta"]
+    class playbook__Demotion["Demotion"]
     class playbook__Evidence["Evidence"]
     class playbook__Item["Item"]
     class playbook__Pending["Pending"]
     playbook__Archived --> playbook__Item
+    playbook__Demotion --> playbook__Delta
 ```
 
 ## Relaciones con otras páginas
