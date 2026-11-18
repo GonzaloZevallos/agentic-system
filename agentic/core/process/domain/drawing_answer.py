@@ -441,4 +441,9 @@ def fold_raised(state: task.TaskState, merged: task.TaskState, at: str) -> task.
     held = task.apply(state, folded)
     if held.get("escalated"):
         return folded
-    return task.apply(folded, escalation_patch(held, raised, at))
+    escalation = escalation_patch(held, raised, at)
+    pause_log = rules.logged(dict(escalation), at=at)["pause_log"]
+    pause = task.DrawingEscalationPatch(
+        **escalation, pause_log=pause_log, status=task.WAITING_ON_HUMAN
+    )
+    return task.apply(folded, pause)

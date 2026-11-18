@@ -11,7 +11,7 @@ import pytest
 
 from agentic.core.process.application.ports import Checkout, CommandResult, RunStopped
 from agentic.core.process.application.verifiers import verify
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import drawing, drawing_answer, rules
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryCommands, MemoryDocuments, MemoryStack, MemoryWorkspace, memory_ports
@@ -408,3 +408,125 @@ async def test_a_task_document_saved_by_the_set_is_the_state_with_the_patch_fold
     patch = await verify(state, CFG, ports, Fakes(approving()).run)
     assert isinstance(ports.documents, MemoryDocuments)
     assert ports.documents.last == apply(state, patch)
+
+
+# GH-766 part 5.2b: the final leads' unanswered departures become the owner's escalation here.
+AT = "2026-11-17T10:00:00Z"
+
+
+def _departure(element: str = "Save") -> drawing.Departure:
+    return drawing.Departure(
+        drawing="docs/design/home.png",
+        element=element,
+        shows="blue",
+        would_ship="green",
+        recommendation="keep the drawing",
+        reason="approved",
+        raised_by="ui_lead_final",
+    )
+
+
+def raising(*raised: drawing.Departure) -> dict[str, Any]:
+    """What the final leads' branch returns for an unanswered departure: no PM run, no verdict."""
+    return {"cost_usd": 1.0, "drawing_raised": list(raised)}
+
+
+def _no_key(patch: Any, ports: Any) -> None:
+    assert "drawing_raised" not in patch and "drawing_raised" not in ports.documents.last
+
+
+async def test_an_unanswered_departure_escalates_with_questions_and_keeps_the_siblings():
+    state, ports = state_of(), ports_of()
+    patches = {**approving(), "final_validation": raising(_departure())}
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    after = apply(state, patch)
+    assert after["escalation_class"] == "questions" and after["status"] == WAITING_ON_HUMAN
+    assert patch["cost_usd"] == 4.0 and {r["role"] for r in patch["runs"]} >= {"copy_review"}
+    assert [r["element"] for r in after["drawing_departures"]] == ["Save"]
+    assert after["drawing_escalation"]["round"] == 1
+    _no_key(patch, ports)
+    assert ports.documents.last == after
+
+
+async def test_a_return_and_a_raise_keep_the_returned_unit_beside_the_escalation():
+    state, ports = state_of(), ports_of()
+    patches = {
+        **approving(),
+        "copy_review": returned(state, "copy_review", "wording"),
+        "final_validation": raising(_departure()),
+    }
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    unit = apply(state, patch)["subtasks"][INTEGRATION]
+    assert unit["status"] == "returned" and unit["returned_by"] == "copy_review"
+    assert apply(state, patch)["escalation_class"] == "questions"
+    _no_key(patch, ports)
+
+
+async def test_a_sibling_escalation_stands_and_the_raise_leaves_no_row_or_round():
+    state, ports = state_of(), ports_of()
+    patches = {
+        **approving(),
+        "qa_performance": escalated("pair limit reached"),
+        "final_validation": raising(_departure()),
+    }
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    after = apply(state, patch)
+    assert after["escalation_class"] == "returns" and "pair limit reached" in after["escalated"]
+    assert "drawing_departures" not in after and "drawing_escalation" not in after
+    _no_key(patch, ports)
+
+
+async def test_a_raise_beside_a_sibling_error_returns_the_escalation_without_raising():
+    state, ports = state_of(), ports_of()
+    patches = {
+        **approving(),
+        "copy_review": RuntimeError("runner died"),
+        "final_validation": raising(_departure()),
+    }
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    assert apply(state, patch)["escalation_class"] == "questions"
+    _no_key(patch, ports)
+
+
+async def test_a_sibling_error_without_a_raise_is_still_raised_and_persists_no_key():
+    state, ports = state_of(), ports_of()
+    patches = {**approving(), "copy_review": RuntimeError("runner died")}
+    with pytest.raises(RuntimeError, match="runner died"):
+        await verify(state, CFG, ports, Fakes(patches).run)
+    assert "drawing_raised" not in ports.documents.last
+    assert "escalated" not in ports.documents.last
+
+
+async def test_an_error_and_an_earlier_escalation_raise_the_error_and_drop_the_raise():
+    state, ports = state_of(), ports_of()
+    patches = {
+        **approving(),
+        "copy_review": RuntimeError("runner died"),
+        "qa_performance": escalated("pair limit reached"),
+        "final_validation": raising(_departure()),
+    }
+    with pytest.raises(RuntimeError, match="runner died"):
+        await verify(state, CFG, ports, Fakes(patches).run)
+    saved = ports.documents.last
+    assert "drawing_raised" not in saved and "drawing_escalation" not in saved
+
+
+async def test_a_full_checks_stop_never_carries_the_key():
+    state, ports = state_of(), ports_of()
+    patches = {"full_checks": escalated("suite red"), **approving(ORDER[1:])}
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    _no_key(patch, ports)
+
+
+async def test_after_the_escalation_a_resume_with_verdicts_leaves_the_final_due():
+    state = state_of()
+    patches = {**approving(), "final_validation": raising(_departure())}
+    patch = await verify(state, CFG, ports_of(), Fakes(patches).run)
+    paused = apply(state, patch)
+    answered = [
+        {**row, "answer": {"verdict": "accept", "by": "comment", "at": AT}}
+        for row in paused["drawing_departures"]
+    ]
+    resumed = apply(paused, drawing_answer.resume_patch(paused, None, None, answered, at=AT))
+    assert not resumed.get("escalated") and rules.all_approved(resumed)
+    assert rules.final_validation_due(resumed)

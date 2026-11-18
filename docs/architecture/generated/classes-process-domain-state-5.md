@@ -35,6 +35,7 @@ classDiagram
     class task__DesignItemRecord["DesignItemRecord"]
     class task__DrawingChecksRecord["DrawingChecksRecord"]
     class task__DrawingEscalation["DrawingEscalation"]
+    class task__DrawingEscalationPatch["DrawingEscalationPatch"]
     class task__DrawingRow["DrawingRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
@@ -44,7 +45,8 @@ classDiagram
     class task__EvaluationRef["EvaluationRef"]
     class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
-    class task__FindingRecord["FindingRecord"]
+    task__DrawingEscalationPatch --> task__DrawingEscalation
+    task__DrawingEscalationPatch --|> task__EscalationPatch
 ```
 
 ## Relaciones con otras páginas

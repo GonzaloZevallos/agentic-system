@@ -1288,6 +1288,10 @@ class DrawingEscalationPatch(EscalationPatch):
 
     drawing_departures: list[DepartureRecord]
     drawing_escalation: DrawingEscalation
+    # What `drawing_answer.fold_raised` adds to make the escalation a pause: the log entry and
+    # the status every escalation site writes (`rules.logged`).
+    pause_log: NotRequired[list[PauseEntry]]
+    status: NotRequired[Status]
 
 
 class SlicesClosedPatch(TypedDict):

@@ -610,6 +610,8 @@ def test_fold_raised_escalates_a_raise_and_keeps_a_siblings_deltas():
     }
     assert [r["number"] for r in folded["drawing_departures"]] == [1]
     assert folded["returned_with"] == ["review"] and folded["cost_usd"] == 2.0
+    assert folded["status"] == task.WAITING_ON_HUMAN
+    assert [e["kind"] for e in folded["pause_log"]] == ["escalation"]
 
 
 def test_fold_raised_with_an_empty_list_escalates_the_row_still_open():
