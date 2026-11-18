@@ -585,3 +585,125 @@ def test_fix_pass_rows_raises_fix_passes_to_one_for_fix_due_only():
     rows = drawing_answer.fix_pass_rows(state, outcomes)
     assert [(r["key"], r["fix_passes"]) for r in rows] == [(fix["key"], 1)]
     assert drawing_answer.fix_pass_rows(state, {back["key"]: "return_due"}) == []
+
+
+UNVERIFIED_AT = "2026-11-18T10:00:00.000+00:00"
+LATER_AT = "2026-11-18T10:05:00.000+00:00"
+
+
+def _checks(*refs: str) -> list[DrawingCheck]:
+    return [
+        DrawingCheck(subject="question", ref=ref, verdict="unverified", drawing="design/./home.png")
+        for ref in refs
+    ]
+
+
+def _asks(*refs: str) -> list[drawing.UnverifiedAsk]:
+    return drawing.unverified_lines(_checks(*refs))
+
+
+def test_an_unverified_only_pause_without_a_spec_is_a_plain_questions_pause():
+    asks = _asks("Q1", "Q2")
+    patch = drawing_answer.escalation_patch(_state(), [], UNVERIFIED_AT, unverified=asks)
+    assert patch["escalation_class"] == "questions"
+    assert "spec_cause" not in patch
+    assert patch["escalated"] == "\n".join(a.line for a in asks)
+    assert patch["questions_for_human"] == [a.line for a in asks]
+    assert patch["drawing_escalation"] == {
+        "round": 1,
+        "numbers": [],
+        "cause": "drawing_departure",
+        "unverified": ["design/home.png"],
+        "unverified_at": UNVERIFIED_AT,
+    }
+    assert patch["drawing_departures"] == []
+
+
+def test_an_unverified_only_pause_with_a_spec_carries_the_drawing_spec_cause():
+    state = _state(spec=cast(Any, {"issue": 7}))
+    patch = drawing_answer.escalation_patch(state, [], UNVERIFIED_AT, unverified=_asks("Q1"))
+    assert patch["spec_cause"] == "drawing"
+
+
+def test_a_mixed_pause_words_the_departures_first_and_carries_only_the_ask_lines():
+    asks = _asks("Q4")
+    patch = drawing_answer.escalation_patch(
+        _state(), [_departure("hero")], UNVERIFIED_AT, unverified=asks
+    )
+    reason = cast(str, patch["escalated"]).split("\n")
+    assert reason[0].startswith("Departure #1:") and reason[-1] == asks[0].line
+    assert patch["questions_for_human"] == [asks[0].line]
+    record = cast(task.DrawingEscalation, patch["drawing_escalation"])
+    assert record["numbers"] == [1] and record["unverified"] == ["design/home.png"]
+
+
+def test_without_asks_the_patch_has_no_questions_and_no_unverified_keys():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], UNVERIFIED_AT)
+    assert "questions_for_human" not in patch
+    assert patch["drawing_escalation"] == {"round": 1, "numbers": [1], "cause": "drawing_departure"}
+
+
+def test_a_pause_with_nothing_to_ask_raises_and_an_ask_alone_does_not():
+    with pytest.raises(ValueError, match="nothing to escalate"):
+        drawing_answer.escalation_patch(_state(), [], UNVERIFIED_AT, unverified=())
+    drawing_answer.escalation_patch(_state(), [], UNVERIFIED_AT, unverified=_asks("Q1"))
+
+
+def test_an_unverified_only_plan_pause_is_refused_but_a_plan_pause_with_a_number_is_not():
+    with pytest.raises(ValueError, match="an unverified-only drawing pause cannot be a plan pause"):
+        drawing_answer.escalation_patch(
+            _state(), [], UNVERIFIED_AT, unverified=_asks("Q1"), stage="plan"
+        )
+    patch = drawing_answer.escalation_patch(
+        _state(), [_departure("a")], UNVERIFIED_AT, unverified=_asks("Q1"), stage="plan"
+    )
+    assert cast(task.DrawingEscalation, patch["drawing_escalation"])["stage"] == "plan"
+
+
+def test_round_four_with_asks_only_is_the_cap_with_the_history_line_then_the_asks():
+    state = _state(
+        drawing_escalation=task.DrawingEscalation(round=3, numbers=[], cause="drawing_departure")
+    )
+    asks = _asks("Q1")
+    patch = drawing_answer.escalation_patch(state, [], UNVERIFIED_AT, unverified=asks)
+    record = cast(task.DrawingEscalation, patch["drawing_escalation"])
+    assert (record["round"], record["cause"]) == (4, "drawing_cap")
+    assert patch["escalated"] == (
+        "The task escalated drawing departures in 3 rounds (the cap is "
+        f"{drawing.DEPARTURE_ESCALATIONS_MAX}); 0 departures are answered and 0 still open. "
+        "Recommendation: close the issue, or rethink the task so it stops departing from the "
+        f"approved drawings.\n{asks[0].line}"
+    )
+
+
+def _paused_on_asks() -> task.TaskState:
+    patch = drawing_answer.escalation_patch(_state(), [], UNVERIFIED_AT, unverified=_asks("Q1"))
+    return _applied(_state(), rules.logged(cast(dict[str, Any], patch), at=UNVERIFIED_AT))
+
+
+def test_prompt_cause_of_an_asks_only_pause_is_the_recorded_cause():
+    assert drawing_answer.prompt_cause(_paused_on_asks()) == "drawing_departure"
+
+
+def test_prompt_cause_of_an_asks_only_pause_is_none_after_it_was_resumed_and_others_follow():
+    state = _paused_on_asks()
+    resumed = _applied(state, rules.resumed(state, "go", None, at=LATER_AT, drawing_plan=False))
+    conflict = rules.logged(
+        dict(
+            rules.escalation(
+                "questions", "a conflict", spec=cast(Any, {"issue": 7}), spec_cause="conflict"
+            )
+        ),
+        at=LATER_AT,
+    )
+    assert drawing_answer.prompt_cause(_applied(resumed, conflict)) is None
+    typed = rules.logged(
+        dict(rules.escalation("questions", "typed items", tracker_human=["h1"])), at=UNVERIFIED_AT
+    )
+    assert drawing_answer.prompt_cause(_applied(state, typed)) is None
+
+
+def test_prompt_cause_needs_the_asks_instant_to_be_the_last_escalations():
+    state = _paused_on_asks()
+    assert drawing_answer.prompt_cause(_state(**{**state, "pause_log": []})) is None
+    assert drawing_answer.prompt_cause(_state(**{**state, "escalation_class": "ci"})) is None
