@@ -430,17 +430,71 @@ def test_the_caller_check_rejects_a_new_note_site(tmp_path: Path):
     assert _note_callers(tmp_path) == {("rogue", "speak")}
 
 
-def test_stack_hold_passes_only_pause_note_output_to_the_tracker():
-    source = (_APPLICATION / "stack_hold.py").read_text()
+_NOTE_EXPRESSION = 'stacking.pause_note(parent, cause) + "\\n" + tag'
+_NOTE_TEXT = ast.dump(ast.parse(_NOTE_EXPRESSION, mode="eval").body)
+_TAG = ast.dump(ast.parse("marker(parent, cause, k)", mode="eval").body)
+_NOTE_SITE = (
+    "def f(ports, task_id, parent, cause, k):\n"
+    "    tag = marker(parent, cause, k)\n"
+    "    ports.tracker.note(task_id, {text})\n"
+)
+
+
+def _note_text_violations(source: str) -> list[str]:
+    """What is wrong with the `.note` calls of a module: it must hold exactly one, whose text is
+    `stacking.pause_note(parent, cause) + "\\n" + tag`, with `tag` assigned once from
+    `marker(parent, cause, k)`."""
+    tree = ast.parse(source)
     calls = [
-        ast.unparse(node)
-        for node in ast.walk(ast.parse(source))
+        node
+        for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "note"
     ]
-    assert len(calls) == 1
-    assert calls[0].startswith("ports.tracker.note(task_id, stacking.pause_note(parent, cause) + ")
+    if len(calls) != 1:
+        return [f"{len(calls)} note calls, expected exactly one"]
+    problems = []
+    args = calls[0].args
+    if len(args) != 2 or calls[0].keywords or ast.dump(args[1]) != _NOTE_TEXT:
+        problems.append(f"note text is not pause_note + newline + tag: {ast.unparse(calls[0])}")
+    tags = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and [t.id for t in node.targets if isinstance(t, ast.Name)] == ["tag"]
+    ]
+    if len(tags) != 1 or ast.dump(tags[0].value) != _TAG:
+        problems.append("`tag` is not assigned once from marker(parent, cause, k)")
+    return problems
+
+
+def test_stack_hold_passes_only_pause_note_output_to_the_tracker():
+    assert _note_text_violations((_APPLICATION / "stack_hold.py").read_text()) == []
+
+
+def test_the_note_text_check_accepts_the_exact_shape():
+    assert _note_text_violations(_NOTE_SITE.format(text=_NOTE_EXPRESSION)) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"literal"',
+        'stacking.pause_note(parent, cause) + "x"',
+        'stacking.pause_note(parent, cause) + "\\n" + tag + "x"',
+        'stacking.pause_note(parent, cause) + "\\n"',
+        'other.pause_note(parent, cause) + "\\n" + tag',
+    ],
+)
+def test_the_note_text_check_rejects_a_text_that_is_not_pause_note_newline_marker(text: str):
+    assert _note_text_violations(_NOTE_SITE.format(text=text)) != []
+
+
+def test_the_note_text_check_rejects_a_second_note_call_and_a_foreign_tag():
+    site = _NOTE_SITE.format(text=_NOTE_EXPRESSION)
+    assert _note_text_violations(site + "    ports.tracker.note(task_id, 'again')\n") != []
+    assert _note_text_violations(site.replace("marker(parent, cause, k)", "'free'")) != []
 
 
 def _imports_stack_hold(root: Path) -> list[str]:
