@@ -121,6 +121,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.qa_performance": "definition",
     "application.reflect": "reflection",
     "application.reflect_run": "reflection",
+    "application.playbook_land": "reflection",
     "application.refusal_note": "support",
     "application.registration": "lifecycle",
     "application.relabel": "lifecycle",
