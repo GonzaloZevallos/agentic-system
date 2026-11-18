@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, get_args
 
@@ -33,8 +33,12 @@ from .task import INTEGRATION, CopyCategory, FindingCategory
 
 # At most this many items per role, and at most this many characters in one lesson: the
 # section rides in the role's system prompt, so both are hard.
-PLAYBOOK_MAX_ITEMS = 12
+PLAYBOOK_MAX_ITEMS = 15
+PLAYBOOK_MAX_CHARS = 6000
 LESSON_MAX_CHARS = 240
+# A lesson is in grace until its role ran this many closed tasks since it reached a prompt:
+# `in_grace` is the only comparison, and a lesson in grace is never demoted.
+GRACE_TASKS = 5
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
 # What a lesson can be about: a finding category, or what a finding category cannot say
@@ -251,6 +255,9 @@ class Pending:
     seen_in: tuple[str, ...]
     sources: tuple[str, ...]
     added_at: str
+    # Set only on a lesson a cap demotion sent back here: how many tasks had cited it then.
+    # `keep` alone reads it, so the lesson returns only when a new task cites it.
+    demoted_at_seen: int | None = None
 
     @property
     def seen(self) -> int:
@@ -267,10 +274,19 @@ class Archived:
     archived_at: str
 
 
-def keep(confidence: Confidence, seen: int, sources: Collection[str]) -> bool:
+def keep(
+    confidence: Confidence,
+    seen: int,
+    sources: Collection[str],
+    *,
+    demoted_at_seen: int | None = None,
+) -> bool:
     """Whether a rated lesson enters the playbook: confidence is `KEEP_CONFIDENCE`, or it
     appeared in `KEEP_MIN_TASKS` tasks. A lesson only human decisions back needs the tasks
-    whatever its confidence: one escalation can be about that task alone."""
+    whatever its confidence: one escalation can be about that task alone. A lesson a cap
+    demotion sent back (`demoted_at_seen`) waits until a task it had not counted cites it."""
+    if demoted_at_seen is not None and seen <= demoted_at_seen:
+        return False
     if sources and all(source == "human_decision" for source in sources):
         return seen >= KEEP_MIN_TASKS
     return confidence == KEEP_CONFIDENCE or seen >= KEEP_MIN_TASKS
@@ -298,6 +314,56 @@ def section(playbook: Playbook) -> str:
         f"- {i.lesson} ({i.category})" for i in sorted(playbook.items, key=lambda i: _number(i.id))
     ]
     return SECTION_TITLE + "\n" + "\n".join(lines)
+
+
+def over_cap(playbook: Playbook) -> bool:
+    """Whether the playbook exceeds the role cap: more than `PLAYBOOK_MAX_ITEMS` items or a
+    section longer than `PLAYBOOK_MAX_CHARS`. The only place the cap is compared. The
+    character axis is a backstop for hand-edited files: through validated lessons (at most
+    `LESSON_MAX_CHARS` each) 15 items stay near 4,100 characters."""
+    return len(playbook.items) > PLAYBOOK_MAX_ITEMS or len(section(playbook)) > PLAYBOOK_MAX_CHARS
+
+
+def in_grace(item: Item, role_tasks_since: Mapping[str, int]) -> bool:
+    """Whether `item` is too new to demote: it never reached a prompt (`in_prompt_since`
+    empty), its id is not in `role_tasks_since`, or its role ran fewer than `GRACE_TASKS`
+    tasks since. The only place `GRACE_TASKS` is compared."""
+    if not item.in_prompt_since or item.id not in role_tasks_since:
+        return True
+    return role_tasks_since[item.id] < GRACE_TASKS
+
+
+def demotion_pick(
+    playbook: Playbook,
+    role_tasks_since: Mapping[str, int],
+    score: Callable[[Item], int] | None = None,
+) -> str | None:
+    """The id of the item to demote, or `None` when every item is in grace: among the items
+    out of grace, the lowest `score` (`None` scores every item equal), then the oldest
+    `in_prompt_since`, then the id number (never plain string order, so x-2 precedes x-10).
+    `role_tasks_since` is keyed by item id and is a different map from `archive_stale`'s
+    `(int, bool)` one: the caller must take the int from the same count."""
+    due = [i for i in playbook.items if not in_grace(i, role_tasks_since)]
+    if not due:
+        return None
+    rank = score or (lambda _item: 0)
+    return min(due, key=lambda i: (rank(i), i.in_prompt_since, _number(i.id))).id
+
+
+def demote(item: Item, slug: str) -> Pending:
+    """The candidate an item becomes when the cap takes it out of the prompt: low confidence,
+    no sources, the tasks that had cited it, and `demoted_at_seen` so `keep` waits for one
+    more."""
+    return Pending(
+        slug=slug,
+        category=item.category,
+        lesson=item.lesson,
+        confidence="low",
+        seen_in=item.seen_in,
+        sources=(),
+        added_at=item.added_at,
+        demoted_at_seen=len(item.seen_in),
+    )
 
 
 _ITEM_KEYS = ("id", "lesson", "category", "since", "seen_in", "added_at")

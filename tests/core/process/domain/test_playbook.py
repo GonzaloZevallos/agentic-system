@@ -7,8 +7,10 @@ from agentic.core.process.domain import roles
 from agentic.core.process.domain.playbook import (
     ACCOUNTABLE,
     ARCHIVE_AFTER,
+    GRACE_TASKS,
     KEEP_CONFIDENCE,
     KEEP_MIN_TASKS,
+    PLAYBOOK_MAX_CHARS,
     PLAYBOOK_MAX_ITEMS,
     PLAYBOOK_ROLES,
     REVIEW_PAIR,
@@ -27,9 +29,13 @@ from agentic.core.process.domain.playbook import (
     archive_due,
     archive_stale,
     attribute,
+    demote,
+    demotion_pick,
+    in_grace,
     keep,
     lesson_refusal,
     normalise,
+    over_cap,
     parse,
     render_file,
     return_backing,
@@ -761,3 +767,122 @@ def test_a_restore_needs_the_same_slug_and_category_as_the_archived_item():
     result = run([add(LESSON, "GH-1")], ev={"GH-1": evidence("process-suite-red")}, archived=shelf)
     assert [i.id for i in result.playbook.items] == ["developer-5"]
     assert result.archived == shelf
+
+
+# ---- the cap, grace and demotion pick (GH-881 part 1) ---------------------------------
+
+
+def aged(n: int, since: str = "", **extra: Any) -> Item:
+    return replace(item(n, f"Lesson number {n}."), in_prompt_since=since, **extra)
+
+
+def test_a_file_without_the_new_keys_round_trips_byte_identical_and_empty_has_no_section():
+    text = render_file(Playbook("developer", (item(1), item(2, "Another lesson."))))
+    assert render_file(parse(text, "developer")) == text
+    assert "demoted_at_seen" not in text
+    assert section(empty()) == ""
+    assert render_file(empty()) == render_file(parse(render_file(empty()), "developer"))
+
+
+def test_over_cap_on_the_item_axis_is_more_than_the_maximum():
+    assert PLAYBOOK_MAX_ITEMS == 15
+    assert not over_cap(full_playbook())
+    over = Playbook("developer", (*full_playbook().items, item(99, "One more lesson.")))
+    assert over_cap(over)
+
+
+def test_over_cap_on_the_character_axis_with_items_built_directly_not_through_validation():
+    # A hand-edited file can hold lessons longer than LESSON_MAX_CHARS; the section is the cap.
+    long = "x" * 1500
+    few = Playbook("developer", tuple(item(n, f"{n}{long}") for n in range(1, 4)))
+    assert len(section(few)) <= PLAYBOOK_MAX_CHARS
+    assert not over_cap(few)
+    many = Playbook("developer", tuple(item(n, f"{n}{long}") for n in range(1, 6)))
+    assert len(many.items) <= PLAYBOOK_MAX_ITEMS
+    assert len(section(many)) > PLAYBOOK_MAX_CHARS
+    assert over_cap(many)
+
+
+@pytest.mark.parametrize(
+    ("since", "counts", "expected"),
+    [
+        ("", {"developer-1": 99}, True),  # never landed
+        ("2026-10-01", {}, True),  # id missing from the map
+        ("2026-10-01", {"developer-1": GRACE_TASKS - 1}, True),
+        ("2026-10-01", {"developer-1": GRACE_TASKS}, False),
+    ],
+)
+def test_in_grace(since, counts, expected):
+    assert in_grace(aged(1, since), counts) is expected
+
+
+def test_the_grace_period_is_five_tasks():
+    assert GRACE_TASKS == 5
+
+
+def test_demotion_pick_takes_the_lowest_score_among_items_out_of_grace():
+    pb_ = Playbook(
+        "developer", (aged(1, "2026-10-01"), aged(2, "2026-10-01"), aged(3, "2026-10-01"))
+    )
+    counts = {"developer-1": 9, "developer-2": 9, "developer-3": 9}
+    scores = {"developer-1": 3, "developer-2": 1, "developer-3": 2}
+    assert demotion_pick(pb_, counts, lambda i: scores[i.id]) == "developer-2"
+
+
+def test_demotion_pick_never_picks_an_item_in_grace_even_with_the_lowest_score():
+    pb_ = Playbook("developer", (aged(1, "2026-10-01"), aged(2, "2026-10-01")))
+    counts = {"developer-1": 9, "developer-2": 1}
+    assert demotion_pick(pb_, counts, lambda i: 0 if i.id == "developer-2" else 5) == "developer-1"
+
+
+def test_without_a_score_every_item_scores_equal_and_the_oldest_in_prompt_since_goes():
+    pb_ = Playbook(
+        "developer", (aged(1, "2026-10-05"), aged(2, "2026-10-01"), aged(3, "2026-10-03"))
+    )
+    counts = {i.id: 9 for i in pb_.items}
+    assert demotion_pick(pb_, counts) == "developer-2"
+
+
+def test_ties_break_by_the_id_number_not_by_string_order():
+    pb_ = Playbook("developer", (aged(10, "2026-10-01"), aged(2, "2026-10-01")))
+    counts = {i.id: 9 for i in pb_.items}
+    assert demotion_pick(pb_, counts) == "developer-2"
+
+
+def test_demotion_pick_is_none_when_every_item_is_in_grace():
+    pb_ = Playbook("developer", (aged(1, "2026-10-01"), aged(2)))
+    assert demotion_pick(pb_, {"developer-1": 2}) is None
+    assert demotion_pick(empty(), {}) is None
+
+
+def test_demote_makes_a_low_candidate_that_remembers_how_many_tasks_had_cited_it():
+    old = aged(4, "2026-10-01", seen_in=("GH-1", "GH-2", "GH-3"), last_applied="x")
+    pending = demote(old, "developer")
+    assert pending == Pending(
+        slug="developer",
+        category=old.category,
+        lesson=old.lesson,
+        confidence="low",
+        seen_in=old.seen_in,
+        sources=(),
+        added_at=old.added_at,
+        demoted_at_seen=3,
+    )
+
+
+def test_keep_refuses_a_demoted_lesson_until_one_more_task_cites_it():
+    assert not keep("high", 3, ("finding",), demoted_at_seen=3)
+    assert not keep("high", 2, ("finding",), demoted_at_seen=3)
+    assert keep("high", 4, ("finding",), demoted_at_seen=3)
+    assert keep("low", 4, ("finding",), demoted_at_seen=3)  # four tasks pass the plain rule
+    assert not keep("low", 1, ("finding",), demoted_at_seen=0)  # one task, low: today's rule
+    assert keep("high", 1, ("finding",), demoted_at_seen=0)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "seen", "sources"),
+    [("high", 1, ()), ("low", 1, ()), ("low", 2, ("finding",)), ("high", 1, ("human_decision",))],
+)
+def test_keep_without_demoted_at_seen_is_unchanged(confidence, seen, sources):
+    plain = keep(confidence, seen, sources)
+    assert keep(confidence, seen, sources, demoted_at_seen=None) is plain
