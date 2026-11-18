@@ -319,3 +319,29 @@ def test_the_refusal_names_a_commit_only_when_the_commits_are_all_that_is_wrong(
         )
         is None
     )
+
+
+# --- no_human_decision_pending (GH-960) -------------------------------------------------
+
+
+def test_no_human_decision_pending_holds_for_a_failure_pause_and_for_a_clear_state():
+    assert rules.no_human_decision_pending({"escalation_class": "failure"}) is True
+    assert rules.no_human_decision_pending({}) is True
+    assert rules.no_human_decision_pending({"escalation_class": None, "escalated": None}) is True
+
+
+@pytest.mark.parametrize(
+    "more",
+    [
+        {"pull_request": "https://example.test/pull/1"},
+        {"escalation_class": "questions"},
+        {"escalation_class": "returns"},
+        {"questions_for_human": ["which one?"]},
+        {"fit_question": True},
+        {"escalated": "an older document", "escalation_class": None},
+        {"escalated": "an older document"},
+    ],
+)
+def test_no_human_decision_pending_fails_on_each_condition(more):
+    assert rules.no_human_decision_pending(more) is False
+
