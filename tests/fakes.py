@@ -2564,6 +2564,38 @@ class FakeSpecValidator:
         return self.result
 
 
+class FakeDraftSpecValidator(FakeSpecValidator):
+    """GH-594 part 5c-1: answers `result` (`spec_unapproved`) for a draft text and `preview` for an
+    approved one, and records every call as `FakeSpecValidator` does. `preview` is a contract
+    unless a test sets another answer."""
+
+    PREVIEW: SpecContract = {
+        "path": "docs/specs/draft.md",
+        "slice": "x",
+        "commit": "a" * 40,
+        "sha256": "b" * 64,
+        "criteria": [],
+        "screens": [],
+        "risks": [],
+        "touches_ui": False,
+        "touches_copy": False,
+    }
+
+    def __init__(
+        self,
+        draft: SpecContract | SpecCause = "spec_unapproved",
+        preview: SpecContract | SpecCause = PREVIEW,
+    ) -> None:
+        super().__init__(draft)
+        self.preview = preview
+
+    def validate(
+        self, text: str, path: str, commit: str, slice_id: str | None, owner_login: str | None
+    ) -> SpecContract | SpecCause:
+        super().validate(text, path, commit, slice_id, owner_login)
+        return self.result if "status: draft" in text else self.preview
+
+
 class CommittingWorkspace(MemoryWorkspace):
     """GH-594 part 5c-1: a workspace whose commits hold what the checkout has, so a draft Spec
     can be read back at the commit that wrote it. Each `commit_all` makes a new full sha

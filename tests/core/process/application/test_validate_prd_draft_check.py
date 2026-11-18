@@ -14,7 +14,7 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
     CommittingWorkspace,
-    FakeSpecValidator,
+    FakeDraftSpecValidator,
     ScriptedRunner,
     memory_ports,
     verdict,
@@ -44,18 +44,6 @@ CONTRACT = {
     "touches_copy": False,
 }
 DEFINITION = [{"capability": "reports", "content": REPORTS}]
-
-
-class PreviewValidator(FakeSpecValidator):
-    """Answers `draft` for a draft text and `preview` for an approved one."""
-
-    def __init__(self, draft="spec_unapproved", preview=CONTRACT) -> None:
-        super().__init__(draft)
-        self.preview = preview
-
-    def validate(self, text, path, commit, slice_id, owner_login):
-        super().validate(text, path, commit, slice_id, owner_login)
-        return self.result if "status: draft" in text else self.preview
 
 
 @pytest.fixture
@@ -114,7 +102,7 @@ def cfg_for(tmp_path, login="owner"):
 async def test_a_body_refused_by_the_pre_check_is_retried_and_never_delivered(
     root, tmp_path, delivered, bad, cause
 ):
-    ports = ports_for(returned(bad), returned(BODY), validator=PreviewValidator())
+    ports = ports_for(returned(bad), returned(BODY), validator=FakeDraftSpecValidator())
     patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert delivered == [BODY]
     assert f"draft Spec refused: {cause}:" in ports.runner.prompts("pm")[1]
@@ -124,7 +112,7 @@ async def test_a_body_refused_by_the_pre_check_is_retried_and_never_delivered(
 async def test_a_draft_the_validator_refuses_is_retried_with_a_fixed_sentence(
     root, tmp_path, delivered
 ):
-    validator = PreviewValidator(draft="spec_invalid")
+    validator = FakeDraftSpecValidator(draft="spec_invalid")
     ports = ports_for(returned(BODY), returned(BODY), validator=validator)
     patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert delivered == []
@@ -141,7 +129,7 @@ async def test_without_a_usable_login_the_preview_is_skipped_and_never_approves(
         raise AssertionError("approve must not run")
 
     monkeypatch.setattr(spec_approval, "approve", boom)
-    validator = PreviewValidator()
+    validator = FakeDraftSpecValidator()
     ports = ports_for(returned(BODY), validator=validator)
     patch = await validate_prd(STATE, cfg_for(tmp_path, login), ports)
     assert patch["spec_draft"]["outcome"] == "written"
@@ -151,7 +139,7 @@ async def test_without_a_usable_login_the_preview_is_skipped_and_never_approves(
 
 
 async def test_a_valid_login_previews_the_approved_draft(root, tmp_path, delivered):
-    validator = PreviewValidator()
+    validator = FakeDraftSpecValidator()
     ports = ports_for(returned(BODY), validator=validator)
     await validate_prd(STATE, cfg_for(tmp_path), ports)
     check_calls = validator.calls[:2]
@@ -163,7 +151,7 @@ async def test_a_valid_login_previews_the_approved_draft(root, tmp_path, deliver
 
 
 async def test_a_multi_slice_draft_is_refused_as_preview_slice_missing(root, tmp_path, delivered):
-    validator = PreviewValidator(preview="slice_missing")
+    validator = FakeDraftSpecValidator(preview="slice_missing")
     ports = ports_for(returned(BODY), returned(BODY), validator=validator)
     await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert delivered == []
@@ -173,7 +161,7 @@ async def test_a_multi_slice_draft_is_refused_as_preview_slice_missing(root, tmp
 async def test_a_clock_that_does_not_read_as_an_instant_skips_the_preview(
     root, tmp_path, delivered
 ):
-    validator = PreviewValidator(preview="slice_missing")  # would refuse, if asked
+    validator = FakeDraftSpecValidator(preview="slice_missing")  # would refuse, if asked
     ports = ports_for(returned(BODY), validator=validator, now="2026-11-17T10:00:00")
     patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert patch["spec_draft"]["outcome"] == "written"
@@ -197,7 +185,7 @@ async def test_outside_the_predicate_the_check_is_the_approval_check_itself(
         return None, {}
 
     monkeypatch.setattr(module, "run_role", fake_run_role)
-    ports = ports_for(validator=PreviewValidator())
+    ports = ports_for(validator=FakeDraftSpecValidator())
     sentinel = lambda data: None  # noqa: E731
     approval_checks = {"feature": sentinel}
     monkeypatch.setattr(
