@@ -72,6 +72,7 @@ from . import (
     release,
     scratch_sweep,
     split_sweep,
+    stack_hold,
     tracker_only,
     worktree_sweep,
 )
@@ -1150,6 +1151,9 @@ def _member(
         merge_due=merge_due,
         waits_on_ci=ci_running and not working,
         account_paused=rules.account_paused(resumes, now) and not working,
+        # GH-838: the assessment's facts, read through the round's memo; none for a task a child
+        # works on, so no stacking is read here.
+        stack_held=stacking.held(facts.stack) if facts is not None else False,
     )
 
 
@@ -1165,6 +1169,7 @@ def evaluate_landing_order(
     integrating: frozenset[str] = frozenset(),
     *,
     memo: StackMemo,
+    skip: frozenset[int] = frozenset(),
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.advance`, the one
@@ -1178,7 +1183,9 @@ def evaluate_landing_order(
     `resumes` are the product's paused tasks, for `account_paused`. `integrating` are the ids with
     a live child of an integrating kind (`landing_order.integrates`): with the head among them
     and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without touching
-    `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the caller's."""
+    `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the caller's.
+    An issue in `skip` (GH-899, a stacked child the round holds) is no member and no entry: it is
+    never assessed, never the head and never ordered."""
     now = now or datetime.now(UTC)
     entries: list[OrderEntry] = []
     members: list[landing_order.Member] = []
@@ -1196,7 +1203,7 @@ def evaluate_landing_order(
 
     for task_id in ports.documents.ids():
         number = ports.inbox.issue_of(task_id)
-        if number is None:
+        if number is None or number in skip:
             continue
         raw = ports.documents.load(task_id) or {}
         if raw.get("closed_at") or not raw.get("pull_request"):
@@ -1322,6 +1329,7 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "head_paths_unknown": "head paths unknown",
     "head_sync_budget": "head sync budget",
     "member_paths_unknown": "paths unknown",
+    "stack_parent_unmerged": "stacked parent unmerged",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
 
@@ -1506,6 +1514,7 @@ def gather_merges(
     *,
     memo: StackMemo,
     dry_run: bool,
+    skip: frozenset[int] = frozenset(),
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1537,14 +1546,26 @@ def gather_merges(
     starvation clock starts there (`exempt_queue.backoff_ends`). A `held` round (GH-621) observes
     nothing: no turn is charged, seen or yielded and no yield is said (`_record_turn` is not
     called); it still decides and says its order lines. `memo` (GH-860) is the round's one
-    `StackMemo`: the children of one parent share its reads."""
+    `StackMemo`: the children of one parent share its reads. `skip` (GH-899) are the stacked
+    children the round holds: they never enter the landing order, so none is assessed, noted,
+    ordered, charged a turn or made the head."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
     round_ = evaluate_landing_order(
-        ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating, memo=memo
+        ports,
+        eval_set,
+        current_master,
+        lock,
+        busy,
+        cfg,
+        now,
+        resumes,
+        integrating,
+        memo=memo,
+        skip=skip,
     )
 
     def at_work(task_id: str) -> bool:
@@ -1614,6 +1635,9 @@ def gather_merges(
             )
             behind = f"behind #{round_.head}" if round_.head is not None else "with no head"
             why = round_.lane_reasons.get(number)
+            if why is None and entry.member is not None and entry.member.stack_held:
+                # GH-838: a held child is never head, so its refusal is not read as one; say why.
+                why = "stack_parent_unmerged"
             if why is not None:
                 reading += ", " + LANE_TEXT[why].format(head=round_.head)
             out.append(f"agentic: poll: auto-merge #{number} -> waiting ({reading}) {behind}")
@@ -1694,18 +1718,21 @@ def gather_merges(
     return found
 
 
-def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
+def gather_resumes(
+    ports: Ports, now: datetime, *, skip: frozenset[int] = frozenset()
+) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
     `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
     `rules.resume_exhausted` decides over, and for an `account_limit` pause the stated reset
     (`rules.stated_reset`) and whether it was retaken since (`rules.account_limit_due`'s
     inputs; ADR-0039, addendum GH-381). A task with no `Escalated:` comment
     at all (its document disagrees with the issue, or it has no issue) is skipped: there
-    is no wait to measure `since` from."""
+    is no wait to measure `since` from. An issue in `skip` (GH-899: a stacked child the round
+    holds) is not evaluated and its comments are not read."""
     resumes: list[rules.ResumeCandidate] = []
     for task_id in ports.documents.ids():
         number = ports.inbox.issue_of(task_id)
-        if number is None:
+        if number is None or number in skip:
             continue
         raw = ports.documents.load(task_id) or {}
         if raw.get("closed_at") or not raw.get("escalated"):
@@ -1874,6 +1901,7 @@ def gather_retakes(
     spent: dict[int, RetakesSpent] | None = None,
     seen: dict[int, Seen] | None = None,
     reported: set[int] | None = None,
+    skip: frozenset[int] = frozenset(),
 ) -> tuple[list[int], list[str]]:
     """Every open task in the tray whose run is gone (`rules.interrupted_run`, one budget for
     every shape, GH-466), and the lines for the ones left to the human. A task whose budget is
@@ -1897,7 +1925,9 @@ def gather_retakes(
     alive, as `acquire` reads it. The comments are fetched only for a task the first,
     cheap verdict did not already rule out. `seen` (GH-616) is filled with the verdict of every
     task that has a lock record, and `reported` with the issues this function printed a line
-    for, so the round can say why an owed task was left alone (`rules.owed_a_line`)."""
+    for, so the round can say why an owed task was left alone (`rules.owed_a_line`). An issue in
+    `skip` (GH-899: a stacked child the round holds) is left out before anything is read for it:
+    no lock read, no verdict in `seen`, no line, no comments, no budget spent."""
     retakes: list[int] = []
     lines: list[str] = []
     crashes = crash if crash is not None else {}
@@ -1912,7 +1942,7 @@ def gather_retakes(
     )
     for task_id in ports.documents.ids():
         number = ports.inbox.issue_of(task_id)
-        if number is None:
+        if number is None or number in skip:
             continue
         record = lock.read(task_id)
         if record is None:
@@ -3048,26 +3078,44 @@ def run_once(
     # GH-627: the queue is read once per round, here and outside the lock, because the split
     # sweep needs it before the launches; the same dict feeds `gather_launches` and the orphan
     # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there). A
-    # read, so a dry round makes it too.
-    queued = queue_documents(ports)
+    # read, so a dry round makes it too. GH-899: `queued_all` is the whole queue, for every consumer
+    # but the two that start a child (`gather_launches`, `gather_orphans`), which get `queued`,
+    # the same without the stacked children the round holds.
+    queued_all = queue_documents(ports)
+    # GH-899: the round's one upstream read and one stacking memo, made here so the hold below
+    # and the sections under the registry's lock share them; nothing is asked until one is called.
+    upstream = functools.cache(ports.workspace.upstream)
+    stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
     if not dry_run:
         # The sweep's own memoised upstream (at most one fetch, and only when it has a merge
         # commit to judge); the one `registry.exclusive()` builds below is not shared with it.
         sweep_upstream = functools.cache(ports.workspace.upstream)
         part_verdict = functools.partial(_part_verdict, cfg, ports, sweep_upstream)
         swept = [
-            *split_sweep.sweep(ports, queued, verdict=part_verdict, report_failures=False),
+            *split_sweep.sweep(ports, queued_all, verdict=part_verdict, report_failures=False),
             *swept,
         ]
         # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
         # read, so a round that frees room starts its children in the same round.
         swept = [*scratch_sweep.sweep(ports, now), *swept]
         # GH-798: a task that ended tracker_only without the re-plan it was owed is said once.
-        swept = [*flag_stranded(ports, queued), *swept]
+        swept = [*flag_stranded(ports, queued_all), *swept]
         # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
         swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
-    resumes = gather_resumes(ports, now)
+    # GH-899: before any gatherer, so a stacked child whose parent says wait is evaluated by none
+    # of them; the episodes (the note, the row, the seal of `resumed_at`) are written here too, so
+    # the time a child was held never counts as quiet. A dry or space-held round writes nothing.
+    stack_view = stack_hold.compute(
+        ports, cfg, lock, queued_all, upstream, stack_memo, registry.live()
+    )
+    stack_held = frozenset(stack_view.held)
+    hold_lines += stack_view.lines
+    hold_lines += stack_hold.write_episodes(
+        ports, lock, stack_view, queued_all, now, dry_run=dry_run, space_held=bool(held)
+    )
+    queued = {n: raw for n, raw in queued_all.items() if n not in stack_held}
+    resumes = gather_resumes(ports, now, skip=stack_held)
     crash_retakes: dict[int, CrashRetake] = {}
     spent_notices: dict[int, RetakesSpent] = {}
     seen: dict[int, Seen] = {}
@@ -3082,6 +3130,7 @@ def run_once(
         spent=spent_notices,
         seen=seen,
         reported=reported,
+        skip=stack_held,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
@@ -3114,15 +3163,13 @@ def run_once(
                 spend_notes.append(f"agentic: poll: {skipped} runs without timestamps not counted")
             spent, covered = rules.trailing_spend(machine, now)
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
-        upstream = functools.cache(ports.workspace.upstream)
-        stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
         queue_blockers: dict[int, tuple[int, ...]] = {}
         experiment_notes: list[str] = []
         declaration = _declared_experiment(cfg, ports, experiment_notes)
         arm_counts = (
-            _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
+            _arm_counts(declaration, ports, registry, product, queued_all) if declaration else {}
         )
         launches = gather_launches(
             cfg,
@@ -3135,7 +3182,7 @@ def run_once(
             declaration,
             queue_blockers,
         )
-        dependents = launch_order.dependents(launch_edges(open_refs, queued, queue_blockers))
+        dependents = launch_order.dependents(launch_edges(open_refs, queued_all, queue_blockers))
         merges: list[int] = []
         backed_off_merges: list[int] = []
         backoff_ends: dict[int, datetime] = {}
@@ -3162,6 +3209,7 @@ def run_once(
                 integrating=integrating,
                 memo=stack_memo,
                 dry_run=dry_run,
+                skip=stack_held,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -3269,6 +3317,8 @@ def run_once(
             exempt_yield=plan_yielded,
             dependents=dependents,
         )
+        # GH-899: the last word on a held child, whatever a gatherer said: no action on its issue.
+        plan = replace(plan, actions=[a for a in plan.actions if a.issue not in stack_held])
         plan = _assign_arms(plan, declaration, arm_counts, frozenset(reruns))
         # GH-500: the head of this product's queue is published only while it could start. A
         # round that starts it, or that has no such head, removes the record: the child that
@@ -3356,7 +3406,7 @@ def run_once(
             orphan_lines += unaccounted_lines(
                 ports,
                 lock,
-                queued,
+                queued_all,
                 busy,
                 {a.issue for a in plan.actions},
                 reported,

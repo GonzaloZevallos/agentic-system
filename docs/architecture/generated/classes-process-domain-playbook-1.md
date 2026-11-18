@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -38,6 +39,8 @@ classDiagram
     class playbook__Evidence["Evidence"]
     class playbook__Item["Item"]
     class playbook__Pending["Pending"]
+    class playbook__Playbook["Playbook"]
+    playbook__Applied --> playbook__Playbook
     playbook__Archived --> playbook__Item
     playbook__Demotion --> playbook__Delta
 ```
@@ -45,5 +48,4 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
-  - `playbook.Applied` se asocia con `playbook.Playbook`
   - `playbook.Refusal` se asocia con `playbook.Delta`

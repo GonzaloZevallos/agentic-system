@@ -285,6 +285,11 @@ def test_the_login_is_compared_with_casefold() -> None:
     assert isinstance(check(approved(body_of()), owner="OWNER"), dict)
 
 
+def test_a_case_different_owner_login_is_the_same_owner() -> None:
+    assert isinstance(check(approved(body_of(), by="MiXeD"), owner="mixed"), dict)
+    assert check(approved(body_of(), by="mixed"), owner="mixed2") == "spec_unapproved"
+
+
 @pytest.mark.parametrize(
     "front",
     [
