@@ -1642,6 +1642,9 @@ class ListedPullRequest:
     body: str
     merge_commit: str
     branch: str
+    cross_repository: bool | None = None
+    """`True` for a pull request from a fork, `False` for one from this repository, `None`
+    when the tracker did not say (or an older caller built the value without it)."""
 
 
 @dataclass(frozen=True)
@@ -1881,13 +1884,18 @@ class Tracker(Protocol):
         cannot answer raises `ValueError` (`TrackerTimedOut` included), as every read."""
         ...
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         """Merges the pull request at `reference`, the URL `deliver` stored (the same key
         `pull_request` takes), only if its head is still `head_sha` (GH-178: the sha the
         automatic-merge decision was taken on, never "whatever is there now"), and returns
         the method used. Raises `MergeCallFailed` (a `ValueError`) when the tracker refuses
         -- the head moved, a check or a rule blocks it, the pull request is not open, the
-        reference is unreadable -- carrying the class of the step that failed."""
+        reference is unreadable -- carrying the class of the step that failed. `method`
+        `None` takes the first method the repository allows, as always; `"merge"` takes a
+        merge commit or nothing: a repository without them raises
+        `MergeCallFailed("no_merge_method")` and merges nothing."""
         ...
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import anyio
 import pytest
@@ -61,12 +62,14 @@ def git(*args: str, cwd: Path) -> str:
 class MergingTracker(MemoryTracker):
     """`gh pr merge` for real enough: once merged, the pull request reads MERGED."""
 
-    def merge(self, reference: str, head_sha: str) -> str:
-        method = super().merge(reference, head_sha)
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
+        used = super().merge(reference, head_sha, method=method)
         self.prs[reference] = dataclasses.replace(
             self.prs[reference], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
-        return method
+        return used
 
 
 class World:
@@ -582,9 +585,12 @@ class _Unreachable(MergingTracker):
         super().__init__()
         self.step = step
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         pull_request_number(reference)
         self.merge_calls.append((reference, head_sha))
+        self.merge_methods.append(method)
         error = TrackerUnreachable("gh repo view could not reach GitHub (error connecting to)")
         if self.step == "repo view":
             raise error
