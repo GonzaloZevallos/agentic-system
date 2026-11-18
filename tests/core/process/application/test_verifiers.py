@@ -462,6 +462,24 @@ async def test_a_return_and_a_raise_keep_the_returned_unit_beside_the_escalation
     _no_key(patch, ports)
 
 
+async def test_two_returns_and_a_raise_keep_returned_with_and_the_pair_increment():
+    state, ports = state_of(), ports_of()
+    copy = {**returned(state, "copy_review", "wording"), "changes_requested": {"pm-tech-lead": 1}}
+    patches = {
+        **approving(),
+        "copy_review": copy,
+        "qa_performance": returned(state, "qa_performance", "slow"),
+        "final_validation": raising(_departure()),
+    }
+    patch = await verify(state, CFG, ports, Fakes(patches).run)
+    after = apply(state, patch)
+    unit = after["subtasks"][INTEGRATION]
+    assert unit["returned_by"] == "copy_review" and unit["returned_with"] == ["qa_performance"]
+    assert patch["changes_requested"] == {"pm-tech-lead": 1}
+    assert after["escalation_class"] == "questions" and after["drawing_escalation"]["round"] == 1
+    _no_key(patch, ports)
+
+
 async def test_a_sibling_escalation_stands_and_the_raise_leaves_no_row_or_round():
     state, ports = state_of(), ports_of()
     patches = {

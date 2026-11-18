@@ -638,3 +638,35 @@ def test_fold_raised_never_opens_a_second_row_for_another_capitalisation():
     again = drawing_answer.fold_raised(held, _state(drawing_raised=[_departure("save")]), AT)
     assert again["drawing_escalation"]["numbers"] == [1]
     assert [r["element"] for r in again["drawing_departures"]] == ["Save"]
+
+
+def test_fold_raised_after_an_answered_round_opens_no_second_one_for_another_case():
+    record = task.DrawingEscalation(round=1, numbers=[1], cause="drawing_departure")
+    held = _raise_state(drawing_departures=_rows("Save", answered=(1,)), drawing_escalation=record)
+    # a pass that cites `save` against the answered `Save` raises nothing (`classify`), so the
+    # node leaves no key and the fold changes nothing
+    assert drawing_answer.fold_raised(held, _state(cost_usd=1.0), AT) == {"cost_usd": 1.0}
+    classified = drawing_answer.classify(
+        held,
+        [
+            DrawingCheck(
+                subject="screen",
+                ref="design/home.png",
+                verdict="departs",
+                drawing="design/home.png",
+                element="save",
+            )
+        ],
+        [
+            DrawingDeparture(
+                drawing="design/home.png",
+                element="save",
+                shows="a",
+                would_ship="b",
+                recommendation="r",
+                reason="r",
+                raised_by="developer",
+            )
+        ],
+    )
+    assert classified.raised == [] and "raise" not in classified.outcomes.values()

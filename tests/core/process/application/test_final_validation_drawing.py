@@ -319,6 +319,18 @@ async def test_an_accepted_departure_is_settled_and_pm_runs(tmp_path):
     assert patch["drawing_checks"]["open"] == 0 and "pm_final" in script.slugs
 
 
+async def test_a_later_pass_citing_the_answered_row_in_another_case_opens_no_round(tmp_path):
+    record = {"round": 1, "numbers": [3], "cause": "drawing_departure"}
+    held = state(drawing_departures=[_row("accept", 0, element="Save")], drawing_escalation=record)
+    script = runner(lead([]), lead([check("departs", element="save")], [departure("save")]))
+    patch, _ = await run(held, script, tmp_path, design())
+    after = apply(held, patch)
+    assert "drawing_raised" not in patch and "pm_final" in script.slugs
+    assert after["drawing_escalation"]["round"] == 1 and not after.get("escalated")
+    assert [(r["number"], r["element"]) for r in after["drawing_departures"]] == [(3, "Save")]
+    assert patch["drawing_checks"]["open"] == 0
+
+
 async def test_without_a_design_no_new_key_and_the_same_rendered_prompts(tmp_path):
     script = runner(lead([]), lead([]))
     patch, _ = await run(state(), script, tmp_path, None)
