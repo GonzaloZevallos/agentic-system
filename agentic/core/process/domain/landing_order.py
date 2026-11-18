@@ -311,9 +311,9 @@ def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozense
 def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
     """Why `member`, `merge_now` and clean, has no lane beside `head_`: the head's conditions
     first, then the member's own; a stacked child whose parent is unmerged comes before both (the
-    head's obstacles are no news to a member that could not have it anyway). `None` for a member that is not `merge_now` and clean (it gets no
-    reason) and for one with no obstacle of its own: it never means "has the lane", which is
-    `Order.lane`."""
+    head's obstacles are no news to a member that could not have it anyway). `None` for a member
+    that is not `merge_now` and clean (it gets no reason) and for one with no obstacle of its own:
+    it never means "has the lane", which is `Order.lane`."""
     if not member.merge_now or member.clean is not True:
         return None
     if member.stack_held:
@@ -359,8 +359,8 @@ def _choose(eligible: list[Member], now: datetime) -> Member | None:
 
 
 def order(members: Iterable[Member], now: datetime) -> Order:
-    """The order of `members` at `now`. Eligible: not `waits_on_human` or `stack_held`, and not `waits_on_ci` or
-    `account_paused` unless busy. The head is the first by the tiers in the module docstring; if
+    """The order of `members` at `now`. Eligible: not `waits_on_human` or `stack_held`, and not
+    `waits_on_ci` or `account_paused` unless busy. The head is the first by the tiers in the module docstring; if
     it is over budget and another member is eligible it yields (`Yield`, at most once per member
     per call, so several over-budget members in front may yield in one call) and the head is
     chosen again. A lone eligible member never yields.
