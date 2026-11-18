@@ -310,11 +310,7 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
             and all(isinstance(p, str) for p in unverified)
             else {}
         ),
-        **(
-            {"unverified_at": at}
-            if isinstance(at := raw.get("unverified_at"), str) and at
-            else {}
-        ),
+        **({"unverified_at": at} if isinstance(at := raw.get("unverified_at"), str) and at else {}),
     }
 
 

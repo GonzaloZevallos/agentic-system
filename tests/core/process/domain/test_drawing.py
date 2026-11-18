@@ -371,7 +371,9 @@ def test_unverified_lines_normalises_the_path_and_maps_none_to_empty():
         _Check("question", "Q2", "unverified", None),
     ]
     assert unverified_lines(checks) == [
-        UnverifiedAsk("Q1", "pantallas/Home.png", unverified_question("Q1", "pantallas/./Home.png")),
+        UnverifiedAsk(
+            "Q1", "pantallas/Home.png", unverified_question("Q1", "pantallas/./Home.png")
+        ),
         UnverifiedAsk("Q2", "", unverified_question("Q2", None)),
     ]
 

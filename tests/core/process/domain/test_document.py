@@ -2350,9 +2350,7 @@ def test_a_record_without_the_new_fields_rewrites_identically_with_no_such_keys(
     assert "unverified" not in text
     parsed = document.parse(text)["drawing_escalation"]
     assert parsed == record
-    assert document.render(
-        {**_departure_base(), "drawing_escalation": parsed}
-    ) == text
+    assert document.render({**_departure_base(), "drawing_escalation": parsed}) == text
 
 
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
