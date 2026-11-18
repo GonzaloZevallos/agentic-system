@@ -274,19 +274,18 @@ def test_a_merge_resets_the_streak_and_a_wait_or_a_failed_call_keeps_it():
         None,
     )
     waited = step(refused, pl.Wait("ci_pending"))
-    assert (waited.verdict, waited.cause, waited.streak, waited.escalated_at) == (
-        "wait",
-        "ci_pending",
-        2,
-        "e",
-    )
+    assert waited == pl.LandAttempt("h2", "t2", "refuse", "ci_red", 2, "m2", "e")
     failed = step(refused, pl.Failed("MergeCallFailed"))
-    assert (failed.verdict, failed.cause, failed.streak, failed.escalated_at) == (
-        "failed",
-        "MergeCallFailed",
-        2,
-        "e",
-    )
+    assert failed == pl.LandAttempt("h2", "t2", "refuse", "ci_red", 2, "m2", "e")
+
+
+def test_a_wait_or_a_failed_call_with_no_refusal_standing_is_recorded_with_its_own_cause():
+    waited = step(None, pl.Wait("ci_pending"))
+    assert (waited.verdict, waited.cause, waited.streak) == ("wait", "ci_pending", 0)
+    failed = step(waited, pl.Failed("MergeCallFailed"))
+    assert (failed.verdict, failed.cause, failed.streak) == ("failed", "MergeCallFailed", 0)
+    merged = step(pl.LandAttempt("h", "t", "merge"), pl.Wait("stale_base"))
+    assert (merged.verdict, merged.streak) == ("wait", 0)
 
 
 def test_escalated_at_survives_a_repeated_refusal_and_is_cleared_when_the_streak_resets():
@@ -296,9 +295,15 @@ def test_escalated_at_survives_a_repeated_refusal_and_is_cleared_when_the_streak
     assert step(prior, pl.Merge("h2")).escalated_at is None
 
 
-def test_a_refusal_after_a_wait_is_a_new_streak_of_one():
-    waited = step(step(None, pl.Refuse("ci_red")), pl.Wait("ci_pending"))
-    assert step(waited, pl.Refuse("ci_red")).streak == 1
+def test_a_refuse_wait_refuse_sequence_for_one_cause_counts_and_halts():
+    refused = step(None, pl.Refuse("ci_red"))
+    waited = step(refused, pl.Wait("ci_pending"))
+    again = step(waited, pl.Refuse("ci_red"))
+    assert again.streak == 2
+    failed = step(again, pl.Failed("MergeCallFailed"))
+    third = step(failed, pl.Refuse("ci_red"))
+    assert third.streak == pl.LAND_REFUSALS_MAX and pl.land_halted(third)
+    assert step(waited, pl.Refuse("path_outside")).streak == 1
 
 
 def test_land_halted_only_when_refusals_in_a_row_reach_the_maximum():
