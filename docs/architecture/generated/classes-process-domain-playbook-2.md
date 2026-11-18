@@ -30,7 +30,6 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
 
 ```mermaid
 classDiagram
-    class playbook__Playbook["Playbook"]
     class playbook__Refusal["Refusal"]
     class playbook__Rejected["Rejected"]
     class playbook_candidates__Add["Add"]
@@ -38,11 +37,11 @@ classDiagram
     class playbook_candidates__Entry["Entry"]
     class playbook_candidates__Ledger["Ledger"]
     class playbook_candidates__Record["Record"]
+    class playbook_similarity__Lesson["Lesson"]
     playbook_candidates__Candidate --> playbook_candidates__Record
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
-  - `playbook.Applied` se asocia con `playbook.Playbook`
   - `playbook.Refusal` se asocia con `playbook.Delta`

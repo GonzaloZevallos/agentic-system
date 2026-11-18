@@ -38,6 +38,8 @@ classDiagram
     class playbook__Evidence["Evidence"]
     class playbook__Item["Item"]
     class playbook__Pending["Pending"]
+    class playbook__Playbook["Playbook"]
+    playbook__Applied --> playbook__Playbook
     playbook__Archived --> playbook__Item
     playbook__Demotion --> playbook__Delta
 ```
@@ -45,5 +47,4 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
-  - `playbook.Applied` se asocia con `playbook.Playbook`
   - `playbook.Refusal` se asocia con `playbook.Delta`
