@@ -1371,3 +1371,5 @@ tasks:
     decisions: 1
   GH-647@review:
     cost_usd: 0.067
+  GH-914@review:
+    cost_usd: 0.0433
