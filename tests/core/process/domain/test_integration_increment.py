@@ -344,4 +344,3 @@ def test_no_human_decision_pending_holds_for_a_failure_pause_and_for_a_clear_sta
 )
 def test_no_human_decision_pending_fails_on_each_condition(more):
     assert rules.no_human_decision_pending(more) is False
-

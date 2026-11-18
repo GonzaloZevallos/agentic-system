@@ -2436,3 +2436,53 @@ def test_the_spec_draft_record_round_trips_and_is_distinct_from_the_spec():
         assert loaded["spec_draft"] == record
         assert "spec" not in loaded and "spec_delivery" not in text
         assert document.render(_base_state(**loaded)) == text
+
+
+# --- owner-decision groundwork (GH-960) -------------------------------------------------
+
+
+def _round_trip(state):
+    return document.parse(document.render(state))
+
+
+def test_the_owner_decision_fields_round_trip_and_are_omitted_when_absent():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    with_fields = {
+        **base,
+        "owner_decision_seen": "2026-11-18T10:00:00Z",
+        "owner_decision_route": "pm",
+    }
+    back = _round_trip(with_fields)
+    assert back["owner_decision_seen"] == "2026-11-18T10:00:00Z"
+    assert back["owner_decision_route"] == "pm"
+    plain = document.render(base)
+    assert "owner_decision_seen" not in plain and "owner_decision_route" not in plain
+
+
+def test_an_absent_task_head_and_empty_subtasks_come_back_as_the_state_without_them():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    assert _round_trip({**base, "task_head": None, "subtasks": {}}) == _round_trip(base)
+    assert "task_head" not in document.render({**base, "task_head": None})
+
+
+def test_a_hand_written_null_task_head_reads_falsy():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "type": "feature"})
+    raw = raw.replace("---\n", "---\ntask_head: null\n", 1)
+    assert not document.parse(raw).get("task_head")
+
+
+def test_an_owner_decision_restart_settled_row_round_trips():
+    row = {
+        "subtask": "integration",
+        "version": 3,
+        "outcome": "discarded",
+        "reason": "owner_decision",
+    }
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "type": "feature",
+        "restart_settled": [row],
+    }
+    assert _round_trip(state)["restart_settled"] == [row]

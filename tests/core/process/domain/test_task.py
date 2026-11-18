@@ -15,6 +15,8 @@ from agentic.core.process.domain.task import (
     delta,
     last,
     merge,
+    merge_subtasks,
+    subtasks_reset,
 )
 
 
@@ -66,6 +68,8 @@ def test_reducers_are_read_from_the_annotations():
         "escalation_cause",
         "tracker_human",
         "owner_decision_unbuilt",
+        "owner_decision_seen",
+        "owner_decision_route",
         "tracker_items",
         "tracker_actions_done",
         "restarts",
@@ -478,3 +482,86 @@ def test_staged_escalation_reducer_laws_hold_over_the_whole_grid():
                 assert add_drawing_escalation(
                     add_drawing_escalation(a, b), c
                 ) == add_drawing_escalation(a, add_drawing_escalation(b, c))
+
+
+# --- merge_subtasks and the reset (GH-960) -----------------------------------------------
+
+
+def _unit(status: str = "pending") -> dict:
+    return {"id": "x", "status": status}
+
+
+def test_the_reset_key_can_never_be_a_valid_subtask_id():
+    from agentic.core.process.domain.schemas import SLUG
+    from agentic.core.process.domain.task import SUBTASKS_RESET
+
+    assert not SLUG.match(SUBTASKS_RESET)
+    assert subtasks_reset() == {SUBTASKS_RESET: {}}
+    assert REDUCERS["subtasks"] is merge_subtasks
+
+
+@pytest.mark.parametrize(
+    ("current", "update"),
+    [
+        (None, None),
+        (None, {"a": _unit()}),
+        ({"a": _unit()}, None),
+        ({"a": _unit()}, {}),
+        ({"a": _unit(), "b": _unit()}, {"a": _unit("approved")}),
+        ({"a": _unit()}, {"b": _unit()}),
+    ],
+)
+def test_merge_subtasks_without_the_key_is_merge(current, update):
+    assert merge_subtasks(current, update) == merge(current, update)
+
+
+def test_the_reset_empties_then_merges_what_else_the_update_carries():
+    current = {"a": _unit(), "b": _unit()}
+    assert merge_subtasks(current, subtasks_reset()) == {}
+    assert merge_subtasks(current, {**subtasks_reset(), "c": _unit()}) == {"c": _unit()}
+    assert merge_subtasks(None, {**subtasks_reset(), "c": _unit()}) == {"c": _unit()}
+
+
+def test_apply_never_stores_the_key_with_or_without_subtasks_in_the_state():
+    from agentic.core.process.domain.task import SUBTASKS_RESET
+
+    with_subtasks = apply({"subtasks": {"a": _unit()}}, {"subtasks": subtasks_reset()})
+    assert with_subtasks["subtasks"] == {}
+    without = apply({"id": "T"}, {"subtasks": {**subtasks_reset(), "b": _unit()}})
+    assert without["subtasks"] == {"b": _unit()}
+    bare = apply({"id": "T"}, {"subtasks": subtasks_reset()})
+    assert bare["subtasks"] == {}
+    for result in (with_subtasks, without, bare):
+        assert SUBTASKS_RESET not in result["subtasks"]
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {},
+        {"subtasks": {}},
+        {"subtasks": {"a": _unit("approved")}},
+        {"subtasks": {"a": {"id": "a"}}},  # a whole-unit replacement
+        {"subtasks": {"z": _unit()}},
+    ],
+)
+def test_a_patch_without_the_key_never_shrinks_the_subtask_keys(patch):
+    state = {"subtasks": {"a": _unit(), "b": _unit()}}
+    assert set(apply(state, patch).get("subtasks", {})) >= {"a", "b"}
+
+
+def test_delta_with_a_dropped_key_emits_the_reset_and_round_trips():
+    before = {"id": "T", "subtasks": {"a": _unit(), "b": _unit(), "c": _unit()}}
+    after = {"id": "T", "subtasks": {"a": _unit("approved"), "d": _unit()}}
+    patch = delta(before, after)
+    assert patch == {"subtasks": {**subtasks_reset(), "a": _unit("approved"), "d": _unit()}}
+    assert apply(before, patch) == after
+    emptied = {"id": "T", "subtasks": {}}
+    assert apply(before, delta(before, emptied)) == emptied
+
+
+def test_delta_without_a_dropped_key_never_emits_the_reset():
+    before = {"subtasks": {"a": _unit(), "b": _unit()}}
+    after = {"subtasks": {"a": _unit("approved"), "b": _unit(), "c": _unit()}}
+    assert delta(before, after) == {"subtasks": {"a": _unit("approved"), "c": _unit()}}
+    assert delta(before, before) == {}
