@@ -94,6 +94,7 @@ from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandid
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
+from agentic.core.process.domain.playbook_land import LandAttempt
 from agentic.core.process.domain.presubmit import (
     ApiBreakLine,
     CheckResult,
@@ -2749,6 +2750,22 @@ class FakeBoardSent:
     def save(self, memory: SentMemory) -> None:
         self.saved.append(memory)
         self.memory = memory
+
+
+class FakeLandRecord:
+    """The playbook landing record, in memory: one attempt per product, `saved` keeps every
+    attempt it was given."""
+
+    def __init__(self, attempts: dict[str, LandAttempt] | None = None) -> None:
+        self.attempts: dict[str, LandAttempt] = dict(attempts or {})
+        self.saved: list[tuple[str, LandAttempt]] = []
+
+    def load(self, product: str) -> LandAttempt | None:
+        return self.attempts.get(product)
+
+    def save(self, product: str, attempt: LandAttempt) -> None:
+        self.saved.append((product, attempt))
+        self.attempts[product] = attempt
 
 
 _INSTANTS = ("at", "started_at", "ended_at")

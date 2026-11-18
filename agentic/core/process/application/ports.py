@@ -24,6 +24,7 @@ from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, Ex
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.playbook_land import LandAttempt
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
@@ -331,6 +332,16 @@ class RoleRunner(Protocol):
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
     ) -> RawResult: ...
+
+
+class LandRecord(Protocol):
+    """The last landing attempt of a product's playbook PR, kept outside every checkout so it
+    survives a stage0 rotation. A record that is missing, unreadable or of another version
+    loads as `None`."""
+
+    def load(self, product: str) -> LandAttempt | None: ...
+
+    def save(self, product: str, attempt: LandAttempt) -> None: ...
 
 
 class TaskDocuments(Protocol):

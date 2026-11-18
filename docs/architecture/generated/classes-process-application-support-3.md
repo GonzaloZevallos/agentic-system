@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 7, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 8, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
@@ -15,25 +15,24 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
   - [application: support (parte 5)](classes-process-application-support-5.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
+  - [application: support (parte 8)](classes-process-application-support-8.md)
 
 ```mermaid
 classDiagram
+    class ports__Grant["Grant"]
+    class ports__Heartbeats["Heartbeats"]
     class ports__Inbox["Inbox"]
     class ports__InstalledProducts["InstalledProducts"]
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
     class ports__LabelTimeline["LabelTimeline"]
+    class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
     class ports__ListMayBeCut["ListMayBeCut"]
     class ports__ListedPullRequest["ListedPullRequest"]
     class ports__LoadReader["LoadReader"]
-    class ports__LockHeld["LockHeld"]
-    class ports__LockRecord["LockRecord"]
-    class ports__MasterWindow["MasterWindow"]
-    class ports__MergeCallFailed["MergeCallFailed"]
-    ports__LockHeld o-- ports__LockRecord
 ```
 
 ## Relaciones con otras páginas
