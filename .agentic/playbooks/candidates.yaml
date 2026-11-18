@@ -2164,3 +2164,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: On the integrated head, run the full test directories of every package the subtasks touched, and update test fakes or stubs of any shared seam that one subtask now calls and the other subtask's tests fake.
+  confidence: medium
+  seen_in:
+  - GH-647
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T04:27:03.824+00:00'
