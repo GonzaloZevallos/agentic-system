@@ -70,6 +70,7 @@ LaneReason = Literal[
     "lacks_master",
     "paths_overlap",
     "member_paths_unknown",
+    "stack_parent_unmerged",
 ]
 """Why a member that is `merge_now` and clean has no lane beside the head."""
 
@@ -109,7 +110,12 @@ class Member:
     `frozenset()` is a read, an empty diff. `paths` is a snapshot taken when the caller read it.
     The lane's safety rests on the head's own `sync_master` seeing any overlap, which is why
     `head_syncs_left` is a required fact. A semantic interaction between files that do not
-    overlap is not detected."""
+    overlap is not detected.
+
+    `stack_held` (GH-838) is that the task is a stacked child whose parent has not reached the
+    upstream (`stacking.held`, which the caller applies: this module never reads a stack record).
+    Like `waits_on_human` it drops the member from the Cabeza choice, and it never gets the lane.
+    It is not a state of the head budget: `advance` neither charges nor yields a held member."""
 
     issue: int
     queued_at: datetime | None
@@ -131,6 +137,7 @@ class Member:
     integrating: bool = False
     paths: frozenset[str] | None = None
     head_syncs_left: int | None = None
+    stack_held: bool = False
 
 
 @dataclass(frozen=True)
@@ -283,6 +290,7 @@ def lane_ready(m: Member) -> bool:
         and m.clean is True
         and m.holds_master is True
         and m.paths is not None
+        and not m.stack_held
         and not (m.waits_on_human or m.busy or m.live_pass or m.waits_on_ci or m.account_paused)
     )
 
@@ -302,11 +310,14 @@ def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozense
 
 def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
     """Why `member`, `merge_now` and clean, has no lane beside `head_`: the head's conditions
-    first, then the member's own. `None` for a member that is not `merge_now` and clean (it gets no
+    first, then the member's own; a stacked child whose parent is unmerged comes before both (the
+    head's obstacles are no news to a member that could not have it anyway). `None` for a member that is not `merge_now` and clean (it gets no
     reason) and for one with no obstacle of its own: it never means "has the lane", which is
     `Order.lane`."""
     if not member.merge_now or member.clean is not True:
         return None
+    if member.stack_held:
+        return "stack_parent_unmerged"
     taken = _head_obstacle(head_, now)
     if isinstance(taken, str):
         return taken
@@ -348,7 +359,7 @@ def _choose(eligible: list[Member], now: datetime) -> Member | None:
 
 
 def order(members: Iterable[Member], now: datetime) -> Order:
-    """The order of `members` at `now`. Eligible: not `waits_on_human`, and not `waits_on_ci` or
+    """The order of `members` at `now`. Eligible: not `waits_on_human` or `stack_held`, and not `waits_on_ci` or
     `account_paused` unless busy. The head is the first by the tiers in the module docstring; if
     it is over budget and another member is eligible it yields (`Yield`, at most once per member
     per call, so several over-budget members in front may yield in one call) and the head is
@@ -360,7 +371,8 @@ def order(members: Iterable[Member], now: datetime) -> Order:
     eligible = [
         m
         for m in members
-        if not m.waits_on_human and (m.busy or not (m.waits_on_ci or m.account_paused))
+        if not (m.waits_on_human or m.stack_held)
+        and (m.busy or not (m.waits_on_ci or m.account_paused))
     ]
     done: list[Yield] = []
     chosen = _choose(eligible, now)
