@@ -1383,3 +1383,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-899
+  GH-839@decision:
+    cost_usd: 0.0243
+    decisions: 1
