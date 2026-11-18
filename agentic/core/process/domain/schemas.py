@@ -1828,3 +1828,35 @@ def plan_check_for(
             _single_check(subtasks, data.get("integration") or "")
 
     return check
+
+
+class LessonDecisionRow(BaseModel):
+    """What the decider says about one new lesson: add it, merge it into one of the lessons
+    it was shown, call it a duplicate (NOOP) or a contradiction of one."""
+
+    candidate_key: str
+    verb: Literal["ADD", "MERGE", "NOOP", "CONTRADICTS"]
+    target_id: str | None = None
+    wording: str | None = None
+
+
+class LessonVerdictRow(BaseModel):
+    """What the decider says about one cluster of similar lessons: they are one lesson
+    (`confirm`, with the text of the member that states it) or they are not (`split`)."""
+
+    cluster_key: str
+    verdict: Literal["confirm", "split"]
+    canonical: str | None = None
+
+
+class LessonDecisions(RoleOutput):
+    """The Lesson Decider's output (GH-881): the only definition of its shape. A model's
+    answer is untrusted and `lesson_decision.settle` holds it to the request."""
+
+    decisions: list[LessonDecisionRow] = Field(
+        description="One decision per new lesson, by its key, and no other key"
+    )
+    verdicts: list[LessonVerdictRow] = Field(
+        default_factory=list,
+        description="One verdict per cluster, by its key; empty when no cluster was shown",
+    )
