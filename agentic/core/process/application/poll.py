@@ -34,6 +34,7 @@ from ..domain import (
     document,
     exempt_queue,
     experiment,
+    hold,
     landing_order,
     launch_order,
     merge_ci,
@@ -80,6 +81,7 @@ from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
     GitError,
+    HeldListMayBeCut,
     IssueComment,
     LaunchAttempt,
     Launcher,
@@ -90,7 +92,11 @@ from .ports import (
     RunRegistration,
     RunRegistry,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
     TrackerTimedOut,
+    TrackerTransient,
+    TrackerUnreachable,
     Upstream,
 )
 from .refusal_note import POLLER_NOTED, note_refusal, read_comments, said
@@ -2820,6 +2826,40 @@ def deferred_line(deferred: rules.Deferred) -> str:
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
+def held_line(deferred: rules.Deferred) -> str:
+    """The one poll line for a candidate the plan deferred as `held` (GH-839): the issue carries
+    the hold label, so it waits whatever it was going to do. The only builder of it."""
+    return f"agentic: poll: {deferred.kind} #{deferred.issue} waiting (held)"
+
+
+def holds_unread_cause(exc: TrackerCallFailed | TrackerRefused) -> hold.HoldsUnreadCause:
+    """The closed cause of a failed hold read, decided by the type of the exception and never by
+    the text `gh` printed."""
+    if isinstance(exc, TrackerRefused):
+        return "refused"
+    if isinstance(exc, HeldListMayBeCut):
+        return "cut"
+    if isinstance(exc, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(exc, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(exc, TrackerTransient):
+        return "transient"
+    if isinstance(exc, TrackerRateLimited):
+        return "rate_limited"
+    return "failed"
+
+
+def read_held_issues(ports: Ports) -> tuple[frozenset[int], str | None]:
+    """The round's one read of the held issues (GH-839) and, when it failed, the line that says
+    so. A failure never becomes an empty set: the caller starts nothing that round. Only
+    `TrackerCallFailed` and `TrackerRefused` are absorbed; any other exception propagates."""
+    try:
+        return ports.tracker.held_issues(), None
+    except (TrackerCallFailed, TrackerRefused) as exc:
+        return frozenset(), f"agentic: poll: holds unread ({holds_unread_cause(exc)})"
+
+
 _LIVE_ACTIONS: frozenset[rules.PollActionKind] = frozenset(
     {"launch", "resume", "retake", "merge", "land"}
 )
@@ -3103,6 +3143,16 @@ def run_once(
         # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
         swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
+    # GH-839: the round's one read of the issues labelled agentic-hold, only when the volumes
+    # leave the round free to start anything; a read that failed starts nothing.
+    held_issues: frozenset[int] = frozenset()
+    holds_unread = False
+    if not held:
+        held_issues, unread_line = read_held_issues(ports)
+        if unread_line is not None:
+            holds_unread = True
+            hold_lines.append(unread_line)
+    starts_nothing = bool(held) or holds_unread
     # GH-899: before any gatherer, so a stacked child whose parent says wait is evaluated by none
     # of them; the episodes (the note, the row, the seal of `resumed_at`) are written here too, so
     # the time a child was held never counts as quiet. A dry or space-held round writes nothing.
@@ -3138,7 +3188,7 @@ def run_once(
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
     # starts nothing, so it has no order to rank and makes no call.
-    open_refs, refs_note = ([], None) if held else read_open_refs(ports)
+    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
     with registry.exclusive():
         running = registry.live()
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
@@ -3204,7 +3254,7 @@ def run_once(
                 reruns,
                 backed_off_merges,
                 backoff_ends,
-                bool(held),
+                starts_nothing,
                 resumes,
                 integrating=integrating,
                 memo=stack_memo,
@@ -3229,7 +3279,7 @@ def run_once(
         # round starts nothing, and asking the tracker for its comments would be for nothing.
         orphans: dict[int, int] = {}
         orphan_lines: list[str] = []
-        if not held:
+        if not starts_nothing:
             acting = {
                 *retakes,
                 *crash_retakes,
@@ -3316,6 +3366,8 @@ def run_once(
             exempt_attempts=exempt_records,
             exempt_yield=plan_yielded,
             dependents=dependents,
+            held_issues=held_issues,
+            holds_unread=holds_unread,
         )
         # GH-899: the last word on a held child, whatever a gatherer said: no action on its issue.
         plan = replace(plan, actions=[a for a in plan.actions if a.issue not in stack_held])
@@ -3331,7 +3383,7 @@ def run_once(
             exempt_head,
             backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
             busy=exempt_live > 0,
-            held=bool(held),
+            held=starts_nothing,
             own_live_exempt=own_exempt_live,
         )
         registry.publish_exempt_wait(
@@ -3389,20 +3441,25 @@ def run_once(
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.
+        # GH-839: a held one first, by its reason and before its kind: the one `held_line`.
+        held_deferred = [d for d in plan.deferred if d.reason == "held"]
+        other_deferred = [d for d in plan.deferred if d.reason != "held"]
         deferral_lines = [
-            deferred_line(d) for d in plan.deferred if d.kind not in ("orphan", "launch")
+            deferred_line(d) for d in other_deferred if d.kind not in ("orphan", "launch")
         ]
         deferral_lines += [
             f"agentic: poll: launch #{d.issue} waiting ({d.reason})"
-            for d in plan.deferred
+            for d in other_deferred
             if d.kind == "launch"
         ]
+        deferral_lines += [held_line(d) for d in held_deferred]
         deferral_lines += starvation
         orphan_lines += [
-            rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
+            rules.orphaned_line(d.issue, "no_slot") for d in other_deferred if d.kind == "orphan"
         ]
         reported |= {d.issue for d in plan.deferred if d.kind == "orphan"}
-        if not held:  # a held round starts nothing and its hold lines already say why
+        reported |= {d.issue for d in held_deferred}
+        if not starts_nothing:  # such a round starts nothing and its hold lines say why
             orphan_lines += unaccounted_lines(
                 ports,
                 lock,
