@@ -255,7 +255,9 @@ def test_the_derived_set_check_fails_against_an_empty_table(monkeypatch):
 
 
 def test_the_blocks_on_disk_are_exactly_the_blocks_of_the_table():
-    assert {path.stem for path in SPEC_PROMPTS.glob("*.md")} == set(spec_brief.SPEC_BLOCKS.values())
+    assert {path.stem for path in SPEC_PROMPTS.glob("*.md")} == set(
+        spec_brief.SPEC_BLOCKS.values()
+    ) | {spec_brief.DRAFT_BLOCK}
 
 
 @pytest.mark.parametrize("name", sorted(set(spec_brief.SPEC_BLOCKS.values())))

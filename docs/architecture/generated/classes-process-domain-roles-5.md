@@ -36,12 +36,14 @@ classDiagram
     class schemas__TechPlan["TechPlan"]
     class schemas__TechPlanWithAssumptions["TechPlanWithAssumptions"]
     class schemas__Verdict["Verdict"]
+    class schemas__VerdictWithSpecDraft["VerdictWithSpecDraft"]
     class stack_signals__Signals["Signals"]
     class tracker_items__CommentItem["CommentItem"]
     class tracker_items__HumanItem["HumanItem"]
     class tracker_items__OpenIssueItem["OpenIssueItem"]
     schemas__TechAnswersWithAssumptions --|> schemas__TechAnswers
     schemas__TechPlanWithAssumptions --|> schemas__TechPlan
+    schemas__VerdictWithSpecDraft --|> schemas__Verdict
 ```
 
 ## Relaciones con otras páginas

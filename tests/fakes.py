@@ -107,7 +107,7 @@ from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.size_budget import NumstatRow
-from agentic.core.process.domain.spec_brief import SPEC_BLOCKS, block_name_ok
+from agentic.core.process.domain.spec_brief import DRAFT_BLOCK, SPEC_BLOCKS, block_name_ok
 from agentic.core.process.domain.spec_delivery import SpecCause, SpecContract
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
@@ -411,7 +411,9 @@ class MemoryPrompts:
     ):
         self.overrides = overrides
         self.blocks: dict[str, str | OSError | ValueError] = {} if blocks is None else blocks
-        self._shipped = frozenset(SPEC_BLOCKS.values()) if blocks is None else frozenset()
+        self._shipped = (
+            frozenset({*SPEC_BLOCKS.values(), DRAFT_BLOCK}) if blocks is None else frozenset()
+        )
         self.block_calls: list[str] = []
         self._read: dict[str, tuple[str, Path] | OSError | UnicodeDecodeError] = {}
         for slug in {role.slug for role in ROLES}:

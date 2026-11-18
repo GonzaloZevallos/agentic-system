@@ -30,6 +30,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
 
 ```mermaid
 classDiagram
+    class playbook__Refusal["Refusal"]
     class playbook__Rejected["Rejected"]
     class playbook__Scored["Scored"]
     class playbook__ScoredTask["ScoredTask"]
@@ -44,4 +45,5 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
+  - `playbook.Refusal` se asocia con `playbook.Delta`
   - `playbook.Scored` se asocia con `playbook.Playbook`
