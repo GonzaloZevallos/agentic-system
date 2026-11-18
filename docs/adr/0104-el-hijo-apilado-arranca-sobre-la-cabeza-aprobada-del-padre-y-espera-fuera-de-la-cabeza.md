@@ -33,7 +33,7 @@ propios que la revisión nunca aceptó antes del merge, el alcance sería `full`
 (`test_a_restack_over_own_commits_the_review_never_accepted_is_a_full_review`): cada restack
 costaría entonces una revisión completa, y eso queda para el lanzamiento.
 
-**La pausa.** Esperar al padre es una retención del poller, no una clase de escalado: nadie debe
+**La pausa.** Esperar al padre es una retención del poller (ADR-0103), no una clase de escalado: nadie debe
 decidir nada mientras el padre avanza.
 
 **Merge commits.** El apilado supone que el repositorio mergea con commit de merge. Un
