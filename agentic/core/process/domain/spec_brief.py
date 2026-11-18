@@ -49,6 +49,9 @@ SPEC_BLOCKS: dict[str, str] = {
 # a slice. The adapter serves it with the table's blocks and preflight refuses it the same way.
 DRAFT_BLOCK = "pm_draft"
 
+# The one line of a block the system fills (`roles.fill_placeholders`).
+RULE_LINE = "{{drawing_rule}}"
+
 DataRefusal = Literal["line_break", "fence", "template", "comment", "oversize"]
 BlockRefusal = Literal["template", "fence"]
 
@@ -60,10 +63,13 @@ def block_name_ok(name: str) -> bool:
 
 def block_refusal(text: str) -> BlockRefusal | None:
     """Why the text of a block may not enter a system prompt, or `None`. `template`: it holds
-    `{{`, which the prompt's own placeholders would read. `fence`: a line that, stripped, is
-    `SPEC_FENCE`, which would forge the edge of the slice. `<!--` is allowed: the block is the
-    owner's own text, not data a task carried. The reason is a bare word, never the text."""
-    if "{{" in text:
+    `{{`, which the prompt's own placeholders would read, except the exact line
+    `RULE_LINE` alone on its line (ADR-0096, addendum): the system fills it like the body's,
+    and `{{drawing_rule}}` with text around it is still `template`. `fence`: a line that,
+    stripped, is `SPEC_FENCE`, which would forge the edge of the slice. `<!--` is allowed: the
+    block is the owner's own text, not data a task carried. The reason is a bare word, never
+    the text."""
+    if any("{{" in line for line in text.splitlines() if line.strip() != RULE_LINE):
         return "template"
     if any(line.strip() == SPEC_FENCE for line in text.splitlines()):
         return "fence"

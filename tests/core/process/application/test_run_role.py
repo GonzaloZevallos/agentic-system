@@ -2485,3 +2485,102 @@ def test_render_role_prompt_refuses_the_rule_and_never_calls_the_supplier(tmp_pa
             drawing_rule="mine",
         )
     assert calls == []
+
+
+# --- {{drawing_rule}} in a Spec block (ADR-0096, addendum) -----------------------------------
+
+BLOCK_WITH_RULE = "Block start\n{{drawing_rule}}\nBlock end"
+
+
+def test_with_playbook_hashes_the_raw_block_and_appends_the_filled_one():
+    ports = memory_ports()
+    raw, rendered = _parts(ports)
+    filled = with_playbook(
+        raw, rendered, DEVELOPER, ports, "", "Block start\nRULE\nBlock end", BLOCK_WITH_RULE
+    )
+    emptied = with_playbook(
+        raw, rendered, DEVELOPER, ports, "", "Block start\nBlock end", BLOCK_WITH_RULE
+    )
+    assert filled.hash == emptied.hash == prompt_hash(raw + "\n" + BLOCK_WITH_RULE)
+    assert filled.text.endswith("Block start\nRULE\nBlock end")
+    assert emptied.text.endswith("Block start\nBlock end")
+    assert filled.text != emptied.text
+
+
+async def _system_prompt_with_block(tmp_path, monkeypatch, *, design, body=None, slug="tech_lead"):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, slug, "build")
+    role = next(role for role in ROLES if role.slug == slug)
+    prompts = MemoryPrompts(blocks={"build": BLOCK_WITH_RULE})
+    if body is not None:
+        prompts.overrides[slug] = body
+    runner = ScriptedRunner()
+    state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
+    with pytest.raises(AssertionError, match="no scripted result"):  # the call was recorded
+        await run_role(
+            cast(Any, state),
+            role,
+            Configuration(product_dir=tmp_path),
+            memory_ports(runner, prompts=prompts, stack=CountingStack(design=design)),
+            **PLACEHOLDERS,
+        )
+    return runner.calls[0]["system_prompt"]
+
+
+async def test_the_block_line_is_filled_with_the_plan_rule_only_with_a_design(
+    tmp_path, monkeypatch
+):
+    from agentic.core.process.domain.drawing import rule_for
+
+    with_design = await _system_prompt_with_block(tmp_path, monkeypatch, design=DESIGN)
+    without = await _system_prompt_with_block(tmp_path, monkeypatch, design=None)
+    assert with_design.endswith(
+        "Block start\n" + rule_for(DESIGN, "tech_lead", plan=True) + "\nBlock end"
+    )
+    assert with_design.count(DRAWING_RULE) == 1
+    assert without.endswith("Block start\nBlock end")
+    assert "{{" not in with_design and "{{" not in without
+
+
+async def test_a_body_that_carries_the_line_fills_it_once_and_the_block_adds_none(
+    tmp_path, monkeypatch
+):
+    body = "You are the tech lead.\n{{drawing_rule}}\nEnd of body."
+    system = await _system_prompt_with_block(tmp_path, monkeypatch, design=DESIGN, body=body)
+    assert system.count(DRAWING_RULE) == 1
+    assert system.endswith("Block start\nBlock end")
+
+
+async def test_the_block_fill_never_enters_the_hash(tmp_path, monkeypatch):
+    hashes = []
+    for design in (DESIGN, None):
+        monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead", "build")
+        prompts = MemoryPrompts(blocks={"build": BLOCK_WITH_RULE})
+        ports = memory_ports(ScriptedRunner(), prompts=prompts, stack=CountingStack(design=design))
+        state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
+        with pytest.raises(AssertionError, match="no scripted result"):
+            await run_role(
+                cast(Any, state),
+                TECH_LEAD,
+                Configuration(product_dir=tmp_path),
+                ports,
+                **PLACEHOLDERS,
+            )
+        raw, _ = prompts.raw(TECH_LEAD)
+        hashes.append(prompt_hash(raw + "\n" + BLOCK_WITH_RULE))
+    assert hashes[0] == hashes[1]
+
+
+async def test_an_unreadable_stack_is_a_prompt_failure_never_no_design(tmp_path, monkeypatch):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead", "build")
+    prompts = MemoryPrompts(blocks={"build": BLOCK_WITH_RULE})
+    stack = CountingStack(error=ValueError("stack unreadable"))
+    runner = ScriptedRunner()
+    ports = memory_ports(runner, prompts=prompts, stack=stack)
+    state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
+    output, patch = await run_role(
+        cast(Any, state), TECH_LEAD, Configuration(product_dir=tmp_path), ports, **PLACEHOLDERS
+    )
+    assert output is None
+    assert runner.calls == []
+    assert patch["failures"][0]["reason"] == "render"
+    assert "stack unreadable" in patch["failures"][0]["error"]
