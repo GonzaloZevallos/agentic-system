@@ -360,10 +360,10 @@ def _choose(eligible: list[Member], now: datetime) -> Member | None:
 
 def order(members: Iterable[Member], now: datetime) -> Order:
     """The order of `members` at `now`. Eligible: not `waits_on_human` or `stack_held`, and not
-    `waits_on_ci` or `account_paused` unless busy. The head is the first by the tiers in the module docstring; if
-    it is over budget and another member is eligible it yields (`Yield`, at most once per member
-    per call, so several over-budget members in front may yield in one call) and the head is
-    chosen again. A lone eligible member never yields.
+    `waits_on_ci` or `account_paused` unless busy. The head is the first by the tiers in the
+    module docstring; if it is over budget and another member is eligible it yields (`Yield`, at
+    most once per member per call, so several over-budget members in front may yield in one
+    call) and the head is chosen again. A lone eligible member never yields.
 
     It chooses a head; it does not prevent a second live child (the poller's job). `Order.yielded`
     is the report: the state to persist is what `advance` returns. A yielded member with
