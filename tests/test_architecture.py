@@ -284,3 +284,41 @@ def test_the_carve_out_guard_rejects_any_other_module_that_imports_it(tmp_path):
         "core/process/application/late.py",
         "core/process/application/plan.py",
     ]
+
+
+# Invariant 1 (GH-839): the hold label's name is written once, as `HOLD_LABEL` in `hold.py`.
+HOLD_HOME = Path("core") / "process" / "domain" / "hold.py"
+HOLD_LITERAL = "agentic-hold"
+
+
+def _writes_the_hold_literal(source: str) -> bool:
+    """Whether `source` holds the label as a string constant of its own; a docstring or a
+    comment that only mentions it in prose is not an exact constant."""
+    return any(
+        isinstance(node, ast.Constant) and node.value == HOLD_LITERAL
+        for node in ast.walk(ast.parse(source))
+    )
+
+
+def _outside_the_hold_home(package: Path) -> list[str]:
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if p != package / HOLD_HOME and _writes_the_hold_literal(p.read_text(encoding="utf-8"))
+    )
+
+
+def test_the_hold_label_literal_lives_only_in_the_hold_module():
+    assert _outside_the_hold_home(PACKAGE) == []
+    assert _writes_the_hold_literal((PACKAGE / HOLD_HOME).read_text(encoding="utf-8"))
+
+
+def test_the_hold_literal_guard_rejects_a_module_that_writes_the_label(tmp_path):
+    package = tmp_path / "agentic"
+    home = package / HOLD_HOME
+    home.parent.mkdir(parents=True)
+    home.write_text(f'HOLD_LABEL = "{HOLD_LITERAL}"\n')
+    (home.parent / "copy.py").write_text(f'LABELS = frozenset({{"{HOLD_LITERAL}"}})\n')
+    (home.parent / "prose.py").write_text(f'"""The {HOLD_LITERAL} label, in prose."""\nX = 1\n')
+    (home.parent / "fine.py").write_text("from .hold import HOLD_LABEL\n")
+    assert _outside_the_hold_home(package) == ["core/process/domain/copy.py"]
