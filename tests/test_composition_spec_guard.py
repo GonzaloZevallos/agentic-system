@@ -15,7 +15,7 @@ from agentic.composition import default_ports
 from agentic.core.knowledge.adapters.git.spec_reader import GitSpecReader
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
 from agentic.core.process.application.classify import spec_intake
-from agentic.core.process.domain import spec_delivery
+from agentic.core.process.domain import spec_approval, spec_delivery
 from agentic.core.process.domain.spec_delivery import (
     body_sha256,
     render_approved_front_matter,
@@ -152,3 +152,33 @@ def test_the_real_validator_calls_a_well_formed_draft_valid_and_a_malformed_one_
 
     assert spec_delivery.draft_reading(good, None).ok is True
     assert spec_delivery.draft_reading(bad, None).ok is False
+
+
+def test_the_real_validator_gives_one_verdict_for_a_text_whatever_the_path(tmp_path):
+    """GH-594 part 5c-1, invariant 5: a verdict on a draft never depends on the path; only
+    `SpecContract.path` carries it. The draft and its approved preview are read under the preview
+    path and under another valid path: same cause, or the same contract apart from `.path`."""
+    validator = default_ports(Configuration(product_dir=tmp_path, owner_login=OWNER)).spec_validator
+    assert validator is not None
+    commit = "a" * 40
+    other = "docs/specs/2026-11-17-another-name.md"
+    assert spec_delivery.spec_path_ok(other)
+    draft = spec_delivery.draft_text(BODY)
+    texts = {
+        "draft": draft,
+        "approved": spec_approval.approve(draft, OWNER, "2026-11-17T10:00:00.000Z"),
+        "malformed": spec_delivery.draft_text("# Title\n\nNo sections.\n"),
+    }
+    for name, text in texts.items():
+        first = validator.validate(text, spec_delivery.DRAFT_PREVIEW_PATH, commit, None, OWNER)
+        second = validator.validate(text, other, commit, None, OWNER)
+        if isinstance(first, str):
+            assert first == second, name
+            continue
+        assert isinstance(second, dict), name
+        assert first["path"] == spec_delivery.DRAFT_PREVIEW_PATH and second["path"] == other
+        assert {**first, "path": other} == second, name
+    assert validator.validate(draft, other, commit, None, OWNER) == "spec_unapproved"
+    assert validator.validate(texts["malformed"], other, commit, None, OWNER) == "spec_invalid"
+    approved = validator.validate(texts["approved"], other, commit, None, OWNER)
+    assert isinstance(approved, dict) and approved["path"] == other
