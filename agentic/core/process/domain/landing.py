@@ -130,8 +130,9 @@ here: the task is not yet at the landing, and nobody has anything to decide."""
 
 STACK_ESCALATION: dict[rules.MergeRefusal, str] = {
     "stack_parent_unmerged": (
-        "The parent this task is stacked on has not reached the base branch. Merge the parent "
-        "by hand, or relaunch this task from the base branch."
+        "The parent this task is stacked on has not reached the base branch, or a head it "
+        "needs, the parent's or this task's own, can no longer be fetched. Merge the parent by "
+        "hand, or relaunch this task from the base branch."
     ),
     "stack_restack_due": (
         "The parent landed, but taking the base branch into this task's branch did not settle "
@@ -298,6 +299,10 @@ class LandingStep:
     restart_why: RestartWhy | None = None
     # Only on the `escalate` of `ci_unknown_names` (GH-485): the sorted names no check run carries.
     names: tuple[str, ...] = ()
+    # Only on the `escalate` of `stack_parent_unmerged` (GH-885): the `since` of the
+    # unfetchable-head clock that ran out, so a released wait that expires again is asked again on
+    # the same head.
+    stack_since: str | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +694,10 @@ def landing_step(
             return step("wait")
         case "stack_parent_unmerged":
             # GH-859: waiting for the parent costs nothing; a slow Head yields by `HEAD_BUDGET`.
+            # GH-885: a head that cannot be fetched is waited on for `STACK_UNFETCHABLE_WAIT` only
+            # (the caller computed `unfetchable_expired`), then it is the stacked escalation.
+            if facts.stack is not None and facts.stack.unfetchable_expired is True:
+                return LandingStep("escalate", refusal, stack_since=facts.stack.unfetchable_since)
             return step("wait")
         case "stack_restack_due":
             # GH-859: one merge of master into the child, never a rebase (the parent's commits
@@ -1292,6 +1301,7 @@ def already_dispatched(
     unstarted: bool = False,
     names: Sequence[str] = (),
     decision_at: str | None = None,
+    stack_since: str | None = None,
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -1310,7 +1320,10 @@ def already_dispatched(
     that recorded the same names, so a new set of wrong names is asked again on the same head. An
     `escalate_adr` is taken as `adr_asked` says (GH-544), and an `apply_adr_decision` only by an
     entry of the same head recorded for the same `decision_at`, or, with no `decision_at`, by the
-    rule's own (`decided_by: rule`, D-be76583a)."""
+    rule's own (`decided_by: rule`, D-be76583a). An `escalate` of
+    `stack_parent_unmerged` that carries `stack_since` (GH-885) is taken when the caller passes no
+    `stack_since` or the entry's own, and not taken for another one: a released wait that ran out
+    again is asked again on the same head. An entry without `stack_since` is taken as before."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -1342,6 +1355,12 @@ def already_dispatched(
             return bool(entry.get("resolved_at"))  # GH-610: asked only once the comment is posted
         if step == "renumber":
             return entry.get("outcome") != "retry"  # GH-611: a transient end is tried again
+        if (
+            step == "escalate"
+            and entry.get("refusal") == "stack_parent_unmerged"
+            and "stack_since" in entry
+        ):
+            return stack_since is None or entry["stack_since"] == stack_since
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -1623,6 +1642,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "head_after",
         "api_break_decided",
         "rejected",
+        "stack_since",  # GH-885: the key `already_dispatched` reads must survive a rewrite
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text

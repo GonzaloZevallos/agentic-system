@@ -152,7 +152,8 @@ def stack_facts(
     has_parent: bool | None = None
     # The child's history carries the recorded head, which is what makes an orphaned parent
     # detectable; `False` from either short-circuits, and no ancestry is asked of a missing sha.
-    if _exists(ports, memo, pr_head) and _exists(ports, memo, parent_head):
+    fetched = _exists(ports, memo, pr_head) and _exists(ports, memo, parent_head)
+    if fetched:
         in_upstream = _ancestor(ports, cfg, memo.in_tip, parent_head, tip)
         if in_upstream is True:
             has_parent = _ancestor(ports, cfg, memo.in_head, parent_head, pr_head)
@@ -167,6 +168,7 @@ def stack_facts(
         parent_state=stacking.parent_state_of(state, closing),
         parent_in_upstream=in_upstream,
         child_has_parent=has_parent,
+        heads_fetched=fetched,
     )
 
 

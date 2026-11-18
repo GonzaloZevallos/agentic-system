@@ -1,6 +1,8 @@
 """GH-859: the stacking truth table and the `stack_parent` parser, pure. Each row is a record or a
 `StackFacts` built by hand and the one answer it must give."""
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import pytest
@@ -12,7 +14,10 @@ from agentic.core.process.domain.stacking import (
     Unreadable,
     parent_state_of,
     parse_stack_parent,
+    parse_unfetchable,
     refusal,
+    unfetchable_expired,
+    unfetchable_patch,
 )
 from agentic.core.process.domain.task import StackParent
 
@@ -212,6 +217,150 @@ def test_facts_of_an_unreadable_record_has_no_record(value):
 )
 def test_parent_state_of(state, closing, expected):
     assert stacking.parent_state_of(state, closing) == expected
+
+
+# --- the unfetchable-head clock (GH-885) -----------------------------------------------------
+
+PR_HEAD = "b" * 40
+OTHER_HEAD = "c" * 40
+T0 = datetime(2026, 11, 17, 8, 0, tzinfo=UTC)
+WAIT = timedelta(hours=12)
+
+
+def _record_at(since: datetime = T0, head: str = PR_HEAD) -> dict[str, str]:
+    return {"head": head, "since": since.isoformat()}
+
+
+def _fetched(
+    value: bool | None, state: Literal["open", "closed", "unknown"] = "open"
+) -> StackFacts:
+    return replace(_facts(state), heads_fetched=value)
+
+
+def _start(now: datetime = T0, head: str = PR_HEAD) -> dict[str, Any]:
+    return {"stack_unfetchable": {"head": head, "since": now.isoformat()}}
+
+
+CLEAR: dict[str, Any] = {"stack_unfetchable": None}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param("x", id="not a mapping"),
+        pytest.param({"head": 5, "since": T0.isoformat()}, id="head not a str"),
+        pytest.param({"head": PR_HEAD}, id="since missing"),
+        pytest.param({"head": PR_HEAD, "since": "yesterday"}, id="since not a date"),
+        pytest.param({"head": PR_HEAD, "since": 5}, id="since not a str"),
+        pytest.param({"head": PR_HEAD, "since": "2026-11-17T08:00:00"}, id="naive since"),
+    ],
+)
+def test_an_unreadable_unfetchable_record_is_unreadable(value):
+    assert isinstance(parse_unfetchable({"stack_unfetchable": value}), Unreadable)
+
+
+def test_a_missing_or_none_unfetchable_record_is_no_record():
+    assert parse_unfetchable({}) is None
+    assert parse_unfetchable({"stack_unfetchable": None}) is None
+
+
+def test_a_valid_unfetchable_record_is_returned_as_it_is():
+    raw = _record_at()
+    assert parse_unfetchable({"stack_unfetchable": raw}) == raw
+
+
+def test_escalated_clears_a_record_and_an_absent_one_writes_nothing():
+    raw = {"escalated": True, "stack_unfetchable": _record_at()}
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0) == CLEAR
+    assert unfetchable_patch({"escalated": True}, _fetched(False), PR_HEAD, T0) == {}
+    assert (
+        unfetchable_patch(
+            {"escalated": True, "stack_unfetchable": None}, _fetched(False), PR_HEAD, T0
+        )
+        == {}
+    )
+
+
+def test_fetched_clears_and_clearing_twice_writes_nothing():
+    raw: dict[str, Any] = {"stack_unfetchable": _record_at()}
+    patch = unfetchable_patch(raw, _fetched(True), PR_HEAD, T0)
+    assert patch == CLEAR
+    assert unfetchable_patch({**raw, **patch}, _fetched(True), PR_HEAD, T0) == {}
+    assert unfetchable_patch({}, _fetched(True), PR_HEAD, T0) == {}
+
+
+def test_heads_fetched_none_changes_nothing():
+    for raw in ({}, {"stack_unfetchable": _record_at()}, {"stack_unfetchable": {}}):
+        assert unfetchable_patch(raw, _fetched(None), PR_HEAD, T0 + WAIT) == {}
+
+
+@pytest.mark.parametrize("state", States)
+def test_each_parent_state_starts_the_clock(state):
+    assert unfetchable_patch({}, _fetched(False, state), PR_HEAD, T0) == _start()
+
+
+def test_a_new_head_that_is_still_unfetchable_restarts_the_clock():
+    raw = {"stack_unfetchable": _record_at(head=OTHER_HEAD)}
+    later = T0 + timedelta(hours=3)
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, later) == _start(later)
+
+
+def test_a_standing_record_on_the_same_head_changes_nothing():
+    raw = {"stack_unfetchable": _record_at()}
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0 + WAIT) == {}
+
+
+def test_no_pr_head_writes_nothing():
+    assert unfetchable_patch({}, _fetched(False), None, T0) == {}
+
+
+def _released(since: datetime = T0) -> dict[str, Any]:
+    entry = {
+        "head": PR_HEAD,
+        "step": "escalate",
+        "refusal": "stack_parent_unmerged",
+        "stack_since": since.isoformat(),
+    }
+    return {"stack_unfetchable": _record_at(since), "landing": [entry]}
+
+
+def test_a_released_wait_restarts_once_and_the_next_call_holds():
+    raw = _released()
+    later = T0 + WAIT
+    patch = unfetchable_patch(raw, _fetched(False), PR_HEAD, later)
+    assert patch == _start(later)
+    assert unfetchable_patch({**raw, **patch}, _fetched(False), PR_HEAD, later) == {}
+
+
+def test_an_escalate_entry_of_another_clock_does_not_restart():
+    raw = _released(since=T0 - WAIT)
+    raw["stack_unfetchable"] = _record_at()
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0) == {}
+
+
+def test_an_entry_hidden_by_a_restoration_does_not_restart():
+    raw = _released()
+    raw["restorations"] = [{"landing_cut": 1}]
+    assert unfetchable_patch(raw, _fetched(False), PR_HEAD, T0 + WAIT) == {}
+
+
+def test_a_naive_since_restarts_once_then_holds():
+    raw: dict[str, Any] = {"stack_unfetchable": {"head": PR_HEAD, "since": "2026-11-17T08:00:00"}}
+    patch = unfetchable_patch(raw, _fetched(False), PR_HEAD, T0)
+    assert patch == _start()
+    assert unfetchable_patch({**raw, **patch}, _fetched(False), PR_HEAD, T0) == {}
+
+
+def test_expiry_is_exactly_at_twelve_hours():
+    record = parse_unfetchable({"stack_unfetchable": _record_at()})
+    assert unfetchable_expired(record, T0 + WAIT) is True
+    assert unfetchable_expired(record, T0 + WAIT - timedelta(seconds=1)) is False
+
+
+def test_no_record_or_an_unreadable_one_never_expires():
+    assert unfetchable_expired(None, T0 + WAIT) is False
+    assert unfetchable_expired(Unreadable(), T0 + WAIT) is False
 
 
 # --- the pause predicate (GH-898) --------------------------------------------------------------

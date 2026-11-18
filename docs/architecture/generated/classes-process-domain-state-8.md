@@ -40,10 +40,10 @@ classDiagram
     class task__StackParent["StackParent"]
     class task__StackPause["StackPause"]
     class task__StackRestack["StackRestack"]
+    class task__StackUnfetchable["StackUnfetchable"]
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
-    class task__TrackerActionDone["TrackerActionDone"]
     task__TaskState --> task__StackParent
     task__TaskState --|> task__TaskInput
 ```

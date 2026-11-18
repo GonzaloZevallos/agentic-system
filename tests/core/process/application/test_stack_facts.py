@@ -209,6 +209,30 @@ def test_the_poller_builds_the_unread_facts_of_the_record_and_none_without_it():
     )
 
 
+def test_both_heads_fetched_reads_true():
+    ports = _ports()
+    assert _read(ports).heads_fetched is True
+
+
+@pytest.mark.parametrize("missing", [CHILD, PARENT])
+def test_either_head_missing_reads_false(missing):
+    assert _read(_ports(missing={missing})).heads_fetched is False
+
+
+def test_each_sha_is_fetched_once_per_memo_for_the_heads():
+    ports = _ports()
+    memo = StackMemo()
+    _read(ports, memo)
+    _read(ports, memo)
+    assert sorted(ports.workspace.fetched) == sorted([CHILD, PARENT])
+
+
+def test_an_unreadable_record_leaves_heads_fetched_unread():
+    unread = stacking.facts_of({"stack_parent": None})
+    assert unread is not None
+    assert _read(_ports(), unread=unread).heads_fetched is None
+
+
 # --- the pause predicate over the parent chain (GH-898) ----------------------------------------
 
 STARTED = "2026-11-16T10:00:00+00:00"

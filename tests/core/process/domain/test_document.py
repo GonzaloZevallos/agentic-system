@@ -2351,6 +2351,37 @@ def test_a_departure_row_with_a_bad_answer_is_refused_on_load():
         document.parse(text)
 
 
+# GH-885: `stack_unfetchable` is a record key: one flow line over every shape the key can be in.
+_UNFETCHABLE = {"head": "a" * 40, "since": "2026-11-17T09:00:00+00:00"}
+
+
+def _read_unfetchable(raw: str):
+    from agentic.core.process.domain import stacking
+
+    return stacking.parse_unfetchable(document.parse(raw))
+
+
+def test_record_closure_writes_stack_unfetchable_over_an_absent_key():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    closed = document.record_closure(raw, {"stack_unfetchable": _UNFETCHABLE})
+    assert closed.count("stack_unfetchable:") == 1
+    assert _read_unfetchable(closed) == _UNFETCHABLE
+
+
+def test_record_closure_replaces_a_block_style_stack_unfetchable_and_clears_it_with_null():
+    base = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    block = f"stack_unfetchable:\n  head: {'b' * 40}\n  since: '2026-11-16T09:00:00+00:00'\n"
+    raw = base.replace("\n---\n", f"\n{block}---\n", 1)
+    assert "stack_unfetchable:\n  head:" in raw
+    assert _read_unfetchable(raw) == {"head": "b" * 40, "since": "2026-11-16T09:00:00+00:00"}
+    written = document.record_closure(raw, {"stack_unfetchable": _UNFETCHABLE})
+    assert written.count("stack_unfetchable:") == 1
+    assert _read_unfetchable(written) == _UNFETCHABLE
+    cleared = document.record_closure(written, {"stack_unfetchable": None})
+    assert cleared.count("stack_unfetchable:") == 1
+    assert _read_unfetchable(cleared) is None
+
+
 _SPEC_STATE = {**_base_state(), "spec": {"path": "docs/specs/a.md", "slice": "s"}}
 
 
