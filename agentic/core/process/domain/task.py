@@ -2132,7 +2132,7 @@ class RestartSettledRow(TypedDict):
     subtask: str
     version: int
     outcome: Literal["discarded"]
-    reason: Literal["restarted"]
+    reason: Literal["restarted", "owner_decision"]
 
 
 class TaskState(TaskInput, total=False):
