@@ -975,6 +975,15 @@ def test_a_waiting_candidates_tasks_the_archived_lesson_already_has_are_not_new_
     assert [c.seen_in for c in result.candidates] == [("GH-3",)]  # GH-1 is not new
 
 
+def test_a_score_restore_into_a_playbook_in_grace_at_the_cap_is_held_and_stays_archived():
+    full = full_playbook()
+    ev = {"GH-3": evidence("process-suite-red")}
+    result = run([add(LESSON, "GH-3")], full, ev=ev, archived=scored_out(harmful=2))
+    assert result.playbook == full and result.applied == ()
+    assert len(result.capped) == 1 and len(result.archived) == 1
+    assert result.archived[0].item.harmful == 2  # nothing was reset: it did not come back
+
+
 def test_high_confidence_restores_a_score_archived_lesson_on_one_new_task():
     result = run(
         [add(LESSON, "GH-3")],
