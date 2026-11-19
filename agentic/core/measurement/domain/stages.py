@@ -531,6 +531,8 @@ def _read_generations(held: object) -> list[_Span]:
     naive datetime is read as UTC. Anything that is not `Generations` reads as none."""
     if not isinstance(held, Generations):
         return []
+    if not isinstance(held.intervals, tuple | list):
+        return []
     spans: list[_Span] = []
     for pair in held.intervals:
         if not isinstance(pair, tuple | list) or len(pair) != 2:

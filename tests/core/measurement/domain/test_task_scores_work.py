@@ -54,6 +54,13 @@ def test_without_generations_the_output_is_todays_plus_work_h():
     )
     assert got["work_h"].data_type == "NUMERIC"
     assert got["work_h"].timestamp == at(13)
+    # everything else is the output the generations do not touch
+    base = [n for n in ts.SCORE_NAMES if n not in NEW]
+    assert [n for n in got if n not in NEW] == [n for n in base if n in got]
+    other = scores(generations={"s": NoRows()})
+    assert {n: s.value for n, s in got.items() if n not in NEW} == {
+        n: s.value for n, s in other.items() if n not in NEW
+    }
 
 
 def test_a_known_split_writes_three_groups_that_sum_to_work_h():
@@ -90,3 +97,8 @@ def test_no_merge_or_an_unknown_stage_split_writes_none_of_the_five():
 def test_the_new_names_close_the_list_and_are_merge_dated():
     assert ts.SCORE_NAMES[-5:] == ts.WORK_SCORE_NAMES
     assert all(ts.merge_dated(name) for name in ts.WORK_SCORE_NAMES)
+
+
+def test_a_generations_value_with_unreadable_intervals_never_raises():
+    got = scores(generations={"s": Generations(None)})
+    assert got["work_split_known"].value == 1.0
