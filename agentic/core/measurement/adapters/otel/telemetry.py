@@ -491,9 +491,15 @@ class RoleRun(Run):
                 attributes["agentic.role.cold_fallback"] = True
         # Per rule, from the entries' own `rule` and the runs' `repairs`; never a field.
         refusals = system_metrics.refusals_by_rule(patch.get("failures", []), runs)
-        if refused := {rule: n["refused"] for rule, n in refusals.items() if n["refused"]}:
+        refused: dict[str, int] = {
+            rule: n["refused"] for rule, n in refusals.items() if n["refused"]
+        }
+        repaired: dict[str, int] = {
+            rule: n["repaired"] for rule, n in refusals.items() if n["repaired"]
+        }
+        if refused:
             attributes["agentic.role.refusals"] = _counts(refused)
-        if repaired := {rule: n["repaired"] for rule, n in refusals.items() if n["repaired"]}:
+        if repaired:
             attributes["agentic.role.repairs"] = _counts(repaired)
         if run is not None and run.get("cold_fallback", False):
             attributes["agentic.role.cold_fallback"] = True
