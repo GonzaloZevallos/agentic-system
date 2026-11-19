@@ -30,7 +30,7 @@ SPEC_MAX_BYTES = 65536
 
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
 # What the system did with the draft Spec PM returned (GH-594 part 5a): closed.
-SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent"]
+SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent", "split_proposed"]
 # Why a draft Spec body is refused (GH-594 part 5c-1), by stage: the body alone, the draft read by
 # the validator, and the approved preview of it. Closed; `DRAFT_REFUSAL_REASONS` has one each.
 DraftCause = Literal[
@@ -202,8 +202,9 @@ class SpecDraftRecord(_SpecDraftOutcome, total=False):
     """The `spec_draft` key of a task (GH-594 part 5a): what became of the draft Spec PM
     returned. `path`, `sha256` (the body hash) and `commit` are there only for `written`; `commit`
     is a full sha at which `path` holds exactly the text whose body hash is `sha256` (a record
-    from before it existed has none). Distinct from `state["spec"]`: a draft is never a spec
-    delivery's contract."""
+    from before it existed has none). `split_proposed` carries `outcome` and `sha256` only: the
+    approved preview had more than one slice, so no file is written. Distinct from
+    `state["spec"]`: a draft is never a spec delivery's contract."""
 
     path: str
     sha256: str
@@ -403,7 +404,10 @@ DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
         "prompt (pm_draft); return every section that block names, in order, with no front matter."
     ),
     "draft_not_draft": "the draft Spec body must read as an unapproved draft; return the body.",
-    "preview_slice_missing": "the draft Spec must have exactly one slice.",
+    "preview_slice_missing": (
+        "the draft Spec must have exactly one slice; fold the work into one slice, or return it "
+        "again with several and the system records a split proposal instead of a Spec file."
+    ),
     "preview_invalid": "the draft Spec body must still validate once it is approved.",
     "preview_unapproved": "the draft Spec could not be previewed as approved; try again.",
 }
@@ -411,6 +415,26 @@ DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
 
 def draft_refusal_message(cause: DraftCause) -> str:
     return f"draft Spec refused: {cause}: {DRAFT_REFUSAL_REASONS[cause]}"
+
+
+def draft_retry(cause: DraftCause, calls_before: int) -> Literal["refuse", "propose_split"]:
+    """What the draft check does with a refused draft: `propose_split` only for a draft whose
+    approved preview has more than one slice (`preview_slice_missing`) on a call that has a call
+    before it, `refuse` otherwise. `calls_before` counts every earlier call of the check, whatever
+    its cause. Known hole: an attempt that failed before reaching the check (schema, turn cut,
+    stall) is not a call, so a multi-slice draft on PM's second attempt can still be refused."""
+    if cause == "preview_slice_missing" and calls_before >= 1:
+        return "propose_split"
+    return "refuse"
+
+
+def draft_outcome(reading: DraftReading) -> Literal["written", "split_proposed", "invalid"]:
+    """The outcome of a draft Spec reading: `written` when ok, `split_proposed` when the approved
+    preview had more than one slice, `invalid` for every other cause. With no valid login or
+    readable instant the preview is skipped, so the reading is ok and the draft is `written`."""
+    if reading.ok:
+        return "written"
+    return "split_proposed" if reading.cause == "preview_slice_missing" else "invalid"
 
 
 def login_ok(login: str | None) -> bool:
