@@ -149,6 +149,46 @@ FailureReason = Literal[
     "render",
     "other",
 ]
+# The closed set of ids a refusal of a role's structured output carries (GH-1011): decided
+# only at the raise site in `run_role._attempt`, never read back from an error's text.
+# `output_missing` the role delivered no structured output, `schema_invalid` the schema's
+# own validation refused it, `unmapped` a `ValueError` no rule claims yet; the rest are the
+# plan and drawing refusals a check raises as an `OutputRefusal`.
+RefusalRule = Literal[
+    "preview_slice_missing",
+    "visible_without_drawing_check",
+    "drawing_path_undeclared",
+    "parts_when_fits",
+    "estimate_does_not_fit",
+    "part_over_budget",
+    "depends_on_reason_too_long",
+    "estimated_files_empty",
+    "estimate_below_spent_floor",
+    "output_missing",
+    "schema_invalid",
+    "unmapped",
+]
+
+
+class OutputRefusal(ValueError):
+    """A refusal of a role's delivery that names its own rule. `str(exc)` is `detail`, so
+    the error text a check raised stays what it was. `field` is a claim: `run_role.
+    refusal_field` keeps it only when the role's schema declares it."""
+
+    def __init__(self, rule: RefusalRule, field: str, detail: str):
+        super().__init__(detail)
+        self.rule = rule
+        self.field = field
+        self.detail = detail
+
+
+class RefusalRepair(TypedDict):
+    """One refusal the role repaired within the same run: which rule and which field."""
+
+    rule: RefusalRule
+    field: str
+
+
 # What the Landing Diagnoser says about an approved pull request the landing could not land
 # (ADR-0048): `sync` (the work lands once master is merged into its branch) or `unlandable`
 # (the approved work itself cannot land). Closed, and defined only here: every reader and writer
@@ -1084,6 +1124,15 @@ class Failure(TypedDict):
     # last 50 only, and how many older ones were dropped. Absent when none was recorded.
     check_runs: NotRequired[list[CheckRun]]
     check_runs_dropped: NotRequired[int]
+    # The refusal rule this attempt was refused with, decided at the raise site in
+    # `run_role._attempt` (GH-1011), never parsed from `error`. Written only when the
+    # recorded (narrowed) `reason` is `schema` or `check`; absent otherwise and on a failure
+    # recorded before this field existed.
+    rule: NotRequired[RefusalRule]
+    # The field of the role's schema (or `markdown`) the refusal names, after
+    # `run_role.refusal_field`; never the value. Same conditions as `rule`, and absent when
+    # the refusal names no declared field.
+    field: NotRequired[str]
 
 
 class CheckRun(TypedDict):
@@ -1238,6 +1287,10 @@ class RoleRun(TypedDict):
     # every recorded `Failure.turn_notice_firings` (`run_role._run_notice_firings`).
     # Absent on a run recorded before this field existed, which reads as `0`.
     turn_notice_firings: NotRequired[int]
+    # The refusals this run repaired before it delivered, `{rule, field}` each (GH-1011);
+    # empty until the repair part fills it. Absent on a run recorded before this field
+    # existed, which reads as none.
+    repairs: NotRequired[list[RefusalRepair]]
     # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
     # entrega), off `RawResult.deliveries`. The run's total, for the section note
     # (`rules.deliveries_note`), also folds in every recorded `Failure.deliveries`:

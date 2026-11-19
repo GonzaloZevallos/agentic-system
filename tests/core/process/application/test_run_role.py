@@ -8,6 +8,7 @@ from typing import Any, cast, get_args
 import anyio
 import pytest
 import yaml
+from pydantic import field_validator
 
 from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
@@ -18,7 +19,9 @@ from agentic.core.process.application.run_role import (
     RoleFailure,
     TaskCapReached,
     context_for,
+    escalation,
     load_prompt,
+    refusal_field,
     render_role_prompt,
     run_record,
     run_role,
@@ -57,10 +60,14 @@ from agentic.core.process.domain.roles import (
     render,
 )
 from agentic.core.process.domain.rules import RETRY_TURNS
-from agentic.core.process.domain.schemas import TechAnswers, TechAnswersWithAssumptions
+from agentic.core.process.domain.schemas import (
+    RoleOutput,
+    TechAnswers,
+    TechAnswersWithAssumptions,
+)
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.spec_brief import fenced_section, protected_line
-from agentic.core.process.domain.task import FailureReason, apply, delta
+from agentic.core.process.domain.task import FailureReason, OutputRefusal, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryPrompts,
@@ -2591,3 +2598,203 @@ async def test_an_unreadable_stack_is_a_prompt_failure_never_no_design(tmp_path,
     assert runner.calls == []
     assert patch["failures"][0]["reason"] == "render"
     assert "stack unreadable" in patch["failures"][0]["error"]
+
+
+# --- GH-1011: every refusal of a structured output carries a closed rule id --------------
+
+BAD_TYPE = RawResult({"markdown": "x", "type": "chore", "confidence": "high", "reason": "r"}, 0.01)
+
+
+class _Gated(RoleOutput):
+    """A tiny schema whose validator refuses with a rule of its own."""
+
+    quantity: int = 0
+
+    @field_validator("quantity")
+    @classmethod
+    def _enough(cls, value: int) -> int:
+        if value < 1:
+            raise OutputRefusal("estimated_files_empty", "quantity", "quantity is empty")
+        return value
+
+
+def _refused_rules(failures: list[Any]) -> list[tuple[Any, Any]]:
+    return [(f.get("rule"), f.get("field")) for f in failures]
+
+
+async def _refusals(raws: list[RawResult | Exception], role: Role = PJM, check=None):
+    with pytest.raises(RoleFailure) as caught:
+        await run_with_retry(
+            role,
+            "task",
+            system_prompt="s",
+            model="m",
+            retries=len(raws) - 1,
+            vocabulary={},
+            cwd=Path("/p"),
+            runner=ScriptedRunner(**{role.slug: raws}),
+            owner_task="GH-1",
+            check=check,
+            spent_usd=0.0,
+            task_cap_usd=None,
+        )
+    return caught.value
+
+
+async def test_a_missing_structured_output_is_refused_as_output_missing():
+    exc = await _refusals([RawResult(None, 0.01)])
+    assert _refused_rules(exc.failures) == [("output_missing", None)]
+    assert exc.failures[0]["reason"] == "schema"
+
+
+async def test_a_schema_error_is_schema_invalid_with_the_field_from_loc():
+    exc = await _refusals([BAD_TYPE])
+    assert _refused_rules(exc.failures) == [("schema_invalid", "type")]
+    assert "structured output invalid" in exc.failures[0]["error"]
+
+
+async def test_a_schema_loc_beyond_the_top_level_records_only_the_top_level_field():
+    # The error is located at ("flags", "touches_ui"): a dict key is never part of the field.
+    bad = RawResult({"markdown": "x", "flags": {"touches_ui": "maybe"}}, 0.01)
+    exc = await _refusals([bad], role=dataclasses.replace(PJM, schema=schemas.PRD))
+    assert _refused_rules(exc.failures) == [("schema_invalid", "flags")]
+
+
+async def test_a_schema_loc_naming_no_declared_field_records_no_field():
+    # An extra key a schema forbids is located by its own name, which the schema never declared.
+    class Strict(RoleOutput):
+        model_config = {"extra": "forbid"}
+
+    role = dataclasses.replace(PJM, schema=Strict)
+    exc = await _refusals([RawResult({"markdown": "x", "invented": 1}, 0.01)], role=role)
+    assert _refused_rules(exc.failures) == [("schema_invalid", None)]
+
+
+async def test_a_value_error_outside_pydantic_is_unmapped():
+    # `flags` validates as a dict of bools, then `validate` itself refuses the vocabulary mismatch.
+    exc = await _refusals(
+        [RawResult({"markdown": "x", "flags": {"nope": True}}, 0.01)],
+        role=dataclasses.replace(PJM, schema=schemas.PRD),
+    )
+    assert _refused_rules(exc.failures) == [("unmapped", None)]
+    assert "flags must be exactly the vocabulary" in exc.failures[0]["error"]
+
+
+async def test_an_output_refusal_in_a_validator_keeps_its_rule_and_field():
+    role = dataclasses.replace(PJM, schema=_Gated)
+    exc = await _refusals([RawResult({"markdown": "x", "quantity": 0}, 0.01)], role=role)
+    assert _refused_rules(exc.failures) == [("estimated_files_empty", "quantity")]
+    assert "quantity is empty" in exc.failures[0]["error"]
+
+
+async def test_an_output_refusal_from_a_check_keeps_its_rule_and_declared_field():
+    def check(data):
+        raise OutputRefusal("parts_when_fits", "confidence", "do not split")
+
+    exc = await _refusals([OK], check=check)
+    assert _refused_rules(exc.failures) == [("parts_when_fits", "confidence")]
+    assert exc.failures[0]["reason"] == "check"
+    assert exc.failures[0]["error"].endswith("do not split")
+
+
+async def test_an_output_refusal_with_an_invented_field_records_no_field():
+    def check(data):
+        raise OutputRefusal("part_over_budget", "not_a_field", "too big")
+
+    exc = await _refusals([OK], check=check)
+    assert _refused_rules(exc.failures) == [("part_over_budget", None)]
+
+
+async def test_an_output_refusal_may_name_markdown():
+    def check(data):
+        raise OutputRefusal("preview_slice_missing", "markdown", "no slice")
+
+    exc = await _refusals([OK], check=check)
+    assert _refused_rules(exc.failures) == [("preview_slice_missing", "markdown")]
+
+
+async def test_any_other_value_error_from_a_check_is_unmapped():
+    def check(data):
+        raise ValueError("be humble")
+
+    exc = await _refusals([OK], check=check)
+    assert _refused_rules(exc.failures) == [("unmapped", None)]
+
+
+async def test_an_empty_markdown_is_schema_invalid_on_markdown():
+    blank = RawResult({"markdown": "  ", "type": "bug", "confidence": "high", "reason": "r"}, 0.01)
+    exc = await _refusals([blank])
+    assert _refused_rules(exc.failures) == [("schema_invalid", "markdown")]
+
+
+def test_refusal_field_keeps_only_a_declared_field_or_markdown():
+    assert refusal_field(schemas.Classification, "type") == "type"
+    assert refusal_field(schemas.Classification, "markdown") == "markdown"
+    assert refusal_field(schemas.Classification, "invented") == ""
+    assert refusal_field(schemas.Classification, 3) == ""
+    assert refusal_field(schemas.Classification, None) == ""
+
+
+def test_an_output_refusal_reads_as_its_detail():
+    exc = OutputRefusal("unmapped", "markdown", "the detail")
+    assert (str(exc), exc.rule, exc.field, exc.detail) == (
+        "the detail",
+        "unmapped",
+        "markdown",
+        "the detail",
+    )
+    assert isinstance(exc, ValueError)
+
+
+async def test_a_disk_full_attempt_records_neither_rule_nor_field():
+    cut = AttemptFailed("no", 0.0, reason="schema", rule="schema_invalid", field="type", space=LOW)
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(ScriptedRunner(pjm=[cut, OK]), floor_bytes=FLOOR_BYTES)
+    [failure] = caught.value.failures
+    assert failure["reason"] == "disk_full"
+    assert "rule" not in failure and "field" not in failure
+
+
+async def test_a_failure_that_is_not_a_refusal_is_written_as_before():
+    out = await run_pjm(ScriptedRunner(pjm=[AttemptFailed("boom", 0.05), OK]))
+    assert all("rule" not in f and "field" not in f for f in out.failures)
+
+
+async def test_a_refusal_sequence_differs_from_todays_failures_only_by_rule_and_field():
+    def check(data):
+        if data["confidence"] == "high":
+            raise OutputRefusal("parts_when_fits", "confidence", "be humble")
+
+    runner = ScriptedRunner(pjm=[BAD_TYPE, OK, classified(confidence="low")])
+    out = await run_with_retry(
+        PJM,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=2,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+        owner_task="GH-1",
+        check=check,
+        spent_usd=0.0,
+        task_cap_usd=None,
+    )
+    assert [f["reason"] for f in out.failures] == ["schema", "check"]
+    assert _refused_rules(out.failures) == [
+        ("schema_invalid", "type"),
+        ("parts_when_fits", "confidence"),
+    ]
+    stripped = [{k: v for k, v in f.items() if k not in ("rule", "field")} for f in out.failures]
+    assert [f["attempt"] for f in stripped] == [1, 2]
+    assert all(set(f) == set(stripped[0]) for f in stripped)
+    assert stripped[1]["error"] == "structured output invalid: be humble"
+
+
+async def test_two_refusals_escalate_and_the_patch_carries_both_entries():
+    exc = await _refusals([BAD_TYPE, RawResult(None, 0.01)])
+    patch = escalation(exc, at="2026-11-19T00:00:00+00:00")
+    assert _refused_rules(patch["failures"]) == [
+        ("schema_invalid", "type"),
+        ("output_missing", None),
+    ]

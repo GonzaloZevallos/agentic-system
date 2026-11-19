@@ -3726,6 +3726,14 @@ def _report(final: TaskState, task_id: str, ports: Ports) -> None:
     print(f"roles:     {', '.join(final.get('sections', {}))}")
     print(f"returns:   {final.get('returns', {})}")
     print(f"failures:  {len(final.get('failures', []))}")
+    if refusals := delivery_metrics.refusals_by_rule(
+        final.get("failures", []), final.get("runs", [])
+    ):
+        items = (
+            f"{rule}={n['refused']} (repaired {n['repaired']})"
+            for rule, n in sorted(refusals.items())
+        )
+        print(f"refusals:  {' '.join(items)}")
     if final.get("escalated"):
         print(f"escalated: {final['escalated']}")
     for question in final.get("questions_for_human", []):

@@ -60,6 +60,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import (
@@ -98,6 +100,9 @@ from ..domain.task import (
     WAITING_ON_HUMAN,
     EscalationClass,
     Failure,
+    FailureReason,
+    OutputRefusal,
+    RefusalRule,
     RoleRun,
     TaskState,
     apply,
@@ -105,7 +110,16 @@ from ..domain.task import (
 from .checkouts import task_base
 from .closed import closed_documents
 from .limits import RunLimits
-from .ports import AttemptFailed, CheckRuns, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
+from .ports import (
+    AttemptFailed,
+    CheckRuns,
+    CheckTool,
+    Ports,
+    Presubmit,
+    RawResult,
+    RoleRunner,
+    SchemaGuard,
+)
 from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
@@ -668,6 +682,9 @@ async def run_with_retry(
             resets_at = (
                 account_reset.reset_at(str(exc), _now()) if reason == "account_limit" else None
             )
+            # A rule is written only on a refusal the recorded reason still says is one: a
+            # narrowed `disk_full` is the machine's failure, not the model's output.
+            refused = exc.rule is not None and reason in ("schema", "check")
             failures.append(
                 {
                     "role": role.name,
@@ -689,6 +706,8 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    **({"rule": exc.rule} if refused else {}),
+                    **({"field": exc.field} if refused and exc.field else {}),
                     **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
                     **(
                         {"check_runs_dropped": exc.check_runs.dropped}
@@ -799,6 +818,61 @@ def _retry_input(
     return f"{prompt}\n\n{error}", resume
 
 
+def refusal_field(schema: type[BaseModel], candidate: object) -> str:
+    """The field a refusal names, kept only when `schema` declares it (or it is `markdown`,
+    which every role's output has): a claim from a validator or a check is never trusted
+    as a label, so what is not a declared field becomes `""` (GH-1011)."""
+    if isinstance(candidate, str) and (candidate in schema.model_fields or candidate == "markdown"):
+        return candidate
+    return ""
+
+
+def _validation_rule(schema: type[BaseModel], exc: ValueError) -> tuple[RefusalRule, str]:
+    """The rule and field `schemas.validate`'s refusal carries. The one place that reads a
+    pydantic error's `ctx`: a validator that raised an `OutputRefusal` has it there, the
+    first such error deciding; any other validation error is `schema_invalid` on the
+    top-level field its `loc` starts with, and any other `ValueError` is `unmapped`."""
+    if not isinstance(exc, ValidationError):
+        return "unmapped", ""
+    errors = exc.errors()
+    for error in errors:
+        refusal = error.get("ctx", {}).get("error")
+        if isinstance(refusal, OutputRefusal):
+            return refusal.rule, refusal_field(schema, refusal.field)
+    loc = errors[0]["loc"] if errors else ()
+    return "schema_invalid", refusal_field(schema, loc[0]) if loc else ""
+
+
+def _refused(
+    result: RawResult,
+    message: str,
+    cost: float,
+    session: str,
+    *,
+    reason: FailureReason,
+    rule: RefusalRule,
+    field: str,
+) -> AttemptFailed:
+    """The `AttemptFailed` of one refusal of the role's output: what the runner measured
+    on the attempt, plus the reason, the rule and the field its raise site decided."""
+    return AttemptFailed(
+        message,
+        cost,
+        session,
+        reason=reason,
+        denials=result.denials,
+        turn_notice=result.turn_notice,
+        turn_notice_firings=result.turn_notice_firings,
+        deliveries=result.deliveries,
+        presubmit_denials=result.presubmit_denials,
+        main_thread_turns=result.main_thread_turns,
+        reaped=result.reaped,
+        check_runs=result.check_runs,
+        rule=rule,
+        field=field,
+    )
+
+
 async def _attempt(
     role: Role,
     prompt: str,
@@ -840,70 +914,53 @@ async def _attempt(
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
-        raise AttemptFailed(
+        raise _refused(
+            result,
             "structured output missing; it is required",
             cost,
             session,
             reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
+            rule="output_missing",
+            field="",
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
     except ValueError as exc:
-        raise AttemptFailed(
+        rule, field_ = _validation_rule(role.schema, exc)
+        raise _refused(
+            result,
             f"structured output invalid: {rules.exception_motive(exc)}",
             cost,
             session,
             reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
+            rule=rule,
+            field=field_,
         ) from exc
     if check is not None:
         try:
             check(data)
         except ValueError as exc:
-            raise AttemptFailed(
+            raise _refused(
+                result,
                 f"structured output invalid: {rules.exception_motive(exc)}",
                 cost,
                 session,
                 reason="check",
-                denials=result.denials,
-                turn_notice=result.turn_notice,
-                turn_notice_firings=result.turn_notice_firings,
-                deliveries=result.deliveries,
-                presubmit_denials=result.presubmit_denials,
-                main_thread_turns=result.main_thread_turns,
-                reaped=result.reaped,
-                check_runs=result.check_runs,
+                rule=exc.rule if isinstance(exc, OutputRefusal) else "unmapped",
+                field=refusal_field(role.schema, exc.field)
+                if isinstance(exc, OutputRefusal)
+                else "",
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
-        raise AttemptFailed(
+        raise _refused(
+            result,
             "`markdown` is empty; the Markdown section is required",
             cost,
             session,
             reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
+            rule="schema_invalid",
+            field="markdown",
         )
     return Output(
         text=text,

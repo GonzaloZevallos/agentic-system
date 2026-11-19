@@ -60,6 +60,7 @@ from ..domain.task import (
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRule,
     TaskInput,
     TaskState,
     TrackerFailure,
@@ -191,6 +192,8 @@ class AttemptFailed(Exception):
         space: SpaceReading | None = None,
         enospc: bool = False,
         check_runs: CheckRuns | None = None,
+        rule: RefusalRule | None = None,
+        field: str = "",
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -239,6 +242,10 @@ class AttemptFailed(Exception):
         # The Developer's own check runs before this attempt broke (`RawResult.check_runs`);
         # empty at every raise site but the runner's own and `run_role._attempt`'s.
         self.check_runs = check_runs if check_runs is not None else CheckRuns()
+        # The refusal rule and the schema field it names (GH-1011), decided at the raise
+        # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
+        self.rule = rule
+        self.field = field
 
 
 class Presubmit(Protocol):
