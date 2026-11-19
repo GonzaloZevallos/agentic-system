@@ -2785,10 +2785,38 @@ async def test_a_refusal_sequence_differs_from_todays_failures_only_by_rule_and_
         ("schema_invalid", "type"),
         ("parts_when_fits", "confidence"),
     ]
-    stripped = [{k: v for k, v in f.items() if k not in ("rule", "field")} for f in out.failures]
-    assert [f["attempt"] for f in stripped] == [1, 2]
-    assert all(set(f) == set(stripped[0]) for f in stripped)
-    assert stripped[1]["error"] == "structured output invalid: be humble"
+    stripped = unstamped(
+        [{k: v for k, v in f.items() if k not in ("rule", "field")} for f in out.failures]
+    )
+    # The pydantic message ends in a version-bound URL: pin its start, then compare the rest.
+    first_error = stripped[0].pop("error")
+    assert first_error.startswith(
+        "structured output invalid: 1 validation error for Classification"
+    )
+    today = {
+        "role": "PjM",
+        "session_id": "",
+        "slug": "pjm",
+        "section": "PjM",
+        "max_turns": PJM.max_turns,
+        "cold_fallback": False,
+        "denials": 0,
+        "turn_notice": False,
+        "turn_notice_firings": 0,
+        "deliveries": 0,
+        "presubmit_denials": 0,
+        "main_thread_turns": 0,
+    }
+    assert stripped == [
+        {**today, "attempt": 1, "cost_usd": 0.01, "reason": "schema"},
+        {
+            **today,
+            "attempt": 2,
+            "cost_usd": 0.03,
+            "reason": "check",
+            "error": "structured output invalid: be humble",
+        },
+    ]
 
 
 async def test_two_refusals_escalate_and_the_patch_carries_both_entries():
