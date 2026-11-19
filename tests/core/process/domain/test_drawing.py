@@ -686,3 +686,21 @@ def test_interview_check_refuses_an_unknown_file_naming_the_expected_form():
     assert reason is not None and f"{PROTO}/<name>" in reason
     reason = interview_check([], [], [Dep("Twin.dc.html", "T")], LISTED, {}, {})
     assert reason is not None and "more than one" in reason
+
+
+@pytest.mark.parametrize(
+    ("design", "cited"),
+    [
+        (LISTED, "Twin.dc.html"),
+        (LISTED, "/abs.html"),
+        (LISTED, "../x.html"),
+        (LISTED, "Nope.html"),
+        (LISTED, f"{PROTO}/Missing.html"),
+        (Design(PROTO, "Home", None, None), "Any.html"),
+        (Design(PROTO, "Home", None, None), "a:b.html"),
+    ],
+)
+def test_every_refusal_under_a_subdirectory_prototype_names_the_expected_form(design, cited):
+    refused = resolve(design, cited, "Q1")
+    assert isinstance(refused, Refused)
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
