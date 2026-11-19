@@ -12,7 +12,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict, assert_never, get_args
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
@@ -2508,6 +2508,53 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
     if other >= 0.005:
         phases["other"] = other
     return phases
+
+
+class SpentSplit(TypedDict):
+    """The task's cost in two halves and what no run records (GH-999)."""
+
+    definition: float
+    build: float
+    unattributed: float
+
+
+_SPLIT_OF: dict[str, Literal["definition", "build"]] = {
+    "definition": "definition",
+    "plan": "definition",
+    "development": "build",
+    "review": "build",
+}
+
+
+def spent_split(state: TaskState) -> SpentSplit:
+    """The task's cost as definition (`definition` and `plan` phases), build (`development` and
+    `review`) and `unattributed` (the `other` residual of `spent_by_phase`, and any phase
+    `_SPLIT_OF` does not name). Derived only from `spent_by_phase`; never raises; the residual is
+    never apportioned to a phase, so the first two are lower bounds.
+
+    The three sum to `cost_usd` only when the residual reaches `spent_by_phase`'s 0.005 floor;
+    below it the residual is not shown, and a run total above `cost_usd` shows no negative
+    `unattributed`. `phase_of` sends the roles it does not recognise (Tech Writer, QA
+    Performance) to `definition`, so that figure may overstate; `phase_of` is left as it is
+    because `closeness` reads it."""
+    split: SpentSplit = {"definition": 0.0, "build": 0.0, "unattributed": 0.0}
+    for phase, usd in spent_by_phase(state).items():
+        half = _SPLIT_OF.get(phase)
+        if half is None:
+            split["unattributed"] += usd
+        else:
+            split[half] += usd
+    return split
+
+
+def spent_split_line(split: SpentSplit, *, build_in_parts: bool = False) -> str:
+    """The one line that shows `spent_split`. `build_in_parts` says where the build will be
+    spent, in the parts of a split task, instead of a figure of zero."""
+    build = "build: in the parts" if build_in_parts else f"build >= {split['build']:.2f} USD"
+    return (
+        f"definition >= {split['definition']:.2f} USD · {build} · "
+        f"unattributed {split['unattributed']:.2f} USD"
+    )
 
 
 # Routing of the paths of README §2: PjM -> Product Analyst -> PM -> Tech Lead ->

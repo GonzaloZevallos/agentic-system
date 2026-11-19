@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__FullChecksRead["FullChecksRead"]
     class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
     class task__HeadYield["HeadYield"]
@@ -44,7 +45,6 @@ classDiagram
     class task__MergeCiRecord["MergeCiRecord"]
     class task__MergeConflictRecord["MergeConflictRecord"]
     class task__MergeOutcome["MergeOutcome"]
-    class task__MergeRefusalRecord["MergeRefusalRecord"]
 ```
 
 ## Relaciones con otras páginas

@@ -65,6 +65,37 @@ async def test_a_plan_that_does_not_fit_opens_labelled_issues_and_ends_split(tmp
     assert all(f"/issues/{n}" in text for n in (101, 102, 103, 104))
 
 
+async def test_a_split_without_build_spending_says_the_build_is_in_the_parts(tmp_path):
+    state = {
+        **STATE,
+        "cost_usd": 1.5,
+        "runs": [{"role": "Tech Lead", "section": "Tech Lead", "cost_usd": 1.5}],
+    }
+    ports = ports_with_numbered_issues()
+    await split(state, Configuration(product_dir=tmp_path), ports)
+    ((_, text),) = ports.tracker.comments
+    expected = "definition >= 1.50 USD · build: in the parts · unattributed 0.00 USD"
+    assert f"\n\n{expected}\n\nThis task is NOT relaunched" in text
+    assert "build >=" not in text
+
+
+async def test_a_split_with_a_costed_development_run_shows_the_build_figure(tmp_path):
+    state = {
+        **STATE,
+        "cost_usd": 4.5,
+        "runs": [
+            {"role": "Tech Lead", "section": "Tech Lead", "cost_usd": 1.5},
+            {"role": "Developer", "section": "Developer: api", "cost_usd": 3.0},
+        ],
+    }
+    ports = ports_with_numbered_issues()
+    await split(state, Configuration(product_dir=tmp_path), ports)
+    ((_, text),) = ports.tracker.comments
+    expected = "definition >= 1.50 USD · build >= 3.00 USD · unattributed 0.00 USD"
+    assert f"\n\n{expected}\n\nThis task is NOT relaunched" in text
+    assert "in the parts" not in text
+
+
 async def test_a_retry_after_a_cut_at_part_two_opens_only_what_is_missing(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     first = ports_with_numbered_issues()

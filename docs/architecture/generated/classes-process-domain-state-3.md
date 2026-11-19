@@ -36,6 +36,7 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class rules__SpentSplit["SpentSplit"]
     class size_budget__ActualSize["ActualSize"]
     class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]
@@ -44,10 +45,4 @@ classDiagram
     class spec_approval__Comment["Comment"]
     class spec_delivery__DraftReading["DraftReading"]
     class spec_delivery__Screen["Screen"]
-    class spec_delivery__SpecContract["SpecContract"]
 ```
-
-## Relaciones con otras páginas
-
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `spec_delivery.SpecStatePatch` se asocia con `spec_delivery.SpecContract`

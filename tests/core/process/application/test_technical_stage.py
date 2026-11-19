@@ -953,10 +953,15 @@ async def test_an_escalation_by_the_task_cap_breaks_the_spending_down_and_propos
     assert "Spent by phase:\n\n- definition: 2.27 USD\n- plan: 0.00 USD" in text
     assert "- development: 40.00 USD\n- review: 64.00 USD" in text
     assert text.endswith("then run `agentic resume --issue 12 --task-budget 117`.")
+    # The split of that spending closes the block, apart by a blank line.
+    split_line = "definition >= 2.27 USD · build >= 104.00 USD · unattributed 0.00 USD"
+    assert split_line == rules.spent_split_line(rules.spent_split(state))
+    assert "- review: 64.00 USD\n\n" + split_line + "\n\nTask document:" in text
     # Any other escalation says how to resume, without a cap to raise.
     ports = memory_ports()
     await escalate({**TASK, "escalated": "PM could not decide"}, cfg, ports)
     assert "Spent by phase" not in ports.tracker.comments[0][1]
+    assert "unattributed" not in ports.tracker.comments[0][1]
     assert ports.tracker.comments[0][1].endswith("`agentic resume --issue 12`.")
     ports = memory_ports()
     await escalate({**state, "id": "T-1"}, cfg, ports)  # no issue, no command to resume it
