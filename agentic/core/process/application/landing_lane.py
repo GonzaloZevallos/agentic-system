@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from ..domain import landing, landing_order
 from ..domain.task import NOT_LANE, LaneAdmitted, LaneMerge
@@ -108,6 +109,18 @@ def _candidate_member(
     holds = _holds_master(ports, product_dir, current_master, pr_head)
     paths = _touched(ports, current_master, pr_head)
     return replace(member, lane_decision=decision, clean=True, holds_master=holds, paths=paths)
+
+
+def mark_not_candidates(
+    members: Sequence[landing_order.Member],
+    reasons: Mapping[int, Literal["not_merge_ready", "backed_off"]],
+) -> tuple[landing_order.Member, ...]:
+    """A copy of `members`, in order, where each member `reasons` names reads clean and carries
+    why it is no lane candidate. Nothing is read: the reason is a fact the round computed."""
+    return tuple(
+        replace(m, clean=True, not_candidate=reasons[m.issue]) if m.issue in reasons else m
+        for m in members
+    )
 
 
 def lane_facts(

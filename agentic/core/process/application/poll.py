@@ -1319,12 +1319,7 @@ def _fast_lane(
     if cfg is None or head is None or head_entry is None:
         return None, {}
     reads = _lane_candidates(entries, head.issue, current_master, now)
-    marked = tuple(
-        replace(m, clean=True, not_candidate=reads.not_candidates[m.issue])
-        if m.issue in reads.not_candidates
-        else m
-        for m in members
-    )
+    marked = landing_lane.mark_not_candidates(members, reads.not_candidates)
     read_head = head
     with_facts = marked
     if reads.candidates:

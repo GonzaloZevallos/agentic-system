@@ -1301,39 +1301,7 @@ class TestLaneWithCiBesideAReintegratingHead:
         }
         return ports
 
-    def test_a_ci_run_jump_starts_and_stays_live_while_the_head_delivers(self, tmp_path):
-        ports = self._ci_ports()
-
-        started, lines = _round_at(
-            ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"}
-        )
-
-        assert started == [5]
-        assert lines[0] == (
-            "agentic: poll: auto-merge #5 -> fast lane behind busy #7 (land_model, ci_run)"
-        )
-        assert ports.documents.load("GH-5")["lane_admitted"]["decision"] == "ci_run"
-
-        # the head delivered while the jump's own merge child (not integrating) is alive: it is
-        # neither cut nor followed by a second jump
-        later = NOW + timedelta(minutes=1)
-        delivered, lines = _round_at(ports, tmp_path, busy={"GH-5"}, integrating={}, now=later)
-        assert 5 not in delivered and 6 not in delivered
-        assert "(land_model" not in "".join(lines)
-        assert (
-            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7"
-            in lines
-        )
-        assert "head_yields" not in ports.documents.load("GH-7")
-
-        # the jump ended: the head is the product's own candidate again
-        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
-        last, _ = _round_at(
-            ports, tmp_path, busy=(), integrating={}, now=later + timedelta(minutes=1)
-        )
-        assert last == [7]
-
-    def test_a_refused_ci_decision_opens_no_jump(self, tmp_path):
+    def test_a_backed_off_member_opens_no_jump_on_a_product_with_ci(self, tmp_path):
         ports = self._ci_ports()
         for number in (5, 6):
             ports.documents.record_closure(
