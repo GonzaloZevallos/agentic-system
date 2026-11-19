@@ -292,8 +292,7 @@ def test_a_pm_decision_resets_the_plan_and_keeps_the_counters():
         None,
         None,
     )
-    # the bar is one above each unit's highest review pass: the `full_checks:` row (version 1, below the bar)
-    # is not a review pass
+    # the bar is one above each unit's highest review pass; a `full_checks:` row is no pass
     assert patch["restart_settled"] == settle_open(
         {**state, "findings": state["findings"][:3]}, ["api", "integration"], "owner_decision"
     )
@@ -325,7 +324,6 @@ def test_an_unreadable_seen_is_replaced(current):
 
 
 def test_a_restart_still_discards_a_full_checks_row_below_its_bar():
-    """The exemption is for an owner decision only: a `restarted` settle row closes it."""
     state = pm_state()
     rows = settle_open(state, ["integration"], "restarted")
     after = task.apply(state, {"restart_settled": rows})
@@ -335,7 +333,7 @@ def test_a_restart_still_discards_a_full_checks_row_below_its_bar():
         state, {"restart_settled": settle_open(state, ["integration"], "owner_decision")}
     )
     status = {(r["subtask"], r["location"]): r["status"] for r in rules.findings_rows(decided)}
-    assert status[("integration", "full_checks:tests")] == "open"  # fails without the exemption
+    assert status[("integration", "full_checks:tests")] == "open"
 
 
 def test_open_rows_of_other_names_stay_open_and_a_recreated_integration_starts_clean():
