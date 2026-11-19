@@ -52,7 +52,8 @@ def _sync(head: str, at: str = "2026-11-10T10:00:00+00:00") -> dict[str, object]
 def _facts(ports, *, head: LaneHead | None = None, candidates=None):
     members = (_member(7), _member(5), _member(6))
     given = {5: MEMBER_HEAD} if candidates is None else candidates
-    result = lane_facts(ports, PRODUCT, MASTER, members, head or _head(), given)
+    decisions = {issue: "merge" for issue in given}
+    result = lane_facts(ports, PRODUCT, MASTER, members, head or _head(), given, decisions)
     return {m.issue: m for m in result}
 
 
@@ -68,7 +69,7 @@ def test_a_candidates_facts_and_the_heads_are_read():
     assert head.integrating is True
     assert head.paths == frozenset({"a.py", "b.py"})
     assert head.head_syncs_left == landing_rules.LANDING_SYNCS_MAX - 1
-    assert (member.merge_now, member.clean, member.holds_master) == (True, True, True)
+    assert (member.lane_decision, member.clean, member.holds_master) == ("merge", True, True)
     assert member.paths == frozenset({"c.py"})
     assert ports.workspace.ancestor_checks == [(PRODUCT, MASTER, MEMBER_HEAD)]
 
@@ -80,35 +81,53 @@ def test_a_member_that_is_not_a_candidate_is_returned_unchanged():
 
     assert by_issue[6] == _member(6)
     assert [
-        m.issue for m in lane_facts(ports, PRODUCT, MASTER, (_member(7), _member(5)), _head(), {})
+        m.issue
+        for m in lane_facts(ports, PRODUCT, MASTER, (_member(7), _member(5)), _head(), {}, {})
     ] == [
         7,
         5,
     ]
 
 
-def test_an_ancestor_read_that_fails_is_unknown_and_reads_nothing_else_of_that_member():
+def test_an_ancestor_read_that_fails_is_unknown_and_the_paths_are_still_read():
     ports = _ports()
     ports.workspace.ancestor_ref_errors.add(MEMBER_HEAD)
+    ports.workspace.touched_by[(MASTER, MEMBER_HEAD)] = ("c.py",)
 
     member = _facts(ports)[5]
 
     assert member.holds_master is None
-    assert member.paths is None
-    assert (member.merge_now, member.clean) == (True, True)
-    assert ports.workspace.touched_reads == [(MASTER, HEAD_OID)]  # the head's alone
+    assert member.paths == frozenset({"c.py"})
+    assert (member.lane_decision, member.clean) == ("merge", True)
+    assert ports.workspace.touched_reads == [(MASTER, HEAD_OID), (MASTER, MEMBER_HEAD)]
     assert ports.workspace.fetched_commits == []
     assert ports.workspace.contains_calls == []
 
 
-def test_a_member_that_lacks_master_reads_no_paths():
+def test_a_member_that_lacks_master_still_reads_its_paths_and_keeps_the_fact():
     ports = _ports()  # MEMBER_HEAD is not scripted as holding MASTER
+    ports.workspace.touched_by[(MASTER, MEMBER_HEAD)] = ("c.py",)
 
     member = _facts(ports)[5]
 
     assert member.holds_master is False
-    assert member.paths is None
-    assert (MASTER, MEMBER_HEAD) not in ports.workspace.touched_reads
+    assert member.paths == frozenset({"c.py"})
+    assert ports.workspace.touched_reads.count((MASTER, MEMBER_HEAD)) == 1
+
+
+@pytest.mark.parametrize("decision", ["merge", "ci_run", "run_checks"])
+def test_the_decision_the_caller_passes_is_transcribed_and_none_is_made_up(decision):
+    ports = _ports()
+    members = (_member(7), _member(5), _member(6))
+
+    result = lane_facts(
+        ports, PRODUCT, MASTER, members, _head(), {5: MEMBER_HEAD, 6: OTHER_OID}, {5: decision}
+    )
+
+    by_issue = {m.issue: m for m in result}
+    assert by_issue[5].lane_decision == decision
+    assert by_issue[6] == _member(6)  # listed as a candidate with no decision: left as it was
+    assert by_issue[7].lane_decision is None
 
 
 def test_a_member_whose_paths_cannot_be_read_has_none_and_holds_master_stays_true():
@@ -177,7 +196,7 @@ def test_a_head_that_does_not_integrate_reads_nothing_at_all():
 
     assert by_issue[7].integrating is False
     assert (by_issue[7].paths, by_issue[7].head_syncs_left) == (None, None)
-    assert (by_issue[5].merge_now, by_issue[5].clean) == (True, True)
+    assert (by_issue[5].lane_decision, by_issue[5].clean) == ("merge", True)
     assert (by_issue[5].holds_master, by_issue[5].paths) == (None, None)
     assert ports.tracker.events == []
     assert ports.workspace.touched_reads == []
@@ -238,7 +257,7 @@ def test_the_result_is_a_copy_in_the_order_given():
     ports = _ports()
     members = (_member(7), _member(5))
 
-    result = lane_facts(ports, PRODUCT, MASTER, members, _head(), {5: MEMBER_HEAD})
+    result = lane_facts(ports, PRODUCT, MASTER, members, _head(), {5: MEMBER_HEAD}, {5: "merge"})
 
     assert [m.issue for m in result] == [7, 5]
     assert members == (_member(7), _member(5))
@@ -286,7 +305,7 @@ def _work(*busy: str):
     return lambda task_id: task_id in busy
 
 
-def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD):
+def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD, decision="merge"):
     landing_lane.admit(
         ports,
         "GH-5",
@@ -294,6 +313,7 @@ def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD):
         7,
         pr_head,
         MASTER,
+        decision,
         now,
         _work(*busy),
         [] if out is None else out,
@@ -323,6 +343,7 @@ def test_an_admission_is_written_once_and_keeps_its_instant_on_the_same_sha():
         "head_issue": 7,
         "pr_head": MEMBER_HEAD,
         "master": MASTER,
+        "decision": "merge",
         "at": NOW.isoformat(),
     }
     _admit(ports, now=LATER)
@@ -390,7 +411,13 @@ def test_a_merge_on_the_admitted_sha_is_appended_once_and_then_marks_the_member(
     _admit(ports)
     _merged(ports)
     assert _record(ports) == []
-    merge = {"issue": 5, "pr_head": MEMBER_HEAD, "master": MASTER, "merged_at": MERGED}
+    merge = {
+        "issue": 5,
+        "pr_head": MEMBER_HEAD,
+        "master": MASTER,
+        "merged_at": MERGED,
+        "decision": "merge",
+    }
     assert ports.documents.load("GH-7")["lane_merges"] == [merge]
     assert ports.documents.load("GH-5")["lane_recorded"] == LATER.isoformat()
     _record(ports)

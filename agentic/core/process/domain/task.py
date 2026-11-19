@@ -35,7 +35,7 @@ from typing import (
 
 from . import drawing
 from .ci_push import PushKind
-from .landing_order import YieldReason
+from .landing_order import LaneDecision, YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
@@ -504,24 +504,28 @@ NOT_LANE = "not_lane"
 
 class LaneAdmitted(TypedDict):
     """The record on a member's own document that the poller let it merge beside the busy head
-    `head_issue` (GH-681, informative): the pull request head `pr_head`, the `master` it held and
-    when (`at`). No decision reads it."""
+    `head_issue` (GH-681, informative): the pull request head `pr_head`, the `master` it held, the
+    merge `decision` that admitted it (a `LaneDecision`, absent from an admission written before it
+    was kept) and when (`at`). No decision reads it."""
 
     head_issue: int
     pr_head: str
     master: str
     at: str
+    decision: NotRequired[LaneDecision]
 
 
 class LaneMerge(TypedDict):
     """One fast-lane merge recorded in the head's document (`lane_merges`): the member `issue`,
-    the `pr_head` and `master` it was admitted on, and when it merged (`merged_at`, its
-    `auto_merged_at` as stored)."""
+    the `pr_head` and `master` it was admitted on, the `decision` that admitted it (copied from its
+    admission, absent when that had none) and when it merged (`merged_at`, its `auto_merged_at` as
+    stored)."""
 
     issue: int
     pr_head: str
     master: str
     merged_at: str
+    decision: NotRequired[LaneDecision]
 
 
 class TrackerActionDone(TypedDict):
