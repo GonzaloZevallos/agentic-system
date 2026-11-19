@@ -1407,3 +1407,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-908
+  GH-960@review:
+    cost_usd: 0.0
