@@ -1166,7 +1166,7 @@ def evaluate_landing_order(
     cfg: Configuration | None = None,
     now: datetime | None = None,
     resumes: Sequence[rules.ResumeCandidate] = (),
-    integrating: frozenset[str] = frozenset(),
+    integrating: Mapping[str, str] | None = None,
     *,
     memo: StackMemo,
     skip: frozenset[int] = frozenset(),
@@ -1180,10 +1180,11 @@ def evaluate_landing_order(
     Read-only (GH-621): the members are read as the documents hold them, `landing_order.resumed`
     is applied once, then `advance`. Each entry keeps its `member` as read and what `advance` made
     of it (`turned`); the writer (`_record_turn`) compares the two. `now` defaults to the clock;
-    `resumes` are the product's paused tasks, for `account_paused`. `integrating` are the ids with
-    a live child of an integrating kind (`landing_order.integrates`): with the head among them
-    and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without touching
-    `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the caller's.
+    `resumes` are the product's paused tasks, for `account_paused`. `integrating` maps the ids with
+    a live child of an integrating kind (`landing_order.integrates`) to that kind: with the head
+    among them and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without
+    touching `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the
+    caller's.
     An issue in `skip` (GH-899, a stacked child the round holds) is no member and no entry: it is
     never assessed, never the head and never ordered."""
     now = now or datetime.now(UTC)
@@ -1234,7 +1235,7 @@ def evaluate_landing_order(
     resumed = landing_order.resumed(members, now)
     result, turned = landing_order.advance(resumed, now)
     lane, lane_reasons = _fast_lane(
-        ports, cfg, current_master, entries, turned, result.head, integrating, now
+        ports, cfg, current_master, entries, turned, result.head, integrating or {}, now
     )
     after = iter(turned)
     return LandingRound(
@@ -1251,32 +1252,49 @@ def evaluate_landing_order(
     )
 
 
+@dataclass(frozen=True)
+class _LaneReads:
+    """What the round already computed of each waiting member, transcribed for the fast lane:
+    the `candidates` (issue to pull request head) with the `decisions` they hold, and for each
+    other member whose merge-tree read is clean why it is no candidate."""
+
+    candidates: dict[int, str] = field(default_factory=dict)
+    decisions: dict[int, landing_order.LaneDecision] = field(default_factory=dict)
+    not_candidates: dict[int, Literal["not_merge_ready", "backed_off"]] = field(
+        default_factory=dict
+    )
+
+
 def _lane_candidates(
     entries: Sequence[OrderEntry], head: int, current_master: str, now: datetime
-) -> dict[int, str]:
-    """The waiting members the fast lane may read: assessed this round, decided `merge`, not
-    under a backoff for this pair, with a conflict-free merge-tree read, by their pull request
-    head."""
-    candidates: dict[int, str] = {}
+) -> _LaneReads:
+    """The waiting members the fast lane may read: assessed this round, with a conflict-free
+    merge-tree read and not under a backoff for this pair, whose decision `(kind, reason)` is one
+    `landing_order.lane_decision_of` admits (`LANE_DECISIONS`: this list is not repeated here).
+    A member that reads clean and is not one carries why in `not_candidates`: `backed_off` when
+    `exempt_queue.backed_off` says so for its pair, else `not_merge_ready`. Nothing is read: every
+    fact is one `assess_merge` already produced."""
+    reads = _LaneReads()
     for entry in entries:
         assessed = entry.outcome
         if (
             entry.member is None
             or entry.number == head
             or not isinstance(assessed, MergeAssessment)
+            or assessed.facts.conflicts is not False
         ):
             continue
         pr_head = assessed.facts.pr_head
-        if (
-            assessed.decision.kind == "merge"
-            and pr_head is not None
-            and assessed.facts.conflicts is False
-            and not exempt_queue.backed_off(
-                entry.raw.get("merge_refusal"), pr_head, current_master, now
-            )
-        ):
-            candidates[entry.number] = pr_head
-    return candidates
+        backed_off = pr_head is not None and exempt_queue.backed_off(
+            entry.raw.get("merge_refusal"), pr_head, current_master, now
+        )
+        decision = landing_order.lane_decision_of(assessed.decision.kind, assessed.decision.reason)
+        if pr_head is not None and decision is not None and not backed_off:
+            reads.candidates[entry.number] = pr_head
+            reads.decisions[entry.number] = decision
+        else:
+            reads.not_candidates[entry.number] = "backed_off" if backed_off else "not_merge_ready"
+    return reads
 
 
 def _fast_lane(
@@ -1286,7 +1304,7 @@ def _fast_lane(
     entries: Sequence[OrderEntry],
     members: Sequence[landing_order.Member],
     head_issue: int | None,
-    integrating: frozenset[str],
+    integrating: Mapping[str, str],
     now: datetime,
 ) -> tuple[int | None, dict[int, landing_order.LaneReason]]:
     """The fast lane of a round (GH-681): the member that may merge beside the head and why each
@@ -1294,31 +1312,46 @@ def _fast_lane(
     has been observed (a child run's save may have erased what the document held of it). Nothing is
     read unless the head, as this round observes it, integrates and a waiting member is a
     candidate; the facts are `landing_lane`'s and the predicate and its reasons `landing_order`'s.
-    Read-only: it writes nothing and adds no member state."""
+    A clean member that is no candidate only carries the reason the round already computed
+    (`_lane_candidates`). Read-only: it writes nothing and adds no member state."""
     head = next((m for m in members if m.issue == head_issue), None)
     head_entry = next((e for e in entries if e.number == head_issue), None)
     if cfg is None or head is None or head_entry is None:
         return None, {}
-    candidates = _lane_candidates(entries, head.issue, current_master, now)
-    if not candidates:
-        return None, {}
-    lane_head = landing_lane.LaneHead(
-        head.issue,
-        str(head_entry.raw.get("pull_request")),
-        head_entry.raw,
-        head_entry.task_id in integrating,
+    reads = _lane_candidates(entries, head.issue, current_master, now)
+    marked = tuple(
+        replace(m, clean=True, not_candidate=reads.not_candidates[m.issue])
+        if m.issue in reads.not_candidates
+        else m
+        for m in members
     )
-    with_facts = landing_lane.lane_facts(
-        ports, cfg.product_dir, current_master, members, lane_head, candidates
-    )
-    read_head = next(m for m in with_facts if m.issue == head.issue)
+    read_head = head
+    with_facts = marked
+    if reads.candidates:
+        lane_head = landing_lane.LaneHead(
+            head.issue,
+            str(head_entry.raw.get("pull_request")),
+            head_entry.raw,
+            head_entry.task_id in integrating,
+        )
+        with_facts = landing_lane.lane_facts(
+            ports,
+            cfg.product_dir,
+            current_master,
+            marked,
+            lane_head,
+            reads.candidates,
+            reads.decisions,
+        )
+        read_head = next(m for m in with_facts if m.issue == head.issue)
     reasons: dict[int, landing_order.LaneReason] = {}
     for member in with_facts:
         if member.issue != head.issue:
             reason = landing_order.lane_reason(member, read_head, now)
             if reason is not None:
                 reasons[member.issue] = reason
-    return landing_order.order(with_facts, now).lane, reasons
+    lane = landing_order.order(with_facts, now).lane if reads.candidates else None
+    return lane, reasons
 
 
 LANE_TEXT: dict[landing_order.LaneReason, str] = {
@@ -1334,6 +1367,15 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "backed_off": "backed off",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
+
+
+def _head_child_kind(round_: LandingRound, integrating: Mapping[str, str] | None) -> str:
+    """The kind of the live integrating child on the head of `round_`: the fast lane never opens
+    unless there is one, so a closed value of `landing_order.INTEGRATING_KINDS`."""
+    for entry in round_.entries:
+        if entry.number == round_.head and integrating is not None:
+            return integrating.get(entry.task_id, "unknown")
+    return "unknown"
 
 
 def _yield_record(
@@ -1512,7 +1554,7 @@ def gather_merges(
     backoff_ends: dict[int, datetime] | None = None,
     held: bool = False,
     resumes: Sequence[rules.ResumeCandidate] = (),
-    integrating: frozenset[str] = frozenset(),
+    integrating: Mapping[str, str] | None = None,
     *,
     memo: StackMemo,
     dry_run: bool,
@@ -1709,12 +1751,24 @@ def gather_merges(
             else:
                 if number == round_.lane:
                     busy_head = round_.head
+                    admitted = landing_order.lane_decision_of(decision.kind, decision.reason)
+                    child = _head_child_kind(round_, integrating)
                     out.append(
-                        f"agentic: poll: auto-merge #{number} -> fast lane behind busy #{busy_head}"
+                        f"agentic: poll: auto-merge #{number} -> fast lane behind busy "
+                        f"#{busy_head} ({child}, {admitted})"
                     )
-                    if not held and busy_head is not None and head is not None:
+                    if not held and busy_head is not None and head is not None and admitted:
                         landing_lane.admit(
-                            ports, task_id, raw, busy_head, head, current_master, now, at_work, out
+                            ports,
+                            task_id,
+                            raw,
+                            busy_head,
+                            head,
+                            current_master,
+                            admitted,
+                            now,
+                            at_work,
+                            out,
                         )
                 found.append(number)
     return found
@@ -3149,9 +3203,11 @@ def run_once(
         exempt_live = len(running) - live
         product = ports.stack.product()
         busy = frozenset(r.task_id for r in running if r.product == product)
-        integrating = frozenset(
-            r.task_id for r in running if r.product == product and landing_order.integrates(r.kind)
-        )
+        integrating = {
+            r.task_id: r.kind
+            for r in running
+            if r.product == product and landing_order.integrates(r.kind)
+        }
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []

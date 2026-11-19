@@ -117,12 +117,13 @@ def lane_facts(
     members: Sequence[landing_order.Member],
     head: LaneHead,
     candidates: Mapping[int, str],
-    decisions: Mapping[int, landing_order.LaneDecision] | None = None,
+    decisions: Mapping[int, landing_order.LaneDecision],
 ) -> tuple[landing_order.Member, ...]:
     """A copy of `members`, in order, with the lane facts read. `candidates` maps an issue to its
     pull request head sha for each member the caller knows to hold an admitted decision
     (`landing_order.LANE_DECISIONS`), not backed off and conflict-free, and `decisions` the
-    decision it holds (`merge` for one it does not list); the others come back unchanged.
+    decision each holds; a member the caller lists in only one of the two, or in neither, comes
+    back unchanged: nothing is made up for it.
 
     A head that does not integrate is read for nothing, and the candidates still carry their
     `lane_decision` and `clean` but no master or path fact. No candidate is read when the head's
@@ -138,9 +139,9 @@ def lane_facts(
     readable = read_head is not None and read_head.integrating and read_head.paths is not None
     for index, member in enumerate(result):
         pr_head = candidates.get(member.issue)
-        if pr_head is None or member.issue == head.issue:
+        decision = decisions.get(member.issue)
+        if pr_head is None or decision is None or member.issue == head.issue:
             continue
-        decision = (decisions or {}).get(member.issue, "merge")
         if readable:
             result[index] = _candidate_member(
                 ports, product_dir, current_master, member, pr_head, decision
@@ -166,14 +167,16 @@ def admit(
     head_issue: int,
     pr_head: str,
     master: str,
+    decision: landing_order.LaneDecision,
     now: datetime,
     at_work: Callable[[str], bool],
     out: list[str],
 ) -> None:
     """Record on the lane member's own document that the poller let it merge beside the busy head
-    `head_issue`, on pull request head `pr_head` and `master`. Idempotent per `pr_head`: an
-    admission already holding that sha is left as it is, with its `at`. A task at work is not
-    written; a failed write is one line and the next round tries again."""
+    `head_issue`, on pull request head `pr_head` and `master`, under the admitted `decision`.
+    Idempotent per `pr_head`: an admission already holding that sha is left as it is, with its
+    `at`. A task at work is not written; a failed write is one line and the next round tries
+    again."""
     held = _admission(raw)
     if (held is not None and held.get("pr_head") == pr_head) or at_work(task_id):
         return
@@ -181,6 +184,7 @@ def admit(
         "head_issue": head_issue,
         "pr_head": pr_head,
         "master": master,
+        "decision": decision,
         "at": _instant_text(now),
     }
     try:
@@ -256,6 +260,7 @@ def _record(
         admitted.get("master"),
         raw.get("auto_merged_at"),
     )
+    decision = landing_order.admitted_decision(admitted.get("decision"))
     if not (
         isinstance(issue, int)
         and isinstance(head_issue, int)
@@ -280,9 +285,15 @@ def _record(
         existing = head_raw.get("lane_merges")
         merges: list[LaneMerge] = list(existing) if isinstance(existing, list) else []
         if not any(m.get("issue") == issue and m.get("pr_head") == pr_head for m in merges):
-            merges.append(
-                {"issue": issue, "pr_head": pr_head, "master": master, "merged_at": merged_at}
-            )
+            merge: LaneMerge = {
+                "issue": issue,
+                "pr_head": pr_head,
+                "master": master,
+                "merged_at": merged_at,
+            }
+            if decision is not None:
+                merge["decision"] = decision
+            merges.append(merge)
             ports.documents.record_closure(
                 head_id, {"lane_merges": merges[-landing_order.LANE_MERGES_MAX :]}
             )

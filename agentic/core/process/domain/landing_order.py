@@ -307,6 +307,13 @@ def lane_decision_of(kind: str, reason: str | None) -> LaneDecision | None:
     return next((d for d in get_args(LaneDecision) if d == kind), None)
 
 
+def admitted_decision(value: object) -> LaneDecision | None:
+    """`value`, as stored in a `lane_admitted` or `lane_merges` entry, as the `LaneDecision` it is,
+    `None` for an entry written before the decision was kept or for anything else: it reads as
+    unknown and is never guessed. Informative: no decision of the system reads it."""
+    return next((d for d in get_args(LaneDecision) if d == value), None)
+
+
 def lane_ready(m: Member) -> bool:
     """Whether `m` has every fact of its own for the lane: an admitted `lane_decision`, clean
     against the current master, its paths read, and nothing that keeps it from advancing. Holding

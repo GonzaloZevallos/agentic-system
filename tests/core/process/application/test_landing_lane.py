@@ -52,7 +52,8 @@ def _sync(head: str, at: str = "2026-11-10T10:00:00+00:00") -> dict[str, object]
 def _facts(ports, *, head: LaneHead | None = None, candidates=None):
     members = (_member(7), _member(5), _member(6))
     given = {5: MEMBER_HEAD} if candidates is None else candidates
-    result = lane_facts(ports, PRODUCT, MASTER, members, head or _head(), given)
+    decisions = {issue: "merge" for issue in given}
+    result = lane_facts(ports, PRODUCT, MASTER, members, head or _head(), given, decisions)
     return {m.issue: m for m in result}
 
 
@@ -80,7 +81,8 @@ def test_a_member_that_is_not_a_candidate_is_returned_unchanged():
 
     assert by_issue[6] == _member(6)
     assert [
-        m.issue for m in lane_facts(ports, PRODUCT, MASTER, (_member(7), _member(5)), _head(), {})
+        m.issue
+        for m in lane_facts(ports, PRODUCT, MASTER, (_member(7), _member(5)), _head(), {}, {})
     ] == [
         7,
         5,
@@ -114,7 +116,7 @@ def test_a_member_that_lacks_master_still_reads_its_paths_and_keeps_the_fact():
 
 
 @pytest.mark.parametrize("decision", ["merge", "ci_run", "run_checks"])
-def test_the_decision_the_caller_passes_is_transcribed_and_defaults_to_merge(decision):
+def test_the_decision_the_caller_passes_is_transcribed_and_none_is_made_up(decision):
     ports = _ports()
     members = (_member(7), _member(5), _member(6))
 
@@ -124,7 +126,7 @@ def test_the_decision_the_caller_passes_is_transcribed_and_defaults_to_merge(dec
 
     by_issue = {m.issue: m for m in result}
     assert by_issue[5].lane_decision == decision
-    assert by_issue[6].lane_decision == "merge"
+    assert by_issue[6] == _member(6)  # listed as a candidate with no decision: left as it was
     assert by_issue[7].lane_decision is None
 
 
@@ -255,7 +257,7 @@ def test_the_result_is_a_copy_in_the_order_given():
     ports = _ports()
     members = (_member(7), _member(5))
 
-    result = lane_facts(ports, PRODUCT, MASTER, members, _head(), {5: MEMBER_HEAD})
+    result = lane_facts(ports, PRODUCT, MASTER, members, _head(), {5: MEMBER_HEAD}, {5: "merge"})
 
     assert [m.issue for m in result] == [7, 5]
     assert members == (_member(7), _member(5))
@@ -303,7 +305,7 @@ def _work(*busy: str):
     return lambda task_id: task_id in busy
 
 
-def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD):
+def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD, decision="merge"):
     landing_lane.admit(
         ports,
         "GH-5",
@@ -311,6 +313,7 @@ def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD):
         7,
         pr_head,
         MASTER,
+        decision,
         now,
         _work(*busy),
         [] if out is None else out,
@@ -340,6 +343,7 @@ def test_an_admission_is_written_once_and_keeps_its_instant_on_the_same_sha():
         "head_issue": 7,
         "pr_head": MEMBER_HEAD,
         "master": MASTER,
+        "decision": "merge",
         "at": NOW.isoformat(),
     }
     _admit(ports, now=LATER)
@@ -407,7 +411,13 @@ def test_a_merge_on_the_admitted_sha_is_appended_once_and_then_marks_the_member(
     _admit(ports)
     _merged(ports)
     assert _record(ports) == []
-    merge = {"issue": 5, "pr_head": MEMBER_HEAD, "master": MASTER, "merged_at": MERGED}
+    merge = {
+        "issue": 5,
+        "pr_head": MEMBER_HEAD,
+        "master": MASTER,
+        "merged_at": MERGED,
+        "decision": "merge",
+    }
     assert ports.documents.load("GH-7")["lane_merges"] == [merge]
     assert ports.documents.load("GH-5")["lane_recorded"] == LATER.isoformat()
     _record(ports)

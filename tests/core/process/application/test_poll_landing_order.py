@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 
 import pytest
 
@@ -13,7 +14,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
-from agentic.core.process.domain import adr_numbers, rules
+from agentic.core.process.domain import adr_numbers, landing_order, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_fix import _stranded_ports
@@ -551,7 +552,7 @@ def _lane_round(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",
         now=now,
         busy=frozenset({"GH-7"}),
         cfg=Configuration(product_dir=tmp_path),
-        integrating=frozenset(integrating),
+        integrating={task: "land_model" for task in integrating},
         dry_run=False,
         memo=StackMemo(),
         **more,
@@ -568,13 +569,14 @@ def _evaluated(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",)
         frozenset({"GH-7"}),
         Configuration(product_dir=tmp_path),
         now,
-        integrating=frozenset(integrating),
+        integrating={task: "land_model" for task in integrating},
         memo=StackMemo(),
     )
 
 
 WAITING = "agentic: poll: auto-merge #{} -> waiting (clean) behind #7"
-FAST = "agentic: poll: auto-merge #5 -> fast lane behind busy #7"
+NOT_READY = "agentic: poll: auto-merge #{} -> waiting (clean, not merge ready) behind #7"
+FAST = "agentic: poll: auto-merge #5 -> fast lane behind busy #7 (land_model, merge)"
 
 
 class TestFastLane:
@@ -596,7 +598,7 @@ class TestFastLane:
 
         assert found == [6]
         assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (conflicts) behind #7"
-        assert lines[1] == "agentic: poll: auto-merge #6 -> fast lane behind busy #7"
+        assert lines[1] == FAST.replace("#5", "#6")
 
     def test_members_waiting_on_ci_stay_waiting_and_open_no_lane(self, tmp_path):
         ports = _missing_ci(_lane_ports())
@@ -604,7 +606,7 @@ class TestFastLane:
         found, lines = _lane_round(ports, tmp_path)
 
         assert found == []
-        assert lines == [WAITING.format(5), WAITING.format(6)]
+        assert lines == [NOT_READY.format(5), NOT_READY.format(6)]
 
     def test_a_member_lacking_master_is_no_obstacle_and_gets_the_lane(self, tmp_path):
         ports = _lane_ports()
@@ -675,7 +677,7 @@ class TestFastLane:
 
         assert first == [5]
         assert found == [6]
-        assert lines == ["agentic: poll: auto-merge #6 -> fast lane behind busy #7"]
+        assert lines == [FAST.replace("#5", "#6")]
 
     def test_a_head_with_one_sync_left_opens_no_lane(self, tmp_path):
         ports = _lane_ports()
@@ -725,7 +727,7 @@ class TestFastLane:
 
         found, lines = _lane_round(ports, tmp_path)
 
-        assert lines[0] == WAITING.format(5)
+        assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (clean, backed off) behind #7"
         assert found == [6]
 
     def test_the_lane_changes_no_member_and_writes_nothing_of_its_own(self, tmp_path):
@@ -771,7 +773,7 @@ class TestFastLane:
             current_boot="boot-now",
         )
 
-        assert (FAST in lines) is opens
+        assert (FAST.replace("land_model", kind) in lines) is opens
         if not opens:
             assert (
                 "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7"
@@ -791,7 +793,7 @@ def _idle_round(ports, tmp_path, locks):
         now=NOW + timedelta(minutes=5),
         busy=frozenset(),
         cfg=Configuration(product_dir=tmp_path),
-        integrating=frozenset({"GH-7"}),
+        integrating={"GH-7": "land_model"},
         dry_run=False,
         memo=StackMemo(),
     )
@@ -812,6 +814,7 @@ class TestFastLaneRecord:
             "head_issue": 7,
             "pr_head": _head_of(5),
             "master": MASTER,
+            "decision": "merge",
             "at": NOW.isoformat(),
         }
         assert ports.documents.load("GH-5")["lane_admitted"] == first
@@ -952,7 +955,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             current_boot="boot-now",
         )
 
-        assert FAST in lines
+        assert FAST.replace("land_model", "role") in lines
 
     @pytest.mark.parametrize("child", [None, "merge"])
     def test_a_head_that_does_not_integrate_reads_nothing_and_every_member_says_so(
@@ -997,7 +1000,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             frozenset({"GH-7"}) if child else frozenset(),
             Configuration(product_dir=tmp_path),
             NOW,
-            integrating=frozenset(),
+            integrating={},
             memo=StackMemo(),
         )
 
@@ -1005,16 +1008,14 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
         assert round_.lane is None
         assert round_.lane_reasons == {5: "head_not_integrating", 6: "head_not_integrating"}
 
-    def test_a_clean_member_that_is_no_lane_candidate_keeps_the_line_without_a_reason(
-        self, tmp_path
-    ):
+    def test_a_clean_member_that_is_no_lane_candidate_says_it_is_not_merge_ready(self, tmp_path):
         ports = _missing_ci(_lane_ports())
         _unseen_head(ports)
 
         found, lines = _lane_round(ports, tmp_path, integrating=())
 
         assert found == []
-        assert lines == [WAITING.format(5), WAITING.format(6)]
+        assert lines == [NOT_READY.format(5), NOT_READY.format(6)]
 
     def test_a_candidate_behind_a_head_with_no_child_says_the_head_is_not_integrating(
         self, tmp_path
@@ -1039,3 +1040,194 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7",
             "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7",
         ]
+
+
+# The poller-lane subtask: the lane admits the decisions of `LANE_DECISIONS`, not only `merge`.
+OLD_MASTER = "e" * 40
+
+
+def _stale(ports, *numbers: int) -> None:
+    """The checks of these pull requests are recorded on an older master: the real assessment
+    decides `run_checks` for them (no `ci:`), the pair (head, current master) lacks evidence."""
+    for number in numbers:
+        document = ports.documents.load(f"GH-{number}")
+        document["merge_checks"] = {"head": _head_of(number), "master": OLD_MASTER, "passed": True}
+        ports.documents.save(document)
+        ports.workspace.ancestors_by_ref[_head_of(number)] = set()  # holds no current master
+
+
+def _round_at(ports, tmp_path, *, busy, integrating, now=NOW, master=MASTER):
+    lines: list[str] = []
+    found = poll.gather_merges(
+        ports,
+        frozenset(),
+        master,
+        _Locks(),
+        lines,
+        [],
+        now=now,
+        busy=frozenset(busy),
+        cfg=Configuration(product_dir=tmp_path),
+        integrating=integrating,
+        dry_run=False,
+        memo=StackMemo(),
+    )
+    return found, lines
+
+
+RUN = "agentic: poll: auto-merge #{} -> fast lane behind busy #7 (land_model, run_checks)"
+
+
+class TestLaneBesideAReintegratingHead:
+    def test_two_clean_pull_requests_behind_a_reintegrating_head_merge_in_order(self, tmp_path):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        head_child = {"GH-7": "land_model"}
+
+        first, first_lines = _round_at(ports, tmp_path, busy={"GH-7"}, integrating=head_child)
+        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
+        moved = "d" * 40
+        ports.workspace.upstream_answer = Upstream("origin/master", moved, None)
+        for number in (6, 7):
+            ports.workspace.conflict_answers[(_head_of(number), moved)] = False
+        second, second_lines = _round_at(
+            ports,
+            tmp_path,
+            busy={"GH-7"},
+            integrating=head_child,
+            now=NOW + timedelta(minutes=1),
+            master=moved,
+        )
+
+        assert first == [5] and first_lines[0] == RUN.format(5)
+        assert second == [6] and second_lines[0] == RUN.format(6)
+        assert "head_yields" not in ports.documents.load("GH-7")
+
+    def test_the_head_that_delivers_is_the_next_one_merged_and_never_yields(self, tmp_path):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+
+        found, _ = _round_at(ports, tmp_path, busy=(), integrating={})
+
+        assert found == [7]
+        assert "head_yields" not in ports.documents.load("GH-7")
+
+    def test_a_live_lane_merge_is_not_cut_when_the_head_delivers_and_the_head_follows(
+        self, tmp_path
+    ):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        started, _ = _round_at(ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"})
+
+        # the head delivered; the lane's own merge child (not integrating) is still alive
+        later = NOW + timedelta(minutes=1)
+        delivered, lines = _round_at(ports, tmp_path, busy={"GH-5"}, integrating={}, now=later)
+        assert started == [5]
+        assert 5 not in delivered and "(land_model" not in "".join(lines)
+        assert (
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7"
+            in lines
+        )
+
+        # the lane merge ended: the head is the product's candidate again
+        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
+        last, _ = _round_at(
+            ports, tmp_path, busy=(), integrating={}, now=later + timedelta(minutes=1)
+        )
+        assert last == [7]
+        assert "head_yields" not in ports.documents.load("GH-7")
+
+    def test_a_clean_stacked_child_behind_an_integrating_head_never_jumps(self, tmp_path):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        ports.tracker.states[9] = IssueState("OPEN", "", (), None)
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "stack_parent": {
+                    "issue": 9,
+                    "task_id": "GH-9",
+                    "head": "c" * 40,
+                    "started_at": "2026-11-16T10:00:00+00:00",
+                }
+            },
+        )
+
+        found, lines = _round_at(ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"})
+
+        assert found == [6]
+        assert lines[0] == (
+            "agentic: poll: auto-merge #5 -> waiting (unread, stacked parent unmerged) behind #7"
+        )
+
+    def test_a_backed_off_and_a_refused_member_say_why_in_the_line(self, tmp_path):
+        ports = _lane_ports()
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "merge_refusal": {
+                    "reason": "ci_untrusted_no_dispatch",
+                    "head": _head_of(5),
+                    "master": MASTER,
+                    "at": NOW.isoformat(),
+                }
+            },
+        )
+        document = ports.documents.load("GH-6")
+        document["merge_checks"] = {"head": _head_of(6), "master": MASTER, "passed": False}
+        ports.documents.save(document)
+
+        found, lines = _round_at(ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"})
+
+        assert found == []
+        assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (clean, backed off) behind #7"
+        assert lines[1] == NOT_READY.format(6)
+
+    def test_the_admission_and_the_merge_record_carry_the_admitted_decision(self, tmp_path):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        _round_at(ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"})
+        assert ports.documents.load("GH-5")["lane_admitted"]["decision"] == "run_checks"
+
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "auto_merged_at": (NOW + timedelta(seconds=30)).isoformat(),
+                "auto_merge_head": _head_of(5),
+                "auto_merge_master": MASTER,
+                "closed_at": "2026-11-11T00:00:00+00:00",
+            },
+        )
+        _round_at(
+            ports,
+            tmp_path,
+            busy=(),
+            integrating={},
+            now=NOW + timedelta(minutes=1),
+        )
+
+        merges = ports.documents.load("GH-7")["lane_merges"]
+        assert [(m["issue"], m["decision"]) for m in merges] == [(5, "run_checks")]
+
+
+def test_every_lane_reason_has_its_text():
+    assert set(poll.LANE_TEXT) == set(get_args(landing_order.LaneReason))
+
+
+def test_a_stored_decision_outside_the_closed_list_is_dropped_and_an_old_entry_has_none():
+    from agentic.core.process.domain import document
+
+    admitted = {"head_issue": 7, "pr_head": "a" * 40, "master": "b" * 40, "at": NOW.isoformat()}
+    merge = {"issue": 5, "pr_head": "a" * 40, "master": "b" * 40, "merged_at": NOW.isoformat()}
+
+    kept = document._lane_fields(
+        {
+            "lane_admitted": {**admitted, "decision": "ci_run"},
+            "lane_merges": [{**merge, "decision": "refuse"}, {**merge, "decision": "run_checks"}],
+        }
+    )
+    old = document._lane_fields({"lane_admitted": admitted, "lane_merges": [merge]})
+
+    assert kept["lane_admitted"]["decision"] == "ci_run"
+    assert ["decision" in m for m in kept["lane_merges"]] == [False, True]
+    assert "decision" not in old["lane_admitted"] and "decision" not in old["lane_merges"][0]
