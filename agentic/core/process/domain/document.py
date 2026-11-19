@@ -283,9 +283,11 @@ _ESCALATION_STAGES = ("plan", "delivery")
 
 def _escalation_record(raw: object) -> dict[str, Any] | None:
     """The stored `drawing_escalation` read back as `{round, numbers, cause}` plus `stage` when it
-    is `plan`; `None` when it is not whole (`round` an int of at least 1, `numbers` a list of
-    ints, `cause` and `stage` from their closed sets), so a hand-edited record is dropped, as
-    an invalid size record is, and never fails the load."""
+    is `plan`, `unverified` (a list of strings) and `unverified_at` (a string) when present;
+    `None` when it is not whole (`round` an int of at least 1, `numbers` a list of ints, `cause`
+    and `stage` from their closed sets), so a hand-edited record is dropped, as an invalid size
+    record is, and never fails the load. A malformed `unverified` or `unverified_at` is dropped
+    alone, as a bad optional field, and the record stays."""
     if not isinstance(raw, Mapping):
         return None
     round_, numbers, cause, stage = (raw.get(k) for k in ("round", "numbers", "cause", "stage"))
@@ -304,6 +306,14 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
         "numbers": numbers,
         "cause": cause,
         **({"stage": "plan"} if stage == "plan" else {}),
+        **(
+            {"unverified": unverified}
+            if isinstance(unverified := raw.get("unverified"), list)
+            and unverified
+            and all(isinstance(p, str) for p in unverified)
+            else {}
+        ),
+        **({"unverified_at": at} if isinstance(at := raw.get("unverified_at"), str) and at else {}),
     }
 
 
@@ -675,6 +685,9 @@ def render(
         # GH-784: when resume closed a pause without building the owner's answer, written only
         # when set so a document without it is byte-identical; read back under the same name.
         **({"owner_decision_unbuilt": e} if (e := state.get("owner_decision_unbuilt")) else {}),
+        # GH-960: the last decision acted on and its route, written only when set.
+        **({"owner_decision_seen": e} if (e := state.get("owner_decision_seen")) else {}),
+        **({"owner_decision_route": e} if (e := state.get("owner_decision_route")) else {}),
         # The delivery assumptions and the cause of a spec delivery's `questions` pause
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.

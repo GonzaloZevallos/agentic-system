@@ -20,11 +20,11 @@ from ..domain.spec_delivery import (
     SPEC_DIR,
     SpecDraftRecord,
     body_sha256,
+    draft_body_refusal,
     draft_path,
+    draft_reading,
     draft_text,
-    draft_valid,
     spec_path_ok,
-    split_front_matter,
 )
 from ..domain.task import TaskState
 from .ports import Checkout, Ports
@@ -41,24 +41,26 @@ def deliver(
     validator = ports.spec_validator
     if validator is None:
         return {"outcome": "unvalidated"}
-    if split_front_matter(body) is not None:
+    if draft_body_refusal(body) is not None:
         return {"outcome": "invalid"}
     path = _path(state, task, ports)
     text = draft_text(body)
-    try:
-        sha256 = body_sha256(text)
-    except UnicodeError:
-        return {"outcome": "invalid"}
+    sha256 = body_sha256(text)
     target = task.path / path
     if sha256 is None or target.is_symlink():
         return {"outcome": "invalid"}
     verdict = validator.validate(text, path, task.base, None, cfg.owner_login or None)
-    if not draft_valid(verdict):
+    if not draft_reading(verdict, None).ok:
         return {"outcome": "invalid"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8", newline="")
     ports.workspace.commit_all(task.path, f"{state['id']}: draft Spec")
-    return {"outcome": "written", "path": path, "sha256": sha256}
+    # The commit is recorded only when it holds exactly what was written, as a full sha (`head` is
+    # short): `commit_all` may have had nothing to commit, and the head is then whatever was there.
+    head = ports.workspace.full_head(task.path)
+    if ports.workspace.show(head, path) != text:
+        return {"outcome": "invalid"}
+    return {"outcome": "written", "path": path, "sha256": sha256, "commit": head}
 
 
 def _path(state: TaskState, task: Checkout, ports: Ports) -> str:

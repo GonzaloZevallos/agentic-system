@@ -172,6 +172,8 @@ def compiled(
         return replace(
             real,
             runner=script,
+            # These tests pin the flow, not the draft Spec: no validator, so no draft is owed.
+            spec_validator=None,
             workspace=fakes.workspace,
             tracker=fakes.tracker,
             knowledge=_Rooted(knowledge, cfg.product_dir),
@@ -1324,6 +1326,7 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
             return replace(
                 default_ports(cfg),
                 runner=script,
+                spec_validator=None,  # pins the flow, not the draft Spec
                 knowledge=BrokenKnowledge(),
                 workspace=MemoryWorkspace(),
                 stack=MemoryStack(),

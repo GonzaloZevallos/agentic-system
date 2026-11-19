@@ -4115,6 +4115,12 @@ def _open_to_a_resume(state: TaskState, task_id: str, descends: bool) -> bool:
     sub = state.get("subtasks", {}).get(unit) if unit else None
     if not descends or sub is None or sub.get("branch") != task_branch(task_id):
         return False
+    return no_human_decision_pending(state)
+
+
+def no_human_decision_pending(state: TaskState) -> bool:
+    """Whether the task has nothing a human has to decide: no pull request, the pause (if any) a
+    failure's, no question for the human, no fit question. The one place the rule is written."""
     if state.get("pull_request"):
         return False
     if state.get("escalation_class") not in (None, "failure"):

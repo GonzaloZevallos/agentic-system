@@ -203,6 +203,11 @@ MechanicalCause = Literal[
     "ci_run_unfinished",
     "delivery_transient",
 ]
+# The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
+# `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
+# Not a `MechanicalCause`: the poller never retakes them, they wait for the owner. Lives here, not
+# in its own module, because `rules` imports `escalation_prompts`.
+OwnerDecisionCause = Literal["owner_decision", "spec_owned"]
 # What the poller's calendar and cap are keyed by (`rules.auto_resumable`): a failed attempt's
 # `FailureReason` or an escalation's `MechanicalCause`. One union, one place that maps either
 # to a calendar (`rules.schedule_for`) or a cap (`rules.auto_resume_limit`).
@@ -308,6 +313,32 @@ def last[T](current: T, new: T) -> T:
 
 def merge[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[str, T]:
     return {**(current or {}), **(update or {})}
+
+
+# The reserved key of `subtasks_reset()`: not a slug and not `INTEGRATION`, so the plan's
+# subtask-id validation (`schemas.SLUG`) can never accept it as a subtask. Read only by
+# `merge_subtasks` and `delta`.
+SUBTASKS_RESET = "__subtasks_reset__"
+
+
+def subtasks_reset() -> dict[str, Subtask]:
+    """The `subtasks` patch that replaces the whole map instead of merging into it: an `Annotated`
+    reducer channel cannot say "drop the keys this update lacks" any other way. The only producer
+    of `SUBTASKS_RESET`. Only a serialized system turn (a resume, or the turn after a termination)
+    may put it in a patch, never a branch patch of a wave: a branch folds a delta computed against
+    the base it started from, which would bring the dropped subtasks back."""
+    return {SUBTASKS_RESET: {}}
+
+
+def merge_subtasks(
+    current: dict[str, Subtask] | None, update: dict[str, Subtask] | None
+) -> dict[str, Subtask]:
+    """The reducer of `subtasks`: `merge`, except that an update carrying `SUBTASKS_RESET` starts
+    from `{}`, so what `current` held and the update lacks is dropped. Without the key it returns
+    exactly what `merge` does (an empty update still changes nothing). Never returns the key."""
+    if update is not None and SUBTASKS_RESET in update:
+        return {k: v for k, v in update.items() if k != SUBTASKS_RESET}
+    return merge(current, update)
 
 
 def first[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[str, T]:
@@ -690,12 +721,20 @@ class DrawingEscalation(TypedDict):
     """The record of the drawing-departure escalations of a task: `round` how many there have
     been, `numbers` every number asked so far (sorted) and `cause` `drawing_cap` once the cap
     was reached, `drawing_departure` before. `stage` says which gate asked, `plan` or `delivery`;
-    absent it reads `delivery`, and a record only carries it when it is `plan`."""
+    absent it reads `delivery`, and a record only carries it when it is `plan`.
+
+    `unverified` is the paths of the drawings the definition and solution interviews already
+    asked about as an unverified question, and `unverified_at` the instant of the latest such
+    ask, in `ports.utc_now`'s format and compared as text; both are written only when non-empty.
+    The final review's raises (`drawing_answer.fold_raised`) write the record too, but pass no
+    asks, so they never write these two."""
 
     round: int
     numbers: list[int]
     cause: Literal["drawing_departure", "drawing_cap"]
     stage: NotRequired[Literal["plan", "delivery"]]
+    unverified: NotRequired[list[str]]
+    unverified_at: NotRequired[str]
 
 
 # Which `stage` wins when two records share a round: the higher rank. `delivery` is the
@@ -711,49 +750,55 @@ def add_drawing_escalation(
     existing: DrawingEscalation | None, new: DrawingEscalation
 ) -> DrawingEscalation:
     """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
-    `drawing_cap` if either has it, and the `stage` of the higher round (the higher
-    `_STAGE_RANK` on a tie), kept only when it is `plan`. Commutative and associative;
-    `existing` may be `None`. The graph's channel starts from the empty `DrawingEscalation()`
-    and may fold an empty update: an empty side is the identity, never an error."""
-    if not new:
-        if not existing:
-            return cast(DrawingEscalation, {})
-        return _drawing_escalation(
-            existing["round"],
-            set(existing["numbers"]),
-            existing["cause"],
-            _escalation_stage(existing),
-        )
-    if not existing:
-        return _drawing_escalation(
-            new["round"], set(new["numbers"]), new["cause"], _escalation_stage(new)
-        )
-    if existing["round"] != new["round"]:
-        winner = existing if existing["round"] > new["round"] else new
-        stage = _escalation_stage(winner)
+    `drawing_cap` if either has it, the `stage` of the higher round (the higher `_STAGE_RANK` on
+    a tie), kept only when it is `plan`, the order-kept union of `unverified` (existing side
+    first) and the later `unverified_at`, the plain string maximum, never a parsed date.
+    Commutative and associative (`unverified` as a set); `existing` may be `None`. The graph's
+    channel starts from the empty `DrawingEscalation()` and may fold an empty update: an empty
+    side is the identity, never an error. Every branch goes through `_merge_escalations`, so no
+    field can be dropped by one of them."""
+    return _merge_escalations([r for r in (existing, new) if r])
+
+
+def _merge_escalations(sides: Sequence[DrawingEscalation]) -> DrawingEscalation:
+    if not sides:
+        return cast(DrawingEscalation, {})
+    top = max(r["round"] for r in sides)
+    if len(sides) == 1:
+        stage = _escalation_stage(sides[0])
     else:
         stage = max(
-            _escalation_stage(existing), _escalation_stage(new), key=_STAGE_RANK.__getitem__
+            (_escalation_stage(r) for r in sides if r["round"] == top),
+            key=_STAGE_RANK.__getitem__,
         )
     return _drawing_escalation(
-        max(existing["round"], new["round"]),
-        {*existing["numbers"], *new["numbers"]},
-        "drawing_cap"
-        if "drawing_cap" in (existing["cause"], new["cause"])
+        round=top,
+        numbers={n for r in sides for n in r["numbers"]},
+        cause="drawing_cap"
+        if any(r["cause"] == "drawing_cap" for r in sides)
         else "drawing_departure",
-        stage,
+        stage=stage,
+        unverified=list(dict.fromkeys(p for r in sides for p in r.get("unverified", []))),
+        unverified_at=max((r.get("unverified_at", "") for r in sides), default=""),
     )
 
 
 def _drawing_escalation(
+    *,
     round: int,
     numbers: set[int],
     cause: Literal["drawing_departure", "drawing_cap"],
     stage: Literal["plan", "delivery"],
+    unverified: list[str],
+    unverified_at: str,
 ) -> DrawingEscalation:
     record = DrawingEscalation(round=round, numbers=sorted(numbers), cause=cause)
     if stage == "plan":
         record["stage"] = "plan"
+    if unverified:
+        record["unverified"] = unverified
+    if unverified_at:
+        record["unverified_at"] = unverified_at
     return record
 
 
@@ -1279,6 +1324,22 @@ class EscalationPatch(TypedDict):
     owner_decision_unbuilt: NotRequired[str]
     # Why a spec delivery's `questions` pause was raised (GH-594), written only with a spec.
     spec_cause: NotRequired[SpecEscalationCause | None]
+
+
+class DrawingEscalationPatch(EscalationPatch):
+    """What `drawing_answer.escalation_patch` writes to ask the owner about drawing departures
+    (GH-766): the escalation keys plus the new rows and the round record. A partial patch, so
+    `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    drawing_departures: list[DepartureRecord]
+    drawing_escalation: DrawingEscalation
+    # The lines of the unverified asks a pause raised, only when it raised some: the caller
+    # appends them to the questions its own patch already carries.
+    questions_for_human: NotRequired[list[str]]
+    # What `drawing_answer.fold_raised` adds to make the escalation a pause: the log entry and
+    # the status every escalation site writes (`rules.logged`).
+    pause_log: NotRequired[list[PauseEntry]]
+    status: NotRequired[Status]
 
 
 class SlicesClosedPatch(TypedDict):
@@ -2132,7 +2193,7 @@ class RestartSettledRow(TypedDict):
     subtask: str
     version: int
     outcome: Literal["discarded"]
-    reason: Literal["restarted"]
+    reason: Literal["restarted", "owner_decision"]
 
 
 class TaskState(TaskInput, total=False):
@@ -2200,6 +2261,11 @@ class TaskState(TaskInput, total=False):
     # GH-784: the instant the settled branch of resume closed a `questions` pause without building
     # the answer; read by the merge decision, never cleared.
     owner_decision_unbuilt: Annotated[str, last]
+    # GH-960: the instant of the owner's last `Decision:` comment already acted on, and the role
+    # it was routed to. Optional and written by nothing yet (the wiring part); `document.render`
+    # omits both when absent.
+    owner_decision_seen: Annotated[str, last]
+    owner_decision_route: Annotated[Literal["developer", "pm"], last]
     # Why a spec delivery's `questions` pause was raised (GH-594): written only by
     # `rules.escalation`, with a spec in the state; never a `MechanicalCause`.
     spec_cause: Annotated[SpecEscalationCause | None, last]
@@ -2252,7 +2318,7 @@ class TaskState(TaskInput, total=False):
     planned_size: Annotated[PlanSize, last]
     actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
-    subtasks: Annotated[dict[str, Subtask], merge]
+    subtasks: Annotated[dict[str, Subtask], merge_subtasks]
     # Rules of the plan every subtask honours (issue #42): the one channel between
     # reviews that works in the first wave, since it is written before anyone codes.
     invariants: list[str]
@@ -2302,7 +2368,7 @@ class TaskState(TaskInput, total=False):
     # The head of the task branch the fan-in last integrated (GH-358), stamped only for a
     # product that declares `delivery_checks`; absent otherwise. `rules.full_checks_due`
     # compares the record's head with it. Persisted in the frontmatter.
-    task_head: str
+    task_head: str | None
     # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
     full_checks: FullChecksRecord
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
@@ -2553,6 +2619,11 @@ class TaskState(TaskInput, total=False):
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
     drawing_checks: NotRequired[DrawingChecksRecord]
+    # The departures a final-leads pass raised and nobody has asked the owner yet (GH-766 part
+    # 5.2b): transient, written only by the final-leads branch of `final_validation` (even when
+    # empty) and removed only by `drawing_answer.fold_raised`, which `verify` calls before
+    # anything is written. Never rendered into the document and never in `_BRANCH_LOCAL`.
+    drawing_raised: NotRequired[list[drawing.Departure]]
 
 
 def _reducers() -> dict[str, object]:
@@ -2565,7 +2636,9 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
+def apply(
+    state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch | DrawingEscalationPatch
+) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
     patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
     checked."""
@@ -2578,6 +2651,8 @@ def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) ->
             )
         elif reducer is add_drawing_escalation:
             merged[key] = add_drawing_escalation(merged.get(key), cast(DrawingEscalation, value))
+        elif reducer is merge_subtasks:
+            merged[key] = merge_subtasks(merged.get(key), cast(dict[str, Subtask], value))
         elif reducer is None or key not in merged:
             merged[key] = value
         else:
@@ -2690,6 +2765,11 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:
                 patch[key] = fresh
+        elif reducer is merge_subtasks:
+            if set(old) - set(value):
+                patch[key] = {**subtasks_reset(), **value}
+            elif changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
+                patch[key] = changed
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

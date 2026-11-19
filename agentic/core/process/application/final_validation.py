@@ -300,8 +300,9 @@ def _drawing_patch(
     comparable: bool,
     outputs: tuple[Output | None, Output | None],
 ) -> tuple[TaskState, bool]:
-    """The `drawing_checks` record of this pass and, when some departure is not settled, the
-    return that stops PM. Nothing when a lead failed (the run already escalated)."""
+    """The `drawing_checks` record of this pass and, when some departure is not settled, what
+    stops PM: the transient `drawing_raised` when one still has to be asked of the owner, else
+    the return. Nothing when a lead failed (the run already escalated)."""
     ux, ui = outputs
     if ux is None or ui is None:
         return {}, False
@@ -341,6 +342,11 @@ def _drawing_patch(
     patch: TaskState = {
         "drawing_checks": {"head": head, "rows": rows, "open": len(classified.open)}
     }
+    if "raise" in classified.outcomes.values():
+        # The owner is asked first, by `verify` (`drawing_answer.fold_raised`): nothing returns
+        # and no fix pass is counted here, both are decided again on the resumed head. The key
+        # is set even when no departure is new: an open row still has to be asked.
+        return apply(patch, {"drawing_raised": list(classified.raised)}), True
     pending = {k: o for k, o in classified.outcomes.items() if o != "settled_accept"}
     if not pending:
         return patch, False

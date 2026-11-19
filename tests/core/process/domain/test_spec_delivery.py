@@ -1,17 +1,28 @@
 import hashlib
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
 from agentic.core.process.domain.spec_delivery import (
+    DRAFT_PREVIEW_PATH,
+    DRAFT_REFUSAL_REASONS,
     SLICE_SLUG,
+    DraftCause,
+    DraftReading,
     Screen,
     SpecLine,
     SpecLineMalformed,
     SpecRefusal,
+    approved_contract,
     body_sha256,
     body_source,
     derive_flags,
+    draft_body_refusal,
+    draft_reading,
+    draft_refusal_message,
+    draft_text,
+    instant_ok,
+    login_ok,
     normalize_text,
     owner_matches,
     parse_spec_line,
@@ -404,3 +415,88 @@ def test_owner_matches_compares_with_casefold_and_refuses_a_blank_login(
     author: str, login: str | None, expected: bool
 ) -> None:
     assert owner_matches(author, login) is expected
+
+
+CONTRACT: Any = {
+    "path": DRAFT_PREVIEW_PATH,
+    "slice": "x",
+    "commit": "a" * 40,
+    "sha256": "b" * 64,
+    "criteria": [],
+    "screens": [],
+    "risks": [],
+    "touches_ui": False,
+    "touches_copy": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("draft", "preview", "expected"),
+    [
+        ("spec_unapproved", None, None),
+        ("spec_unapproved", CONTRACT, None),
+        ("spec_invalid", None, "draft_invalid"),
+        ("slice_unknown", None, "draft_not_draft"),
+        ("slice_missing", None, "draft_not_draft"),
+        (CONTRACT, None, "draft_not_draft"),
+        ("spec_unapproved", "slice_missing", "preview_slice_missing"),
+        ("spec_unapproved", "spec_invalid", "preview_invalid"),
+        ("spec_unapproved", "slice_unknown", "preview_invalid"),
+        ("spec_unapproved", "spec_unapproved", "preview_unapproved"),
+        # The draft is judged before the preview.
+        ("spec_invalid", CONTRACT, "draft_invalid"),
+        ("spec_invalid", "slice_missing", "draft_invalid"),
+        (CONTRACT, "slice_missing", "draft_not_draft"),
+    ],
+)
+def test_draft_reading_judges_the_draft_then_the_preview(draft, preview, expected) -> None:
+    reading = draft_reading(draft, preview)
+    assert reading == (
+        DraftReading(True, None) if expected is None else DraftReading(False, expected)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (None, "draft_empty"),
+        (3, "draft_empty"),
+        ("", "draft_empty"),
+        ("  \n", "draft_empty"),
+        ("---\nstatus: approved\n---\nx\n", "draft_front_matter"),
+        ("\ufeff---\r\nx: 1\r\n---\r\nx", "draft_front_matter"),
+        ("bad \ud800", "draft_unhashable"),
+        ("## Goal\n\nText.\n", None),
+        ("---\nnot closed\n", None),
+    ],
+)
+def test_draft_body_refusal(body, expected) -> None:
+    assert draft_body_refusal(body) == expected
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [(CONTRACT, CONTRACT), ("spec_invalid", "spec_invalid"), ("slice_missing", "slice_missing")],
+)
+def test_approved_contract_is_the_contract_or_the_cause(result, expected) -> None:
+    assert approved_contract(result) == expected
+
+
+def test_every_cause_has_one_fixed_single_line_sentence() -> None:
+    assert set(DRAFT_REFUSAL_REASONS) == set(get_args(DraftCause))
+    for cause, sentence in DRAFT_REFUSAL_REASONS.items():
+        assert sentence and "\n" not in sentence
+        assert draft_refusal_message(cause) == f"draft Spec refused: {cause}: {sentence}"
+    assert "pm_draft" in DRAFT_REFUSAL_REASONS["draft_invalid"]
+
+
+def test_the_preview_path_is_a_spec_path_and_the_login_and_instant_forms() -> None:
+    assert spec_path_ok(DRAFT_PREVIEW_PATH)
+    assert login_ok("owner") and login_ok("a-b") and not login_ok("a b")
+    assert not login_ok("") and not login_ok(None) and not login_ok("a-")
+    assert instant_ok("2026-11-17T10:00:00Z") and instant_ok("2026-11-17T10:00:00.5Z")
+    assert not instant_ok("2026-11-17T10:00:00.000+00:00") and not instant_ok("")
+
+
+def test_the_draft_text_is_what_the_body_check_hashes() -> None:
+    assert body_sha256(draft_text("## Goal\n")) == _sha("## Goal\n")

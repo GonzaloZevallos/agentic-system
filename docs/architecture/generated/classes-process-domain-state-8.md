@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 8 de 9, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 8 de 10, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -30,28 +31,25 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__MergeConflictRecord["MergeConflictRecord"]
+    class task__MergeOutcome["MergeOutcome"]
+    class task__MergeRefusalRecord["MergeRefusalRecord"]
+    class task__OutOfBoundsLine["OutOfBoundsLine"]
+    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
+    class task__PartRecord["PartRecord"]
+    class task__PathRevision["PathRevision"]
+    class task__PendingCloseDocs["PendingCloseDocs"]
+    class task__PlanRoute["PlanRoute"]
+    class task__PlanSettledRow["PlanSettledRow"]
+    class task__PullRequest["PullRequest"]
+    class task__PullRequestCommit["PullRequestCommit"]
     class task__RefusalNoted["RefusalNoted"]
     class task__ReleasePatch["ReleasePatch"]
-    class task__RestartPending["RestartPending"]
-    class task__RestartSettledRow["RestartSettledRow"]
-    class task__Restoration["Restoration"]
-    class task__ResumedPauseEntry["ResumedPauseEntry"]
-    class task__ReviewScopeRecord["ReviewScopeRecord"]
-    class task__RoleRun["RoleRun"]
-    class task__SettledRow["SettledRow"]
-    class task__ShadowRecord["ShadowRecord"]
-    class task__SlicesClosedPatch["SlicesClosedPatch"]
-    class task__StackParent["StackParent"]
-    class task__StackPause["StackPause"]
-    class task__StackRestack["StackRestack"]
-    class task__StackUnfetchable["StackUnfetchable"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
-- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
-  - `stacking.ParentLink` se asocia con `task.StackParent`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.StackParent`
+- [domain: state (parte 10)](classes-process-domain-state-10.md)
+  - `task.TaskState` se asocia con `task.PlanRoute`

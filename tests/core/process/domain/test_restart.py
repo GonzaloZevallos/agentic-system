@@ -297,3 +297,82 @@ def test_the_restarted_returns_prompt_asks_for_a_decision_and_names_existing_com
     question, recommended, options = escalation_prompts.restarted_returns_prompt()
     assert "brief" in question and recommended in options
     assert "Decision:" in recommended
+
+
+# --- settle_open (GH-960) ----------------------------------------------------------------
+
+
+def test_restart_patch_is_byte_for_byte_the_same_whole_patch():
+    state = _state(reviewed_head="h0", reason="r", returned_by="review")
+    state["findings"] = [_finding(version=2), _finding("b", version=5)]
+    state["runs"] = [{"role": "Developer", "section": "Developer: a", "version": 4}]
+
+    assert restart.restart_patch(state, "a", PAIR, "the brief", "h1") == {
+        "restarts": {PAIR.key: 1},
+        "changes_requested": {PAIR.key: 0},
+        "subtasks": {"a": {"id": "a", "brief": "do a", "status": "pending", "attempt": 2}},
+        "session_floor": {"Developer: a": 4},
+        "restart_settled": [
+            {"subtask": "a", "version": 3, "outcome": "discarded", "reason": "restarted"}
+        ],
+        "restart_pending": {"subtask": "a", "archived_head": "h1"},
+        "sections": {"Restart a": "the brief"},
+    }
+
+
+def test_settle_open_builds_one_row_per_id_one_above_that_ids_highest_version():
+    state = _state()
+    state["findings"] = [
+        _finding("a", version=2),
+        _finding("a", version=3),
+        _finding("integration", version=4),
+        _finding("other", version=9),
+    ]
+
+    rows = restart.settle_open(state, ["a", "integration", "never-reviewed"], "owner_decision")
+
+    def row(subtask: str, version: int) -> dict[str, Any]:
+        return {
+            "subtask": subtask,
+            "version": version,
+            "outcome": "discarded",
+            "reason": "owner_decision",
+        }
+
+    assert rows == [row("a", 4), row("integration", 5), row("never-reviewed", 1)]
+    assert restart.settle_open(state, [], "restarted") == []
+
+
+def test_a_row_settled_as_owner_decision_reads_dismissed_below_the_bar_and_open_at_it():
+    for unit in ("integration", "a"):
+        state = _state()
+        state["findings"] = [_finding(unit, version=2)]
+        rows = restart.settle_open(state, [unit], "owner_decision")
+        state["restart_settled"] = rows
+        # The unit is reviewed again: the next review's records sit at the bar or above it.
+        state["findings"] = [
+            _finding(unit, version=2),
+            _finding(unit, version=rows[0]["version"], location="y.py:2"),
+            _finding(unit, version=rows[0]["version"] + 1, location="z.py:3"),
+        ]
+        by_place = {row["location"]: row["status"] for row in rules.findings_rows(state)}
+        assert by_place == {"x.py:1": "dismissed", "y.py:2": "open", "z.py:3": "open"}
+
+
+def test_every_owner_decision_cause_has_a_questions_prompt_with_the_exact_texts():
+    from agentic.core.process.domain import escalation_prompts as prompts
+    from agentic.core.process.domain.task import OwnerDecisionCause
+
+    for cause in get_args(OwnerDecisionCause):
+        assert ("questions", cause) in prompts.ESCALATION_PROMPTS
+    assert prompts.prompt_for("questions", "owner_decision") == (
+        "The decision was not applied: this task cannot be routed back automatically. Comment a "
+        "new `Decision:` and the task is planned again with it.",
+        prompts.DECIDE,
+        (prompts.DECIDE, prompts.CLOSE_UNPLANNED),
+    )
+    assert prompts.prompt_for("questions", "spec_owned") == (
+        "The Spec is the owner's file: edit it and resume.",
+        prompts.RESUME,
+        (prompts.RESUME, prompts.CLOSE_UNPLANNED),
+    )

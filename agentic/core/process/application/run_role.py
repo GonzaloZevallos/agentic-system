@@ -86,6 +86,7 @@ from ..domain.roles import (
     Prompt,
     Role,
     describe_flags,
+    fill_placeholders,
     prompt_hash,
     reads_by_index,
     render,
@@ -436,21 +437,49 @@ def with_playbook(
     ports: Ports,
     tiers: str,
     spec_block: str = "",
+    raw_block: str | None = None,
 ) -> Prompt:
     """`rendered` with the role's playbook, the product's tiers section and the constant
     Spec block appended, in that order (`load_prompt`'s own doc has the hash rule). The block
-    is covered by the hash like the tiers; with all three empty it is `rendered` itself."""
+    is covered by the hash like the tiers; with all three empty it is `rendered` itself.
+
+    `spec_block` is the text that is appended; `raw_block`, when given, is the block as the
+    port holds it, before its `{{drawing_rule}}` line was filled, and is what the hash covers
+    (ADR-0096, addendum): the fill never enters a hash. Without it the hash covers
+    `spec_block`."""
     source = rendered.source
     text = playbook.section(ports.prompts.playbook(role))
-    if not text and not tiers and not spec_block:
+    if not text and not tiers and not spec_block and not raw_block:
         return rendered
     appended = "\n\n".join(part for part in (text, tiers, spec_block) if part)
+    hashed = appended
+    if raw_block is not None:
+        hashed = "\n\n".join(part for part in (text, tiers, raw_block) if part)
     return Prompt(
         text=rendered.text + "\n\n" + appended,
-        hash=prompt_hash(raw + "\n" + appended),
+        hash=prompt_hash(raw + "\n" + hashed),
         source=source,
         playbook=prompt_hash(text) if text else "",
     )
+
+
+def filled_block(
+    raw_block: str,
+    raw: str,
+    source: Path,
+    role: Role,
+    state: TaskState,
+    ports: Ports,
+) -> str:
+    """The Spec block with its `{{drawing_rule}}` line filled the way the body's is
+    (`roles.fill_placeholders`): `drawing.block_rule` decides whether the rule comes through
+    the body (`raw`) or here. The stack is read only for a block that holds the line, and an
+    unreadable one raises as everywhere else. The fill is for the text only, never a hash."""
+    if spec_brief.RULE_LINE not in raw_block:
+        return raw_block
+    design = ports.stack.design(task_base(state, ports))
+    rule = drawing.block_rule(raw, drawing.rule_for(design, role.slug, plan=True))
+    return fill_placeholders(raw_block, source, {"drawing_rule": rule})
 
 
 def playbook_patch(state: TaskState, role: Role, loaded: Prompt) -> TaskState:
@@ -1111,6 +1140,7 @@ async def run_role(
         role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
     vocabulary = ports.flags.load()
     block_text = ""
+    raw_block: str | None = None
     try:
         spec = state.get("spec")
         if spec and (refusal := spec_brief.data_refusal(spec)):
@@ -1123,7 +1153,7 @@ async def run_role(
             ports,
             vocabulary,
             drawing_rule_for=lambda: drawing.rule_for(
-                ports.stack.design(task_base(state, ports)), role.slug
+                ports.stack.design(task_base(state, ports)), role.slug, plan=True
             ),
             **placeholders,
         )
@@ -1131,7 +1161,8 @@ async def run_role(
         # when this call builds the context itself (a caller that passes `prompt` is resuming
         # a session that already holds it). The empty table never gets here.
         if spec and prompt is None and (block := spec_brief.block_for(role.slug)) is not None:
-            block_text = ports.prompts.spec_block(block)
+            raw_block = ports.prompts.spec_block(block)
+            block_text = filled_block(raw_block, raw, rendered.source, role, state, ports)
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
         # kept (`raw()` re-raises it), and the spec data refusal. The playbook, the flags and
@@ -1140,7 +1171,7 @@ async def run_role(
             "current_role": role.name,
             **escalation(PromptFailure(role, exc, section), at=ports.now()),
         }
-    loaded = with_playbook(raw, rendered, role, ports, tiers, block_text)
+    loaded = with_playbook(raw, rendered, role, ports, tiers, block_text, raw_block)
     patch: TaskState = {
         "current_role": role.name,
         "prompts": {role.slug: loaded.hash},

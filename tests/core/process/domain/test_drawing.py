@@ -10,9 +10,12 @@ from agentic.core.process.domain.drawing import (
     DEPARTURE_ESCALATIONS_MAX,
     DRAWING_RULE,
     DRAWING_SEATS,
+    PLAN_WRITERS,
     Departure,
+    UnverifiedAsk,
     Verdicts,
     answers,
+    block_rule,
     departure_key,
     departure_question,
     flag_verdict,
@@ -25,6 +28,7 @@ from agentic.core.process.domain.drawing import (
     row_is_open,
     rule_for,
     screens_due,
+    unverified_lines,
     unverified_question,
     verdicts,
 )
@@ -38,6 +42,29 @@ def test_a_declared_design_has_the_rule():
 
 def test_no_design_has_no_rule():
     assert rule_for(None, "tech_lead") == ""
+    assert rule_for(None, "tech_lead", plan=True) == ""
+
+
+_DESIGN = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
+
+
+def test_the_plan_writer_with_plan_gets_where_its_departures_go():
+    assert PLAN_WRITERS == frozenset({"tech_lead"})
+    plain = rule_for(_DESIGN, "tech_lead")
+    planned = rule_for(_DESIGN, "tech_lead", plan=True)
+    assert planned.startswith(plain + " ")
+    assert "`drawing_departures`" in planned and "never taken as an assumption" in planned
+
+
+@pytest.mark.parametrize("slug", ["developer", "pm_interviewee", "tech_lead_critic", "unknown"])
+def test_plan_changes_nothing_for_a_role_outside_the_plan_writers(slug):
+    assert rule_for(_DESIGN, slug, plan=True) == rule_for(_DESIGN, slug)
+
+
+def test_the_body_that_carries_the_placeholder_leaves_the_block_empty():
+    assert block_rule("a\n{{drawing_rule}}\nb", "RULE") == ""
+    assert block_rule("a\nb", "RULE") == "RULE"
+    assert block_rule("a\nb", "") == ""
 
 
 def _departure(**over: str) -> Departure:
@@ -352,6 +379,45 @@ def test_unverified_question_names_the_ref_and_the_drawing():
     line = unverified_question("Q2", "pantallas/Home.png")
     assert "Q2" in line and "pantallas/Home.png" in line and "\n" not in line
     assert "Q3" in unverified_question("Q3", None)
+
+
+@dataclass(frozen=True)
+class _Check:
+    subject: str
+    ref: str
+    verdict: str
+    drawing: str | None = None
+    element: str | None = None
+
+
+def test_unverified_lines_normalises_the_path_and_maps_none_to_empty():
+    checks = [
+        _Check("question", "Q1", "unverified", "pantallas/./Home.png"),
+        _Check("question", "Q2", "unverified", None),
+    ]
+    assert unverified_lines(checks) == [
+        UnverifiedAsk(
+            "Q1", "pantallas/Home.png", unverified_question("Q1", "pantallas/./Home.png")
+        ),
+        UnverifiedAsk("Q2", "", unverified_question("Q2", None)),
+    ]
+
+
+def test_unverified_lines_skips_screens_and_other_verdicts_and_keeps_input_order():
+    checks = [
+        _Check("question", "Q3", "unverified", "b.png"),
+        _Check("screen", "s.png", "unverified", "s.png"),
+        _Check("question", "Q1", "matches", "a.png", "x"),
+        _Check("question", "Q2", "departs", "a.png", "x"),
+        _Check("question", "Q1", "unverified", "a.png"),
+    ]
+    assert [a.ref for a in unverified_lines(checks)] == ["Q3", "Q1"]
+    assert unverified_lines([]) == []
+
+
+def test_unverified_lines_refuses_an_invalid_path():
+    with pytest.raises(ValueError):
+        unverified_lines([_Check("question", "Q1", "unverified", "/abs.png")])
 
 
 TEXT = "**Q1** one?\nrecommendation\n\n**Q2** two?"

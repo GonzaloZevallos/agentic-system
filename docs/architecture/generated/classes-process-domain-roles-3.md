@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -30,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__DesignItem["DesignItem"]
     class schemas__DesignReview["DesignReview"]
     class schemas__Diagnosis["Diagnosis"]
     class schemas__DrawingCheck["DrawingCheck"]
@@ -43,7 +45,6 @@ classDiagram
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
-    class schemas__LessonDelta["LessonDelta"]
     schemas__FinalDesignReview --|> schemas__DesignReview
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
