@@ -2194,3 +2194,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant, enumerate every branch or refusal it covers, check each one against the invariant's exact wording, and assert that wording in a test per branch before you claim it in the coverage map.
+  confidence: medium
+  seen_in:
+  - GH-983
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-19T21:55:06.914+00:00'
