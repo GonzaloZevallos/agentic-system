@@ -82,16 +82,19 @@ class Collector:
         held = {r["key"] for r in state.get("drawing_departures", [])}
         self.raised_now = False
         for raw in data.get("departures", []):
-            key = drawing.departure_key(raw["drawing"], raw["element"])
+            full = self._full(raw["drawing"])
+            key = drawing.departure_key(full, raw["element"])
             if key not in held:
                 self.raised_now = True
-                self.new.setdefault(key, drawing.Departure(**{**raw, "raised_by": role.slug}))
+                self.new.setdefault(
+                    key, drawing.Departure(**{**raw, "drawing": full, "raised_by": role.slug})
+                )
         owed = drawing_answer.must_match(state, role.slug)
         matched = {
             key
             for c in data.get("drawing_checks", [])
             if c["verdict"] == "matches"
-            and (key := drawing.departure_key(c["drawing"], c["element"])) in owed
+            and (key := drawing.departure_key(self._full(c["drawing"]), c["element"])) in owed
         }
         rows = [
             drawing_answer.with_fix_pass(row)
@@ -99,6 +102,14 @@ class Collector:
             if row["key"] in matched
         ]
         return {"drawing_departures": rows} if rows else {}
+
+    def _full(self, cited: str) -> str:
+        """The full path of a drawing the check already accepted. If it is refused here anyway
+        the raw path stays, never an exception."""
+        if self.design is None:
+            return cited
+        found = drawing.resolve(self.design, cited, "a drawing")
+        return found.path if isinstance(found, drawing.Resolved) else cited
 
     def pending(self, state: TaskState) -> list[drawing.Departure]:
         """The departures raised and not yet a row of `state`."""
