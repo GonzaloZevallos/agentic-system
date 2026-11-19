@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from agentic.core.process.application import interview_drawing
-from agentic.core.process.application.interview import interview
+from agentic.core.process.application.interview import _escalate_drawing, interview
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.domain import drawing, drawing_answer, spec_assumptions, task
 from agentic.core.process.domain.design import Design
@@ -16,7 +16,7 @@ from agentic.core.process.domain.roles import (
     INTERVIEW_SOLUTION_PLATFORM,
     INTERVIEW_SOLUTION_STACK,
 )
-from agentic.core.process.domain.schemas import Answers
+from agentic.core.process.domain.schemas import Answers, DrawingCheck
 from agentic.core.process.domain.task import SpecConflictCause
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_interview import SPEC_TASK, TASK, _closed_four_rounds
@@ -370,3 +370,55 @@ def test_a_departure_already_held_as_a_row_is_not_raised_by_this_round():
     again = interview_drawing.Collector(DESIGN)
     again.collect(role, data, held)
     assert again.raised_now is False and again.pending(held) == []
+
+
+async def test_the_new_rows_and_the_pause_log_share_one_clock_read(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [_ask(), _ask(done=True, visible=())],
+            ANSWER: [_answer([_check(verdict="departs")], [_departure()])],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(runner))
+
+    assert transcript is None
+    (row,) = patch["drawing_departures"]
+    (entry,) = [e for e in patch["pause_log"] if e["kind"] == "escalation"]
+    assert row["raised_at"] == entry["at"]
+
+
+def _unverified_check(ref="Q1"):
+    return DrawingCheck(subject="question", ref=ref, verdict="unverified", drawing=PATH)
+
+
+def _escalate_with_asks(monkeypatch, patch, asks):
+    real = drawing_answer.escalation_patch
+
+    def with_asks(state, departures, at, **kwargs):
+        return real(state, departures, at, **{**kwargs, "unverified": asks})
+
+    monkeypatch.setattr(drawing_answer, "escalation_patch", with_asks)
+    drawn = interview_drawing.Collector(DESIGN)
+    drawn.collect(INTERVIEW_DEFINITION.interviewee, {"departures": [_departure()]}, {})
+    return _escalate_drawing({}, patch, drawn, _ports(ScriptedRunner()))
+
+
+def test_the_ask_lines_follow_the_questions_the_patch_already_carried(monkeypatch):
+    asks = drawing.unverified_lines([_unverified_check("Q1"), _unverified_check("Q2")])
+    out = _escalate_with_asks(monkeypatch, {"questions_for_human": ["Own?", asks[0].line]}, asks)
+    assert out["questions_for_human"] == ["Own?", asks[0].line, asks[1].line]
+    (entry,) = [e for e in out["pause_log"] if e["kind"] == "escalation"]
+    assert out["drawing_escalation"]["unverified_at"] == entry["at"]
+    assert out["drawing_departures"][0]["raised_at"] == entry["at"]
+
+
+def test_a_pause_without_asks_leaves_the_patch_questions_as_they_were(monkeypatch):
+    held = _escalate_with_asks(monkeypatch, {"questions_for_human": ["Own?"]}, ())
+    assert held["questions_for_human"] == ["Own?"]
+    bare = _escalate_with_asks(monkeypatch, {}, ())
+    assert "questions_for_human" not in bare
+
+
+def test_a_pause_without_asks_keeps_a_question_the_patch_carried_twice(monkeypatch):
+    held = _escalate_with_asks(monkeypatch, {"questions_for_human": ["Own?", "Own?"]}, ())
+    assert held["questions_for_human"] == ["Own?", "Own?"]
