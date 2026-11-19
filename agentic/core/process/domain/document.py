@@ -314,6 +314,34 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
     }
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _plan_held_record(raw: object) -> dict[str, Any] | None:
+    """The stored `plan_held` (GH-1004) as it was written, or `None` when it is not whole: not a
+    mapping, a `plan` that is not one, `departures` that are not a list of mappings, a `round`
+    that is not an int, or an `estimate` that is not a mapping with a numeric `cost_usd`. A
+    hand-edited record is dropped as absent, as `_escalation_record` does, and never fails the
+    load."""
+    if not isinstance(raw, Mapping):
+        return None
+    plan, departures, round_, estimate = (
+        raw.get(k) for k in ("plan", "departures", "round", "estimate")
+    )
+    cost = estimate.get("cost_usd") if isinstance(estimate, Mapping) else None
+    if not (
+        isinstance(plan, Mapping)
+        and isinstance(departures, list)
+        and all(isinstance(d, Mapping) for d in departures)
+        and _is_int(round_)
+        and isinstance(cost, int | float)
+        and not isinstance(cost, bool)
+    ):
+        return None
+    return dict(raw)
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -405,6 +433,11 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             del state["drawing_escalation"]
         else:
             state["drawing_escalation"] = escalation
+    if "plan_held" in state:
+        if (held := _plan_held_record(state["plan_held"])) is None:
+            del state["plan_held"]
+        else:
+            state["plan_held"] = held
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -576,6 +609,11 @@ def render(
             if (e := _escalation_record(state.get("drawing_escalation")))
             else {}
         ),
+        # The plan held while the owner answers its own departures (GH-1004), written whenever the
+        # key is there and not `None`, never otherwise, so a document without it is byte-identical
+        # to one written before. Kept out of `RECORD_KEYS` and `_FLOW_KEYS`; `parse` drops a
+        # record that is not whole.
+        **({"plan_held": h} if (h := state.get("plan_held")) is not None else {}),
         # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
         # there and never when it is absent, so a document without it is byte-identical to one
         # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.

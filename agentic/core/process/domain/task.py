@@ -1771,6 +1771,21 @@ class EstimateRecord(TypedDict):
     declared_usd: NotRequired[float]
 
 
+class PlanHeld(TypedDict):
+    """The plan the plan node dropped when it escalated on drawing departures the owner has not
+    answered (GH-1004), kept whole so the answer's re-plan can start from it.
+
+    `estimate` is the one figure that counts: exactly the estimate the same patch stored, after
+    the floor and the lift. `plan["estimated_cost_usd"]` is kept only because the plan dict is
+    stored whole. Part 2 restores `estimate` from this record, never runs `_floored` again on
+    the stored plan, and clears the record; this part never clears it."""
+
+    plan: dict[str, Any]
+    departures: list[dict[str, Any]]
+    round: int
+    estimate: EstimateRecord
+
+
 class EstimateRevision(TypedDict):
     """One estimate a human decided on: `human` is what they wrote, `proposed` the one the
     stopped task proposed and they accepted."""
@@ -2615,6 +2630,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The plan held while the owner answers the plan's own drawing departures (GH-1004,
+    # `PlanHeld`). Written only by the plan node's escalation of open plan-stage departures; no
+    # route reads it yet. `document.render` writes it explicitly, after `drawing_escalation`.
+    plan_held: Annotated[PlanHeld | None, last]
     # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
