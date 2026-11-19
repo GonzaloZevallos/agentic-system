@@ -1397,3 +1397,13 @@ tasks:
     cost_usd: 0.0373
   GH-942@review:
     cost_usd: 0.0239
+  GH-908@review:
+    cost_usd: 0.0468
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-908
