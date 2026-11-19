@@ -802,6 +802,36 @@ def _drawing_escalation(
     return record
 
 
+EARLY_SPLIT_ROWS_MAX = 3
+
+
+class EarlySplitRow(TypedDict):
+    """One row of the early-split record: `verdict` (`split` or `go`), `cause` (one of
+    `early_split.Cause`), `at` the ISO 8601 UTC instant, and the declared figures the sizer gave
+    (`hand_files`, `hand_lines`, `test_lines`, `estimated_cost_usd`), absent when it gave none.
+    The figures are measurement only: no decision reads them."""
+
+    verdict: Literal["split", "go"]
+    cause: str
+    at: str
+    hand_files: NotRequired[int]
+    hand_lines: NotRequired[int]
+    test_lines: NotRequired[int]
+    estimated_cost_usd: NotRequired[float]
+
+
+def add_early_split(existing: list[EarlySplitRow], new: list[EarlySplitRow]) -> list[EarlySplitRow]:
+    """The rows of `existing` and `new` as one list: appended in arrival order, a row equal in
+    every field to one already there adds nothing, and the first `EARLY_SPLIT_ROWS_MAX` stay (the
+    oldest). The record has a single, serial writer, so this is not commutative. The only way
+    `early_split` is ever written."""
+    joined: list[EarlySplitRow] = []
+    for row in (*existing, *new):
+        if row not in joined:
+            joined.append(row)
+    return joined[:EARLY_SPLIT_ROWS_MAX]
+
+
 ReviewScope = Literal["carried", "resolution", "full"]
 ScopeCause = Literal[
     "first",
@@ -2600,6 +2630,11 @@ class TaskState(TaskInput, total=False):
     # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
     stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
+    # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
+    # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
+    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # decision.
+    early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
     # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept (`delta`
     # emits the valid rows of those, or `after` as it is when `before` has no key, which `apply`
@@ -2761,6 +2796,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 r for r in value if held_pauses.get((r["parent"], r["cause"], r["at"])) != r
             ]:
                 patch[key] = changed_pauses
+        elif reducer is add_early_split:
+            if fresh_early := [r for r in value if r not in old]:
+                patch[key] = fresh_early
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:
