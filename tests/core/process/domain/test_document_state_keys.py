@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import pytest
 
-from agentic.core.process.domain import document, size_budget, spec_delivery, task
+from agentic.core.process.domain import document, drawing, size_budget, spec_delivery, task
 
 ROOT = Path(__file__).resolve().parents[4]
 KEYS = frozenset(task.TaskState.__required_keys__ | task.TaskState.__optional_keys__)
@@ -41,6 +41,11 @@ EXCLUDED: dict[str, tuple[Reason, str]] = {
         "tests/core/process/application/test_plan_promote.py"
         "::test_the_plan_node_applies_the_request_after_the_model_ran",
     ),
+    "drawing_raised": (
+        "transient",
+        "tests/core/process/domain/test_drawing_answer.py"
+        "::test_fold_raised_escalates_a_raise_and_keeps_a_siblings_deltas",
+    ),
     "interview_stats": (
         "transient",
         "tests/core/process/domain/test_document.py::test_interview_stats_never_reaches_the_document",
@@ -58,6 +63,17 @@ EXCLUDED_SAMPLES: dict[str, object] = {
     "review_kind": "first",
     "presubmit_checks": [[{"name": "lint", "command": "ruff", "passed": True}]],
     "plan_promote_request": {"kind": "role", "from_role": "Tech Lead", "text": "bigger"},
+    "drawing_raised": [
+        drawing.Departure(
+            drawing="home",
+            element="cta",
+            shows="green",
+            would_ship="blue",
+            recommendation="green",
+            reason="token",
+            raised_by="UI Lead",
+        )
+    ],
     "interview_stats": {"interview": "solution", "rounds": 2},
     "escalation_cause": "ci_run_unfinished",
 }
@@ -149,6 +165,8 @@ FIXTURES: dict[str, object] = {
     "tracker_actions_done": {"abc": {"at": NOW, "kind": "comment", "url": PR}},
     "tracker_human": ["abc"],
     "owner_decision_unbuilt": NOW,
+    "owner_decision_seen": NOW,
+    "owner_decision_route": "developer",
     "spec_cause": "contradiction",
     "spec_refusal": {"cause": "spec_invalid", "detail": ["slice"]},
     "spec": _SPEC_PATCH["spec"],
