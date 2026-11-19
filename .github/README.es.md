@@ -2,7 +2,7 @@
 
 [English](readme.md) · **Español**
 
-**Un equipo de agentes de IA que lleva un issue de GitHub hasta un pull request mergeado, y que se viene construyendo a sí mismo desde su primera semana.**
+**Un equipo de agentes de IA que lleva un issue de GitHub hasta un pull request mergeado. Se viene construyendo a sí mismo desde la primera semana.**
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](../pyproject.toml)
 [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
@@ -10,14 +10,13 @@
 [![Langfuse](https://img.shields.io/badge/observability-Langfuse%20%2B%20OpenTelemetry-0A0A0A)](../observability/README.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](../LICENSE)
 
-Abro un issue y le pongo la etiqueta `agentic`. Un poller lo levanta, un agente Project
-Manager lo clasifica, los roles de producto y diseño lo definen, un Tech Lead lo planifica,
-los Developers lo construyen en paralelo, el Tech Lead revisa corriendo los checks, y el
-sistema abre el pull request. Si el Tech Lead lo aprobó y los checks están en verde, el
-sistema lo mergea. Si hace falta una decisión mía, frena y me deja una sola pregunta en el
-issue.
+Abro un issue y le pongo la etiqueta `agentic`. Un poller lo levanta y un agente Project
+Manager lo clasifica. Los roles de producto y diseño lo definen, un Tech Lead lo planifica y
+los Developers lo construyen en paralelo. El Tech Lead revisa corriendo los checks y el
+sistema abre el pull request. Si el Tech Lead lo aprobó y los checks están en verde, se
+mergea solo. Si hace falta una decisión mía, frena y me deja una sola pregunta en el issue.
 
-Este repo es el sistema. Y es también su propio segundo producto: de los 440 pull requests
+Este repo es el sistema, y también su propio segundo producto: de los 440 pull requests
 mergeados acá, 413 los abrió el sistema, un issue a la vez, corriendo desde un clon aparte
 que nunca toca.
 
@@ -35,10 +34,10 @@ final de esta sección.
 | Issues cerrados | 458 (de 557 abiertos) | 397 (de 527 abiertos) |
 | Primer commit / repo creado | 2026-09-12 | 2026-10-02 |
 
-**742 pull requests** escritos, revisados y abiertos por el sistema en dos productos, en
-unas diez semanas.
+En total son **742 pull requests** escritos, revisados y abiertos por el sistema en dos
+productos, en unas diez semanas.
 
-Este repo solo:
+Solo este repo:
 
 | | |
 |---|---:|
@@ -62,8 +61,8 @@ Este repo solo:
   fijado a un sha).
 - Funciones de test: `grep` de `def test_` sobre `tests/`. Los casos parametrizados no se
   expanden, así que pytest junta más que esto.
-- El gasto en modelos no está a propósito: no tengo un número que se pueda reproducir solo
-  con el repo.
+- El gasto en modelos no lo puse a propósito: no tengo un número que se pueda reproducir
+  solo con el repo.
 
 </details>
 
@@ -95,32 +94,32 @@ flowchart TD
     H -->|"agentic resume"| T
 ```
 
-El grafo de roles completo, generado desde el grafo compilado de LangGraph, está en
+El grafo de roles completo se genera desde el grafo compilado de LangGraph:
 [`docs/architecture/generated/role-graph.md`](../docs/architecture/generated/role-graph.md).
-El paso a paso, con cada afirmación apuntando al archivo y la función que la respaldan, está
-en [`docs/architecture/flujos/de-issue-a-merge.md`](../docs/architecture/flujos/de-issue-a-merge.md).
+Si querés el paso a paso, con cada afirmación apuntando al archivo y la función que la
+respaldan, está en [`docs/architecture/flujos/de-issue-a-merge.md`](../docs/architecture/flujos/de-issue-a-merge.md).
 
 El [diseño](../README.md) describe 19 roles agénticos más el humano. Hoy corren 12: PjM, Reflector, PM,
 Product Analyst, UX Designer, UX Lead, UI Designer, UI Lead, Tech Writer, Tech Lead,
 Developer y QA Performance. Data Analyst, QA Lead con QA funcional y de seguridad, SRE y
-Customer Insights están diseñados pero todavía no construidos.
+Customer Insights están diseñados pero todavía no los construí.
 
 ---
 
 ## Por qué lo armé
 
-Construir con agentes suele ser una persona haciendo de PM, Tech Lead, Developer y reviewer
-en serie, a la velocidad a la que tipea una persona. Quería darle cada uno de esos roles a un
+Construir con agentes suele ser una persona haciendo de PM, Tech Lead, Developer y reviewer,
+uno atrás del otro, a la velocidad a la que tipea. Quería darle cada uno de esos roles a un
 agente y quedarme solo con lo que tiene que seguir siendo humano: las decisiones que cambian
 plata o alcance, y qué significa "bien hecho". ([`BRIEF.md`](../BRIEF.md))
 
-El segundo objetivo era poder medirlo. Un cambio de prompt tiene que demostrar que sirvió, si
-no es deriva. Por eso hay un set de evaluación fijo, un puntaje binario y trazas de cada
+También quería poder medirlo. Si un cambio de prompt no demuestra que sirvió, es deriva y
+nada más. Por eso hay un set de evaluación fijo, un puntaje binario y una traza por cada
 corrida.
 
 ---
 
-## Las ideas que lo hicieron andar
+## Decisiones clave
 
 **Nunca escribe en el checkout desde el que corre.** El sistema se desarrolla a sí mismo, así
 que un Developer podría cambiar el código de ruteo de la misma corrida que lo está cambiando.
@@ -129,26 +128,26 @@ repositorio, no por ruta: dos worktrees comparten `.git`, así que `preflight` c
 `--git-common-dir` y se niega a correr sobre su propio repo. ([ADR-0002](../docs/adr/0002-repos-separados.md), [ADR-0017](../docs/adr/0017-el-sistema-es-su-propio-segundo-producto.md), [`scripts/stage0.sh`](../scripts/stage0.sh))
 
 **Cada validador trae una fuente que el pensador no tuvo.** Un validador con el mismo modelo,
-el mismo prompt y la misma información ratifica, no valida. Los pensadores corren en Sonnet,
-los validadores en Opus, y el Tech Lead revisa corriendo los checks del producto en el
-worktree del Developer, no leyendo el diff. Los hallazgos vienen con evidencia. ([ADR-0016](../docs/adr/0016-el-revisor-verifica-ejecutando.md), diseño §10)
+el mismo prompt y la misma información que el pensador le da la razón y listo. Los pensadores
+corren en Sonnet, los validadores en Opus, y el Tech Lead revisa corriendo los checks del
+producto en el worktree del Developer, en vez de leer el diff. Los hallazgos vienen con evidencia. ([ADR-0016](../docs/adr/0016-el-revisor-verifica-ejecutando.md), diseño §10)
 
 **Los loops se cuentan por par, y se terminan.** Cada par validador→pensador tiene 2
 devoluciones. Un Developer que llega al límite tiene un reinicio limpio con el brief
 reescrito; después de eso, escala. Un rol que se rompe (JSON inválido, sin turnos) tiene un
-reintento con el error, y después escala. Nada de ping-pong infinito. (diseño §3, [ADR-0092](../docs/adr/0092-reinicio-limpio-y-causas-mecanicas.md))
+reintento con el error, y después escala. (diseño §3, [ADR-0092](../docs/adr/0092-reinicio-limpio-y-causas-mecanicas.md))
 
-**A mí solo me llegan decisiones de criterio.** Las fallas mecánicas (red, un tropiezo de
-GitHub, CI sin veredicto, un choque de número de ADR) se reintentan solas, hasta 3 veces. Las
+**A mí solo me llegan decisiones de criterio.** Las fallas mecánicas (red, un error pasajero
+de GitHub, CI sin veredicto, un choque de número de ADR) se reintentan solas, hasta 3 veces. Las
 de criterio me llegan como etiqueta `needs-human` y un solo comentario: una pregunta, la
 respuesta recomendada y cada opción como un comando del CLI. Cuando contesto con una regla
-general, va a [`docs/decisiones-del-dueño.md`](../docs/decisiones-del-dueño.md), todos los roles
-la leen, y la misma pregunta no vuelve.
+general, va a [`docs/decisiones-del-dueño.md`](../docs/decisiones-del-dueño.md). Todos los roles
+leen ese archivo, así que la misma pregunta no vuelve.
 
 **Las tareas tienen presupuesto de tamaño, y las grandes se parten.** Un plan declara como
 mucho 15 archivos escritos a mano que no sean tests y 400 líneas a mano que no sean tests
-(los tests tienen su propio tope de 600 líneas). Lo generado no cuenta. Una parte que sigue
-pasada se vuelve a partir, hasta profundidad 2. Cada parte se mergea sola y deja `master` en
+(los tests tienen su propio tope de 600 líneas). Lo generado no cuenta. Si una parte sigue
+pasada, se vuelve a partir, hasta profundidad 2. Cada parte se mergea sola y deja `master` en
 verde. ([ADR-0093](../docs/adr/0093-presupuesto-de-tamano-en-codigo-escrito-a-mano-y-las-partes-se-parten-de-nuevo.md))
 
 **El sistema mergea, y aterriza sus propios pull requests.** El poller mergea solo lo que el
@@ -156,16 +155,16 @@ Tech Lead aprobó y el CI dejó en verde sobre la cabeza mergeada con el `master
 merge se rechaza, un paso de aterrizaje diagnostica por qué y sincroniza o arregla el mismo
 pull request en vez de arrancar de cero. ([ADR-0045](../docs/adr/0045-el-poller-mergea-solo-lo-aprobado-y-verde.md), [ADR-0048](../docs/adr/0048-el-sistema-aterriza-sus-propios-pull-requests.md))
 
-**Un documento por tarea, estado durable.** Los roles se pasan el trabajo por un único
-documento Markdown con secciones fijas, no por chat. El estado de LangGraph vive en un
+**Un documento por tarea, estado durable.** Los roles se pasan el trabajo en un único
+documento Markdown con secciones fijas. El estado de LangGraph vive en un
 checkpointer SQLite, así que una corrida pausada o caída sigue donde quedó. El poller retoma
-las corridas caídas con un calendario y nunca retoma una que frené a propósito. ([ADR-0003](../docs/adr/0003-interrupt-para-escalados.md), diseño §3)
+solo las corridas caídas cada tanto; nunca una que frené a propósito. ([ADR-0003](../docs/adr/0003-interrupt-para-escalados.md), diseño §3)
 
 **Los roles aprenden de sus devoluciones.** Cuando cierra una tarea, un Reflector lee por qué
 le devolvieron trabajo a cada rol y propone lecciones para el playbook de ese rol. Las cura
-código. ([ADR-0043](../docs/adr/0043-los-roles-aprenden-de-sus-devoluciones-con-un-playbook-por-rol.md), [`.agentic/playbooks/`](../.agentic/playbooks))
+un paso de código. ([ADR-0043](../docs/adr/0043-los-roles-aprenden-de-sus-devoluciones-con-un-playbook-por-rol.md), [`.agentic/playbooks/`](../.agentic/playbooks))
 
-**Todo queda trazado.** Claude Code exporta OpenTelemetry nativo; un collector lo reenvía a
+**Todo queda trazado.** Claude Code exporta OpenTelemetry nativo y un collector lo manda a
 un Langfuse local. Una tarea es un trace con cada rol como span anidado, con costo, modelo,
 versión de la entrega y resultado, más la versión del sistema y el producto. ([ADR-0037](../docs/adr/0037-langfuse-unico-destino-el-dashboard-queda-en-los-documentos.md), [`observability/`](../observability/README.md))
 
@@ -178,27 +177,28 @@ puertos. ([ADR-0007](../docs/adr/0007-arquitectura-hexagonal.md), [ADR-0010](../
 
 ## Lo difícil
 
-- **Lo lento son los checks, no el modelo.** En apostrophe, correr todos los checks sobre el
+- **El cuello de botella son los checks.** En apostrophe, correr todos los checks sobre el
   árbol entero eran ~2.560 tests y ~7,5 minutos en serie para un cambio de un archivo de CSS,
   y el e2e llegaba al timeout en 17 de 60 tareas. Ahora la puerta de entrega corre solo los
   tests que el cambio puede alcanzar, por clausura de imports ([ADR-0046](../docs/adr/0046-los-chequeos-pueden-correr-solo-lo-que-el-cambio-afecta.md), [ADR-0047](../docs/adr/0047-las-pruebas-de-este-repo-corren-solo-lo-que-el-cambio-alcanza.md)); la suite completa corre una vez por tarea.
 - **Los agentes re-deciden lo que ya estaba decidido.** Si lo dejás solo, un rol que no está
-  de acuerdo con un ADR o con un plan se desvía callado. Acá tiene que escalar, y para PM un
-  ADR cierra la pregunta en vez de llegarme a mí.
-- **Auto-hospedarse muerde.** Una corrida que edita el código que la ejecuta le arruina sus
-  propias trazas. stage0 existe por eso.
+  de acuerdo con un ADR o con un plan se desvía callado. Acá tiene que escalar. Si es una pregunta
+  de PM, la cierra un ADR y no me llega a mí.
+- **Desarrollarse a sí mismo tiene su costo.** Una corrida que edita el código que la ejecuta
+  le arruina sus propias trazas. Por eso existe stage0.
 - **Medir un cambio de prompt en serio sale caro.** El puntaje es binario: el diff pasa los
-  tests y se mergea sin tocar, o no cuenta. Re-correr cinco tareas por cada ajuste cuesta
-  demasiado, así que el set completo corre solo en hitos.
+  tests y se mergea sin tocar, o no cuenta. Re-correr cinco tareas por cada ajuste sale
+  demasiado, así que el set completo lo corro solo en hitos.
 
 ---
 
-## Hecho con esto
+## Lo que construyó
 
 **[apostrophe](https://github.com/GonzaloZevallos/apostrophe)** es un back office para un
 negocio chico que vende productos por unidad y por peso: precios, ventas, stock, plata que te
-deben, gastos y resultados, con varios negocios en una misma instalación sin que se mezclen. Backend en Python, front web en
-TypeScript. Yo escribí el brief y contesté los escalados; el código lo escribió el sistema:
+deben, gastos y resultados. Una misma instalación tiene varios negocios y no se mezclan. Backend en
+Python, front web en TypeScript. Yo escribí el brief y contesté los escalados. El código lo
+escribió el sistema:
 329 de sus 344 pull requests mergeados salieron de ramas de tarea `agentic/*`. También es la
 base del set de evaluación.
 
@@ -267,16 +267,16 @@ docs/
 .agentic/                    este repo como producto: stack, playbooks, documentos de tarea
 ```
 
-Arrancá por el [documento de diseño completo](../README.md) y por
+Si querés el detalle, arrancá por el [documento de diseño completo](../README.md) y seguí por
 [`docs/adr/`](../docs/adr) para las decisiones con trade-offs reales. Los dos están en
-castellano; el código, los prompts y los issues, en inglés.
+castellano. El código, los prompts y los issues, en inglés.
 
 ---
 
 ## Sobre mí
 
 Soy Gonzalo Zevallos ([@GonzaloZevallos](https://github.com/GonzaloZevallos)). Diseñé este
-sistema y lo manejo yo: decido qué se construye, contesto los escalados y pongo las reglas.
+sistema y lo manejo yo. Decido qué se construye, contesto los escalados y pongo las reglas.
 El código lo escriben los agentes.
 
 Estoy abierto a roles en IA / agentic engineering.
