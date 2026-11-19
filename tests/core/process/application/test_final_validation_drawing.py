@@ -366,3 +366,59 @@ async def test_the_fill_instructions_reach_both_leads_only_with_a_comparable_des
         for s in ("ux_lead_final", "ui_lead_final")
         for p in bare.prompts(s)
     )
+
+
+# --- GH-887: a rejected row with no fix pass is a fix still owed, whoever spoke before ----------
+
+
+async def test_a_rejected_row_with_no_fix_pass_and_a_matches_check_is_settled_by_the_lead(tmp_path):
+    held = state(drawing_departures=[_row("reject", 0)])
+    script = runner(lead([]), lead([check("matches")]))
+    patch, _ = await run(held, script, tmp_path, design())
+    assert patch["drawing_checks"]["open"] == 0 and "pm_final" in script.slugs
+    assert "findings" not in patch and "drawing_departures" not in patch
+    assert "changes_requested" not in patch
+    assert [r["fix_passes"] for r in held["drawing_departures"]] == [0]
+
+
+async def test_a_rejected_row_on_a_screen_that_is_not_due_is_not_forced_open(tmp_path):
+    held = state(drawing_departures=[_row("reject", 0, image=OTHER)])
+    script = runner(lead([]), lead([check("matches")]))
+    patch, _ = await run(held, script, tmp_path, design())  # only web/home.tsx is touched
+    assert [r["ref"] for r in patch["drawing_checks"]["rows"]] == [IMAGE]
+    assert patch["drawing_checks"]["open"] == 0 and "pm_final" in script.slugs
+    assert "findings" not in patch and "drawing_departures" not in patch
+
+
+async def test_a_rejected_row_with_no_fix_pass_stays_open_when_comparisons_are_unavailable(
+    tmp_path,
+):
+    held = state(drawing_departures=[_row("reject", 0)])
+    script = runner(lead([]), lead([check("matches")]))
+    patch, _ = await run(held, script, tmp_path, design(compare=None))
+    assert [r["verdict"] for r in patch["drawing_checks"]["rows"]] == ["unverified"]
+    assert patch["drawing_checks"]["open"] >= 1
+    assert "drawing_departures" not in patch
+    assert [r["fix_passes"] for r in apply(held, patch)["drawing_departures"]] == [0]
+    assert rules.drawing_merge_facts(apply(held, patch))[2] >= 1
+
+
+async def test_a_rejected_row_with_no_fix_pass_needs_a_check_from_the_lead_on_a_due_screen(
+    tmp_path,
+):
+    held = state(drawing_departures=[_row("reject", 0)])
+    script = ScriptedRunner(
+        ux_lead_final=[lead([])],
+        ui_lead_final=[lead([]), lead([check("departs")], [departure()])],
+    )
+    patch, _ = await run(held, script, tmp_path, design())
+    assert script.slugs.count("ui_lead_final") == 2  # the empty answer was refused in the turn
+    assert [r["fix_passes"] for r in patch["drawing_departures"]] == [1]
+
+
+def test_the_in_turn_check_refuses_no_check_for_a_due_screen_with_an_owed_row():
+    held = state(drawing_departures=[_row("reject", 0)])
+    refuse = node._drawing_check(held, [IMAGE])
+    with pytest.raises(ValueError, match="no drawing check for the due screen"):
+        refuse({"drawing_checks": [], "departures": []})
+    refuse({"drawing_checks": [check("matches")], "departures": []})  # a matches check passes
