@@ -314,16 +314,25 @@ def rejected_keys(state: task.TaskState) -> Mapping[str, int]:
     }
 
 
+def fix_owed(row: task.DepartureRecord) -> bool:
+    """Whether `row` is a fix still owed: the owner rejected it and it has had no fix pass yet.
+    A rejected row with no fix pass is never settled. The only place that condition is written."""
+    answer = row["answer"]
+    return answer is not None and answer["verdict"] == "reject" and row["fix_passes"] == 0
+
+
+def with_fix_pass(row: task.DepartureRecord) -> task.DepartureRecord:
+    """`row` with `fix_passes` at least 1 (never lowered). The only place a fix pass is counted."""
+    return task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+
+
 def must_match(state: task.TaskState, seat_slug: str) -> Mapping[str, int]:
     """Each key the owner rejected on a departure `seat_slug` raised and that has had no fix
     pass yet, with its number: the seat's next answer must carry a `matches` check for it."""
     return {
         r["key"]: r["number"]
         for r in state.get("drawing_departures", [])
-        if r["answer"] is not None
-        and r["answer"]["verdict"] == "reject"
-        and r["raised_by"] == seat_slug
-        and r["fix_passes"] == 0
+        if fix_owed(r) and r["raised_by"] == seat_slug
     }
 
 
@@ -376,7 +385,7 @@ def _outcome(row: task.DepartureRecord) -> Outcome:
         return "raise"
     if answer["verdict"] == "accept":
         return "settled_accept"
-    return "fix_due" if row["fix_passes"] == 0 else "return_due"
+    return "fix_due" if fix_owed(row) else "return_due"
 
 
 def classify(
@@ -450,7 +459,7 @@ def fix_pass_rows(
     """The rows of the `fix_due` outcomes with `fix_passes` at least 1: the return that asks for
     the fix is its first pass, so the next rejected pass of the row is `return_due`."""
     return [
-        task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+        with_fix_pass(row)
         for row in state.get("drawing_departures", [])
         if outcomes.get(row["key"]) == "fix_due"
     ]

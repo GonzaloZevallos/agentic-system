@@ -181,6 +181,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.finding_location": "state",
     "domain.gate_priority": "landing",
     "domain.hold": "landing",
+    "domain.hold_record": "state",
     "domain.landing": "landing",
     "domain.landing_order": "landing",
     "domain.launch_order": "machine",

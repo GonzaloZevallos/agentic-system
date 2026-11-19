@@ -31,7 +31,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__CiCancelRerun["CiCancelRerun"]
     class task__CiGhostDispatch["CiGhostDispatch"]
     class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
@@ -45,6 +44,8 @@ classDiagram
     class task__DrawingChecksRecord["DrawingChecksRecord"]
     class task__DrawingEscalation["DrawingEscalation"]
     class task__DrawingEscalationPatch["DrawingEscalationPatch"]
+    class task__DrawingRow["DrawingRow"]
+    class task__EarlySplitRow["EarlySplitRow"]
     task__DrawingEscalationPatch --> task__DrawingEscalation
 ```
 
@@ -52,5 +53,4 @@ classDiagram
 
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`

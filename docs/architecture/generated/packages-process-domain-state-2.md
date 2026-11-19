@@ -16,6 +16,8 @@ graph TD
     g_domain__machine["machine (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state__1["state parte 1 (grupo)"]
+    g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_domain__rules["domain.rules"]
     m_domain__signals["domain.signals"]
     m_domain__size_budget["domain.size_budget"]
     m_domain__spec_approval["domain.spec_approval"]
@@ -27,13 +29,23 @@ graph TD
     m_domain__task_path["domain.task_path"]
     m_domain__tracker_refs["domain.tracker_refs"]
     m_domain__worktree_sweep["domain.worktree_sweep"]
+    m_domain__rules --> g_domain__checks
+    m_domain__rules --> g_domain__landing
+    m_domain__rules --> g_domain__machine
+    m_domain__rules --> g_domain__roles
+    m_domain__rules --> g_domain__state__1
+    m_domain__rules --> g_pkg__agentic__shared
+    m_domain__rules --> m_domain__size_budget
+    m_domain__rules --> m_domain__spec_delivery
+    m_domain__rules --> m_domain__task
+    m_domain__rules --> m_domain__task_path
     m_domain__size_budget --> g_domain__checks
     m_domain__spec_approval --> m_domain__spec_delivery
     m_domain__spec_assumptions --> g_domain__roles
-    m_domain__spec_assumptions --> g_domain__state__1
+    m_domain__spec_assumptions --> m_domain__rules
     m_domain__spec_assumptions --> m_domain__task
     m_domain__spec_brief --> m_domain__spec_delivery
-    m_domain__spec_route --> g_domain__state__1
+    m_domain__spec_route --> m_domain__rules
     m_domain__spec_route --> m_domain__spec_delivery
     m_domain__spec_route --> m_domain__task
     m_domain__task --> g_domain__checks

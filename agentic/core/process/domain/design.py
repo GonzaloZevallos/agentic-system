@@ -12,6 +12,7 @@ against (`core.knowledge.domain.stack`'s own docstring)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -33,13 +34,32 @@ class Design:
     inside it a walk starts from. `sample_app` and `compare` are optional commands:
     `None` is the product declaring neither, not a half-written file -- that failure
     already happened at load, in `core.knowledge`. `captures` are the approved
-    captures, `()` when the block declares none."""
+    captures, `()` when the block declares none. `files` is the listing of the prototype at
+    the task's base: the repo-relative paths of every file under `prototype`, sorted, read by
+    the application (`ProductStack.prototype_files`) and handed in as data -- this module never
+    reads a filesystem. `()` means not listed, never an empty prototype."""
 
     prototype: str
     entry: str
     sample_app: str | None
     compare: str | None
     captures: tuple[Capture, ...] = ()
+    files: tuple[str, ...] = ()
+
+
+PROTOTYPE_FILES_MAX = 2000
+"""The most files of a prototype the system lists: a bigger one is `over_cap`, not truncated."""
+
+
+@dataclass(frozen=True)
+class PrototypeListing:
+    """What reading the prototype's files gave: `files` the sorted repo-relative paths when
+    `cause` is `listed`, `()` otherwise. The other causes are closed: `whole_repo` (the
+    prototype is the repo itself, never listed), `over_cap` (more than `PROTOTYPE_FILES_MAX`
+    files) and `unreadable` (git could not say). Never git's own text."""
+
+    files: tuple[str, ...]
+    cause: Literal["listed", "whole_repo", "over_cap", "unreadable"]
 
 
 # The one line the system writes in a lead's section when it cannot back a claim with

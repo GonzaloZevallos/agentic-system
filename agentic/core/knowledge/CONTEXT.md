@@ -97,7 +97,7 @@ _Avoid_: design system (es una parte del diseño, la de tokens y componentes), m
 _Campo_: sin término de arte; la clave se llama `design` en el archivo
 
 **Dibujo aprobado**:
-El prototipo declarado en `design` más sus capturas (`captures`), leídos del commit base de la tarea y no de la rama: una tarea que edita el bloque no cambia el dibujo contra el que se mide. En el código son `Design.prototype` y `Design.captures` (`Capture`: imagen, pantalla y, opcional, los globs de los archivos que la implementan). La comprobación de rutas es solo textual: no toca el sistema de archivos, no resuelve enlaces simbólicos y no verifica que la imagen exista.
+El prototipo declarado en `design` más sus capturas (`captures`), leídos del commit base de la tarea y no de la rama: una tarea que edita el bloque no cambia el dibujo contra el que se mide. En el código son `Design.prototype` y `Design.captures` (`Capture`: imagen, pantalla y, opcional, los globs de los archivos que la implementan). La comprobación de rutas es solo textual: no toca el sistema de archivos, no resuelve enlaces simbólicos y no verifica que la imagen exista. `Design.files` es el listado del prototipo en el commit base, leído solo por la entrevista de definición: un dibujo citado se resuelve contra él (ruta completa, ruta relativa o nombre de archivo único) y se guarda como su ruta completa. El plan y la validación final siguen comparando la ruta tal como está escrita.
 _Avoid_: mockup, diseño del humano (es el dibujo, no el diseño del producto)
 _Campo_: sin término de arte
 

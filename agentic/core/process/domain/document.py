@@ -24,7 +24,7 @@ from typing import Any, cast, get_args
 import yaml
 
 from . import size_budget, spec_delivery, tracker_items
-from .landing_order import LANE_MERGES_MAX, YieldReason, instant
+from .landing_order import LANE_MERGES_MAX, YieldReason, admitted_decision, instant
 from .legacy_names import rename_legacy_roles
 from .task import (
     HEAD_YIELDS_MAX,
@@ -197,7 +197,8 @@ _LANE_KEYS = ("lane_admitted", "lane_recorded", "lane_merges")
 
 def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
     """`entry` as `{key: value}` for `keys` (an `int` `issue` or `head_issue`, `str` shas, an
-    aware instant), `None` when it is not whole; a `bool` is not an issue."""
+    aware instant), `None` when it is not whole; a `bool` is not an issue. A `decision` that is a
+    `LaneDecision` is kept, any other value is dropped: an older entry has none."""
     if not isinstance(entry, Mapping):
         return None
     out: dict[str, Any] = {}
@@ -212,6 +213,9 @@ def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
         if not ok:
             return None
         out[key] = value
+    decision = admitted_decision(entry.get("decision"))
+    if decision is not None:
+        out["decision"] = decision
     return out
 
 
@@ -219,6 +223,7 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     """The fast lane's keys (GH-681, informative) of `source` as the document keeps them, the only
     place they are validated, called by `render` and by `from_frontmatter`. `lane_admitted` is
     kept when it holds an `int` `head_issue`, `str` `pr_head` and `master` and an aware `at`;
+    its `decision`, when a `LaneDecision`, is kept with it;
     `lane_recorded` when it is an aware instant or `not_lane`; `lane_merges` as its whole entries
     only, the last `LANE_MERGES_MAX`, and omitted when none is left. `None` and anything malformed
     read as absent. Never raises."""

@@ -31,12 +31,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__TaskState["TaskState"]
-    class task__TrackerActionDone["TrackerActionDone"]
-    class task__TrackerFailure["TrackerFailure"]
-    class task__TrackerFailureRecord["TrackerFailureRecord"]
-    class task__TrackerPosted["TrackerPosted"]
-    class task__WorktreeReleaseLapse["WorktreeReleaseLapse"]
     class task_path__PathDecision["PathDecision"]
     class task_path__PromoteRequest["PromoteRequest"]
     class task_path__Promotion["Promotion"]
@@ -44,21 +38,10 @@ classDiagram
     class task_path__RiskNone["RiskNone"]
     class task_path__RiskUnreadable["RiskUnreadable"]
     class worktree_sweep__SweepMemory["SweepMemory"]
-    task__TaskState --> task_path__Promotion
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
-  - `task.TaskState` se asocia con `task.InterviewStats`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
-  - `task.TaskState` se asocia con `task.PlanRoute`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` hereda de `task.TaskInput`
-  - `task.TaskState` se asocia con `task.StackParent`
+  - `task.TaskState` se asocia con `task_path.Promotion`

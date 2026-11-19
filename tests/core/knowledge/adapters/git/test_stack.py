@@ -8,6 +8,7 @@ import pytest
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.application.ports import RiskArea
+from agentic.core.process.domain.design import Design, PrototypeListing
 from agentic.core.process.domain.docs import Docs
 
 
@@ -335,3 +336,45 @@ def test_an_adr_naming_value_the_domain_refuses_is_an_error_with_the_source(prod
     base = commit_stack(product, "checks:\n  tests: pytest\nadr_naming: dates\n")
     with pytest.raises(ValueError, match=r"stack.yaml: expected `adr_naming`"):
         GitStack(product).adr_naming(base)
+
+
+def _prototype(product: Path) -> str:
+    (product / "docs/pantallas/sub").mkdir(parents=True)
+    (product / "docs/pantallas/B.html").write_text("b")
+    (product / "docs/pantallas/sub/A.html").write_text("a")
+    git("add", "-A", cwd=product)
+    git("commit", "-q", "-m", "prototype", cwd=product)
+    return git("rev-parse", "--short", "HEAD", cwd=product)
+
+
+def _design(prototype: str = "docs/pantallas") -> Design:
+    return Design(prototype=prototype, entry="B.html", sample_app=None, compare=None)
+
+
+def test_the_prototype_is_listed_at_the_revision_not_at_the_working_tree(product):
+    base = _prototype(product)
+    (product / "docs/pantallas/New.html").write_text("n")
+    listing = GitStack(product).prototype_files(base, _design())
+    assert listing == PrototypeListing(
+        ("docs/pantallas/B.html", "docs/pantallas/sub/A.html"), "listed"
+    )
+
+
+def test_a_prototype_over_the_cap_is_over_cap_and_lists_nothing(product, monkeypatch):
+    base = _prototype(product)
+    monkeypatch.setattr("agentic.core.knowledge.adapters.git.stack.PROTOTYPE_FILES_MAX", 1)
+    assert GitStack(product).prototype_files(base, _design()) == PrototypeListing((), "over_cap")
+
+
+def test_a_revision_git_cannot_read_is_unreadable_and_never_raises(product):
+    listing = GitStack(product).prototype_files("nope", _design())
+    assert listing == PrototypeListing((), "unreadable")
+    assert GitStack(product / "missing").prototype_files("HEAD", _design()) == listing
+
+
+def test_the_whole_repo_as_prototype_is_not_listed_and_calls_no_git(product):
+    stack = GitStack(product / "missing")  # a git call here would give `unreadable`
+    for prototype in (".", "./", "docs/.."):
+        assert stack.prototype_files("HEAD", _design(prototype)) == PrototypeListing(
+            (), "whole_repo"
+        )

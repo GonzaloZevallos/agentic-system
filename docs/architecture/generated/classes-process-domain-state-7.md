@@ -31,9 +31,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__FullChecksJob["FullChecksJob"]
-    class task__FullChecksRead["FullChecksRead"]
-    class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
     class task__HeadYield["HeadYield"]
     class task__InterviewStats["InterviewStats"]
@@ -45,12 +42,13 @@ classDiagram
     class task__LapsePauseEntry["LapsePauseEntry"]
     class task__MergeCiRecord["MergeCiRecord"]
     class task__MergeConflictRecord["MergeConflictRecord"]
+    class task__MergeOutcome["MergeOutcome"]
+    class task__MergeRefusalRecord["MergeRefusalRecord"]
+    class task__OutOfBoundsLine["OutOfBoundsLine"]
+    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.InterviewStats`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.FullChecksJob` hereda de `task.CiLogRecord`

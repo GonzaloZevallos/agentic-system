@@ -587,6 +587,28 @@ def test_fix_pass_rows_raises_fix_passes_to_one_for_fix_due_only():
     assert drawing_answer.fix_pass_rows(state, {back["key"]: "return_due"}) == []
 
 
+# --- GH-887: the one predicate of a fix still owed ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("verdict", "fix_passes", "owed"),
+    [("accept", 0, False), (None, 0, False), ("reject", 0, True), ("reject", 1, False)],
+)
+def test_fix_owed_is_a_rejected_row_with_no_fix_pass_only(
+    verdict: str | None, fix_passes: int, owed: bool
+):
+    assert drawing_answer.fix_owed(_row(verdict=verdict, fix_passes=fix_passes)) is owed
+
+
+@pytest.mark.parametrize(("before", "after"), [(0, 1), (1, 1), (2, 2)])
+def test_with_fix_pass_raises_to_one_and_never_lowers(before: int, after: int):
+    row = _row(verdict="reject", fix_passes=before)
+    passed = drawing_answer.with_fix_pass(row)
+    assert passed["fix_passes"] == after
+    assert {**passed, "fix_passes": before} == row
+    assert row["fix_passes"] == before
+
+
 UNVERIFIED_AT = "2026-11-18T10:00:00.000+00:00"
 LATER_AT = "2026-11-18T10:05:00.000+00:00"
 

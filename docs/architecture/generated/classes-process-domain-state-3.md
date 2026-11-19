@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__PushPlan["PushPlan"]
     class rules__ReportedFailure["ReportedFailure"]
     class rules__RestoreObserved["RestoreObserved"]
     class rules__RestoreSteps["RestoreSteps"]
