@@ -1421,3 +1421,13 @@ tasks:
       - GH-964
   GH-962@review:
     cost_usd: 0.0379
+  GH-864@review:
+    cost_usd: 0.03
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-864
