@@ -45,4 +45,5 @@ classDiagram
     class hold_record__Unreadable["hold_record.Unreadable"]
     class lead_time__Known["Known"]
     class lead_time__Unreadable["lead_time.Unreadable"]
+    class rules__BlockerReport["BlockerReport"]
 ```
