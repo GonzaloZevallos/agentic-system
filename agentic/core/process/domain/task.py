@@ -723,10 +723,11 @@ class DrawingEscalation(TypedDict):
     was reached, `drawing_departure` before. `stage` says which gate asked, `plan` or `delivery`;
     absent it reads `delivery`, and a record only carries it when it is `plan`.
 
-    The record holds only the drawings the definition and solution interviews asked about: the
-    final review keeps its own route and never writes it. `unverified` is the paths already
-    asked as an unverified question and `unverified_at` the instant of the latest such ask, in
-    `ports.utc_now`'s format and compared as text; both are written only when non-empty."""
+    `unverified` is the paths of the drawings the definition and solution interviews already
+    asked about as an unverified question, and `unverified_at` the instant of the latest such
+    ask, in `ports.utc_now`'s format and compared as text; both are written only when non-empty.
+    The final review's raises (`drawing_answer.fold_raised`) write the record too, but pass no
+    asks, so they never write these two."""
 
     round: int
     numbers: list[int]
