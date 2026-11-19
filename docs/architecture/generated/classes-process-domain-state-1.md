@@ -37,6 +37,7 @@ classDiagram
     class drawing_answer__Due["Due"]
     class drawing_answer__Exhausted["Exhausted"]
     class drawing_answer__PlanSplit["PlanSplit"]
+    class early_split__Verdict["Verdict"]
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]
@@ -44,5 +45,4 @@ classDiagram
     class lead_time__Unreadable["Unreadable"]
     class rules__BlockerReport["BlockerReport"]
     class rules__CiGate["CiGate"]
-    class rules__Commit["Commit"]
 ```
