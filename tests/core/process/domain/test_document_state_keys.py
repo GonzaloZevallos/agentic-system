@@ -5,7 +5,9 @@ reads it then decides on a state the task never had. This test is what fails fir
 
 A key is either in `FIXTURES` (one hand-typed, non-empty value: the round trip must give back an
 equal value, never just the key) or in `EXCLUDED` with a `Reason` and a reference the test
-resolves, so a reason that stops being true fails here too."""
+resolves, so a reason that stops being true fails here too.
+
+Not covered: keys `render` writes that `TaskState` does not declare (the reverse direction)."""
 
 import ast
 import importlib
