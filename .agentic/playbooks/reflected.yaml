@@ -1460,3 +1460,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-998
+  GH-975@review:
+    cost_usd: 0.0383
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-975
