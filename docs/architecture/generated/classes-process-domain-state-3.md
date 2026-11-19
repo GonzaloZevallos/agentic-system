@@ -42,9 +42,9 @@ classDiagram
     class size_budget__PlanSize["PlanSize"]
     class spec_approval__ApprovalReading["ApprovalReading"]
     class spec_approval__Comment["Comment"]
+    class spec_delivery__DraftReading["DraftReading"]
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
-    class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
 ```
 
 ## Relaciones con otras páginas

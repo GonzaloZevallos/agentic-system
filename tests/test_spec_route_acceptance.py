@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agentic import composition
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
 from agentic.core.process.adapters.langgraph.graph import build_graph
-from agentic.core.process.application.ports import IssueState, SpecUnreadable, Upstream
+from agentic.core.process.application.ports import IssueState, RawResult, SpecUnreadable, Upstream
 from agentic.core.process.domain.spec_delivery import (
     body_sha256,
     render_approved_front_matter,
@@ -144,8 +144,16 @@ async def test_a_feature_with_an_approved_spec_goes_straight_to_the_tech_lead(tm
         assert role not in script.slugs, role
 
 
-async def test_the_same_feature_without_a_spec_line_still_drafts_a_definition(tmp_path):
-    script = ScriptedRunner(pjm=[classified()], **definition(), **technical())
+async def test_the_same_feature_without_a_spec_line_still_drafts_a_definition(
+    tmp_path, monkeypatch
+):
+    # The draft is written into the checkout: a real directory, not the fake's `/memory`.
+    monkeypatch.setattr(MemoryWorkspace, "ROOT", tmp_path)
+    (tmp_path / "GH-1").mkdir()
+    # GH-594 part 5c-1: a full-path feature owes PM's draft body, and the real validator reads it.
+    approved = verdict("approved")
+    with_draft = RawResult({**approved.structured_output, "spec_draft": BODY}, approved.cost_usd)
+    script = ScriptedRunner(pjm=[classified()], **definition(pm=[with_draft]), **technical())
 
     await run(PLAIN_TASK, script, Reader(), tmp_path=tmp_path)
 

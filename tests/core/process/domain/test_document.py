@@ -2430,7 +2430,8 @@ def test_the_spec_draft_record_round_trips_and_is_distinct_from_the_spec():
     plain = document.render(_base_state())
     assert document.render(_base_state(spec_draft=None)) == plain
     assert "spec_draft" not in plain
-    for record in (_WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
+    with_commit = {**_WRITTEN_DRAFT, "commit": "d" * 40}
+    for record in (with_commit, _WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
         text = document.render(_base_state(spec_draft=record))
         loaded = document.parse(text)
         assert loaded["spec_draft"] == record
