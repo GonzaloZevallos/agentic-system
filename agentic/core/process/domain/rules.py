@@ -3950,7 +3950,10 @@ def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
     request ends the road unless the landing reopened the stage under it, or a stopped run
     still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`. A
-    re-plan owed (`plan_due`, GH-798) goes to `plan`, whatever the status says."""
+    re-plan owed (`plan_due`, GH-798) goes to `plan`, whatever the status says. An owner decision
+    routed (`owner_decision_route`, GH-873) goes back to PM (`define`, never `definition_entry`,
+    which would skip PM on `definition_ready`) or to the integration Developer (`integrate`), after
+    the pull request block on purpose: a stale route on a task with a pull request is never read."""
     if state.get("escalated"):
         return None
     if state.get("pull_request"):
@@ -3958,6 +3961,10 @@ def resume_target(state: TaskState) -> str | None:
             return "deliver"
         if not landing_pass_live(state):
             return None
+    if state.get("owner_decision_route") == "pm":
+        return "define"
+    if state.get("owner_decision_route") == "developer":
+        return "integrate"
     if state.get("plan_due"):
         return "plan"
     if state.get("status") == "split":

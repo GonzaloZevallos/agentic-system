@@ -31,6 +31,9 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__BlockerReport["BlockerReport"]
+    class rules__CiGate["CiGate"]
+    class rules__Commit["Commit"]
     class rules__Deferred["Deferred"]
     class rules__FastForwardBlock["FastForwardBlock"]
     class rules__ImportantPartition["ImportantPartition"]
@@ -42,7 +45,4 @@ classDiagram
     class rules__MergeDecision["MergeDecision"]
     class rules__MergeFacts["MergeFacts"]
     class rules__PollAction["PollAction"]
-    class rules__PollPlan["PollPlan"]
-    class rules__PushPlan["PushPlan"]
-    class rules__ReportedFailure["ReportedFailure"]
 ```

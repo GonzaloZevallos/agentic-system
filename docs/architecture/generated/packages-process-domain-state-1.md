@@ -25,6 +25,7 @@ graph TD
     m_domain__finding_location["domain.finding_location"]
     m_domain__lead_time["domain.lead_time"]
     m_domain__legacy_names["domain.legacy_names"]
+    m_domain__owner_decision["domain.owner_decision"]
     m_domain__restart["domain.restart"]
     m_domain__returns["domain.returns"]
     m_domain__rules["domain.rules"]
@@ -41,6 +42,9 @@ graph TD
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared
+    m_domain__owner_decision --> g_domain__state__2
+    m_domain__owner_decision --> m_domain__restart
+    m_domain__owner_decision --> m_domain__rules
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
     m_domain__returns --> g_domain__state__2

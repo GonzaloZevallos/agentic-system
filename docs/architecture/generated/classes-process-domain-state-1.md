@@ -42,7 +42,7 @@ classDiagram
     class experiment__InvalidExperiment["InvalidExperiment"]
     class lead_time__Known["Known"]
     class lead_time__Unreadable["Unreadable"]
-    class rules__BlockerReport["BlockerReport"]
-    class rules__CiGate["CiGate"]
-    class rules__Commit["Commit"]
+    class owner_decision__Comment["Comment"]
+    class owner_decision__Consumed["Consumed"]
+    class owner_decision__RouteVerdict["RouteVerdict"]
 ```

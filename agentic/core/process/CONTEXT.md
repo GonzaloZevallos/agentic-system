@@ -339,6 +339,11 @@ Lo que el humano responde a un escalado: todo lo que comenta en el issue despué
 _Avoid_: respuesta, comentario
 _Campo_: sin término de arte
 
+**Decisión posterior del dueño**:
+Un comentario `Decision:` en el issue de una tarea parada a mano, con `Decision:` en la columna 0 de su primera línea no vacía, publicado después de `owner_decision_seen` o, si todavía no se consumió ninguno, después del `Escalated: ` o `Resumed: ` más nuevo (un comentario del mismo segundo no cuenta; las notas del poller no son piso). `owner_decision.decision_route` decide adónde va, probando `spec` primero: `escalate` (`spec_owned` si la tarea tiene `spec`; `owner_decision` si hay una decisión humana pendiente o la forma no es una de las dos siguientes), `pm` (hay PRD) o `developer` (una sola unidad, la revisada, en la rama de la tarea). `owner_decision.consumed_patch` es el único que escribe `owner_decision_seen` y el único que borra `owner_decision_route`; la ruta `pm` además reinicia las subtareas, cierra sus hallazgos abiertos como `owner_decision` y escribe `status: returned`, porque `define` solo se salta su entrevista con `returned`. En `resume_target` el bloque del `pull_request` gana a la ruta. Inerte hasta la parte 2 de GH-873: nadie la llama todavía.
+_Avoid_: respuesta, comentario
+_Campo_: `owner_decision_seen`, `owner_decision_route`
+
 **Handoff**:
 El bloque "Para el siguiente rol" con que cierra cada sección.
 _Campo_: handoff — de OpenAI (primero Swarm, después el Agents SDK), hoy vocabulario compartido con AutoGen y langgraph-swarm. Allá es la transferencia de control a otro agente; acá es el bloque de texto que se le deja al que sigue

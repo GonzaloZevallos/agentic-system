@@ -189,6 +189,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.merge_ci": "checks",
     "domain.merge_conflict": "checks",
     "domain.merge_hold": "landing",
+    "domain.owner_decision": "state",
     "domain.performance": "checks",
     "domain.plan_revision": "landing",
     "domain.plan_route": "landing",
