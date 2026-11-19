@@ -44,7 +44,7 @@ WORK_STAGES: tuple[CycleStage, ...] = (
     "landing",
     "other",
 )
-WAIT_STAGES: tuple[CycleStage, ...] = ("queue", "human_wait", "account_limit")
+WAIT_STAGES: tuple[CycleStage, ...] = ("queue", "human_wait", "account_limit", "held")
 
 # What an `other` claim is: the time no stage owns (`gap`), a run with no readable role
 # (`legacy_role`), a pause that was an outage (`outage_pause`) or the reflector's run.
