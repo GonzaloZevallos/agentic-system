@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__LockHeld["LockHeld"]
     class ports__LockRecord["LockRecord"]
     class ports__MasterWindow["MasterWindow"]
     class ports__MergeCallFailed["MergeCallFailed"]
@@ -32,11 +33,10 @@ classDiagram
     class ports__ProcessReaper["ProcessReaper"]
     class ports__ProductKnowledge["ProductKnowledge"]
     class ports__ProductStack["ProductStack"]
-    class ports__Prompts["Prompts"]
+    ports__LockHeld o-- ports__LockRecord
     ports__Ports --> ports__ProcessReaper
     ports__Ports --> ports__ProductKnowledge
     ports__Ports --> ports__ProductStack
-    ports__Ports --> ports__Prompts
 ```
 
 ## Relaciones con otras páginas
@@ -52,9 +52,9 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Commands`
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
 - [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.LockHeld` agrega a `ports.LockRecord`
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 6)](classes-process-application-support-6.md)

@@ -289,6 +289,21 @@ def parent_unmerged(stack: StackFacts, conflicts: bool | None) -> bool:
     return refusal(stack, conflicts) == "stack_parent_unmerged"
 
 
+def held(stack: StackFacts | None) -> bool:
+    """Whether the landing order keeps a task out of the Cabeza and the Carril rápido (GH-838):
+    it is stacked and its parent's head has not reached upstream, `refusal` being the only
+    judge. `None` (never stacked) is never held. No `conflicts` argument: `refusal` reads it only
+    where it answers `stack_restack_due` or `None`, so it could not change the answer.
+
+    Doubts hold: unknown ancestry, an unknown tracker state, and an unfetchable head inside its
+    wait. An unfetchable head whose wait expired is released, so that it reaches the Cabeza and
+    `landing_step` escalates it. `stack_base_orphaned` is human-owned (`waits_on_human` drops it),
+    and `stack_restack_due` is not held, so that the restack `sync_master` can run."""
+    if stack is None or refusal(stack, None) != "stack_parent_unmerged":
+        return False
+    return not (stack.heads_fetched is False and stack.unfetchable_expired is True)
+
+
 def base_landed(stack: StackFacts, conflicts: bool | None) -> bool:
     """A view of `refusal`: nothing stacking-related stands in the way."""
     return refusal(stack, conflicts) is None

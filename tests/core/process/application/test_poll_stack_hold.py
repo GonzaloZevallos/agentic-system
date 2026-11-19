@@ -103,8 +103,12 @@ def test_the_cause_clearing_resumes_the_child_and_stamps_resumed_at(tmp_path):
     (row,) = ports.documents.load(f"GH-{CHILD}")["stack_pauses"]
     assert row["at"] == NOW.isoformat()
     assert row["resumed_at"] == later.isoformat()
-    # evaluated again: the landing order reads it and refuses on the stack, not held away
-    assert any(f"#{CHILD} -> left to the human: stack_parent_unmerged" in line for line in lines)
+    # evaluated again: the pause is over, and the unmerged parent (GH-838) keeps the child out of
+    # the Cabeza, so it waits with the stacking reason instead of being refused as head
+    assert any(
+        f"auto-merge #{CHILD} -> waiting (" in line and "stacked parent unmerged" in line
+        for line in lines
+    )
     assert len(_notes(ports, CHILD)) == 1
 
 

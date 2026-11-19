@@ -52,7 +52,7 @@ classDiagram
 
 - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - `spec_delivery.SpecStatePatch` se asocia con `spec_delivery.SpecContract`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
+- [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`

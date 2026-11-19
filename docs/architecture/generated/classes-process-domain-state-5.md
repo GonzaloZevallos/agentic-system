@@ -43,13 +43,13 @@ classDiagram
     class task__DesignItemRecord["DesignItemRecord"]
     class task__DrawingChecksRecord["DrawingChecksRecord"]
     class task__DrawingEscalation["DrawingEscalation"]
+    class task__DrawingEscalationPatch["DrawingEscalationPatch"]
     class task__DrawingRow["DrawingRow"]
-    class task__EscalationPatch["EscalationPatch"]
+    task__DrawingEscalationPatch --> task__DrawingEscalation
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
   - `task.FullChecksJob` hereda de `task.CiLogRecord`

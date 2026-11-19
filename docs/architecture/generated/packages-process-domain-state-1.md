@@ -28,6 +28,7 @@ graph TD
     m_domain__restart["domain.restart"]
     m_domain__returns["domain.returns"]
     m_domain__rules["domain.rules"]
+    m_domain__carve_out --> g_domain__landing
     m_domain__document --> g_domain__landing
     m_domain__document --> g_domain__roles
     m_domain__document --> g_domain__state__2

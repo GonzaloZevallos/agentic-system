@@ -609,6 +609,7 @@ LANE_NOT_READY = {
     "live_pass": {"live_pass": True},
     "waits_on_ci": {"waits_on_ci": True},
     "account_paused": {"account_paused": True},
+    "stack_held": {"stack_held": True},
 }
 
 
@@ -734,10 +735,11 @@ LANE_REASONS: dict[LaneReason, tuple[Member | None, Member]] = {
     "lacks_master": (_lane_head(), _cand(holds_master=False)),
     "member_paths_unknown": (_lane_head(), _cand(paths=None)),
     "paths_overlap": (_lane_head(), _cand(paths=frozenset({"a.py"}))),
+    "stack_parent_unmerged": (_lane_head(), _cand(stack_held=True)),
 }
 
 
-def test_lane_reason_covers_the_seven_reasons_of_the_type():
+def test_lane_reason_covers_the_eight_reasons_of_the_type():
     assert set(LANE_REASONS) == set(get_args(LaneReason))
     assert get_args(LaneReason) == (
         "head_not_integrating",
@@ -747,6 +749,7 @@ def test_lane_reason_covers_the_seven_reasons_of_the_type():
         "lacks_master",
         "paths_overlap",
         "member_paths_unknown",
+        "stack_parent_unmerged",
     )
 
 
@@ -905,6 +908,7 @@ LANE_FIELD_VALUES = {
     "integrating": True,
     "paths": frozenset(),
     "head_syncs_left": 0,
+    "stack_held": True,
 }
 
 
@@ -985,3 +989,55 @@ def test_the_verdict_is_none_without_any_lane_key():
 def test_the_record_limits():
     assert LANE_MERGES_MAX == 20
     assert LANE_RECORD_WINDOW == timedelta(days=7)
+
+
+# --- GH-838 part 2: a stacked child whose parent has not reached upstream ----------------------
+
+
+def test_a_held_child_is_never_cabeza_beside_an_escalated_parent():
+    parent = _m(5, waits_on_human=True)
+    child = _m(1, stack_held=True)  # approved earlier than its parent
+    assert order([parent, child], NOW).head is None
+    assert head([_m(7), child], NOW) == 7
+
+
+def test_once_the_parent_merged_the_child_is_cabeza_again():
+    parent = _m(5, waits_on_human=True)
+    child = _m(1, stack_held=False)
+    assert order([parent, child], NOW).head == 1
+
+
+def test_a_held_member_is_dropped_even_when_busy_or_with_a_live_pass():
+    held = _m(1, stack_held=True, busy=True, live_pass=True, seen_at=NOW - SEC)
+    assert order([held, _m(2)], NOW).head == 2
+
+
+def test_a_held_child_beside_a_head_that_is_not_its_parent_gets_the_stacking_reason():
+    head_, child = _lane_head(), _cand(stack_held=True)
+    assert lane_reason(child, head_, NOW) == "stack_parent_unmerged"
+    assert order([head_, child], NOW).lane is None
+    assert order([head_, _cand(stack_held=False)], NOW).lane == 2
+
+
+def test_the_stacking_reason_wins_over_the_head_obstacles_and_the_members_own():
+    child = _cand(stack_held=True, holds_master=False, paths=None)
+    for head_ in (None, _lane_head(paths=None), _lane_head(integrating=False)):
+        assert lane_reason(child, head_, NOW) == "stack_parent_unmerged"
+
+
+def test_a_held_member_that_is_not_merge_now_and_clean_gets_no_reason():
+    assert lane_reason(_cand(stack_held=True, merge_now=False), _lane_head(), NOW) is None
+    assert lane_reason(_cand(stack_held=True, clean=None), _lane_head(), NOW) is None
+
+
+def test_a_held_member_is_not_charged_or_yielded_by_advance():
+    held = _m(1, stack_held=True)
+    result, folded = advance([held, _m(2)], NOW)
+    assert result.yielded == () and result.head == 2
+    assert folded[0] == held
+
+
+def test_a_member_without_stack_held_orders_as_before():
+    assert Member(1, T0, False, False).stack_held is False
+    members = [_m(5), _m(2, waits_on_human=True), _m(9, live_pass=True)]
+    assert order(members, NOW) == order([replace(m, stack_held=False) for m in members], NOW)

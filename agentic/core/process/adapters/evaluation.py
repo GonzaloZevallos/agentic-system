@@ -92,6 +92,10 @@ class EvaluationTracker:
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         return []
 
+    def held_issues(self) -> frozenset[int]:
+        """None held: an evaluation runs a frozen entry and never reads the live queue."""
+        return frozenset()
+
     def comment(self, task_id: str, text: str) -> None:
         return None
 

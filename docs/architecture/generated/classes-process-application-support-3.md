@@ -21,6 +21,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 classDiagram
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
+    class ports__HeldListMayBeCut["HeldListMayBeCut"]
     class ports__Inbox["Inbox"]
     class ports__InstalledProducts["InstalledProducts"]
     class ports__IssueComment["IssueComment"]
@@ -32,7 +33,6 @@ classDiagram
     class ports__ListMayBeCut["ListMayBeCut"]
     class ports__ListedPullRequest["ListedPullRequest"]
     class ports__LoadReader["LoadReader"]
-    class ports__LockHeld["LockHeld"]
 ```
 
 ## Relaciones con otras páginas
@@ -42,5 +42,6 @@ classDiagram
 - [application: reflection](classes-process-application-reflection.md)
   - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 4)](classes-process-application-support-4.md)
-  - `ports.LockHeld` agrega a `ports.LockRecord`
   - `ports.Ports` se asocia con `ports.Inbox`
+- [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`

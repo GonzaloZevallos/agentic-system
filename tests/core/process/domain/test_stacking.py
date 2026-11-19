@@ -537,3 +537,57 @@ def test_a_reopened_idle_parent_does_not_pause_while_the_merge_is_still_refused(
     link = _link(state="OPEN", reason="")
     facts = StackFacts(_record_of(7), parent_state_of("OPEN", "none"), False, None)
     assert (stacking.pause_cause([link]), refusal(facts, None)) == ("none", "stack_parent_unmerged")
+
+
+# --- GH-838 part 2: `held`, the one predicate of the Cabeza and the Carril rápido ---------------
+
+HELD_ROWS: list[tuple[str, StackFacts, bool]] = [
+    ("unmerged_open", _facts("open", False), True),
+    ("unmerged_unknown_state", _facts("unknown", False), True),
+    ("ancestry_unknown", _facts("open", None), True),
+    ("parent_landed_child_unknown", _facts("open", True, None), True),
+    ("orphaned_closed", _facts("closed", False), False),
+    ("orphaned_unreadable", replace(_facts(), record=None), False),
+    ("restack_due", _facts("open", True, False), False),
+    ("landed_and_held", _facts("open", True, True), False),
+]
+
+
+@pytest.mark.parametrize(
+    ("facts", "want"), [row[1:] for row in HELD_ROWS], ids=[r[0] for r in HELD_ROWS]
+)
+def test_held_is_true_only_for_an_unmerged_parent(facts, want):
+    assert stacking.held(facts) is want
+
+
+def test_a_task_that_never_was_stacked_is_never_held():
+    assert stacking.held(None) is False
+
+
+def test_held_is_the_unmerged_row_of_refusal_and_nothing_else():
+    for _, facts, want in HELD_ROWS:
+        assert (refusal(facts, None) == "stack_parent_unmerged") is want
+
+
+def test_an_unfetchable_head_holds_until_its_wait_expires_and_is_released_after():
+    waiting = replace(_facts("open", None), heads_fetched=False, unfetchable_expired=False)
+    assert stacking.held(waiting) is True
+    assert stacking.held(replace(waiting, unfetchable_expired=None)) is True
+    assert stacking.held(replace(waiting, unfetchable_expired=True)) is False
+    # The expiry only counts for a head that could not be fetched.
+    assert stacking.held(replace(waiting, heads_fetched=True, unfetchable_expired=True)) is True
+    assert stacking.held(replace(waiting, heads_fetched=None, unfetchable_expired=True)) is True
+
+
+def test_held_does_not_depend_on_conflicts_for_any_row():
+    for _, facts, _want in HELD_ROWS:
+        verdicts = {refusal(facts, c) == "stack_parent_unmerged" for c in (True, False, None)}
+        assert verdicts == {stacking.held(facts)}
+
+
+def test_an_expired_unfetchable_head_never_holds_a_row_that_refusal_does_not_hold():
+    for _, facts, want in HELD_ROWS:
+        expired = replace(facts, heads_fetched=False, unfetchable_expired=True)
+        assert stacking.held(expired) is False
+        waiting = replace(facts, heads_fetched=False, unfetchable_expired=False)
+        assert stacking.held(waiting) is want

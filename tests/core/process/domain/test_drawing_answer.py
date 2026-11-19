@@ -585,3 +585,88 @@ def test_fix_pass_rows_raises_fix_passes_to_one_for_fix_due_only():
     rows = drawing_answer.fix_pass_rows(state, outcomes)
     assert [(r["key"], r["fix_passes"]) for r in rows] == [(fix["key"], 1)]
     assert drawing_answer.fix_pass_rows(state, {back["key"]: "return_due"}) == []
+
+
+def _raise_state(**over: Any) -> task.TaskState:
+    """What `fold_raised` reads: the state a verifier set ran on."""
+    return _state(**over)
+
+
+def test_fold_raised_without_the_key_returns_merged_as_it_is():
+    merged = _state(cost_usd=1.0)
+    assert drawing_answer.fold_raised(_raise_state(), merged, AT) == {"cost_usd": 1.0}
+
+
+def test_fold_raised_escalates_a_raise_and_keeps_a_siblings_deltas():
+    sibling = {"returned_with": ["review"], "cost_usd": 2.0}
+    merged = _state(**sibling, drawing_raised=[_departure("Save")])
+    folded = drawing_answer.fold_raised(_raise_state(), merged, AT)
+    assert "drawing_raised" not in folded and "drawing_raised" in merged
+    assert folded["escalation_class"] == "questions" and folded["escalated"]
+    assert folded["drawing_escalation"] == {
+        "round": 1,
+        "numbers": [1],
+        "cause": "drawing_departure",
+    }
+    assert [r["number"] for r in folded["drawing_departures"]] == [1]
+    assert folded["returned_with"] == ["review"] and folded["cost_usd"] == 2.0
+    assert folded["status"] == task.WAITING_ON_HUMAN
+    assert [e["kind"] for e in folded["pause_log"]] == ["escalation"]
+
+
+def test_fold_raised_with_an_empty_list_escalates_the_row_still_open():
+    state = _raise_state(drawing_departures=_rows("a", "b", answered=(1,)))
+    folded = drawing_answer.fold_raised(state, _state(drawing_raised=[]), AT)
+    assert "drawing_raised" not in folded
+    assert folded["drawing_escalation"]["numbers"] == [2]
+    assert folded["escalation_class"] == "questions"
+
+
+def test_fold_raised_drops_the_departures_when_a_sibling_already_escalated():
+    sibling = _state(escalated="the suite is red", escalation_class="returns", cost_usd=1.0)
+    merged = _applied(sibling, {"drawing_raised": [_departure("Save")]})
+    folded = drawing_answer.fold_raised(_raise_state(), merged, AT)
+    assert folded == sibling
+    assert "drawing_departures" not in folded and "drawing_escalation" not in folded
+
+
+def test_fold_raised_never_opens_a_second_row_for_another_capitalisation():
+    merged = _state(drawing_raised=[_departure("Save"), _departure("save")])
+    folded = drawing_answer.fold_raised(_raise_state(), merged, AT)
+    assert [r["number"] for r in folded["drawing_departures"]] == [1]
+    held = _raise_state(drawing_departures=_rows("Save"))
+    again = drawing_answer.fold_raised(held, _state(drawing_raised=[_departure("save")]), AT)
+    assert again["drawing_escalation"]["numbers"] == [1]
+    assert [r["element"] for r in again["drawing_departures"]] == ["Save"]
+
+
+def test_fold_raised_after_an_answered_round_opens_no_second_one_for_another_case():
+    record = task.DrawingEscalation(round=1, numbers=[1], cause="drawing_departure")
+    held = _raise_state(drawing_departures=_rows("Save", answered=(1,)), drawing_escalation=record)
+    # a pass that cites `save` against the answered `Save` raises nothing (`classify`), so the
+    # node leaves no key and the fold changes nothing
+    assert drawing_answer.fold_raised(held, _state(cost_usd=1.0), AT) == {"cost_usd": 1.0}
+    classified = drawing_answer.classify(
+        held,
+        [
+            DrawingCheck(
+                subject="screen",
+                ref="design/home.png",
+                verdict="departs",
+                drawing="design/home.png",
+                element="save",
+            )
+        ],
+        [
+            DrawingDeparture(
+                drawing="design/home.png",
+                element="save",
+                shows="a",
+                would_ship="b",
+                recommendation="r",
+                reason="r",
+                raised_by="developer",
+            )
+        ],
+    )
+    assert classified.raised == [] and "raise" not in classified.outcomes.values()
