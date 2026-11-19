@@ -32,7 +32,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "early_split"
 
 
 def row(
-    cause: str, verdict: Literal["split", "go"] = "go", at: str = "2026-11-19T10:00:00Z"
+    cause: Any, verdict: Literal["split", "go"] = "go", at: str = "2026-11-19T10:00:00Z"
 ) -> EarlySplitRow:
     return {"verdict": verdict, "cause": cause, "at": at}
 

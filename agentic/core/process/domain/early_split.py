@@ -23,9 +23,9 @@ from .roles import (
     UX_LEAD,
 )
 from .size_budget import PlanSize
-from .task import TaskState
+from .task import EarlySplitCause, TaskState
 
-Cause = Literal["over", "fits", "close", "sizer_failed", "parts_refused"]
+Cause = EarlySplitCause
 
 
 @dataclass(frozen=True)

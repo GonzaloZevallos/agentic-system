@@ -803,16 +803,18 @@ def _drawing_escalation(
 
 
 EARLY_SPLIT_ROWS_MAX = 3
+# Why the early size check decided as it did, the closed set (`early_split.Cause` is this type).
+EarlySplitCause = Literal["over", "fits", "close", "sizer_failed", "parts_refused"]
 
 
 class EarlySplitRow(TypedDict):
     """One row of the early-split record: `verdict` (`split` or `go`), `cause` (one of
-    `early_split.Cause`), `at` the ISO 8601 UTC instant, and the declared figures the sizer gave
+    `EarlySplitCause`), `at` the ISO 8601 UTC instant, and the declared figures the sizer gave
     (`hand_files`, `hand_lines`, `test_lines`, `estimated_cost_usd`), absent when it gave none.
     The figures are measurement only: no decision reads them."""
 
     verdict: Literal["split", "go"]
-    cause: str
+    cause: EarlySplitCause
     at: str
     hand_files: NotRequired[int]
     hand_lines: NotRequired[int]
