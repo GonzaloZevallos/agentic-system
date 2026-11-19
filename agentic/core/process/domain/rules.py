@@ -408,6 +408,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     green = full_checks_green_version(state)
     plan_settled = _plan_settled_versions(state)
     restarted = _restart_settled_versions(state)
+    restarted_only = _restart_settled_versions(state, ("restarted",))
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -420,8 +421,15 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
             rows[key] = {**row, "subtask": f"{row['subtask']}, {record['subtask']}"}
 
     def discarded(record: FindingRecord) -> bool:
-        """A clean restart threw this record away: it is not a fix, so it never reads as one."""
-        return record["subtask"] in restarted and record["version"] < restarted[record["subtask"]]
+        """A clean restart threw this record away: it is not a fix, so it never reads as one. An
+        owner decision (GH-873) discards no `full_checks:` row: only `full_checks_settles` closes
+        those, as for a reviewer's word."""
+        bars = (
+            restarted_only
+            if _norm(record["location"]).startswith(FULL_CHECKS_PREFIX)
+            else restarted
+        )
+        return record["subtask"] in bars and record["version"] < bars[record["subtask"]]
 
     def closed(row: FindingRecord, key: tuple[str, str]) -> FindingStatus:
         """`fixed` when a reviewer, an approval or a check closed the row, `dismissed` when the
@@ -508,11 +516,16 @@ def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
     return settled
 
 
-def _restart_settled_versions(state: TaskState) -> dict[str, int]:
-    """The highest version per subtask a clean restart discarded (`restart.restart_patch`): the
-    open records of that subtask below it are closed, for the reason `restarted`."""
+def _restart_settled_versions(
+    state: TaskState, reasons: Collection[str] | None = None
+) -> dict[str, int]:
+    """The highest version per subtask a clean restart or an owner decision discarded
+    (`restart.settle_open`; only the rows of `reasons` when given): the open records of that
+    subtask below it are closed, for the reason the row carries."""
     settled: dict[str, int] = {}
     for row in state.get("restart_settled", []):
+        if reasons is not None and row.get("reason", "restarted") not in reasons:
+            continue
         settled[row["subtask"]] = max(settled.get(row["subtask"], 0), row["version"])
     return settled
 

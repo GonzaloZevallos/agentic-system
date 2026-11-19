@@ -259,7 +259,7 @@ def pm_state() -> dict[str, Any]:
             finding("api", "a.py:1"),
             finding("integration", "b.py:1"),
             finding("PM: final validation", "docs/prd.md"),
-            finding("docs", "full_checks:tests", 2),
+            finding("integration", "full_checks:tests", 2),
         ],
     }
 
@@ -292,7 +292,12 @@ def test_a_pm_decision_resets_the_plan_and_keeps_the_counters():
         None,
         None,
     )
-    assert patch["restart_settled"] == settle_open(state, ["api", "integration"], "owner_decision")
+    # the bar is one above each unit's highest review pass: the `full_checks:` row (version 2)
+    # is not a review pass
+    assert patch["restart_settled"] == settle_open(
+        {**state, "findings": state["findings"][:3]}, ["api", "integration"], "owner_decision"
+    )
+    assert [r["version"] for r in patch["restart_settled"]] == [2, 2]
     assert {"full_checks", "restarts", "changes_requested"}.isdisjoint(patch)
     after = task.apply(state, patch)
     assert after["full_checks"] == state["full_checks"]
@@ -324,7 +329,9 @@ def test_open_rows_of_other_names_stay_open_and_a_recreated_integration_starts_c
     after = task.apply(state, owner_decision.consumed_patch(state, Consumed("pm", NEWEST)))
     rows = {(r["subtask"], r["location"]): r["status"] for r in rules.findings_rows(after)}
     assert rows[("PM: final validation", "docs/prd.md")] == "open"
-    assert rows[("docs", "full_checks:tests")] == "open"  # `docs` is no current unit
+    assert (
+        rows[("integration", "full_checks:tests")] == "open"
+    )  # filed as `full_checks_return` does
     assert rows[("api", "a.py:1")] == "dismissed"
     assert rows[("integration", "b.py:1")] == "dismissed"
     # integration is re-created and reviewed again: its new finding is above the bar.
@@ -374,6 +381,7 @@ def test_a_route_does_not_change_what_a_pull_request_owes():
         "head_reviewed": head,
     }
     plain = rules.resume_target(owed)
+    assert plain == "deliver"
     assert rules.resume_target({**owed, "owner_decision_route": "pm"}) == plain
     assert rules.resume_target({**owed, "owner_decision_route": "developer"}) == plain
 

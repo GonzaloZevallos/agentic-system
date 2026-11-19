@@ -130,6 +130,18 @@ class Consumed:
     newest: str
 
 
+def _without_full_checks_rows(state: TaskState) -> TaskState:
+    """`state` with no `full_checks:` finding: those rows carry the `full_checks` counter's version,
+    not a review pass's, so they must not set the bar a re-created unit's review starts above,
+    and `rules.findings_rows` never discards them for an owner decision."""
+    kept = [
+        f
+        for f in state.get("findings", [])
+        if not f["location"].startswith(rules.FULL_CHECKS_PREFIX)
+    ]
+    return {**state, "findings": kept}
+
+
 def consumed_patch(state: TaskState, result: Consumed | None) -> dict[str, Any]:
     """The patch that records a decision as consumed. `None` gives `{}`. Every route moves
     `owner_decision_seen` to the later of its current value and `newest` (never back; an
@@ -138,7 +150,8 @@ def consumed_patch(state: TaskState, result: Consumed | None) -> dict[str, Any]:
 
     Route `pm` also resets the plan: `subtasks_reset()`, no `task_head`, `restart_pending` or
     `pending_close_docs`, no `plan_due`, every unit's open findings settled as `owner_decision`
-    through `restart.settle_open`, and `status: "returned"`. `define` reruns the whole
+    through `restart.settle_open` (a `full_checks:` row apart: only a green run closes it, and its
+    version is no review pass), and `status: "returned"`. `define` reruns the whole
     definition interview unless the status is `returned` (it then rewrites over the existing
     transcript), and should the process die after the route is cleared, the plain status fork
     still reaches `define`, so PM cannot be skipped. `full_checks` is never cleared (its version
@@ -167,7 +180,9 @@ def consumed_patch(state: TaskState, result: Consumed | None) -> dict[str, Any]:
                 "plan_due": False,
                 "status": "returned",
                 "restart_settled": restart.settle_open(
-                    state, list(state.get("subtasks", {})), "owner_decision"
+                    _without_full_checks_rows(state),
+                    list(state.get("subtasks", {})),
+                    "owner_decision",
                 ),
             }
         )
