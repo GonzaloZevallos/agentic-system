@@ -1,4 +1,5 @@
 import ast
+import json
 from pathlib import Path
 from typing import get_args, get_type_hints
 
@@ -18,6 +19,7 @@ from agentic.core.process.domain import (
 )
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing_order import YieldReason
+from agentic.core.process.domain.task import DrawingEscalation
 from tests.gh150_stranded import GH150_STRANDED
 
 
@@ -2293,6 +2295,64 @@ def test_an_invalid_escalation_record_is_dropped_on_load_and_never_written(bad):
     assert "drawing_escalation" not in document.parse(stored)
 
 
+_UNVERIFIED_AT = "2026-11-18T10:00:00.001+00:00"
+_FULL_ESCALATION = {
+    "round": 2,
+    "numbers": [1, 3],
+    "cause": "drawing_cap",
+    "stage": "plan",
+    "unverified": ["pantallas/Home.png", ""],
+    "unverified_at": _UNVERIFIED_AT,
+}
+
+
+def test_an_escalation_with_unverified_asks_round_trips_intact():
+    text = document.render(_escalation_state(**_FULL_ESCALATION))
+    parsed = document.parse(text)
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+def test_every_key_of_the_escalation_record_has_a_sample_that_round_trips():
+    assert set(_FULL_ESCALATION) == set(DrawingEscalation.__annotations__)
+    parsed = document.parse(document.render(_escalation_state(**_FULL_ESCALATION)))
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+
+
+@pytest.mark.parametrize(
+    ("bad", "dropped"),
+    [
+        ({"unverified": "x"}, "unverified"),
+        ({"unverified": [1]}, "unverified"),
+        ({"unverified": ["a.png", 2]}, "unverified"),
+        ({"unverified_at": 3}, "unverified_at"),
+        ({"unverified_at": ["x"]}, "unverified_at"),
+    ],
+)
+def test_a_malformed_unverified_field_is_dropped_and_the_record_survives(bad, dropped):
+    base = {"round": 1, "numbers": [1], "cause": "drawing_departure"}
+    assert document.parse(document.render(_escalation_state(**base, **bad)))[
+        "drawing_escalation"
+    ] == (base)
+    stored = document.render(_escalation_state(**base)).replace(
+        "\n---\n", "\ndrawing_escalation: " + json.dumps({**base, **bad}) + "\n---\n", 1
+    )
+    assert dropped in stored
+    assert document.parse(stored)["drawing_escalation"] == base
+
+
+@pytest.mark.parametrize("stage", [None, "plan"])
+def test_a_record_without_the_new_fields_rewrites_identically_with_no_such_keys(stage):
+    record = {"round": 2, "numbers": [1], "cause": "drawing_departure"}
+    if stage:
+        record["stage"] = stage
+    text = document.render(_escalation_state(**record))
+    assert "unverified" not in text
+    parsed = document.parse(text)["drawing_escalation"]
+    assert parsed == record
+    assert document.render({**_departure_base(), "drawing_escalation": parsed}) == text
+
+
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
 
 
@@ -2430,9 +2490,60 @@ def test_the_spec_draft_record_round_trips_and_is_distinct_from_the_spec():
     plain = document.render(_base_state())
     assert document.render(_base_state(spec_draft=None)) == plain
     assert "spec_draft" not in plain
-    for record in (_WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
+    with_commit = {**_WRITTEN_DRAFT, "commit": "d" * 40}
+    for record in (with_commit, _WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
         text = document.render(_base_state(spec_draft=record))
         loaded = document.parse(text)
         assert loaded["spec_draft"] == record
         assert "spec" not in loaded and "spec_delivery" not in text
         assert document.render(_base_state(**loaded)) == text
+
+
+# --- owner-decision groundwork (GH-960) -------------------------------------------------
+
+
+def _round_trip(state):
+    return document.parse(document.render(state))
+
+
+def test_the_owner_decision_fields_round_trip_and_are_omitted_when_absent():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    with_fields = {
+        **base,
+        "owner_decision_seen": "2026-11-18T10:00:00Z",
+        "owner_decision_route": "pm",
+    }
+    back = _round_trip(with_fields)
+    assert back["owner_decision_seen"] == "2026-11-18T10:00:00Z"
+    assert back["owner_decision_route"] == "pm"
+    plain = document.render(base)
+    assert "owner_decision_seen" not in plain and "owner_decision_route" not in plain
+
+
+def test_an_absent_task_head_and_empty_subtasks_come_back_as_the_state_without_them():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    assert _round_trip({**base, "task_head": None, "subtasks": {}}) == _round_trip(base)
+    assert "task_head" not in document.render({**base, "task_head": None})
+
+
+def test_a_hand_written_null_task_head_reads_falsy():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "type": "feature"})
+    raw = raw.replace("---\n", "---\ntask_head: null\n", 1)
+    assert not document.parse(raw).get("task_head")
+
+
+def test_an_owner_decision_restart_settled_row_round_trips():
+    row = {
+        "subtask": "integration",
+        "version": 3,
+        "outcome": "discarded",
+        "reason": "owner_decision",
+    }
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "type": "feature",
+        "restart_settled": [row],
+    }
+    assert _round_trip(state)["restart_settled"] == [row]

@@ -417,11 +417,17 @@ def _escalate_drawing(
     and the open ones in one `questions` pause; the questions for the human already in `patch`
     travel in it. With a spec the cause is `drawing` (`drawing_answer.escalation_patch`)."""
     held = apply(state, patch)
-    escalation = drawing_answer.escalation_patch(held, drawn.pending(held), ports.now())
+    at = ports.now()
+    escalation = drawing_answer.escalation_patch(held, drawn.pending(held), at)
     new_rows = cast(list[DepartureRecord], escalation.pop("drawing_departures"))
     rows = add_drawing_departures(patch.get("drawing_departures"), new_rows)
+    asked = cast(list[str], escalation.pop("questions_for_human", []))
     merged = cast(TaskState, {**patch, **escalation, "drawing_departures": rows})
-    escalated = rules.logged(merged, at=ports.now())
+    held_questions = patch.get("questions_for_human", [])
+    questions = [*held_questions, *(q for q in dict.fromkeys(asked) if q not in held_questions)]
+    if questions:
+        merged["questions_for_human"] = questions
+    escalated = rules.logged(merged, at=at)
     escalated["status"] = WAITING_ON_HUMAN
     return escalated
 

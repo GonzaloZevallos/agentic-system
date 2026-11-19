@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -30,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__StackProposal["StackProposal"]
     class schemas__Subtask["Subtask"]
     class schemas__TechAnswers["TechAnswers"]
     class schemas__TechAnswersWithAssumptions["TechAnswersWithAssumptions"]
@@ -49,6 +51,7 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
   - `schemas.Verdict` hereda de `schemas.RoleOutput`

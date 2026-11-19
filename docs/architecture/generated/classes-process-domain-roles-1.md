@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -38,17 +39,12 @@ classDiagram
     class drawing__CheckLike["CheckLike"]
     class drawing__Departure["Departure"]
     class drawing__DepartureLike["DepartureLike"]
+    class drawing__UnverifiedAsk["UnverifiedAsk"]
     class drawing__Verdicts["Verdicts"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]
     class roles__Prompt["Prompt"]
     class roles__Role["Role"]
-    class schemas__Answers["Answers"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
-
-## Relaciones con otras páginas
-
-- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
-  - `schemas.Answers` hereda de `schemas.RoleOutput`

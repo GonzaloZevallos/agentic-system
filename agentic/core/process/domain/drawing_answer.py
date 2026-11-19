@@ -90,7 +90,10 @@ def _history(due: Exhausted, rows: Sequence[task.DepartureRecord]) -> str:
 
 
 def _reason(
-    due: Due | Exhausted, rows: Sequence[task.DepartureRecord], contradicted: frozenset[int]
+    due: Due | Exhausted,
+    rows: Sequence[task.DepartureRecord],
+    contradicted: frozenset[int],
+    asks: Sequence[drawing.UnverifiedAsk],
 ) -> str:
     lines = [_history(due, rows)] if isinstance(due, Exhausted) else []
     for row in sorted(rows, key=lambda r: r["number"]):
@@ -100,6 +103,7 @@ def _reason(
         lines.append(drawing.departure_question(_departure(row), n))
         if n in contradicted:
             lines.append(f"Drawing {n} got both accept and reject in one comment; answer it once.")
+    lines.extend(ask.line for ask in asks)
     return "\n".join(lines)
 
 
@@ -119,16 +123,23 @@ def escalation_patch(
     departures: Sequence[drawing.Departure],
     at: str,
     *,
+    unverified: Sequence[drawing.UnverifiedAsk] = (),
     contradicted: frozenset[int] = frozenset(),
     stage: Literal["plan", "delivery"] = "delivery",
-) -> dict[str, object]:
-    """The patch that escalates `departures` (and every row still open) to the owner: the new
-    rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
-    escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
-    comment). Raises `ValueError` when no number remains unanswered.
+) -> task.DrawingEscalationPatch:
+    """The patch that escalates `departures` (and every row still open) and the `unverified`
+    asks to the owner: the new rows recorded (also when the cap is reached, never dropped), the
+    round, and a `questions` escalation worded here (the commands are `prompt_lines`, shown by
+    the one that renders the comment). The only builder of every drawing pause. Raises
+    `ValueError` when no number remains unanswered and there is no ask, and when `stage` is
+    `plan` with asks only: a plan pause needs an open departure.
 
     `stage` says which gate asked: `plan` is written to the record, `delivery` (the default) is
-    what an absent one reads as.
+    what an absent one reads as. The ask lines come after the departure questions in the reason;
+    with asks the record carries their paths and `unverified_at` is `at`, and the patch carries
+    `questions_for_human`, only those lines (the key is absent without asks): the caller appends
+    them to the ones its own patch already has. `at` must be the value the caller passes to
+    `rules.logged`, so the `pause_log` entry and the record share one instant (`prompt_cause`).
 
     Called only from the system's serialized turn, never from a branch node: it reads the
     round the whole task has reached."""
@@ -136,18 +147,27 @@ def escalation_patch(
     new_rows = task.departure_records(state.get("drawing_departures"), departures, at)
     rows = task.add_drawing_departures(state.get("drawing_departures"), new_rows)
     numbers = sorted(r["number"] for r in rows if r["answer"] is None)
-    if not numbers:
+    if not numbers and not unverified:
         raise ValueError("no departure is left unanswered: there is nothing to escalate")
+    if stage == "plan" and not numbers:
+        raise ValueError("an unverified-only drawing pause cannot be a plan pause")
     escalation = rules.escalation(
         "questions",
-        _reason(due, rows, contradicted),
+        _reason(due, rows, contradicted, unverified),
         spec=state.get("spec"),
         spec_cause="drawing" if rules.spec_delivery(state) else None,
     )
     record = task.DrawingEscalation(round=due.round, numbers=numbers, cause=due.cause)
     if stage == "plan":
         record["stage"] = "plan"
-    return {**escalation, "drawing_departures": new_rows, "drawing_escalation": record}
+    patch = task.DrawingEscalationPatch(
+        **escalation, drawing_departures=new_rows, drawing_escalation=record
+    )
+    if unverified:
+        record["unverified"] = list(dict.fromkeys(ask.path for ask in unverified))
+        record["unverified_at"] = at
+        patch["questions_for_human"] = [ask.line for ask in unverified]
+    return patch
 
 
 @dataclass(frozen=True)
@@ -229,17 +249,29 @@ def resume_patch(
 
 def prompt_cause(state: task.TaskState) -> Cause | None:
     """The cause the prompt of a pause carries: the recorded one, only while the pause is a
-    `questions` one that is not on tracker items and some open row was asked. The landing's
-    `api_break_missing` passes its own cause and wins."""
+    `questions` one that is not on tracker items and either some open row was asked or the
+    record's `unverified_at` is the instant of the last `escalation` entry of `pause_log` (an
+    unverified-only pause, which asks no row). The landing's `api_break_missing` passes its own
+    cause and wins."""
     record = state.get("drawing_escalation")
     if (
         record
         and state.get("escalation_class") == "questions"
         and not rules.tracker_item_pause(state)
-        and set(unanswered(state)) & set(record["numbers"])
+        and (set(unanswered(state)) & set(record["numbers"]) or _asked_unverified(state, record))
     ):
         return record["cause"]
     return None
+
+
+def _asked_unverified(state: task.TaskState, record: task.DrawingEscalation) -> bool:
+    at = record.get("unverified_at")
+    if not at:
+        return False
+    last = next(
+        (e for e in reversed(state.get("pause_log", [])) if e["kind"] == "escalation"), None
+    )
+    return last is not None and last.get("at") == at
 
 
 def _flat(text: str) -> str:
@@ -431,3 +463,28 @@ def fix_pass_rows(
         for row in state.get("drawing_departures", [])
         if outcomes.get(row["key"]) == "fix_due"
     ]
+
+
+def fold_raised(state: task.TaskState, merged: task.TaskState, at: str) -> task.TaskState:
+    """`merged` (the patch a verifier set returns, on the snapshot `state`) without the
+    transient `drawing_raised` the final leads left: the escalation of those departures built by
+    `escalation_patch`, applied on top of `merged` so a sibling's deltas survive (ADR-0084).
+
+    Decided by whether the key is present, never by whether the list is empty: a raise with no
+    new departure still escalates the row left open. Without the key `merged` is returned as it
+    is. When a sibling already escalated, this pass's departures are dropped: they are found
+    again on the head the resume verifies, never remembered. A raise always leaves an open
+    number, so the `ValueError` of `escalation_patch` is unreachable here and is not caught."""
+    if "drawing_raised" not in merged:
+        return merged
+    folded = merged.copy()
+    raised = folded.pop("drawing_raised")
+    held = task.apply(state, folded)
+    if held.get("escalated"):
+        return folded
+    escalation = escalation_patch(held, raised, at)
+    pause_log = rules.logged(dict(escalation), at=at)["pause_log"]
+    pause = task.DrawingEscalationPatch(
+        **escalation, pause_log=pause_log, status=task.WAITING_ON_HUMAN
+    )
+    return task.apply(folded, pause)

@@ -209,16 +209,13 @@ async def test_a_git_error_runs_no_lead_and_writes_no_record(tmp_path):
     assert script.slugs == []
 
 
-async def test_an_unanswered_departure_returns_without_a_number_and_runs_no_pm(tmp_path):
+async def test_an_unanswered_departure_is_left_for_verify_and_runs_no_pm(tmp_path):
     script = runner(lead([]), lead([check("departs")], [departure()]), pm=False)
     patch, _ = await run(state(), script, tmp_path, design())
-    claims = [f["claim"] for f in patch["findings"]]
-    assert len(claims) == 1 and IMAGE in claims[0] and "Save" in claims[0]
-    assert "owner must answer" in claims[0] and not any(
-        ch.isdigit() for ch in claims[0].replace(IMAGE, "").replace("GH", "")
-    )
-    assert "pm_final" not in script.slugs and "drawing_raised" not in patch
-    assert patch["subtasks"]["s0"]["status"] == "returned"
+    assert [(d.drawing, d.element) for d in patch["drawing_raised"]] == [(IMAGE, "Save")]
+    assert "pm_final" not in script.slugs
+    # nothing returns and nothing is counted: the owner's escalation replaces the return
+    assert not {"subtasks", "findings", "changes_requested", "drawing_departures"} & set(patch)
     assert patch["drawing_checks"]["open"] == 1
 
 
@@ -285,25 +282,33 @@ async def test_the_pass_after_a_fix_pass_is_return_due_and_escalates_at_the_pair
     assert "pm_final" not in script.slugs
 
 
-async def test_a_raise_and_a_fix_due_in_one_pass_give_one_return_with_both_claims(tmp_path):
+async def test_a_raise_with_a_fix_due_in_one_pass_leaves_only_the_raise(tmp_path):
     held = state(drawing_departures=[_row("reject", 0, image=OTHER, number=7)])
     ws = Workspace()
     ws.touched = ("web/home.tsx", "web/list.tsx")
     ui = lead([check("departs"), check("departs", OTHER)], [departure(), departure(ref=OTHER)])
     script = runner(lead([]), ui, pm=False)
     patch, _ = await run(held, script, tmp_path, design(), workspace=ws)
-    claims = [f["claim"] for f in patch["findings"]]
-    assert len(claims) == 2 and len(patch["findings"]) == len(set(claims))
-    raised = next(c for c in claims if IMAGE in c)
-    rejected = next(c for c in claims if OTHER in c)
-    assert "owner must answer" in raised and not any(
-        ch.isdigit() for ch in raised.replace(IMAGE, "")
-    )
-    assert "Drawing 7" in rejected and "reject" in rejected
-    assert patch["subtasks"]["s0"]["status"] == "returned"
-    assert patch["changes_requested"] == {PAIR_PM_TECH_LEAD.key: 1}
-    assert [r["fix_passes"] for r in patch["drawing_departures"]] == [1]
-    assert "pm_final" not in script.slugs and "drawing_raised" not in patch
+    # the fix pass is counted again on the resumed head, never on a pass that escalates
+    assert [d.element for d in patch["drawing_raised"]] == ["Save"]
+    assert not {"subtasks", "findings", "changes_requested", "drawing_departures"} & set(patch)
+    assert "pm_final" not in script.slugs
+
+
+async def test_a_pass_with_an_open_row_and_nothing_new_still_sets_the_empty_key(tmp_path):
+    held = state(drawing_departures=[_row(None, 0)])
+    script = runner(lead([]), lead([check("departs")], [departure()]), pm=False)
+    patch, _ = await run(held, script, tmp_path, design())
+    assert patch["drawing_raised"] == [] and "pm_final" not in script.slugs
+    assert drawing_answer.unanswered(held) == [3]
+
+
+async def test_the_same_element_in_two_capitalisations_is_one_departure(tmp_path):
+    ux = lead([check("departs")], [departure("Save")])
+    ui = lead([check("departs", element="save")], [departure("save")])
+    patch, _ = await run(state(), runner(ux, ui, pm=False), tmp_path, design())
+    assert len(patch["drawing_raised"]) == 1
+    assert patch["drawing_raised"][0].element.lower() == "save"
 
 
 async def test_an_accepted_departure_is_settled_and_pm_runs(tmp_path):
@@ -312,6 +317,18 @@ async def test_an_accepted_departure_is_settled_and_pm_runs(tmp_path):
     patch, _ = await run(held, script, tmp_path, design())
     assert patch["drawing_checks"]["rows"][0]["settled"] is True
     assert patch["drawing_checks"]["open"] == 0 and "pm_final" in script.slugs
+
+
+async def test_a_later_pass_citing_the_answered_row_in_another_case_opens_no_round(tmp_path):
+    record = {"round": 1, "numbers": [3], "cause": "drawing_departure"}
+    held = state(drawing_departures=[_row("accept", 0, element="Save")], drawing_escalation=record)
+    script = runner(lead([]), lead([check("departs", element="save")], [departure("save")]))
+    patch, _ = await run(held, script, tmp_path, design())
+    after = apply(held, patch)
+    assert "drawing_raised" not in patch and "pm_final" in script.slugs
+    assert after["drawing_escalation"]["round"] == 1 and not after.get("escalated")
+    assert [(r["number"], r["element"]) for r in after["drawing_departures"]] == [(3, "Save")]
+    assert patch["drawing_checks"]["open"] == 0
 
 
 async def test_without_a_design_no_new_key_and_the_same_rendered_prompts(tmp_path):
@@ -340,7 +357,7 @@ async def test_without_a_design_no_new_key_and_the_same_rendered_prompts(tmp_pat
 
 async def test_two_elements_of_one_image_leave_one_row_and_one_claim(tmp_path):
     # `merge_checks` keeps one row per image (invariant 3): the second element a lead cites on
-    # the same image is not recorded, and the return still cites the one that was.
+    # the same image is not recorded, and the raise still carries the one that was.
     ui = lead(
         [check("departs"), check("departs", element="Cancel")],
         [departure("Save"), departure("Cancel")],
@@ -348,8 +365,7 @@ async def test_two_elements_of_one_image_leave_one_row_and_one_claim(tmp_path):
     script = runner(lead([]), ui, pm=False)
     patch, _ = await run(state(), script, tmp_path, design())
     assert len(patch["drawing_checks"]["rows"]) == 1 and patch["drawing_checks"]["open"] == 1
-    claims = [f["claim"] for f in patch["findings"]]
-    assert len(claims) == 1 and "Save" in claims[0] and "Cancel" not in claims[0]
+    assert [d.element for d in patch["drawing_raised"]] == ["Save"]
 
 
 async def test_the_fill_instructions_reach_both_leads_only_with_a_comparable_design(tmp_path):

@@ -15,6 +15,8 @@ from agentic.core.process.domain.task import (
     delta,
     last,
     merge,
+    merge_subtasks,
+    subtasks_reset,
 )
 
 
@@ -66,6 +68,8 @@ def test_reducers_are_read_from_the_annotations():
         "escalation_cause",
         "tracker_human",
         "owner_decision_unbuilt",
+        "owner_decision_seen",
+        "owner_decision_route",
         "tracker_items",
         "tracker_actions_done",
         "restarts",
@@ -478,3 +482,189 @@ def test_staged_escalation_reducer_laws_hold_over_the_whole_grid():
                 assert add_drawing_escalation(
                     add_drawing_escalation(a, b), c
                 ) == add_drawing_escalation(a, add_drawing_escalation(b, c))
+
+
+_AT_EARLY = "2026-11-18T10:00:00.000+00:00"
+_AT_LATE = "2026-11-18T10:00:00.001+00:00"
+
+
+def _full(round_, numbers, cause, stage, unverified, unverified_at):
+    record: dict[str, object] = {"round": round_, "numbers": numbers, "cause": cause}
+    if stage is not None:
+        record["stage"] = stage
+    if unverified:
+        record["unverified"] = unverified
+    if unverified_at:
+        record["unverified_at"] = unverified_at
+    return cast(DrawingEscalation, record)
+
+
+_FULL = [
+    _full(round_, numbers, cause, stage, unverified, at)
+    for round_, numbers, cause, stage in [
+        (1, [1], "drawing_departure", None),
+        (2, [], "drawing_cap", "plan"),
+        (2, [2, 3], "drawing_departure", "delivery"),
+    ]
+    for unverified, at in [
+        ([], ""),
+        (["a.png"], _AT_EARLY),
+        (["b.png", "a.png"], _AT_LATE),
+        (["c.png"], "x"),
+    ]
+]
+
+
+def _same(a, b):
+    """Equal records, `unverified` compared as a set: its order depends on the fold order."""
+    assert set(a.get("unverified", [])) == set(b.get("unverified", []))
+    assert len(a.get("unverified", [])) == len(set(a.get("unverified", [])))
+    drop = {k: v for k, v in a.items() if k != "unverified"}
+    other = {k: v for k, v in b.items() if k != "unverified"}
+    assert drop == other
+
+
+def test_the_escalation_reducer_laws_hold_over_records_with_unverified_asks():
+    empty = cast(DrawingEscalation, {})
+    for a in _FULL:
+        assert add_drawing_escalation(a, empty) == add_drawing_escalation(empty, a)
+        assert add_drawing_escalation(empty, a) == add_drawing_escalation(None, a)
+        assert set(add_drawing_escalation(empty, a).get("unverified", [])) == set(
+            a.get("unverified", [])
+        )
+        for b in [*_FULL, empty]:
+            _same(add_drawing_escalation(a, b), add_drawing_escalation(b, a))
+            for c in [*_FULL[::3], empty]:
+                _same(
+                    add_drawing_escalation(add_drawing_escalation(a, b), c),
+                    add_drawing_escalation(a, add_drawing_escalation(b, c)),
+                )
+
+
+def test_unverified_is_the_order_kept_union_with_the_existing_side_first():
+    merged = add_drawing_escalation(
+        _full(1, [1], "drawing_departure", None, ["b.png", "a.png"], _AT_EARLY),
+        _full(1, [2], "drawing_departure", None, ["c.png", "a.png"], _AT_LATE),
+    )
+    assert merged["unverified"] == ["b.png", "a.png", "c.png"]
+    assert merged["unverified_at"] == _AT_LATE
+
+
+def test_unverified_at_is_the_plain_string_max_and_never_parsed():
+    a = _full(1, [1], "drawing_departure", None, ["a.png"], "x")
+    b = _full(1, [1], "drawing_departure", None, [], _AT_LATE)
+    assert add_drawing_escalation(a, b)["unverified_at"] == "x"
+    assert add_drawing_escalation(b, a)["unverified_at"] == "x"
+    assert add_drawing_escalation(b, _full(1, [1], "drawing_departure", None, [], ""))[
+        "unverified_at"
+    ] == (_AT_LATE)
+
+
+def test_a_record_without_the_new_fields_merges_without_those_keys():
+    merged = add_drawing_escalation(_escalation(1, [1]), _escalation(2, [2]))
+    assert merged == _escalation(2, [1, 2])
+    assert "unverified" not in merged and "unverified_at" not in merged
+
+
+_SAMPLES: dict[str, object] = {
+    "round": 2,
+    "numbers": [1, 3],
+    "cause": "drawing_cap",
+    "stage": "plan",
+    "unverified": ["pantallas/Home.png"],
+    "unverified_at": _AT_LATE,
+}
+
+
+def test_every_key_of_the_drawing_escalation_has_a_sample_that_survives_the_merge():
+    keys = set(DrawingEscalation.__annotations__)
+    assert keys == set(_SAMPLES), "a new DrawingEscalation key needs a sample here"
+    record = cast(DrawingEscalation, dict(_SAMPLES))
+    empty = cast(DrawingEscalation, {})
+    assert add_drawing_escalation(record, empty) == record
+    assert add_drawing_escalation(empty, record) == record
+    assert add_drawing_escalation(None, record) == record
+    assert add_drawing_escalation(record, record) == record
+
+
+# --- merge_subtasks and the reset (GH-960) -----------------------------------------------
+
+
+def _unit(status: str = "pending") -> dict:
+    return {"id": "x", "status": status}
+
+
+def test_the_reset_key_can_never_be_a_valid_subtask_id():
+    from agentic.core.process.domain.schemas import SLUG
+    from agentic.core.process.domain.task import SUBTASKS_RESET
+
+    assert not SLUG.match(SUBTASKS_RESET)
+    assert subtasks_reset() == {SUBTASKS_RESET: {}}
+    assert REDUCERS["subtasks"] is merge_subtasks
+
+
+@pytest.mark.parametrize(
+    ("current", "update"),
+    [
+        (None, None),
+        (None, {"a": _unit()}),
+        ({"a": _unit()}, None),
+        ({"a": _unit()}, {}),
+        ({"a": _unit(), "b": _unit()}, {"a": _unit("approved")}),
+        ({"a": _unit()}, {"b": _unit()}),
+    ],
+)
+def test_merge_subtasks_without_the_key_is_merge(current, update):
+    assert merge_subtasks(current, update) == merge(current, update)
+
+
+def test_the_reset_empties_then_merges_what_else_the_update_carries():
+    current = {"a": _unit(), "b": _unit()}
+    assert merge_subtasks(current, subtasks_reset()) == {}
+    assert merge_subtasks(current, {**subtasks_reset(), "c": _unit()}) == {"c": _unit()}
+    assert merge_subtasks(None, {**subtasks_reset(), "c": _unit()}) == {"c": _unit()}
+
+
+def test_apply_never_stores_the_key_with_or_without_subtasks_in_the_state():
+    from agentic.core.process.domain.task import SUBTASKS_RESET
+
+    with_subtasks = apply({"subtasks": {"a": _unit()}}, {"subtasks": subtasks_reset()})
+    assert with_subtasks["subtasks"] == {}
+    without = apply({"id": "T"}, {"subtasks": {**subtasks_reset(), "b": _unit()}})
+    assert without["subtasks"] == {"b": _unit()}
+    bare = apply({"id": "T"}, {"subtasks": subtasks_reset()})
+    assert bare["subtasks"] == {}
+    for result in (with_subtasks, without, bare):
+        assert SUBTASKS_RESET not in result["subtasks"]
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {},
+        {"subtasks": {}},
+        {"subtasks": {"a": _unit("approved")}},
+        {"subtasks": {"a": {"id": "a"}}},  # a whole-unit replacement
+        {"subtasks": {"z": _unit()}},
+    ],
+)
+def test_a_patch_without_the_key_never_shrinks_the_subtask_keys(patch):
+    state = {"subtasks": {"a": _unit(), "b": _unit()}}
+    assert set(apply(state, patch).get("subtasks", {})) >= {"a", "b"}
+
+
+def test_delta_with_a_dropped_key_emits_the_reset_and_round_trips():
+    before = {"id": "T", "subtasks": {"a": _unit(), "b": _unit(), "c": _unit()}}
+    after = {"id": "T", "subtasks": {"a": _unit("approved"), "d": _unit()}}
+    patch = delta(before, after)
+    assert patch == {"subtasks": {**subtasks_reset(), "a": _unit("approved"), "d": _unit()}}
+    assert apply(before, patch) == after
+    emptied = {"id": "T", "subtasks": {}}
+    assert apply(before, delta(before, emptied)) == emptied
+
+
+def test_delta_without_a_dropped_key_never_emits_the_reset():
+    before = {"subtasks": {"a": _unit(), "b": _unit()}}
+    after = {"subtasks": {"a": _unit("approved"), "b": _unit(), "c": _unit()}}
+    assert delta(before, after) == {"subtasks": {"a": _unit("approved"), "c": _unit()}}
+    assert delta(before, before) == {}

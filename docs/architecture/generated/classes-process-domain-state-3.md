@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 9, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 10, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
@@ -30,6 +31,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__RestoreObserved["RestoreObserved"]
+    class rules__RestoreSteps["RestoreSteps"]
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
@@ -39,12 +42,9 @@ classDiagram
     class size_budget__PlanSize["PlanSize"]
     class spec_approval__ApprovalReading["ApprovalReading"]
     class spec_approval__Comment["Comment"]
+    class spec_delivery__DraftReading["DraftReading"]
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
-    class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
-    class spec_delivery__SpecLine["SpecLine"]
-    class spec_delivery__SpecLineMalformed["SpecLineMalformed"]
-    class spec_delivery__SpecRefusal["SpecRefusal"]
 ```
 
 ## Relaciones con otras páginas
