@@ -606,14 +606,14 @@ class TestFastLane:
         assert found == []
         assert lines == [WAITING.format(5), WAITING.format(6)]
 
-    def test_a_member_lacking_master_says_so(self, tmp_path):
+    def test_a_member_lacking_master_is_no_obstacle_and_gets_the_lane(self, tmp_path):
         ports = _lane_ports()
         ports.workspace.ancestors_by_ref[_head_of(5)] = set()
 
         found, lines = _lane_round(ports, tmp_path)
 
-        assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (clean, lacks master) behind #7"
-        assert found == [6]
+        assert found == [5]
+        assert "lacks master" not in "".join(lines)
 
     def test_overlapping_paths_say_which_head_they_overlap(self, tmp_path):
         ports = _lane_ports()
@@ -660,7 +660,7 @@ class TestFastLane:
         ]
         assert ports.workspace.ancestor_checks == []
 
-    def test_one_lane_member_per_master_movement(self, tmp_path):
+    def test_a_member_lacking_the_moved_master_gets_the_lane_in_the_next_round(self, tmp_path):
         ports = _lane_ports()
         first = _lane_round(ports, tmp_path)[0]
         moved = "d" * 40
@@ -674,8 +674,8 @@ class TestFastLane:
         found, lines = _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=1), master=moved)
 
         assert first == [5]
-        assert found == []
-        assert lines == ["agentic: poll: auto-merge #6 -> waiting (clean, lacks master) behind #7"]
+        assert found == [6]
+        assert lines == ["agentic: poll: auto-merge #6 -> fast lane behind busy #7"]
 
     def test_a_head_with_one_sync_left_opens_no_lane(self, tmp_path):
         ports = _lane_ports()
@@ -905,13 +905,13 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
     ):
         ports = _lane_ports()
         _unseen_head(ports)
-        ports.workspace.ancestors_by_ref[_head_of(5)] = set()
+        ports.workspace.touched_by[(MASTER, _head_of(5))] = ("head.py",)
         ports.workspace.touched_by[(MASTER, _head_of(6))] = ("head.py",)
 
         round_ = _evaluated(ports, tmp_path)
 
         assert round_.lane is None
-        assert round_.lane_reasons == {5: "lacks_master", 6: "paths_overlap"}
+        assert round_.lane_reasons == {5: "paths_overlap", 6: "paths_overlap"}
 
     def test_the_round_after_a_child_run_saved_a_stale_state_assesses_the_members(self, tmp_path):
         memory = _lane_ports()

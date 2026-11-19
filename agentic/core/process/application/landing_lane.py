@@ -100,12 +100,14 @@ def _candidate_member(
     current_master: str,
     member: landing_order.Member,
     pr_head: str,
+    decision: landing_order.LaneDecision,
 ) -> landing_order.Member:
-    """`member` as a candidate: `merge_now` and clean by the caller's own reading; its branch
-    holds master or not, and only when it does are its paths read."""
+    """`member` as a candidate: the caller's admitted `decision` and clean by its own reading; its
+    paths are read whether or not its branch holds master (the merge verb brings the evidence on
+    the pair), and `holds_master` is kept as an informative fact."""
     holds = _holds_master(ports, product_dir, current_master, pr_head)
-    paths = _touched(ports, current_master, pr_head) if holds is True else None
-    return replace(member, merge_now=True, clean=True, holds_master=holds, paths=paths)
+    paths = _touched(ports, current_master, pr_head)
+    return replace(member, lane_decision=decision, clean=True, holds_master=holds, paths=paths)
 
 
 def lane_facts(
@@ -115,14 +117,16 @@ def lane_facts(
     members: Sequence[landing_order.Member],
     head: LaneHead,
     candidates: Mapping[int, str],
+    decisions: Mapping[int, landing_order.LaneDecision] | None = None,
 ) -> tuple[landing_order.Member, ...]:
     """A copy of `members`, in order, with the lane facts read. `candidates` maps an issue to its
-    pull request head sha for each member the caller knows to be decided `merge`, not backed off
-    and conflict-free; the others come back unchanged.
+    pull request head sha for each member the caller knows to hold an admitted decision
+    (`landing_order.LANE_DECISIONS`), not backed off and conflict-free, and `decisions` the
+    decision it holds (`merge` for one it does not list); the others come back unchanged.
 
-    A head that does not integrate is read for nothing, and the candidates still carry `merge_now`
-    and `clean` but no master or path fact. No candidate is read when the head's paths are `None`:
-    the lane cannot open on them."""
+    A head that does not integrate is read for nothing, and the candidates still carry their
+    `lane_decision` and `clean` but no master or path fact. No candidate is read when the head's
+    paths are `None`: the lane cannot open on them."""
     result: list[landing_order.Member] = []
     read_head: landing_order.Member | None = None
     for member in members:
@@ -136,10 +140,13 @@ def lane_facts(
         pr_head = candidates.get(member.issue)
         if pr_head is None or member.issue == head.issue:
             continue
+        decision = (decisions or {}).get(member.issue, "merge")
         if readable:
-            result[index] = _candidate_member(ports, product_dir, current_master, member, pr_head)
+            result[index] = _candidate_member(
+                ports, product_dir, current_master, member, pr_head, decision
+            )
         else:
-            result[index] = replace(member, merge_now=True, clean=True)
+            result[index] = replace(member, lane_decision=decision, clean=True)
     return tuple(result)
 
 

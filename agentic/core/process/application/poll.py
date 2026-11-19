@@ -1005,7 +1005,7 @@ class LandingRound:
     `landing_order.order` answers once `landing_lane.lane_facts` has read the facts, `None` when
     there is none or the head holds no turn."""
     lane_reasons: Mapping[int, landing_order.LaneReason] = field(default_factory=dict)
-    """Why each waiting member that is clean and `merge_now` has no lane: `lane_reason`'s."""
+    """Why each waiting member that is clean has no lane: `lane_reason`'s."""
 
 
 def _stamp(raw: TaskState) -> datetime | None:
@@ -1330,6 +1330,8 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "head_sync_budget": "head sync budget",
     "member_paths_unknown": "paths unknown",
     "stack_parent_unmerged": "stacked parent unmerged",
+    "not_merge_ready": "not merge ready",
+    "backed_off": "backed off",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
 
