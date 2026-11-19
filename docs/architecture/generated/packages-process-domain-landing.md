@@ -20,6 +20,7 @@ graph TD
     m_domain__board["domain.board"]
     m_domain__cost_history["domain.cost_history"]
     m_domain__gate_priority["domain.gate_priority"]
+    m_domain__hold["domain.hold"]
     m_domain__landing["domain.landing"]
     m_domain__landing_order["domain.landing_order"]
     m_domain__merge_hold["domain.merge_hold"]

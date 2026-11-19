@@ -423,8 +423,8 @@ def _escalate_drawing(
     rows = add_drawing_departures(patch.get("drawing_departures"), new_rows)
     asked = cast(list[str], escalation.pop("questions_for_human", []))
     merged = cast(TaskState, {**patch, **escalation, "drawing_departures": rows})
-    questions = [*patch.get("questions_for_human", []), *asked]
-    questions = list(dict.fromkeys(questions))
+    held_questions = patch.get("questions_for_human", [])
+    questions = [*held_questions, *(q for q in dict.fromkeys(asked) if q not in held_questions)]
     if questions:
         merged["questions_for_human"] = questions
     escalated = rules.logged(merged, at=at)

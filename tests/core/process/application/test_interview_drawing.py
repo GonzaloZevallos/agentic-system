@@ -417,3 +417,8 @@ def test_a_pause_without_asks_leaves_the_patch_questions_as_they_were(monkeypatc
     assert held["questions_for_human"] == ["Own?"]
     bare = _escalate_with_asks(monkeypatch, {}, ())
     assert "questions_for_human" not in bare
+
+
+def test_a_pause_without_asks_keeps_a_question_the_patch_carried_twice(monkeypatch):
+    held = _escalate_with_asks(monkeypatch, {"questions_for_human": ["Own?", "Own?"]}, ())
+    assert held["questions_for_human"] == ["Own?", "Own?"]

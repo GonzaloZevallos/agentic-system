@@ -49,4 +49,5 @@ classDiagram
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`
+- [application: support (parte 8)](classes-process-application-support-8.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
