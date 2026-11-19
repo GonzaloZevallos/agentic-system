@@ -1137,6 +1137,47 @@ class TestLaneBesideAReintegratingHead:
         assert last == [7]
         assert "head_yields" not in ports.documents.load("GH-7")
 
+    def test_a_ci_run_jump_starts_stays_live_and_the_head_follows_it(self, tmp_path):
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        ports.stack.declared_ci_all = ("web",)
+        ports.tracker.ci_reports = {
+            f"https://github.com/o/r/pull/{number}": ci.CiReport(
+                _head_of(number),
+                "master",
+                "9" * 40,
+                "2026-11-03T09:00:00+00:00",
+                (ci.CiCheck("web", "COMPLETED", "SUCCESS", "https://github.com/o/r/runs/1/job/5"),),
+            )
+            for number in (5, 6, 7)
+        }
+
+        started, started_lines = _round_at(
+            ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"}
+        )
+        assert started == [5]
+        assert started_lines[0] == (
+            "agentic: poll: auto-merge #5 -> fast lane behind busy #7 (land_model, ci_run)"
+        )
+        assert ports.documents.load("GH-5")["lane_admitted"]["decision"] == "ci_run"
+
+        # the head delivered; the lane's own ci_run merge child is still alive: nothing is cut
+        later = NOW + timedelta(minutes=1)
+        delivered, lines = _round_at(ports, tmp_path, busy={"GH-5"}, integrating={}, now=later)
+        assert 5 not in delivered and "(land_model" not in "".join(lines)
+        assert (
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7"
+            in lines
+        )
+
+        # the jump ended: the head is the product's candidate again, and never yielded
+        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
+        last, _ = _round_at(
+            ports, tmp_path, busy=(), integrating={}, now=later + timedelta(minutes=1)
+        )
+        assert last == [7]
+        assert "head_yields" not in ports.documents.load("GH-7")
+
     def test_a_clean_stacked_child_behind_an_integrating_head_never_jumps(self, tmp_path):
         ports = _lane_ports()
         _stale(ports, 5, 6)
