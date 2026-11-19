@@ -4,6 +4,8 @@ departure the owner has not answered is paused as a `questions` escalation at st
 with no subtasks, no promotion and no human tracker question. Without a `design` nothing about
 the plan changes. Seam: `plan.plan` with a scripted runner and in-memory ports."""
 
+from dataclasses import replace
+
 import pytest
 
 from agentic.core.process.application.plan import plan
@@ -12,7 +14,16 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.task import apply, departure_records
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_plan_critic import CRITIC_ARM, critique, sized
-from tests.core.process.application.test_plan_estimate import ITEM1, TASK, arm_of
+from tests.core.process.application.test_plan_estimate import (
+    ITEM1,
+    PART,
+    TASK,
+    arm_of,
+    carve_ports,
+    carve_result,
+    cold,
+    two_steps,
+)
 from tests.core.process.application.test_plan_promote import _promoted_state
 from tests.core.process.application.test_spec_assumptions_nodes import SPEC
 from tests.fakes import MemoryStack, ScriptedRunner, memory_ports, planned
@@ -241,3 +252,85 @@ async def test_an_unreadable_stack_fails_the_node_and_writes_nothing(arm, tmp_pa
         await plan(TASK, cfg, ports)
 
     assert ports.documents.saved == []
+
+
+# -- the plan the node keeps when it escalates on its own departures (GH-1004) ------------------
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_an_open_departure_keeps_the_plan_with_its_round_estimate_and_departures(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(arm, tmp_path, departing(RAW, invariants=["Keep it pure."]))
+    patch = await plan(TASK, cfg, designed(runner))
+
+    held = patch["plan_held"]
+    assert held["round"] == patch["drawing_escalation"]["round"]
+    assert held["estimate"] == patch["estimate"]
+    assert held["departures"] == held["plan"]["drawing_departures"] == [RAW]
+    assert [drawing.Departure(**row) for row in held["departures"]] == [DEPARTURE]
+    assert held["plan"]["invariants"] == ["Keep it pure."]
+    assert held["plan"]["subtasks"][0]["id"] == "api"
+    assert held["departures"][0] is not held["plan"]["drawing_departures"][0]
+
+
+async def test_the_critic_route_keeps_the_revision_it_escalated_on(tmp_path):
+    runner = ScriptedRunner(
+        plan_sizer=[sized()],
+        tech_lead=[departing(), departing(RAW)],
+        tech_lead_critic=[critique("important")],
+    )
+    cfg = Configuration(product_dir=tmp_path, plan_review="critic")
+    patch = await plan({**TASK, "assignment": CRITIC_ARM}, cfg, designed(runner))
+
+    assert patch["plan_held"]["departures"] == [RAW]
+    assert patch["plan_held"]["estimate"] == patch["estimate"]
+
+
+async def test_a_floored_estimate_is_held_as_the_stored_one_with_the_declared_figure(tmp_path):
+    spent = {**TASK, "cost_usd": 50.0}
+    runner, cfg = arm_of("cold", tmp_path, departing(RAW, estimated_cost_usd=20.0, cost=30.0))
+    patch = await plan(spent, cfg, designed(runner))
+
+    held = patch["plan_held"]
+    assert held["estimate"] == patch["estimate"]
+    assert held["estimate"]["declared_usd"] == 20.0
+    # The lift to what the task has spent after the node is above the floored plan's figure.
+    assert held["plan"]["estimated_cost_usd"] >= 70.0
+    assert held["estimate"]["cost_usd"] > held["plan"]["estimated_cost_usd"]
+
+
+async def test_a_carve_out_that_lands_a_remainder_escalates_without_holding_the_plan(tmp_path):
+    two = two_steps()
+    two.structured_output.update(drawing_departures=[RAW])
+    runner = ScriptedRunner(tech_lead=[two], tech_lead_carve_out=[carve_result()])
+    ports = replace(carve_ports(runner), stack=MemoryStack(design=DESIGN))
+    patch = await plan(PART, cold(tmp_path), ports)
+
+    assert patch["carve_out"]["outcome"] == "applied"
+    assert patch["drawing_escalation"]["stage"] == "plan"
+    assert "subtasks" not in patch
+    assert "plan_held" not in patch
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        pytest.param(lambda: planned(), id="no departure"),
+        pytest.param(lambda: departing(), id="no departure declared"),
+    ],
+)
+async def test_a_plan_that_does_not_escalate_holds_nothing(script, tmp_path):
+    runner, cfg = arm_of("cold", tmp_path, script())
+    patch = await plan(TASK, cfg, designed(runner))
+
+    assert "escalation_class" not in patch
+    assert "plan_held" not in patch
+
+
+async def test_an_accepted_departure_dispatches_and_holds_nothing(tmp_path):
+    held = {**TASK, "drawing_departures": [answered("accept")]}
+    runner, cfg = arm_of("cold", tmp_path, departing(RAW))
+    patch = await plan(held, cfg, designed(runner))
+
+    assert "plan_held" not in patch
