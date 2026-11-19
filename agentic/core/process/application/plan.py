@@ -26,6 +26,8 @@ from ..domain import (
     ci_workflow,
     cost_history,
     docs,
+    drawing,
+    drawing_answer,
     plan_revision,
     plan_route,
     plan_view,
@@ -36,6 +38,7 @@ from ..domain import (
     task_path,
     tracker_items,
 )
+from ..domain.design import Design
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -45,7 +48,7 @@ from ..domain.roles import (
     TECH_LEAD_REVIEWER,
     Interview,
 )
-from ..domain.task import INTEGRATION, PlanRoute, Subtask, TaskState, apply
+from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, PlanRoute, Subtask, TaskState, apply
 from . import plan_carve_out, promotion
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
@@ -77,6 +80,8 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(spec.author), ports)
     history = cost_history.build(closed_documents(ports))
+    # Read once per call, on every route; an unreadable stack raises here, it is never no design.
+    design = ports.stack.design(task_base(state, ports))
     carried: TaskState = {}
     pre_estimate: float | None = None
     files: int | None = None
@@ -85,7 +90,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         steps = _steps(cfg, state, history, _part_of(state), ports, None)
         return _finished(state, await carved(state, {}, {}, None, steps, ports), ports)
     if _revising(state):
-        return await _replan(state, spec, cfg, ports, task.path, history)
+        return await _replan(state, spec, cfg, ports, task.path, history, design)
     if plan_route.sizes(state.get("assignment"), cfg.plan_review):
         carried, size = await _size(state, cfg, ports, task.path, history)
         if carried.get("escalation_class") is not None:
@@ -96,12 +101,12 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         recorded = _route_record(pre_estimate, files, cfg, route)
         if plan_route.takes_critic(route):
             return await _plan_with_critic(
-                state, spec, cfg, ports, task.path, history, carried, recorded
+                state, spec, cfg, ports, task.path, history, carried, recorded, design
             )
         carried = apply(carried, {"plan_route": recorded})
     if cfg.skip_ephemeral:
-        return await _plan_cold(state, spec, cfg, ports, task.path, history, carried)
-    return await _interview_and_plan(state, spec, cfg, ports, task.path, history, carried)
+        return await _plan_cold(state, spec, cfg, ports, task.path, history, design, carried)
+    return await _interview_and_plan(state, spec, cfg, ports, task.path, history, carried, design)
 
 
 def _revising(state: TaskState) -> bool:
@@ -121,6 +126,7 @@ async def _replan(
     ports: Ports,
     cwd: Path,
     history: cost_history.History,
+    design: Design | None,
 ) -> TaskState:
     """The plan stage of a promoted task (GH-591): it revises, it never starts a new
     interview. `plan_route.after_promotion` picks the existing interview's resume (the retake
@@ -132,9 +138,9 @@ async def _replan(
         "after_promotion": True,
     }
     if stage == "critic":
-        return await _plan_with_critic(state, spec, cfg, ports, cwd, history, {}, recorded)
+        return await _plan_with_critic(state, spec, cfg, ports, cwd, history, {}, recorded, design)
     carried = apply({}, {"plan_route": recorded})
-    return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
+    return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried, design)
 
 
 def _plan_over_cap(landed: TaskState) -> task_path.PromoteRequest | None:
@@ -143,11 +149,49 @@ def _plan_over_cap(landed: TaskState) -> task_path.PromoteRequest | None:
     return rules.plan_over_cap_request(landed)
 
 
-def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
-    """`finish` after the plan node's system step: a promotion the model asked for, or the cap
-    asked for, is applied here through `task_path.promote` (the node is serialized) and never
-    left in the document; a refusal's notice goes to the Tech Lead's section."""
+def _declared(output: Output | None, design: Design | None) -> tuple[drawing.Departure, ...]:
+    """The departures the plan that stands declares, as `drawing.Departure`; none without a
+    `design`, where they are ignored, or when nothing was delivered."""
+    if design is None or output is None:
+        return ()
+    return tuple(drawing.Departure(**raw) for raw in output.data.get("drawing_departures") or [])
+
+
+def _finished(
+    state: TaskState,
+    patch: TaskState,
+    ports: Ports,
+    *,
+    design: Design | None = None,
+    departures: tuple[drawing.Departure, ...] = (),
+) -> TaskState:
+    """`finish` after the plan node's system step, in a fixed order. (a) A patch that already
+    escalated goes on as it is. (b) With a `design`, a plan that stands with subtasks and
+    declares a departure the owner has not answered is escalated before anything is built:
+    `drawing_answer.escalation_patch` words and records it, and the patch loses its subtasks, its
+    promotion request and its cleared `plan_due`, so nothing is dispatched or promoted and the
+    re-plan the owner's answer owes stays owed. (c) Otherwise a promotion the model asked for, or
+    the cap asked for, is applied here through `task_path.promote` (the node is serialized) and
+    never left in the document; a refusal's notice goes to the Tech Lead's section."""
     landed = apply(state, patch)
+    if (
+        design is not None
+        and not patch.get("escalated")
+        and "subtasks" in patch
+        and not landed.get("parts")
+        and not rules.tracker_only_plan(landed)
+    ):
+        split = drawing_answer.plan_split(landed, departures)
+        if split.open:
+            unbuilt: TaskState = {
+                k: v
+                for k, v in patch.items()
+                if k not in ("subtasks", "plan_promote_request", "plan_due")
+            }
+            asked = drawing_answer.escalation_patch(landed, split.open, ports.now(), stage="plan")
+            paused = rules.logged({**unbuilt, **asked}, at=ports.now())
+            paused["status"] = WAITING_ON_HUMAN
+            return finish(state, cast(TaskState, paused), ports)
     request = patch.get("plan_promote_request") or _plan_over_cap(landed)
     kept: TaskState = {k: v for k, v in patch.items() if k != "plan_promote_request"}
     if request is None:
@@ -191,6 +235,7 @@ async def _interview_and_plan(
     cwd: Path,
     history: cost_history.History,
     carried: TaskState,
+    design: Design | None,
 ) -> TaskState:
     """The full solution stage (ADR-0014): the interview, then the Tech Lead from its own
     session. `carried` is what earlier calls of this node already put in the patch (the
@@ -208,7 +253,7 @@ async def _interview_and_plan(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(cfg, interviewed, history, part_of, ports),
+        check=_estimate_check(cfg, interviewed, history, part_of, ports, design),
         cwd=cwd,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
@@ -238,10 +283,16 @@ async def _interview_and_plan(
         history,
         part_of,
         ports,
-        _lazy_check(cfg, interviewed, history, part_of, ports),
+        _lazy_check(cfg, interviewed, history, part_of, ports, design),
         output,
     )
-    return _finished(state, await carved(state, delivered, judged, output, steps, ports), ports)
+    return _finished(
+        state,
+        await carved(state, delivered, judged, output, steps, ports),
+        ports,
+        design=design,
+        departures=_declared(output, design),
+    )
 
 
 def _joined(carried: TaskState, patch: TaskState) -> TaskState:
@@ -313,11 +364,13 @@ def _estimate_check(
     history: cost_history.History,
     part_of: tuple[str, int, int] | None,
     ports: Ports,
+    design: Design | None,
 ) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
     which read the history, what the task has spent so far and whether the task is a part
     (ADR-0054). It also holds the names the base's workflows can report, so a `ci_required`
-    name no check run carries is refused while the plan is written (GH-485)."""
+    name no check run carries is refused while the plan is written (GH-485). With a `design` a
+    departure the owner rejected may not be declared again; without one the map is empty."""
     base = task_base(state, ports)
     return schemas.plan_check_for(
         history,
@@ -336,6 +389,7 @@ def _estimate_check(
         size_ratio=_size_ratio(history),
         has_spec=bool(state.get("spec")),
         spec_path=state["spec"]["path"] if state.get("spec") else None,
+        rejected=drawing_answer.rejected_keys(state) if design is not None else {},
     )
 
 
@@ -499,12 +553,13 @@ def _lazy_check(
     history: cost_history.History,
     part_of: tuple[str, int, int] | None,
     ports: Ports,
+    design: Design | None,
 ) -> Check:
     """`_estimate_check`, built only when a remainder is checked: a plan with no carve-out
     reads nothing more than it did."""
 
     def check(data: dict) -> None:
-        _estimate_check(cfg, state, history, part_of, ports)(data)
+        _estimate_check(cfg, state, history, part_of, ports, design)(data)
 
     return check
 
@@ -554,6 +609,7 @@ async def _plan_cold(
     ports: Ports,
     cwd: Path,
     history: cost_history.History,
+    design: Design | None,
     carried: TaskState | None = None,
 ) -> TaskState:
     """The ephemeral-arm skip path (issue #28): no interviewer, no interviewee, no
@@ -569,7 +625,9 @@ async def _plan_cold(
     ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
     part_of = _part_of(state)
     base = apply(state, carried) if carried else state
-    output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
+    output, written = await _cold_draft(
+        base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL, design
+    )
     output, floored = _floored(output, base, history)
     gate = _spec_gate(state, output, spec.author.name, ports.now())
     if _escalated(gate):
@@ -581,9 +639,21 @@ async def _plan_cold(
     delivered = _covered(state, apply(delivered, gate) if gate else delivered, floored)
     judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
     steps = _steps(
-        cfg, state, history, part_of, ports, _lazy_check(cfg, base, history, part_of, ports), output
+        cfg,
+        state,
+        history,
+        part_of,
+        ports,
+        _lazy_check(cfg, base, history, part_of, ports, design),
+        output,
     )
-    return _finished(state, await carved(state, delivered, judged, output, steps, ports), ports)
+    return _finished(
+        state,
+        await carved(state, delivered, judged, output, steps, ports),
+        ports,
+        design=design,
+        departures=_declared(output, design),
+    )
 
 
 async def _cold_draft(
@@ -594,6 +664,7 @@ async def _cold_draft(
     cwd: Path,
     history: cost_history.History,
     proposed_invariants: str,
+    design: Design | None,
     *,
     resume: str | None = None,
     extra_input: str = "",
@@ -608,7 +679,7 @@ async def _cold_draft(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(cfg, state, history, part_of, ports),
+        check=_estimate_check(cfg, state, history, part_of, ports, design),
         cwd=cwd,
         resume=resume,
         extra_input=extra_input,
@@ -635,6 +706,7 @@ async def _plan_with_critic(
     history: cost_history.History,
     carried: TaskState,
     recorded: PlanRoute,
+    design: Design | None,
 ) -> TaskState:
     """The critic arm (GH-472, ADR-0086): the Tech Lead plans cold, one critic reviews the
     draft in a fresh session, the Tech Lead revises once from its own session. A draft whose
@@ -649,7 +721,7 @@ async def _plan_with_critic(
     carried = apply(carried, {"plan_route": recorded})
     drafting = apply(state, carried)
     draft, draft_patch = await _cold_draft(
-        drafting, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL
+        drafting, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL, design
     )
     carried = apply(carried, draft_patch)
     if draft is None:
@@ -663,7 +735,7 @@ async def _plan_with_critic(
     regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
     if not recorded.get("after_promotion") and not plan_route.takes_critic(regated):
         carried = apply(carried, {"plan_route": {**recorded, "route": regated, "misrouted": True}})
-        return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
+        return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried, design)
     draft_text = drafted["sections"][name]
     if spec is INTERVIEW_SOLUTION_PLATFORM:
         critique, critic_patch = await run_role(
@@ -692,6 +764,7 @@ async def _plan_with_critic(
             cwd,
             history,
             _critic_proposed(critique.data["invariants_proposed"]),
+            design,
             resume=draft.session_id or None,
             extra_input=_critique_input(critique.data["findings"]),
         )
@@ -714,9 +787,15 @@ async def _plan_with_critic(
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
     covered = _covered(state, apply(apply(carried, delivered), route_state), floored)
     judged = _after_delivery(state, covered, part_of, final, history, at=ports.now())
-    checking = _lazy_check(cfg, apply(state, carried), history, part_of, ports)
+    checking = _lazy_check(cfg, apply(state, carried), history, part_of, ports, design)
     steps = _steps(cfg, state, history, part_of, ports, checking, final)
-    return _finished(state, await carved(state, covered, judged, final, steps, ports), ports)
+    return _finished(
+        state,
+        await carved(state, covered, judged, final, steps, ports),
+        ports,
+        design=design,
+        departures=_declared(final, design),
+    )
 
 
 def _critique_input(findings: list[dict]) -> str:

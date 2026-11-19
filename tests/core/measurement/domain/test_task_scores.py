@@ -747,6 +747,7 @@ MERGE_DATED = (
     "cycle_active_h",
     "stage_split_known",
     *ts.FAMILIES["slowest_stage"],
+    *ts.WORK_SCORE_NAMES,
 )
 MERGE_INSTANT = datetime(2026, 10, 1, 13, 0, tzinfo=UTC)
 
@@ -802,7 +803,11 @@ def test_the_new_scores_follow_the_existing_names_and_the_fixed_ones_keep_their_
     assert ts.FAMILIES["slowest_stage"] == tuple(f"slowest_stage.{n[8:]}" for n in STAGE_NAMES)
     assert ts.SCORE_NAMES[: len(ts.BASE_SCORE_NAMES)] == ts.BASE_SCORE_NAMES
     fixed = ts.SCORE_NAMES.index(ts.FIXED_SCORE_NAMES[-1])
-    assert ts.SCORE_NAMES[fixed + 1 :] == ("cycle_active_h", "stage_split_known")
+    assert ts.SCORE_NAMES[fixed + 1 :] == (
+        "cycle_active_h",
+        "stage_split_known",
+        *ts.WORK_SCORE_NAMES,
+    )
     assert len(set(ts.SCORE_NAMES)) == len(ts.SCORE_NAMES)
 
 

@@ -144,6 +144,27 @@ def _last_run(state: TaskState, section: str) -> int:
     return max((r.get("version", 0) for r in runs if r.get("section") == section), default=0)
 
 
+def settle_open(
+    state: TaskState, subtask_ids: Sequence[str], reason: Literal["restarted", "owner_decision"]
+) -> list[RestartSettledRow]:
+    """The one constructor of `RestartSettledRow`s: one row per unit, discarding as `reason` the
+    open findings it raised so far. The bar is one above the unit's highest finding version, and
+    a record at the bar or above stays open, so a unit that is reviewed again (an id reused after
+    a restart or a decision, `integration` included) starts clean."""
+    rows: list[RestartSettledRow] = []
+    for unit in subtask_ids:
+        raised = [f["version"] for f in state.get("findings", []) if f["subtask"] == unit]
+        rows.append(
+            {
+                "subtask": unit,
+                "version": 1 + max(raised, default=0),
+                "outcome": "discarded",
+                "reason": reason,
+            }
+        )
+    return rows
+
+
 def restart_patch(
     state: TaskState, subtask_id: str, pair: Pair, brief_text: str, archived_head: str
 ) -> dict[str, Any]:
@@ -157,20 +178,13 @@ def restart_patch(
     fresh: dict[str, Any] = {k: v for k, v in kept.items() if k not in _ATTEMPT_KEYS}
     fresh["status"] = "pending"
     fresh["attempt"] = used + 1
-    raised = [f["version"] for f in state.get("findings", []) if f["subtask"] == subtask_id]
-    settled: RestartSettledRow = {
-        "subtask": subtask_id,
-        "version": 1 + max(raised, default=0),
-        "outcome": "discarded",
-        "reason": "restarted",
-    }
     section = developer_section(subtask_id)
     return {
         "restarts": {pair.key: used},
         "changes_requested": {pair.key: 0},
         "subtasks": {subtask_id: fresh},
         "session_floor": {section: _last_run(state, section)},
-        "restart_settled": [settled],
+        "restart_settled": settle_open(state, [subtask_id], "restarted"),
         "restart_pending": {"subtask": subtask_id, "archived_head": archived_head},
         "sections": {restart_section(subtask_id): brief_text},
     }

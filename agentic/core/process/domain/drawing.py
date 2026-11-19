@@ -7,6 +7,7 @@ are the only owners of the comment grammar of the owner's answer, `flag_verdict`
 `flag_verdicts` of the `--drawing` flag's, `screens_due` of which screens a change owes a
 check for and `row_is_open` of whether a check row still blocks. `question_numbers` is the only
 reader of the interviewer's `**Qn**` markers and `question_ref` the only builder of a `Q<n>` ref;
+`unverified_lines` the only builder of the lines for questions whose drawing could not be compared;
 one private classifier reads every line of a comment or an interview. `interviewer_check` and
 `interview_check` are the pure rules of the definition interview's drawing checks. The module
 is a leaf: it imports neither `task`, `rules` nor `schemas`, not even inside a function.
@@ -49,17 +50,38 @@ _SEAT_RULES: Mapping[Seat, str] = MappingProxyType(
 )
 
 
-def rule_for(design: Design | None, slug: str) -> str:
+PLAN_WRITERS: frozenset[str] = frozenset({"tech_lead"})
+"""The roles whose plan is gated on its `drawing_departures` (GH-766 part 4b): with
+`rule_for(plan=True)` they are told where a departure goes."""
+
+_PLAN_RULE = (
+    "A visible departure from an approved drawing is declared in `drawing_departures` of the "
+    "plan, never taken as an assumption."
+)
+
+_RULE_PLACEHOLDER = "{{drawing_rule}}"
+
+
+def rule_for(design: Design | None, slug: str, *, plan: bool = False) -> str:
     """The rule for the role `slug` when the product declares a `design`, "" when `None`:
     one line, the base rule plus what the seat of `DRAWING_SEATS` must do; any other role
-    gets the base rule alone.
+    gets the base rule alone. With `plan=True` a role of `PLAN_WRITERS` also gets where its
+    departures go; for any other role `plan` changes nothing.
 
     `None` means the stack was read and declares no `design`; an unreadable stack never
     reaches here, it raises where it is read."""
     if design is None:
         return ""
     seat = DRAWING_SEATS.get(slug)
-    return DRAWING_RULE if seat is None else f"{DRAWING_RULE} {_SEAT_RULES[seat]}"
+    rule = DRAWING_RULE if seat is None else f"{DRAWING_RULE} {_SEAT_RULES[seat]}"
+    return f"{rule} {_PLAN_RULE}" if plan and slug in PLAN_WRITERS else rule
+
+
+def block_rule(body_raw: str, rule: str) -> str:
+    """What fills `{{drawing_rule}}` in a role's Spec block: "" when the role's raw body already
+    carries the placeholder (the rule comes through the body, once), `rule` otherwise. The
+    one decision of which of the two carries it."""
+    return "" if _RULE_PLACEHOLDER in body_raw else rule
 
 
 @dataclass(frozen=True)
@@ -273,6 +295,31 @@ class CheckLike(Protocol):
     def element(self) -> str | None: ...
 
 
+@dataclass(frozen=True)
+class UnverifiedAsk:
+    """A question whose approved drawing could not be compared, asked of the owner: `ref` the
+    check's ref, `path` the normalized drawing path (`""` when the check names none) and `line`
+    the text for the human."""
+
+    ref: str
+    path: str
+    line: str
+
+
+def unverified_lines(checks: Sequence[CheckLike]) -> list[UnverifiedAsk]:
+    """One ask per `question` check whose verdict is `unverified`, in input order. The only
+    builder of those lines and the only place their path is normalized."""
+    return [
+        UnverifiedAsk(
+            ref=c.ref,
+            path="" if c.drawing is None else normalize_drawing(c.drawing),
+            line=unverified_question(c.ref, c.drawing),
+        )
+        for c in checks
+        if c.subject == "question" and c.verdict == "unverified"
+    ]
+
+
 class DepartureLike(Protocol):
     """What `interview_check` reads of a departure (`schemas.DrawingDeparture` fits it)."""
 
@@ -404,7 +451,6 @@ for _reason, _names in (
         "pending GH-766 part 3",
         "pm_consultant pm_bug spec/pm_consultant spec/pm_draft",
     ),
-    ("pending GH-766 part 4", "tech_lead spec/plan"),
     (
         "covered by tech_lead",
         "developer developer_integrator tech_lead_review tech_lead_review_light",

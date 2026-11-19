@@ -117,3 +117,18 @@ Todo queda inerte sin `state["spec"]`; hasta la parte 4b-4 nada escribe esa clav
   sin revertir escala otra vez con la misma causa y sin costo de modelo.
 - **La compuerta de los acarreos** (`landing_sync`, el renumerado de `landing_adr` y el tramo de
   `landing_plan`) es de #801, que usa `spec_carry_ok` e `intact_at`.
+
+## Adenda (2026-11-18): el renglón `{{drawing_rule}}` en un bloque
+
+Un bloque constante puede llevar exactamente el renglón `{{drawing_rule}}`, solo en su línea.
+Lo rellena el sistema con el mismo relleno de renglón que el cuerpo del rol
+(`roles.fill_placeholders`): vacío, el renglón se borra con su salto; con un `design` declarado,
+entra la regla de `drawing.rule_for(plan=True)`.
+
+- **Una sola vez.** `drawing.block_rule` decide si la regla entra por el cuerpo o por el bloque:
+  si el cuerpo crudo del rol ya lleva el placeholder, el bloque queda vacío.
+- **Todo otro `{{` sigue siendo `template`.** `block_refusal` admite solo el renglón exacto
+  (ignorando espacios en los bordes); `{{drawing_rule}}` con texto alrededor se rechaza igual.
+- **El relleno nunca entra en un hash.** El hash cubre el bloque crudo, como lo guarda el
+  puerto; el texto del prompt lleva el bloque relleno. Sin `design`, el texto del prompt es el
+  de siempre.

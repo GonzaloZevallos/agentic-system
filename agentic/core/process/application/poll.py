@@ -1151,6 +1151,9 @@ def _member(
         merge_due=merge_due,
         waits_on_ci=ci_running and not working,
         account_paused=rules.account_paused(resumes, now) and not working,
+        # GH-838: the assessment's facts, read through the round's memo; none for a task a child
+        # works on, so no stacking is read here.
+        stack_held=stacking.held(facts.stack) if facts is not None else False,
     )
 
 
@@ -1326,6 +1329,7 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "head_paths_unknown": "head paths unknown",
     "head_sync_budget": "head sync budget",
     "member_paths_unknown": "paths unknown",
+    "stack_parent_unmerged": "stacked parent unmerged",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
 
@@ -1631,6 +1635,9 @@ def gather_merges(
             )
             behind = f"behind #{round_.head}" if round_.head is not None else "with no head"
             why = round_.lane_reasons.get(number)
+            if why is None and entry.member is not None and entry.member.stack_held:
+                # GH-838: a held child is never head, so its refusal is not read as one; say why.
+                why = "stack_parent_unmerged"
             if why is not None:
                 reading += ", " + LANE_TEXT[why].format(head=round_.head)
             out.append(f"agentic: poll: auto-merge #{number} -> waiting ({reading}) {behind}")

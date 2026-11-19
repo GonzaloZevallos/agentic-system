@@ -95,3 +95,11 @@ def test_a_stacked_exhaustion_reaches_the_escalation_text_of_its_refusal():
     step = landing.landing_step("stack_restack_due", facts, spent, (), turn="head")
     assert step.kind == "escalate"
     assert step.refusal in landing.STACK_ESCALATION
+
+
+def test_every_human_owned_refusal_is_a_known_refusal_with_text_and_stack_ones_have_escalation():
+    # GH-838: the landing says nothing for these, so the verb or the poller must say it for it.
+    assert landing.HUMAN_OWNED_REFUSALS <= set(ALL)
+    assert all(r in merge.COMMENTED or r in merge.UNCOMMENTED for r in landing.HUMAN_OWNED_REFUSALS)
+    for refusal in landing.HUMAN_OWNED_REFUSALS & set(STACK):
+        assert landing.STACK_ESCALATION[refusal]

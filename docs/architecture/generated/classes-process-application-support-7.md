@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__TrackerRefused["TrackerRefused"]
     class ports__TrackerTimedOut["TrackerTimedOut"]
     class ports__TrackerTransient["TrackerTransient"]
     class ports__TrackerUnreachable["TrackerUnreachable"]
@@ -32,7 +33,6 @@ classDiagram
     class run_role__EstimateCapReached["EstimateCapReached"]
     class run_role__EstimateStop["EstimateStop"]
     class run_role__GuardChain["GuardChain"]
-    class run_role__Output["Output"]
     run_role__EstimateCapReached --|> run_role__Escalating
 ```
 
@@ -40,11 +40,8 @@ classDiagram
 
 - [application: landing](classes-process-application-landing.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`
-- [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
-  - `plan_carve_out.Judged` se asocia con `run_role.Output`
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`
-  - `run_role.Output` se asocia con `ports.CheckRuns`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `ports.Workspace`
 - [application: support (parte 5)](classes-process-application-support-5.md)

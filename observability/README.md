@@ -196,6 +196,11 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `cycle_active_h` | `cycle_h` menos `stage_h.human_wait` y `stage_h.account_limit`, del mismo reparto que `stage_h` | numérico | las mismas condiciones que `stage_h`: sin reparto no se escribe |
 | `stage_split_known` | `1` si el ciclo tiene reparto por etapas, `0` si no (el backfill lo llama «parcial») | booleano | el PR no se mergeó o no se pudo leer su fecha de merge |
 | `slowest_stage.<CycleStage>` | el `cycle_h` de la tarea, bajo el nombre de la etapa con más horas (empate: la primera en el orden de `CycleStage`); una por tarea | numérico | las mismas condiciones que `stage_h` |
+| `work_h` | suma de `stage_h.*` de las etapas de trabajo (`definition`, `plan`, `development`, `review`, `checks`, `landing`, `other`), es decir el ciclo sin `queue`, `human_wait` ni `account_limit` | numérico | las mismas condiciones que `stage_h`: sin reparto no se escribe |
+| `work_llm_h` | horas de `work_h` cubiertas por alguna generación LLM de la sesión de la corrida o falla donde caen, de `stages.work_split` (unión de intervalos, nunca suma) | numérico | no se pasaron generaciones, o el reparto del trabajo es desconocido (sin reparto por etapas, corrida o falla de trabajo sin `session_id`, o sesión sin filas) |
+| `work_tools_h` | horas de `work_h` cubiertas por alguna corrida o falla pero por ninguna generación (corrida menos LLM), de `stages.work_split` | numérico | las mismas condiciones que `work_llm_h` |
+| `work_outside_h` | horas de `work_h` que ninguna corrida ni falla cubre (trabajo menos corrida; incluye el tiempo con el PR abierto sin corrida), de `stages.work_split` | numérico | las mismas condiciones que `work_llm_h` |
+| `work_split_known` | `1` si el trabajo tiene reparto LLM / herramientas / afuera, `0` si una corrida o falla de trabajo no tiene `session_id` o su sesión no tiene filas | booleano | no se pasaron generaciones, el PR no se mergeó o el ciclo no tiene reparto por etapas |
 
 Reglas para leerlos:
 

@@ -20,6 +20,9 @@ classDiagram
     class evaluation__EvalSet["EvalSet"]
     class evaluation__EvalTaskId["EvalTaskId"]
     class evaluation__EvaluationRecord["EvaluationRecord"]
+    class evaluation__Score["Score"]
+    class evaluation__TaskDocument["TaskDocument"]
+    class scorecard__CauseCount["CauseCount"]
 ```
 
 ## Relaciones con otras páginas
