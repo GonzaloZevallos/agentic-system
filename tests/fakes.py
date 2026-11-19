@@ -88,7 +88,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     JobLog,
 )
-from agentic.core.process.domain.design import Design, NotReady
+from agentic.core.process.domain.design import Design, NotReady, PrototypeListing
 from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
@@ -488,6 +488,7 @@ class MemoryStack:
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
         adr_naming: Literal["numbered", "dated"] = "numbered",
+        prototype: PrototypeListing | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -504,6 +505,8 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # Unreadable by default: a test that wants short drawing paths resolved injects a listing.
+        self.declared_prototype = prototype or PrototypeListing((), "unreadable")
         # None is a product that declares no `docs` block: no generated docs, today's gate.
         self.declared_docs = docs
         # Empty is a product that declares no `generated` globs: only the lockfiles and `docs`.
@@ -678,6 +681,10 @@ class MemoryStack:
     def design(self, revision: str) -> Design | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_design
+
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        # Not tracked in `revisions` either; `listed` is what a test injects.
+        return self.declared_prototype
 
     def docs(self, revision: str) -> Docs | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
