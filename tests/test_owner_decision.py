@@ -259,7 +259,7 @@ def pm_state() -> dict[str, Any]:
             finding("api", "a.py:1"),
             finding("integration", "b.py:1"),
             finding("PM: final validation", "docs/prd.md"),
-            finding("integration", "full_checks:tests", 2),
+            finding("integration", "full_checks:tests"),
         ],
     }
 
@@ -292,7 +292,7 @@ def test_a_pm_decision_resets_the_plan_and_keeps_the_counters():
         None,
         None,
     )
-    # the bar is one above each unit's highest review pass: the `full_checks:` row (version 2)
+    # the bar is one above each unit's highest review pass: the `full_checks:` row (version 1, below the bar)
     # is not a review pass
     assert patch["restart_settled"] == settle_open(
         {**state, "findings": state["findings"][:3]}, ["api", "integration"], "owner_decision"
@@ -322,6 +322,20 @@ def test_consuming_twice_is_idempotent_and_seen_never_moves_back(route):
 def test_an_unreadable_seen_is_replaced(current):
     patch = owner_decision.consumed_patch({"owner_decision_seen": current}, Consumed("pm", NEWEST))
     assert patch["owner_decision_seen"] == NEWEST
+
+
+def test_a_restart_still_discards_a_full_checks_row_below_its_bar():
+    """The exemption is for an owner decision only: a `restarted` settle row closes it."""
+    state = pm_state()
+    rows = settle_open(state, ["integration"], "restarted")
+    after = task.apply(state, {"restart_settled": rows})
+    status = {(r["subtask"], r["location"]): r["status"] for r in rules.findings_rows(after)}
+    assert status[("integration", "full_checks:tests")] == "dismissed"
+    decided = task.apply(
+        state, {"restart_settled": settle_open(state, ["integration"], "owner_decision")}
+    )
+    status = {(r["subtask"], r["location"]): r["status"] for r in rules.findings_rows(decided)}
+    assert status[("integration", "full_checks:tests")] == "open"  # fails without the exemption
 
 
 def test_open_rows_of_other_names_stay_open_and_a_recreated_integration_starts_clean():
