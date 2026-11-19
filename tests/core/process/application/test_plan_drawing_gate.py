@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from agentic.core.process.application.plan import plan
-from agentic.core.process.domain import drawing, drawing_answer, rules
+from agentic.core.process.domain import document, drawing, drawing_answer, rules
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.task import apply, departure_records
 from agentic.shared.configuration import Configuration
@@ -271,7 +271,9 @@ async def test_an_open_departure_keeps_the_plan_with_its_round_estimate_and_depa
     assert [drawing.Departure(**row) for row in held["departures"]] == [DEPARTURE]
     assert held["plan"]["invariants"] == ["Keep it pure."]
     assert held["plan"]["subtasks"][0]["id"] == "api"
-    assert held["departures"][0] is not held["plan"]["drawing_departures"][0]
+    stored = document.render({**TASK, **patch})
+    assert "&id" not in stored and "*id" not in stored
+    assert document.parse(stored)["plan_held"] == held
 
 
 async def test_the_critic_route_keeps_the_revision_it_escalated_on(tmp_path):

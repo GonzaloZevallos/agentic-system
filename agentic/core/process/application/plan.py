@@ -13,6 +13,7 @@ measurable (issue #28)."""
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -199,11 +200,12 @@ def _finished(
             paused = rules.logged({**unbuilt, **asked}, at=ports.now())
             if holdable and plan is not None:
                 paused["plan_held"] = PlanHeld(
-                    plan=dict(plan),
-                    # Copied row by row: the document must not write one dict twice as an anchor.
-                    departures=[dict(row) for row in plan.get("drawing_departures") or []],
+                    # Deep copies: no object of the record is shared with the patch or with
+                    # another field, or one `yaml.safe_dump` would write anchors and aliases.
+                    plan=copy.deepcopy(dict(plan)),
+                    departures=copy.deepcopy(list(plan.get("drawing_departures") or [])),
                     round=asked["drawing_escalation"]["round"],
-                    estimate=patch["estimate"],
+                    estimate=copy.deepcopy(patch["estimate"]),
                 )
             paused["status"] = WAITING_ON_HUMAN
             return finish(state, cast(TaskState, paused), ports)
