@@ -158,6 +158,28 @@ def test_a_block_with_a_placeholder_is_refused_as_template():
 
 
 @pytest.mark.parametrize(
+    "text", ["a\n{{drawing_rule}}\nb\n", "{{drawing_rule}}", "a\n  {{drawing_rule}} \t\nb"]
+)
+def test_the_exact_rule_line_alone_on_its_line_is_allowed(text):
+    assert block_refusal(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a {{drawing_rule}}",
+        "{{drawing_rule}} b",
+        "{{drawing_rule}}{{drawing_rule}}",
+        "{{x}}",
+        "a\n{{drawing_rule}}\n{{x}}\n",
+        "{{ drawing_rule }}",
+    ],
+)
+def test_any_other_template_is_still_refused_even_beside_the_rule_line(text):
+    assert block_refusal(text) == "template"
+
+
+@pytest.mark.parametrize(
     "text", [SPEC_FENCE, f"before\n{SPEC_FENCE}\nafter", f"before\n  {SPEC_FENCE}  \nafter"]
 )
 def test_a_block_with_a_fence_line_is_refused_as_fence(text):
