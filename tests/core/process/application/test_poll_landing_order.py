@@ -14,7 +14,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
-from agentic.core.process.domain import adr_numbers, landing_order, rules
+from agentic.core.process.domain import adr_numbers, ci, landing_order, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_fix import _stranded_ports
@@ -1231,3 +1231,83 @@ def test_a_stored_decision_outside_the_closed_list_is_dropped_and_an_old_entry_h
     assert kept["lane_admitted"]["decision"] == "ci_run"
     assert ["decision" in m for m in kept["lane_merges"]] == [False, True]
     assert "decision" not in old["lane_admitted"] and "decision" not in old["lane_merges"][0]
+
+
+class TestLaneWithCiBesideAReintegratingHead:
+    """The product declares `ci:`: a clean pull request whose head lacks the current master is
+    judged `ci_run` by the real assessment, and the lane admits it, its fresh run being the
+    merge child's own gate on the pair."""
+
+    @staticmethod
+    def _ci_ports():
+        ports = _lane_ports()
+        _stale(ports, 5, 6)
+        ports = dataclasses.replace(ports, stack=MemoryStack(checks={"tests": "x"}, ci=("web",)))
+        # each head's pull-request CI is green, on a master older than the current one
+        ports.tracker.ci_reports = {
+            URL.format(number): ci.CiReport(
+                _head_of(number),
+                "master",
+                OLD_MASTER,
+                "2026-11-03T09:00:00+00:00",
+                (
+                    ci.CiCheck(
+                        "web", "COMPLETED", "SUCCESS", f"https://github.com/o/r/runs/{number}"
+                    ),
+                ),
+            )
+            for number in (5, 6, 7)
+        }
+        return ports
+
+    def test_a_ci_run_jump_starts_and_stays_live_while_the_head_delivers(self, tmp_path):
+        ports = self._ci_ports()
+
+        started, lines = _round_at(
+            ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"}
+        )
+
+        assert started == [5]
+        assert lines[0] == (
+            "agentic: poll: auto-merge #5 -> fast lane behind busy #7 (land_model, ci_run)"
+        )
+        assert ports.documents.load("GH-5")["lane_admitted"]["decision"] == "ci_run"
+
+        # the head delivered while the jump's own merge child (not integrating) is alive: it is
+        # neither cut nor followed by a second jump
+        later = NOW + timedelta(minutes=1)
+        delivered, lines = _round_at(ports, tmp_path, busy={"GH-5"}, integrating={}, now=later)
+        assert 5 not in delivered and 6 not in delivered
+        assert "(land_model" not in "".join(lines)
+        assert (
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7"
+            in lines
+        )
+        assert "head_yields" not in ports.documents.load("GH-7")
+
+        # the jump ended: the head is the product's own candidate again
+        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
+        last, _ = _round_at(
+            ports, tmp_path, busy=(), integrating={}, now=later + timedelta(minutes=1)
+        )
+        assert last == [7]
+
+    def test_a_refused_ci_decision_opens_no_jump(self, tmp_path):
+        ports = self._ci_ports()
+        for number in (5, 6):
+            ports.documents.record_closure(
+                f"GH-{number}",
+                {
+                    "merge_refusal": {
+                        "reason": "ci_untrusted_no_dispatch",
+                        "head": _head_of(number),
+                        "master": MASTER,
+                        "at": NOW.isoformat(),
+                    }
+                },
+            )
+
+        found, lines = _round_at(ports, tmp_path, busy={"GH-7"}, integrating={"GH-7": "land_model"})
+
+        assert found == []
+        assert not any("fast lane" in line for line in lines)
