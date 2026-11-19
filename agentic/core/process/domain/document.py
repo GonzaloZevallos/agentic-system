@@ -651,6 +651,9 @@ def render(
         # GH-784: when resume closed a pause without building the owner's answer, written only
         # when set so a document without it is byte-identical; read back under the same name.
         **({"owner_decision_unbuilt": e} if (e := state.get("owner_decision_unbuilt")) else {}),
+        # GH-960: the last decision acted on and its route, written only when set.
+        **({"owner_decision_seen": e} if (e := state.get("owner_decision_seen")) else {}),
+        **({"owner_decision_route": e} if (e := state.get("owner_decision_route")) else {}),
         # The delivery assumptions and the cause of a spec delivery's `questions` pause
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.

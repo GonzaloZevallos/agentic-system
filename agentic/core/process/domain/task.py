@@ -203,6 +203,11 @@ MechanicalCause = Literal[
     "ci_run_unfinished",
     "delivery_transient",
 ]
+# The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
+# `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
+# Not a `MechanicalCause`: the poller never retakes them, they wait for the owner. Lives here, not
+# in its own module, because `rules` imports `escalation_prompts`.
+OwnerDecisionCause = Literal["owner_decision", "spec_owned"]
 # What the poller's calendar and cap are keyed by (`rules.auto_resumable`): a failed attempt's
 # `FailureReason` or an escalation's `MechanicalCause`. One union, one place that maps either
 # to a calendar (`rules.schedule_for`) or a cap (`rules.auto_resume_limit`).
@@ -308,6 +313,32 @@ def last[T](current: T, new: T) -> T:
 
 def merge[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[str, T]:
     return {**(current or {}), **(update or {})}
+
+
+# The reserved key of `subtasks_reset()`: not a slug and not `INTEGRATION`, so the plan's
+# subtask-id validation (`schemas.SLUG`) can never accept it as a subtask. Read only by
+# `merge_subtasks` and `delta`.
+SUBTASKS_RESET = "__subtasks_reset__"
+
+
+def subtasks_reset() -> dict[str, Subtask]:
+    """The `subtasks` patch that replaces the whole map instead of merging into it: an `Annotated`
+    reducer channel cannot say "drop the keys this update lacks" any other way. The only producer
+    of `SUBTASKS_RESET`. Only a serialized system turn (a resume, or the turn after a termination)
+    may put it in a patch, never a branch patch of a wave: a branch folds a delta computed against
+    the base it started from, which would bring the dropped subtasks back."""
+    return {SUBTASKS_RESET: {}}
+
+
+def merge_subtasks(
+    current: dict[str, Subtask] | None, update: dict[str, Subtask] | None
+) -> dict[str, Subtask]:
+    """The reducer of `subtasks`: `merge`, except that an update carrying `SUBTASKS_RESET` starts
+    from `{}`, so what `current` held and the update lacks is dropped. Without the key it returns
+    exactly what `merge` does (an empty update still changes nothing). Never returns the key."""
+    if update is not None and SUBTASKS_RESET in update:
+        return {k: v for k, v in update.items() if k != SUBTASKS_RESET}
+    return merge(current, update)
 
 
 def first[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[str, T]:
@@ -2145,7 +2176,7 @@ class RestartSettledRow(TypedDict):
     subtask: str
     version: int
     outcome: Literal["discarded"]
-    reason: Literal["restarted"]
+    reason: Literal["restarted", "owner_decision"]
 
 
 class TaskState(TaskInput, total=False):
@@ -2213,6 +2244,11 @@ class TaskState(TaskInput, total=False):
     # GH-784: the instant the settled branch of resume closed a `questions` pause without building
     # the answer; read by the merge decision, never cleared.
     owner_decision_unbuilt: Annotated[str, last]
+    # GH-960: the instant of the owner's last `Decision:` comment already acted on, and the role
+    # it was routed to. Optional and written by nothing yet (the wiring part); `document.render`
+    # omits both when absent.
+    owner_decision_seen: Annotated[str, last]
+    owner_decision_route: Annotated[Literal["developer", "pm"], last]
     # Why a spec delivery's `questions` pause was raised (GH-594): written only by
     # `rules.escalation`, with a spec in the state; never a `MechanicalCause`.
     spec_cause: Annotated[SpecEscalationCause | None, last]
@@ -2265,7 +2301,7 @@ class TaskState(TaskInput, total=False):
     planned_size: Annotated[PlanSize, last]
     actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
-    subtasks: Annotated[dict[str, Subtask], merge]
+    subtasks: Annotated[dict[str, Subtask], merge_subtasks]
     # Rules of the plan every subtask honours (issue #42): the one channel between
     # reviews that works in the first wave, since it is written before anyone codes.
     invariants: list[str]
@@ -2315,7 +2351,7 @@ class TaskState(TaskInput, total=False):
     # The head of the task branch the fan-in last integrated (GH-358), stamped only for a
     # product that declares `delivery_checks`; absent otherwise. `rules.full_checks_due`
     # compares the record's head with it. Persisted in the frontmatter.
-    task_head: str
+    task_head: str | None
     # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
     full_checks: FullChecksRecord
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
@@ -2598,6 +2634,8 @@ def apply(
             )
         elif reducer is add_drawing_escalation:
             merged[key] = add_drawing_escalation(merged.get(key), cast(DrawingEscalation, value))
+        elif reducer is merge_subtasks:
+            merged[key] = merge_subtasks(merged.get(key), cast(dict[str, Subtask], value))
         elif reducer is None or key not in merged:
             merged[key] = value
         else:
@@ -2710,6 +2748,11 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:
                 patch[key] = fresh
+        elif reducer is merge_subtasks:
+            if set(old) - set(value):
+                patch[key] = {**subtasks_reset(), **value}
+            elif changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
+                patch[key] = changed
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed
