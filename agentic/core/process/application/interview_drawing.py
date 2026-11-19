@@ -97,7 +97,7 @@ class Collector:
             and (key := drawing.departure_key(self._full(c["drawing"]), c["element"])) in owed
         }
         rows = [
-            task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+            drawing_answer.with_fix_pass(row)
             for row in state.get("drawing_departures", [])
             if row["key"] in matched
         ]

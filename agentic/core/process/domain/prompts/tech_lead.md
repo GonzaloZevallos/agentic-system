@@ -140,6 +140,7 @@ acceptance criterion.
   rule above, and split any that exceeds it.
 - Read-only: you read files and the git history, you write nothing and run no tests.
 - Single turn.
+{{drawing_rule}}
 </Hard Limits>
 
 <Output>

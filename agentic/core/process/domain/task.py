@@ -721,12 +721,20 @@ class DrawingEscalation(TypedDict):
     """The record of the drawing-departure escalations of a task: `round` how many there have
     been, `numbers` every number asked so far (sorted) and `cause` `drawing_cap` once the cap
     was reached, `drawing_departure` before. `stage` says which gate asked, `plan` or `delivery`;
-    absent it reads `delivery`, and a record only carries it when it is `plan`."""
+    absent it reads `delivery`, and a record only carries it when it is `plan`.
+
+    `unverified` is the paths of the drawings the definition and solution interviews already
+    asked about as an unverified question, and `unverified_at` the instant of the latest such
+    ask, in `ports.utc_now`'s format and compared as text; both are written only when non-empty.
+    The final review's raises (`drawing_answer.fold_raised`) write the record too, but pass no
+    asks, so they never write these two."""
 
     round: int
     numbers: list[int]
     cause: Literal["drawing_departure", "drawing_cap"]
     stage: NotRequired[Literal["plan", "delivery"]]
+    unverified: NotRequired[list[str]]
+    unverified_at: NotRequired[str]
 
 
 # Which `stage` wins when two records share a round: the higher rank. `delivery` is the
@@ -742,49 +750,55 @@ def add_drawing_escalation(
     existing: DrawingEscalation | None, new: DrawingEscalation
 ) -> DrawingEscalation:
     """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
-    `drawing_cap` if either has it, and the `stage` of the higher round (the higher
-    `_STAGE_RANK` on a tie), kept only when it is `plan`. Commutative and associative;
-    `existing` may be `None`. The graph's channel starts from the empty `DrawingEscalation()`
-    and may fold an empty update: an empty side is the identity, never an error."""
-    if not new:
-        if not existing:
-            return cast(DrawingEscalation, {})
-        return _drawing_escalation(
-            existing["round"],
-            set(existing["numbers"]),
-            existing["cause"],
-            _escalation_stage(existing),
-        )
-    if not existing:
-        return _drawing_escalation(
-            new["round"], set(new["numbers"]), new["cause"], _escalation_stage(new)
-        )
-    if existing["round"] != new["round"]:
-        winner = existing if existing["round"] > new["round"] else new
-        stage = _escalation_stage(winner)
+    `drawing_cap` if either has it, the `stage` of the higher round (the higher `_STAGE_RANK` on
+    a tie), kept only when it is `plan`, the order-kept union of `unverified` (existing side
+    first) and the later `unverified_at`, the plain string maximum, never a parsed date.
+    Commutative and associative (`unverified` as a set); `existing` may be `None`. The graph's
+    channel starts from the empty `DrawingEscalation()` and may fold an empty update: an empty
+    side is the identity, never an error. Every branch goes through `_merge_escalations`, so no
+    field can be dropped by one of them."""
+    return _merge_escalations([r for r in (existing, new) if r])
+
+
+def _merge_escalations(sides: Sequence[DrawingEscalation]) -> DrawingEscalation:
+    if not sides:
+        return cast(DrawingEscalation, {})
+    top = max(r["round"] for r in sides)
+    if len(sides) == 1:
+        stage = _escalation_stage(sides[0])
     else:
         stage = max(
-            _escalation_stage(existing), _escalation_stage(new), key=_STAGE_RANK.__getitem__
+            (_escalation_stage(r) for r in sides if r["round"] == top),
+            key=_STAGE_RANK.__getitem__,
         )
     return _drawing_escalation(
-        max(existing["round"], new["round"]),
-        {*existing["numbers"], *new["numbers"]},
-        "drawing_cap"
-        if "drawing_cap" in (existing["cause"], new["cause"])
+        round=top,
+        numbers={n for r in sides for n in r["numbers"]},
+        cause="drawing_cap"
+        if any(r["cause"] == "drawing_cap" for r in sides)
         else "drawing_departure",
-        stage,
+        stage=stage,
+        unverified=list(dict.fromkeys(p for r in sides for p in r.get("unverified", []))),
+        unverified_at=max((r.get("unverified_at", "") for r in sides), default=""),
     )
 
 
 def _drawing_escalation(
+    *,
     round: int,
     numbers: set[int],
     cause: Literal["drawing_departure", "drawing_cap"],
     stage: Literal["plan", "delivery"],
+    unverified: list[str],
+    unverified_at: str,
 ) -> DrawingEscalation:
     record = DrawingEscalation(round=round, numbers=sorted(numbers), cause=cause)
     if stage == "plan":
         record["stage"] = "plan"
+    if unverified:
+        record["unverified"] = unverified
+    if unverified_at:
+        record["unverified_at"] = unverified_at
     return record
 
 
@@ -1319,6 +1333,9 @@ class DrawingEscalationPatch(EscalationPatch):
 
     drawing_departures: list[DepartureRecord]
     drawing_escalation: DrawingEscalation
+    # The lines of the unverified asks a pause raised, only when it raised some: the caller
+    # appends them to the questions its own patch already carries.
+    questions_for_human: NotRequired[list[str]]
     # What `drawing_answer.fold_raised` adds to make the escalation a pause: the log entry and
     # the status every escalation site writes (`rules.logged`).
     pause_log: NotRequired[list[PauseEntry]]

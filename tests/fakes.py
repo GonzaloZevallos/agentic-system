@@ -2579,6 +2579,66 @@ class FakeSpecValidator:
         return self.result
 
 
+class FakeDraftSpecValidator(FakeSpecValidator):
+    """GH-594 part 5c-1: answers `result` (`spec_unapproved`) for a draft text and `preview` for an
+    approved one, and records every call as `FakeSpecValidator` does. `preview` is a contract
+    unless a test sets another answer."""
+
+    PREVIEW: SpecContract = {
+        "path": "docs/specs/draft.md",
+        "slice": "x",
+        "commit": "a" * 40,
+        "sha256": "b" * 64,
+        "criteria": [],
+        "screens": [],
+        "risks": [],
+        "touches_ui": False,
+        "touches_copy": False,
+    }
+
+    def __init__(
+        self,
+        draft: SpecContract | SpecCause = "spec_unapproved",
+        preview: SpecContract | SpecCause = PREVIEW,
+    ) -> None:
+        super().__init__(draft)
+        self.preview = preview
+
+    def validate(
+        self, text: str, path: str, commit: str, slice_id: str | None, owner_login: str | None
+    ) -> SpecContract | SpecCause:
+        super().validate(text, path, commit, slice_id, owner_login)
+        return self.result if "status: draft" in text else self.preview
+
+
+class CommittingWorkspace(MemoryWorkspace):
+    """GH-594 part 5c-1: a workspace whose commits hold what the checkout has, so a draft Spec
+    can be read back at the commit that wrote it. Each `commit_all` makes a new full sha
+    (`full_head`) and snapshots every `docs/specs/*.md` of the checkout at it, so `show` answers
+    the text as it was at that commit. With `pinned_head` set, nothing is committed (`commit_all`
+    answers `None`, as git does with nothing to commit) and `full_head` is that sha: what `show`
+    knows of it is whatever the test put in `files`."""
+
+    def __init__(self, pinned_head: str | None = None) -> None:
+        super().__init__()
+        self.pinned_head = pinned_head
+
+    def commit_all(self, path: Path, message: str) -> str | None:
+        super().commit_all(path, message)
+        if self.pinned_head is not None:
+            return None
+        sha = self.full_head(path)
+        for entry in sorted((path / "docs/specs").glob("*.md")):
+            if not entry.is_file():
+                continue
+            text = entry.read_text(encoding="utf-8")
+            self.files[(sha, f"docs/specs/{entry.name}")] = text
+        return sha
+
+    def full_head(self, path: Path) -> str:
+        return self.pinned_head or f"{len(self.commits):040x}"
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of

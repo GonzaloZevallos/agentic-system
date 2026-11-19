@@ -42,6 +42,7 @@ classDiagram
     class drawing__DepartureLike["DepartureLike"]
     class drawing__Refused["Refused"]
     class drawing__Resolved["Resolved"]
+    class drawing__UnverifiedAsk["UnverifiedAsk"]
     class drawing__Verdicts["Verdicts"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]

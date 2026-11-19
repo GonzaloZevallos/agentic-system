@@ -40,9 +40,9 @@ classDiagram
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]
+    class hold_record__HoldUnknown["HoldUnknown"]
+    class hold_record__LabelEvent["LabelEvent"]
+    class hold_record__Unreadable["hold_record.Unreadable"]
     class lead_time__Known["Known"]
-    class lead_time__Unreadable["Unreadable"]
-    class rules__BlockerReport["BlockerReport"]
-    class rules__CiGate["CiGate"]
-    class rules__Commit["Commit"]
+    class lead_time__Unreadable["lead_time.Unreadable"]
 ```

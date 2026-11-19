@@ -52,7 +52,11 @@ sequenceDiagram
    no va al número de issue más bajo: `poll_plan` elige al candidato que más tiempo lleva
    sin intento (`agentic/core/process/domain/exempt_queue.py:rank`, la Cola exenta), y un
    merge rechazado por `ci_untrusted_no_dispatch` sobre el mismo head y master queda en
-   `backoff` hasta que uno se mueva.
+   `backoff` hasta que uno se mueva. Un issue con la etiqueta `agentic-hold` no se lanza,
+   reanuda ni retoma: el poller lee las retenciones una vez por ronda
+   (`agentic/core/process/application/poll.py:read_held_issues`), `poll_plan` lo difiere con
+   la razón `held` antes de contar cupos y la línea `waiting (held)` lo dice. Si esa lectura
+   falla, la ronda no arranca nada y dice `holds unread`; los cierres y los barridos siguen.
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
    `agentic/composition.py:graph`.

@@ -10,7 +10,8 @@ from agentic.core.measurement.domain.stages import (
 )
 
 HEADER = (
-    "task | queue definition plan development review checks human_wait account_limit landing other"
+    "task | queue definition plan development review checks human_wait account_limit held "
+    "landing other"
 )
 
 
@@ -27,6 +28,7 @@ def split(other_by_cause: dict[OtherCause, float] | None = None, **hours: float)
         "checks",
         "human_wait",
         "account_limit",
+        "held",
         "landing",
         "other",
     )
@@ -57,14 +59,14 @@ def test_golden_of_a_split_an_unknown_and_each_unread_row():
     ]
     assert sr.stage_lines(rows) == [
         HEADER,
-        "GH-1 | 0.000 0.000 0.000 3.000 0.000 0.000 0.000 0.000 0.000 1.000 | other 25.0%",
+        "GH-1 | 0.000 0.000 0.000 3.000 0.000 0.000 0.000 0.000 0.000 0.000 1.000 | other 25.0%",
         "GH-2 | unknown:pause_open",
         "GH-3 | unread:unreadable",
         "GH-4 | unread:not_finished",
         "GH-5 | unread:no_time",
         "GH-6 | unread:gh_failed",
         "unknown no_merge 0 no_issue_created 0 no_pr_created 0 pause_open 1 "
-        "failure_unbounded 0 ci_wait_unknown 0 run_unbounded 0 bounds_reversed 0",
+        "failure_unbounded 0 ci_wait_unknown 0 run_unbounded 0 bounds_reversed 0 hold_unknown 0",
         "unread unreadable 1 not_finished 1 no_time 1 gh_failed 1",
         "other share gap 25.0% legacy_role 0.0% outage_pause 0.0% reflector 0.0%",
         "legacy_role 0",

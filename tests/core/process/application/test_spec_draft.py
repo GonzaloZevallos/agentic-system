@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.application.checkouts import task_checkout_in_thread
 from agentic.core.process.application.ports import RawResult, Upstream
+from agentic.core.process.application.spec_draft import deliver
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain.spec_delivery import (
     body_sha256,
@@ -19,6 +21,8 @@ from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
+    CommittingWorkspace,
+    FakeDraftSpecValidator,
     FakeSpecValidator,
     MemoryWorkspace,
     ScriptedRunner,
@@ -67,6 +71,14 @@ def cfg(tmp_path):
     return Configuration(product_dir=tmp_path, owner_login="owner")
 
 
+async def delivered(body, validator, cfg, workspace=None):
+    """`deliver` called directly: after this part the pre-check keeps a bad body from it, so the
+    outcomes it still guards (`invalid` for a refused body or validator answer) are read here."""
+    ports = ports_for(validator=validator, workspace=workspace)
+    task = await task_checkout_in_thread(STATE, cfg, ports)
+    return deliver(STATE, {"spec_draft": body}, task, cfg, ports), ports
+
+
 def returned(kind: str = "approved", draft: str | None = BODY) -> RawResult:
     base = verdict(kind, definitions=DEFINITION if kind == "approved" else [])
     data = dict(base.structured_output)
@@ -79,13 +91,13 @@ def ports_for(*results: RawResult, validator=None, workspace=None, now: str = NO
     return memory_ports(
         ScriptedRunner(pm=list(results)),
         spec_validator=validator,
-        workspace=workspace,
+        workspace=workspace if workspace is not None else CommittingWorkspace(),
         now=lambda: now,
     )
 
 
 async def test_an_approved_valid_draft_is_written_committed_and_recorded(root, cfg):
-    validator = FakeSpecValidator("spec_unapproved")
+    validator = FakeDraftSpecValidator()
     ports = ports_for(returned(), validator=validator)
     patch = await validate_prd(STATE, cfg, ports)
     text = draft_text(BODY)
@@ -96,10 +108,14 @@ async def test_an_approved_valid_draft_is_written_committed_and_recorded(root, c
         "outcome": "written",
         "path": DRAFT,
         "sha256": body_sha256(text),
+        "commit": f"{2:040x}",
     }
     assert "spec" not in patch  # a draft is not a spec delivery
     assert "spec" not in apply(STATE, patch)
-    assert validator.calls == [(text, DRAFT, "base0", None, "owner")]
+    # The pre-check read the draft and its approved preview under the preview path; deliver then
+    # read the draft once more under the real one.
+    assert len(validator.calls) == 3
+    assert validator.calls[-1] == (text, DRAFT, "base0", None, "owner")
     assert ports.workspace.commits == [
         (root, "T-1: product definition"),
         (root, "T-1: draft Spec"),
@@ -109,10 +125,8 @@ async def test_an_approved_valid_draft_is_written_committed_and_recorded(root, c
 
 @pytest.mark.parametrize("draft", [None, "", "  \n"], ids=["missing", "empty", "blank"])
 async def test_a_missing_or_empty_draft_is_recorded_absent(root, cfg, draft):
-    ports = ports_for(returned(draft=draft), validator=FakeSpecValidator("spec_unapproved"))
-    patch = await validate_prd(STATE, cfg, ports)
-    assert patch["spec_draft"] == {"outcome": "absent"}
-    assert patch["status"] == "definition_ready"
+    record, _ = await delivered(draft, FakeDraftSpecValidator(), cfg)
+    assert record == {"outcome": "absent"}
     assert not (root / "docs").exists()
 
 
@@ -126,18 +140,14 @@ async def test_without_a_validator_port_nothing_is_written(root, cfg):
 
 @pytest.mark.parametrize("cause", ["spec_invalid", "slice_unknown", "slice_missing"])
 async def test_a_draft_the_validator_refuses_is_invalid_and_never_on_disk(root, cfg, cause):
-    ports = ports_for(returned(), validator=FakeSpecValidator(cause))
-    patch = await validate_prd(STATE, cfg, ports)
-    assert patch["spec_draft"] == {"outcome": "invalid"}
-    assert patch["status"] == "definition_ready"
+    record, _ = await delivered(BODY, FakeSpecValidator(cause), cfg)
+    assert record == {"outcome": "invalid"}
     assert not (root / "docs").exists()
-    assert "changes_requested" not in patch and "change_history" not in patch
 
 
 async def test_a_validator_that_says_approved_is_not_a_draft(root, cfg):
-    ports = ports_for(returned(), validator=FakeSpecValidator(CONTRACT))
-    patch = await validate_prd(STATE, cfg, ports)
-    assert patch["spec_draft"] == {"outcome": "invalid"}
+    record, _ = await delivered(BODY, FakeSpecValidator(CONTRACT), cfg)
+    assert record == {"outcome": "invalid"}
     assert not (root / "docs").exists()
 
 
@@ -155,22 +165,20 @@ async def test_a_body_that_carries_front_matter_is_invalid_even_if_the_validator
     root, cfg, smuggled
 ):
     validator = FakeSpecValidator("spec_unapproved")
-    ports = ports_for(returned(draft=smuggled), validator=validator)
-    patch = await validate_prd(STATE, cfg, ports)
-    assert patch["spec_draft"] == {"outcome": "invalid"}
+    record, _ = await delivered(smuggled, validator, cfg)
+    assert record == {"outcome": "invalid"}
     assert validator.calls == []  # not even asked
     assert not (root / "docs").exists()  # never on disk as approved
 
 
 async def test_a_body_that_cannot_be_encoded_is_invalid(root, cfg):
-    ports = ports_for(returned(draft="bad \ud800"), validator=FakeSpecValidator("spec_unapproved"))
-    patch = await validate_prd(STATE, cfg, ports)
-    assert patch["spec_draft"] == {"outcome": "invalid"}
+    record, _ = await delivered("bad \ud800", FakeSpecValidator("spec_unapproved"), cfg)
+    assert record == {"outcome": "invalid"}
     assert not (root / "docs").exists()
 
 
 async def test_a_returned_verdict_writes_and_records_nothing(root, cfg):
-    validator = FakeSpecValidator("spec_unapproved")
+    validator = FakeDraftSpecValidator()
     ports = ports_for(returned("returned"), validator=validator)
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["status"] == "returned"
@@ -189,7 +197,7 @@ async def test_a_returned_verdict_writes_and_records_nothing(root, cfg):
     ids=["platform", "light", "evaluation", "spec delivery"],
 )
 async def test_when_no_draft_is_due_nothing_is_validated_written_or_recorded(root, cfg, state):
-    validator = FakeSpecValidator("spec_unapproved")
+    validator = FakeDraftSpecValidator()
     ports = ports_for(returned(), validator=validator)
     patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "definition_ready"
@@ -198,26 +206,21 @@ async def test_when_no_draft_is_due_nothing_is_validated_written_or_recorded(roo
     assert ports.workspace.commits == [(root, "T-1: product definition")]
 
 
-async def test_an_invalid_draft_on_the_second_attempt_still_reaches_definition_ready(root, cfg):
-    schema_failure = RawResult({"markdown": "x", "verdict": "approved"}, 0.1)  # no `reason`
-    ports = ports_for(schema_failure, returned(), validator=FakeSpecValidator("spec_invalid"))
+async def test_a_draft_that_fails_the_pre_check_twice_escalates_and_is_never_written(root, cfg):
+    ports = ports_for(returned(), returned(), validator=FakeSpecValidator("spec_invalid"))
     patch = await validate_prd(STATE, cfg, ports)
     assert len(ports.runner.calls) == 2
-    assert patch["status"] == "definition_ready"
-    assert patch["spec_draft"] == {"outcome": "invalid"}
-    assert "changes_requested" not in patch and "change_history" not in patch
-    assert "escalated" not in patch
+    assert "spec_draft" not in patch and patch["status"] != "definition_ready"
+    assert not (root / "docs").exists()
 
 
 async def test_a_task_that_re_enters_after_commit_without_record_keeps_one_file(root, cfg):
-    await validate_prd(
-        STATE, cfg, ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"))
-    )
+    await validate_prd(STATE, cfg, ports_for(returned(), validator=FakeDraftSpecValidator()))
     # The run stopped after the commit and before the record, and the second run is another
     # day: a fresh name would be a second file.
     second = ports_for(
         returned(draft=BODY + "\nMore.\n"),
-        validator=FakeSpecValidator("spec_unapproved"),
+        validator=FakeDraftSpecValidator(),
         now="2026-11-18T09:00:00.000+00:00",
     )
     patch = await validate_prd(STATE, cfg, second)
@@ -231,7 +234,7 @@ async def test_a_task_that_re_enters_after_write_without_commit_keeps_one_file(r
     (root / DRAFT).write_text(draft_text("old\n"), encoding="utf-8")  # untracked, no record
     ports = ports_for(
         returned(),
-        validator=FakeSpecValidator("spec_unapproved"),
+        validator=FakeDraftSpecValidator(),
         now="2026-11-20T09:00:00.000+00:00",
     )
     patch = await validate_prd(STATE, cfg, ports)
@@ -246,7 +249,7 @@ async def test_the_recorded_path_wins_on_re_entry(root, cfg):
         **STATE,
         "spec_draft": {"outcome": "written", "path": recorded, "sha256": "e" * 64},
     }
-    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"))
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator())
     patch = await validate_prd(state, cfg, ports)
     assert patch["spec_draft"]["path"] == recorded
     assert (root / recorded).is_file() and not (root / DRAFT).exists()
@@ -257,19 +260,17 @@ async def test_a_recorded_path_that_is_not_a_spec_path_is_not_followed(root, cfg
         **STATE,
         "spec_draft": {"outcome": "written", "path": "../../outside.md", "sha256": "e" * 64},
     }
-    ports = ports_for(returned(), validator=FakeSpecValidator("spec_unapproved"))
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator())
     patch = await validate_prd(state, cfg, ports)
     assert patch["spec_draft"]["path"] == DRAFT
     assert not (root.parent.parent / "outside.md").exists()
 
 
 async def test_a_name_taken_in_the_upstream_gets_the_task_id(root, cfg):
-    workspace = MemoryWorkspace()
+    workspace = CommittingWorkspace()
     workspace.upstream_answer = Upstream("origin/master", "f" * 40, None)
     workspace.files[("f" * 40, DRAFT)] = "---\nstatus: approved\n---\nsomeone else's\n"
-    ports = ports_for(
-        returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace
-    )
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator(), workspace=workspace)
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"]["path"] == TAKEN_AS
     assert not (root / DRAFT).exists()
@@ -279,11 +280,60 @@ async def test_a_name_taken_in_the_checkout_gets_the_task_id(root, cfg):
     # Someone else's file, already in the base: not this task's own draft.
     (root / "docs/specs").mkdir(parents=True)
     (root / DRAFT).write_text("---\nstatus: approved\n---\nothers\n", encoding="utf-8")
-    workspace = MemoryWorkspace()
+    workspace = CommittingWorkspace()
     workspace.files[("base0", DRAFT)] = "---\nstatus: approved\n---\nothers\n"
-    ports = ports_for(
-        returned(), validator=FakeSpecValidator("spec_unapproved"), workspace=workspace
-    )
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator(), workspace=workspace)
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"]["path"] == TAKEN_AS
     assert (root / DRAFT).read_text(encoding="utf-8").endswith("others\n")
+
+
+async def test_a_draft_committed_twice_records_the_second_commit_and_hash(root, cfg):
+    ports = ports_for(validator=FakeDraftSpecValidator())
+    task = await task_checkout_in_thread(STATE, cfg, ports)
+    first = deliver(STATE, {"spec_draft": BODY}, task, cfg, ports)
+    again = BODY + "\nMore.\n"
+    second = deliver({**STATE, "spec_draft": first}, {"spec_draft": again}, task, cfg, ports)
+    assert first["outcome"] == second["outcome"] == "written"
+    assert first["path"] == second["path"] == DRAFT
+    assert first["commit"] == f"{1:040x}" and second["commit"] == f"{2:040x}"
+    assert second["sha256"] == body_sha256(draft_text(again)) != first["sha256"]
+    # Each commit still holds the text it recorded.
+    workspace = ports.workspace
+    assert workspace.show(second["commit"], DRAFT) == draft_text(again)
+    assert workspace.show(first["commit"], DRAFT) == draft_text(BODY)
+
+
+async def test_a_commit_that_added_nothing_records_the_head_that_holds_the_text(root, cfg):
+    sha = "9" * 40
+    workspace = CommittingWorkspace(pinned_head=sha)
+    workspace.files[(sha, DRAFT)] = draft_text(BODY)
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator(), workspace=workspace)
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {
+        "outcome": "written",
+        "path": DRAFT,
+        "sha256": body_sha256(draft_text(BODY)),
+        "commit": sha,
+    }
+
+
+@pytest.mark.parametrize("held", [None, "---\nstatus: draft\n---\nsomething else\n"])
+async def test_a_head_that_does_not_hold_the_written_text_is_not_recorded(root, cfg, held):
+    sha = "9" * 40
+    workspace = CommittingWorkspace(pinned_head=sha)
+    if held is not None:
+        workspace.files[(sha, DRAFT)] = held
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator(), workspace=workspace)
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {"outcome": "invalid"}
+    assert patch["status"] == "definition_ready"
+
+
+async def test_a_symlink_at_the_target_is_invalid(root, cfg):
+    (root / "docs/specs").mkdir(parents=True)
+    (root / DRAFT).symlink_to(root / "elsewhere.md")
+    ports = ports_for(returned(), validator=FakeDraftSpecValidator())
+    patch = await validate_prd(STATE, cfg, ports)
+    assert patch["spec_draft"] == {"outcome": "invalid"}
+    assert not (root / "elsewhere.md").exists()

@@ -192,6 +192,8 @@ def _performance_graph(script, stack, perf):
         return replace(
             real,
             runner=runner,
+            # These tests pin the flow, not the draft Spec: no validator, so no draft is owed.
+            spec_validator=None,
             workspace=fakes.workspace,
             tracker=fakes.tracker,
             knowledge=_Rebased(knowledge, cfg.product_dir),

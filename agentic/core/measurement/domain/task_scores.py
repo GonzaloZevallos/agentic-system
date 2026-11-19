@@ -32,7 +32,17 @@ from agentic.core.process.domain.task import (
 )
 
 from . import metrics, stage_report
-from .stages import CycleStage, StageSplit, StageUnknown, stage_split
+from .stages import (
+    WORK_STAGES,
+    CycleStage,
+    Generations,
+    NoRows,
+    StageSplit,
+    StageUnknown,
+    WorkSplitUnknown,
+    stage_split,
+    work_split,
+)
 
 ScoreDataType = Literal["NUMERIC", "CATEGORICAL", "BOOLEAN"]
 
@@ -114,11 +124,22 @@ STAGE_SCORE_NAMES: tuple[str, ...] = ("cycle_active_h", "stage_split_known")
 """The two fixed scores the dashboard reads beside the `stage_h` family (GH-819), after the
 older fixed names so none of them moves."""
 
+WORK_SCORE_NAMES: tuple[str, ...] = (
+    "work_h",
+    "work_llm_h",
+    "work_tools_h",
+    "work_outside_h",
+    "work_split_known",
+)
+"""The time spent working, by `stages.WORK_STAGES`, and its division into LLM, tools and outside
+(`stages.work_split`), after the older fixed names so none of them moves."""
+
 SCORE_NAMES: tuple[str, ...] = (
     *BASE_SCORE_NAMES,
     *(name for names in FAMILIES.values() for name in names),
     *FIXED_SCORE_NAMES,
     *STAGE_SCORE_NAMES,
+    *WORK_SCORE_NAMES,
 )
 """The closed list of score names; no other name can be produced."""
 
@@ -202,7 +223,7 @@ def _parse(value: object) -> datetime | None:
 
 
 MERGE_DATED_PREFIXES: tuple[str, ...] = ("stage_h.", "slowest_stage.")
-MERGE_DATED_NAMES: tuple[str, ...] = ("cycle_h", *STAGE_SCORE_NAMES)
+MERGE_DATED_NAMES: tuple[str, ...] = ("cycle_h", *STAGE_SCORE_NAMES, *WORK_SCORE_NAMES)
 
 
 def merge_dated(name: str) -> bool:
@@ -213,7 +234,7 @@ def merge_dated(name: str) -> bool:
 def score_time(name: str, task_time: TaskTime, pr_merged_at: str | None) -> datetime | None:
     """The instant a score is dated at, the only place one is chosen (GH-819). A score that
     needs a merge (`cycle_h`, `stage_h.*`, `cycle_active_h`, `stage_split_known`,
-    `slowest_stage.*`) is dated at the pull request's merge, so the weekly trend and the
+    `slowest_stage.*`, `work_*`) is dated at the pull request's merge, so the weekly trend and the
     date range put the task in the week it landed; `None` when there is no readable merge.
     Every other score keeps the task's own end."""
     if merge_dated(name):
@@ -328,6 +349,44 @@ def _stage_hours(split: StageSplit | StageUnknown) -> dict[str, float]:
         return {}
     hours: dict[str, float] = {str(stage): h for stage, h in stage_report.hours(split).items()}
     return {name: hours[name.removeprefix("stage_h.")] for name in FAMILIES["stage_h"]}
+
+
+def _work_hours(stage_hours: Mapping[str, float]) -> float | None:
+    """`work_h`: the sum of the `stage_h.*` of `WORK_STAGES`; `None` without a stage split."""
+    if not stage_hours:
+        return None
+    return sum(stage_hours[f"stage_h.{stage}"] for stage in WORK_STAGES)
+
+
+def _work_scores(
+    document: Mapping[str, Any],
+    generations: Mapping[str, Generations | NoRows] | None,
+    *,
+    issue_created_at: str | None,
+    pr_created_at: str | None,
+    pr_merged_at: str | None,
+) -> dict[str, float]:
+    """The other four work scores. Nothing without `generations`, or when the stage split is
+    unknown (`stage_unknown`); only `work_split_known = 0` when the split is unknown for lack of
+    a session or its rows; the three groups in hours and `work_split_known = 1` otherwise. The
+    seconds are `stages.work_split`'s; nothing here subtracts them."""
+    if generations is None:
+        return {}
+    divided = work_split(
+        document,
+        issue_created_at=_parse(issue_created_at),
+        pr_created_at=_parse(pr_created_at),
+        pr_merged_at=_parse(pr_merged_at),
+        generations=generations,
+    )
+    if isinstance(divided, WorkSplitUnknown):
+        return {} if divided.cause == "stage_unknown" else {"work_split_known": 0.0}
+    return {
+        "work_llm_h": divided.llm_s / _SECONDS_PER_HOUR,
+        "work_tools_h": divided.tools_s / _SECONDS_PER_HOUR,
+        "work_outside_h": divided.outside_s / _SECONDS_PER_HOUR,
+        "work_split_known": 1.0,
+    }
 
 
 def _slowest_stage(stage_hours: Mapping[str, float], cycle_h: float | None) -> dict[str, float]:
@@ -468,6 +527,7 @@ def task_scores(
     issue_created_at: str | None = None,
     pr_created_at: str | None = None,
     identity: Identity | None = None,
+    generations: Mapping[str, Generations | NoRows] | None = None,
 ) -> list[Score]:
     """The scores the document and the tracker reads support, in `SCORE_NAMES` order.
     A score whose input is missing is left out, never written as `0` or `false`. With an
@@ -475,7 +535,10 @@ def task_scores(
     a score that needs a merge is left out when there is none. The `stage_h` family is all
     ten hours from one `StageSplit` or none: an unknown split, or no merge, writes nothing,
     and `cycle_active_h` and `slowest_stage.*` come from that same split. `stage_split_known`
-    says which of the two a merged task got."""
+    says which of the two a merged task got. `work_h` is the `stage_h` of `WORK_STAGES` summed,
+    written with them; with `generations` (session id to its intervals) a merged task with a
+    stage split also gets `work_llm_h`, `work_tools_h`, `work_outside_h` and `work_split_known`
+    (see `_work_scores`); with `None` none of the four."""
     cost = float(document.get("cost_usd") or 0.0)
     delivered = _delivered(document)
     cycle_h = _cycle_hours(issue_created_at, pr_merged_at)
@@ -486,6 +549,13 @@ def task_scores(
         pr_merged_at=pr_merged_at,
     )
     stage_hours = _stage_hours(split)
+    work = _work_scores(
+        document,
+        generations,
+        issue_created_at=issue_created_at,
+        pr_created_at=pr_created_at,
+        pr_merged_at=pr_merged_at,
+    )
     task_type, origin = document.get("type") or None, _origin(document)
     values: dict[str, tuple[float | str | None, ScoreDataType]] = {
         "cost_usd": (cost, "NUMERIC"),
@@ -508,6 +578,11 @@ def task_scores(
             None if _parse(pr_merged_at) is None else float(bool(stage_hours)),
             "BOOLEAN",
         ),
+        "work_h": (_work_hours(stage_hours), "NUMERIC"),
+        "work_llm_h": (work.get("work_llm_h"), "NUMERIC"),
+        "work_tools_h": (work.get("work_tools_h"), "NUMERIC"),
+        "work_outside_h": (work.get("work_outside_h"), "NUMERIC"),
+        "work_split_known": (work.get("work_split_known"), "BOOLEAN"),
     }
     numeric: dict[str, float] = {
         **_returns_by_category(document),

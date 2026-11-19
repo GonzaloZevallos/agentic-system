@@ -45,6 +45,7 @@ classDiagram
     class schemas__CopyReview["CopyReview"]
     class schemas__CritiqueFinding["CritiqueFinding"]
     class schemas__DefinitionTurn["DefinitionTurn"]
+    class schemas__Delivery["Delivery"]
     schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
@@ -53,6 +54,8 @@ classDiagram
 - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - `roles.Interview` se asocia con `roles.Role`
   - `roles.Pair` se asocia con `roles.Role`
+- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
@@ -61,4 +64,4 @@ classDiagram
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
-  - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
+  - `schemas.Delivery` hereda de `schemas.RoleOutput`

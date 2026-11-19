@@ -128,7 +128,9 @@ PROMPT_GOLDENS = {
 
 def rendered(name, **more):
     raw = (roles.PROMPTS_DIR / f"{name}.md").read_text()
-    return roles.render(raw, Path(name), **{**PLACEHOLDERS, "date": "2026-01-01", **more})
+    return roles.render(
+        raw, Path(name), **{**PLACEHOLDERS, "date": "2026-01-01", "drawing_rule": "", **more}
+    )
 
 
 def test_the_tech_lead_prompts_render_as_they_did_under_the_default():

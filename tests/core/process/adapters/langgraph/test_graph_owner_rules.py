@@ -100,6 +100,8 @@ def build(tmp_path, comments, stack=None, system_file=False, commands=None, scri
         return replace(
             real,
             runner=script,
+            # These tests pin the flow, not the draft Spec: no validator, so no draft is owed.
+            spec_validator=None,
             workspace=fakes.workspace,
             tracker=fakes.tracker,
             knowledge=_Owned(knowledge, cfg.product_dir),

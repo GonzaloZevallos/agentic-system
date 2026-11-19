@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, get_args
+
+from agentic.core.process.domain import hold_record
 
 from . import cycle, parallel_factor
 
@@ -27,9 +29,23 @@ CycleStage = Literal[
     "checks",
     "human_wait",
     "account_limit",
+    "held",
     "landing",
     "other",
 ]
+# The stages where someone or something is working on the task, and the ones where it waits, both
+# in `CycleStage` order. A test pins them as disjoint and covering `CycleStage`.
+WORK_STAGES: tuple[CycleStage, ...] = (
+    "definition",
+    "plan",
+    "development",
+    "review",
+    "checks",
+    "landing",
+    "other",
+)
+WAIT_STAGES: tuple[CycleStage, ...] = ("queue", "human_wait", "account_limit", "held")
+
 # What an `other` claim is: the time no stage owns (`gap`), a run with no readable role
 # (`legacy_role`), a pause that was an outage (`outage_pause`) or the reflector's run.
 OtherCause = Literal["gap", "legacy_role", "outage_pause", "reflector"]
@@ -42,6 +58,7 @@ StageUnknownCause = Literal[
     "ci_wait_unknown",
     "run_unbounded",
     "bounds_reversed",
+    "hold_unknown",
 ]
 
 
@@ -132,6 +149,7 @@ STAGE_PRECEDENCE: tuple[CycleStage, ...] = (
     "development",
     "plan",
     "definition",
+    "held",
     "queue",
     "other",
 )
@@ -140,7 +158,16 @@ OTHER_ORDER: tuple[OtherCause, ...] = get_args(OtherCause)
 # The causes of a mechanical escalation that wait on CI (`CiCause`, prefixed `ci_`).
 _CI_CAUSES = frozenset({"ci_gh_unavailable", "ci_gh_unreadable", "ci_run_unfinished"})
 
-RANK_HUMAN, RANK_ACCOUNT, RANK_PAUSE, RANK_LANDING, RANK_CI, RANK_RUN, RANK_QUEUE = range(1, 8)
+(
+    RANK_HUMAN,
+    RANK_ACCOUNT,
+    RANK_PAUSE,
+    RANK_LANDING,
+    RANK_CI,
+    RANK_RUN,
+    RANK_HELD,
+    RANK_QUEUE,
+) = range(1, 9)
 
 
 def key(claim: Claim) -> tuple[int, int, int]:
@@ -206,6 +233,7 @@ class _Timed:
     end: datetime
     slug: object
     queue_wait_s: object = None
+    session_id: object = None
 
 
 def _read_runs(document: Mapping[str, Any]) -> list[_Timed] | None:
@@ -220,7 +248,9 @@ def _read_runs(document: Mapping[str, Any]) -> list[_Timed] | None:
         span = _bounded(record)
         if span is None or not isinstance(record, Mapping):
             return None
-        runs.append(_Timed(*span, record.get("slug"), record.get("queue_wait_s")))
+        runs.append(
+            _Timed(*span, record.get("slug"), record.get("queue_wait_s"), record.get("session_id"))
+        )
     return runs
 
 
@@ -237,7 +267,7 @@ def _read_failures(document: Mapping[str, Any]) -> list[_Timed] | None:
         span = _bounded(record)
         if span is None or not isinstance(record, Mapping):
             return None
-        failures.append(_Timed(*span, record.get("slug")))
+        failures.append(_Timed(*span, record.get("slug"), None, record.get("session_id")))
     return failures
 
 
@@ -278,11 +308,13 @@ def claims(
     `no_merge`); a merge before the issue's creation, or a pull request created after the merge
     (`bounds_reversed`); a pause still open or unreadable (`pause_open`); a failure or a run
     with a missing, unparsable or reversed bound (`failure_unbounded`, `run_unbounded`); a CI
-    wait that cannot be derived (`ci_wait_unknown`).
+    wait that cannot be derived (`ci_wait_unknown`); a holds record that is unreadable or
+    unpaired (`hold_unknown`, read by `hold_record.read`, last, so a document that gave another
+    cause before still gives it).
 
     The ranks: 1 a human pause, 2 an account-limit pause, 3 the other closed pauses (CI ones to
     `checks`, the rest to `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to
-    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the queue.
+    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
 
     `parallel_factor.clip` drops the empty claims silently. The inputs that would invert a range
     are caught first by the validation above, so no claim is ever inverted. The later sweep must
@@ -314,6 +346,9 @@ def claims(
     runs = _read_runs(document)
     if runs is None:
         return StageUnknown("run_unbounded")
+    holds = hold_record.read(document)
+    if isinstance(holds, hold_record.HoldUnknown):
+        return StageUnknown("hold_unknown")
 
     found: list[Claim] = []
 
@@ -337,9 +372,56 @@ def claims(
     for timed in [*runs, *failures]:
         stage, cause = _run_claim(timed.slug)
         add((timed.start, timed.end), RANK_RUN, stage, cause)
+    for span in holds or ():
+        add(span, RANK_HELD, "held")
     for span in _queue_claims(runs, created):
         add(span, RANK_QUEUE, "queue")
     return found
+
+
+Segment = tuple[datetime, datetime, CycleStage, OtherCause | None]
+
+
+def _segments(found: list[Claim], created: datetime, merged: datetime) -> Iterator[Segment]:
+    """The cycle `[created, merged]` cut into `(start, end, stage, cause)` segments of positive
+    length, in order, each attributed to one stage: the one source of the sweep that
+    `stage_split` and `work_split` share (ADR-0099), so the clipping and the precedence are
+    never written twice. `cause` is set for an `other` segment (`gap` where no claim covers).
+
+    One sweep over the claim edges, sorted once: at each instant every edge is applied before
+    the next segment is attributed, and a heap of open `(key, index)` pairs gives the segment to
+    the claim with the smallest `key` (the index settles equal keys; a closed claim is dropped
+    from the top lazily). O(n log n) time and O(n) memory."""
+    # (instant, 0 close | 1 open, claim index): a close sorts before an open at the same instant.
+    edges = sorted(
+        edge
+        for index, claim in enumerate(found)
+        for edge in ((claim.start, 1, index), (claim.end, 0, index))
+    )
+    open_keys: list[tuple[tuple[int, int, int], int]] = []
+    closed: set[int] = set()
+    keys = [key(claim) for claim in found]
+
+    def attribute(until: datetime, since: datetime) -> Iterator[Segment]:
+        if (until - since).total_seconds() <= 0:
+            return
+        while open_keys and open_keys[0][1] in closed:
+            heapq.heappop(open_keys)
+        if not open_keys:
+            yield since, until, "other", "gap"
+            return
+        claim = found[open_keys[0][1]]
+        yield since, until, claim.stage, (claim.cause or "gap") if claim.stage == "other" else None
+
+    since = created
+    for instant, opens, index in edges:
+        yield from attribute(instant, since)
+        since = max(since, instant)
+        if opens:
+            heapq.heappush(open_keys, (keys[index], index))
+        else:
+            closed.add(index)
+    yield from attribute(merged, since)
 
 
 @dataclass(frozen=True)
@@ -362,11 +444,8 @@ def stage_split(
     """The seconds per stage of the cycle `[issue_created_at, pr_merged_at]`, or the
     `StageUnknown` `claims` returns. The only place stage seconds are computed (ADR-0099).
 
-    One sweep over the claim edges, sorted once: at each instant every edge is applied before
-    the next segment is attributed, and a heap of open `(key, index)` pairs gives the segment to
-    the claim with the smallest `key` (the index settles equal keys; a closed claim is dropped
-    from the top lazily). A segment no claim covers is `other`/`gap`. O(n log n) time and O(n)
-    memory. Never raises and never reads `closed_at` or `cycle._bounds`."""
+    The sum of the segments `_segments` yields. A segment no claim covers is `other`/`gap`.
+    Never raises and never reads `closed_at` or `cycle._bounds`."""
     found = claims(
         document,
         issue_created_at=issue_created_at,
@@ -377,43 +456,177 @@ def stage_split(
         return found
     # `claims` returned a list, so the three arguments are not `None` and the bounds are ordered.
     assert issue_created_at is not None and pr_merged_at is not None
-    created, merged = _utc(issue_created_at), _utc(pr_merged_at)
-
     seconds: dict[CycleStage, float] = dict.fromkeys(STAGE_PRECEDENCE, 0.0)
     by_cause: dict[OtherCause, float] = dict.fromkeys(OTHER_ORDER, 0.0)
-    # (instant, 0 close | 1 open, claim index): a close sorts before an open at the same instant.
-    edges = sorted(
-        edge
-        for index, claim in enumerate(found)
-        for edge in ((claim.start, 1, index), (claim.end, 0, index))
-    )
-    open_keys: list[tuple[tuple[int, int, int], int]] = []
-    closed: set[int] = set()
-    keys = [key(claim) for claim in found]
-
-    def attribute(until: datetime, since: datetime) -> None:
+    for since, until, stage, cause in _segments(found, _utc(issue_created_at), _utc(pr_merged_at)):
         length = (until - since).total_seconds()
-        if length <= 0:
-            return
-        while open_keys and open_keys[0][1] in closed:
-            heapq.heappop(open_keys)
-        if not open_keys:
-            by_cause["gap"] += length
-            return
-        claim = found[open_keys[0][1]]
-        if claim.stage == "other":
-            by_cause[claim.cause or "gap"] += length
+        if stage == "other":
+            by_cause[cause or "gap"] += length
         else:
-            seconds[claim.stage] += length
-
-    since = created
-    for instant, opens, index in edges:
-        attribute(instant, since)
-        since = max(since, instant)
-        if opens:
-            heapq.heappush(open_keys, (keys[index], index))
-        else:
-            closed.add(index)
-    attribute(merged, since)
+            seconds[stage] += length
     seconds["other"] = sum(by_cause.values())
     return StageSplit(seconds, by_cause)
+
+
+@dataclass(frozen=True)
+class Generations:
+    """The LLM generation intervals `(start, end)` of one session, as an adapter read them. The
+    endpoints are `object` because they come from outside: `work_split` ignores the ones that
+    are not datetimes."""
+
+    intervals: tuple[tuple[object, object], ...]
+
+
+@dataclass(frozen=True)
+class NoRows:
+    """The session was looked up and has no generation rows."""
+
+
+@dataclass(frozen=True)
+class Unreachable:
+    """The generation source could not be read; `cause` says why. The adapter turns it into
+    `generations=None` before the domain is called, so `work_split` never receives it."""
+
+    cause: str
+
+
+WorkSplitUnknownCause = Literal["no_session", "no_rows", "stage_unknown"]
+
+
+@dataclass(frozen=True)
+class WorkSplit:
+    """The seconds of a task's work: `work_s` is the time in `WORK_STAGES`, `llm_s` the part of
+    it some generation covers, `tools_s` the rest of what some run or failure covers and
+    `outside_s` what none covers. The last three are never negative and sum to `work_s`."""
+
+    work_s: float
+    llm_s: float
+    tools_s: float
+    outside_s: float
+
+
+@dataclass(frozen=True)
+class WorkSplitUnknown:
+    """The work cannot be divided: `cause` says which input is missing."""
+
+    cause: WorkSplitUnknownCause
+
+
+_Span = tuple[datetime, datetime]
+
+
+def _union(spans: Iterable[_Span]) -> list[_Span]:
+    """The sorted, disjoint spans covering the same time (touching spans are merged)."""
+    merged: list[_Span] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            if end > merged[-1][1]:
+                merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _overlap(first: list[_Span], second: list[_Span]) -> list[_Span]:
+    """The intersection of two sorted, disjoint span lists, two pointers."""
+    out: list[_Span] = []
+    i = j = 0
+    while i < len(first) and j < len(second):
+        start, end = max(first[i][0], second[j][0]), min(first[i][1], second[j][1])
+        if start < end:
+            out.append((start, end))
+        if first[i][1] < second[j][1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def _seconds(spans: list[_Span]) -> float:
+    return sum((end - start).total_seconds() for start, end in spans)
+
+
+def _read_generations(held: object) -> list[_Span]:
+    """The usable intervals of a session's generations: an endpoint that is not a datetime, a
+    malformed pair or an interval whose end is before its start is dropped (never an error); a
+    naive datetime is read as UTC. Anything that is not `Generations` reads as none."""
+    if not isinstance(held, Generations):
+        return []
+    if not isinstance(held.intervals, tuple | list):
+        return []
+    spans: list[_Span] = []
+    for pair in held.intervals:
+        if not isinstance(pair, tuple | list) or len(pair) != 2:
+            continue
+        start, end = pair
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            continue
+        start, end = _utc(start), _utc(end)
+        if end >= start:
+            spans.append((start, end))
+    return spans
+
+
+def work_split(
+    document: Mapping[str, Any],
+    *,
+    issue_created_at: datetime | None,
+    pr_created_at: datetime | None,
+    pr_merged_at: datetime | None,
+    generations: Mapping[str, Generations | NoRows],
+) -> WorkSplit | WorkSplitUnknown:
+    """The work of the cycle `[issue_created_at, pr_merged_at]` split into LLM, tools and
+    outside, or why it cannot be. It takes `claims` and `_segments`, the same ones
+    `stage_split` sums, so the clipping and the precedence are not written again.
+
+    Work is the seconds of the `WORK_STAGES` segments. Run is the work covered by the union of
+    the intervals of runs and failures. LLM is the work covered by the union of each record's
+    session generations, clipped to that record's interval, so a generation two records of one
+    session share counts once and LLM is inside run. Unions, never sums: `tools_s = run - llm`
+    and `outside_s = work - run`. `outside_s` includes the time the pull request is open that no
+    run covers.
+
+    The unknowns, in order: `stage_unknown` when `claims` is unknown; then, over the records
+    that touch work (their interval clipped to the cycle meets a work segment, a zero-length
+    touch included, and only those), `no_session` when one has no `session_id`, and `no_rows`
+    when the session of one is `NoRows` or absent from `generations`. A record outside work
+    contributes neither a cause nor seconds. Never raises."""
+    found = claims(
+        document,
+        issue_created_at=issue_created_at,
+        pr_created_at=pr_created_at,
+        pr_merged_at=pr_merged_at,
+    )
+    runs, failures = _read_runs(document), _read_failures(document)
+    if isinstance(found, StageUnknown) or runs is None or failures is None:
+        return WorkSplitUnknown("stage_unknown")
+    assert issue_created_at is not None and pr_merged_at is not None
+    created, merged = _utc(issue_created_at), _utc(pr_merged_at)
+    work = _union(
+        (start, end)
+        for start, end, stage, _ in _segments(found, created, merged)
+        if stage in WORK_STAGES
+    )
+
+    touching: list[tuple[_Span, object]] = []
+    for record in [*runs, *failures]:
+        span = (max(record.start, created), min(record.end, merged))
+        if span[0] <= span[1] and any(
+            span[0] <= w_end and w_start <= span[1] for w_start, w_end in work
+        ):
+            touching.append((span, record.session_id))
+    if any(not isinstance(session, str) or not session for _, session in touching):
+        return WorkSplitUnknown("no_session")
+    if any(not isinstance(generations.get(str(session)), Generations) for _, session in touching):
+        return WorkSplitUnknown("no_rows")
+
+    llm_spans: list[_Span] = []
+    for (start, end), session in touching:
+        for g_start, g_end in _read_generations(generations.get(str(session))):
+            clipped = (max(g_start, start), min(g_end, end))
+            if clipped[0] < clipped[1]:
+                llm_spans.append(clipped)
+    work_s = _seconds(work)
+    run_s = min(work_s, _seconds(_overlap(work, _union(span for span, _ in touching))))
+    llm_s = min(run_s, _seconds(_overlap(work, _union(llm_spans))))
+    return WorkSplit(work_s, llm_s, run_s - llm_s, work_s - run_s)
