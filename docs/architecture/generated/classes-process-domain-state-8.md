@@ -31,25 +31,28 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__MergeConflictRecord["MergeConflictRecord"]
-    class task__MergeOutcome["MergeOutcome"]
-    class task__MergeRefusalRecord["MergeRefusalRecord"]
-    class task__OutOfBoundsLine["OutOfBoundsLine"]
-    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
-    class task__PartRecord["PartRecord"]
-    class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
+    class task__PlanHeld["PlanHeld"]
     class task__PlanRoute["PlanRoute"]
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__RefusalNoted["RefusalNoted"]
     class task__ReleasePatch["ReleasePatch"]
+    class task__RestartPending["RestartPending"]
+    class task__RestartSettledRow["RestartSettledRow"]
+    class task__Restoration["Restoration"]
+    class task__ResumedPauseEntry["ResumedPauseEntry"]
+    class task__ReviewScopeRecord["ReviewScopeRecord"]
+    class task__RoleRun["RoleRun"]
+    class task__SettledRow["SettledRow"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
+- [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - `task.PlanHeld` se asocia con `task.EstimateRecord`
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
