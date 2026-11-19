@@ -33,6 +33,7 @@ HOLDS = {
     "resume_waiting": False,
     "space_held": False,
     "schedule": False,
+    "held": False,
 }
 
 
@@ -41,12 +42,16 @@ def test_every_deferred_reason_is_classed_explicitly():
     assert set(reasons) == set(HOLDS)
 
 
-@pytest.mark.parametrize(("reason", "holds"), sorted(HOLDS.items()))
-def test_a_deferred_land_holds_launches_only_for_the_reasons_that_open_a_wait(reason, holds):
-    assert rules.holds_launches(rules.Deferred("land", 4, reason)) is holds
+LAND_REASONS = sorted(rules.DEFERRED_REASONS["land"])
+LAUNCH_REASONS = sorted(rules.DEFERRED_REASONS["launch"])
 
 
-@pytest.mark.parametrize("reason", sorted(HOLDS))
+@pytest.mark.parametrize("reason", LAND_REASONS)
+def test_a_deferred_land_holds_launches_only_for_the_reasons_that_open_a_wait(reason):
+    assert rules.holds_launches(rules.Deferred("land", 4, reason)) is HOLDS[reason]
+
+
+@pytest.mark.parametrize("reason", LAUNCH_REASONS)
 def test_a_deferred_launch_never_opens_a_wait(reason):
     assert rules.holds_launches(rules.Deferred("launch", 4, reason)) is False
 
