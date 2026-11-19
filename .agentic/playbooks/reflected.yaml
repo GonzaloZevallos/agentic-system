@@ -1443,3 +1443,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-980
+  GH-943@review:
+    cost_usd: 0.0755
+    decisions: 1
