@@ -594,6 +594,7 @@ def test_resolve_refuses_an_ambiguous_name_listing_candidates_and_never_picking_
     assert isinstance(refused, Refused)
     assert "more than one" in refused.reason and "Q1" in refused.reason
     assert f"{PROTO}/other/Twin.dc.html" in refused.reason
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
     assert f"{PROTO}/sub/Twin.dc.html" in refused.reason
 
 
@@ -641,7 +642,8 @@ def test_resolve_with_the_whole_repo_as_prototype_accepts_any_relative_path():
 def test_resolve_names_the_prototype_for_an_invalid_path_and_never_the_exception():
     refused = resolve(LISTED, "/abs.html", "Q1")
     assert isinstance(refused, Refused)
-    assert "not valid" in refused.reason and f"under {PROTO}/" in refused.reason
+    assert "not valid" in refused.reason
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
     assert "must be relative" not in refused.reason
 
 

@@ -349,7 +349,7 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
         where = (
             "cite a relative path inside the repo"
             if prototype == "."
-            else f"cite a path under {prototype}/"
+            else _expected_form(prototype)
         )
         return Refused(f"{who} cites a drawing path that is not valid; {where}")
     if any(path == capture.image for capture in design.captures):
@@ -378,7 +378,7 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
         extra = f" (+{more} more)" if more > 0 else ""
         return Refused(
             f"{who} cites {_echo(cited)}, which matches more than one drawing: "
-            f"{shown}{extra}; cite the full path"
+            f"{shown}{extra}; {_expected_form(prototype)}"
         )
     refusal = (
         f"{who} cites {_echo(cited)}, which the design does not declare; "
