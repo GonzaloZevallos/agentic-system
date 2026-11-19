@@ -634,7 +634,7 @@ def staged_scores(doc=None, **times):
     )
 
 
-def test_the_stage_family_is_the_ten_cycle_stages_and_follows_the_base_names():
+def test_the_stage_family_is_the_eleven_cycle_stages_and_follows_the_base_names():
     assert [n.removeprefix("stage_h.") for n in STAGE_NAMES] == [
         "queue",
         "definition",
@@ -644,13 +644,14 @@ def test_the_stage_family_is_the_ten_cycle_stages_and_follows_the_base_names():
         "checks",
         "human_wait",
         "account_limit",
+        "held",
         "landing",
         "other",
     ]
     assert ts.SCORE_NAMES[: len(ts.BASE_SCORE_NAMES)] == ts.BASE_SCORE_NAMES
 
 
-def test_a_merged_document_emits_the_ten_stage_hours_numeric_under_the_identity():
+def test_a_merged_document_emits_the_eleven_stage_hours_numeric_under_the_identity():
     ids = ts.identity("p", "GH-1", START)
     scores = scores_of(
         staged_document(),
@@ -705,7 +706,7 @@ def test_the_close_and_the_backfill_calls_give_equal_stage_hours():
         )
         if s.name in STAGE_NAMES
     }
-    assert first == second and len(first) == 10
+    assert first == second and len(first) == 11
 
 
 def test_stage_outcome_reads_the_strings_only_with_parse():
@@ -872,3 +873,49 @@ def test_two_calls_over_the_same_document_give_the_same_ids_and_timestamps():
     first = [(s.id, s.timestamp) for s in merged_scores(identity=ids)]
     again = [(s.id, s.timestamp) for s in merged_scores(identity=ids)]
     assert first == again and all(i for i, _ in first)
+
+
+def _held_doc(hold_to, *, account_pause=False):
+    """A merged document with no runs: a hold from the creation to `hold_to`, and either the
+    landing to the merge or, with `account_pause`, an account-limit pause from `hold_to` to it."""
+    hold = {"intervals": [{"start": "2026-10-01T09:00:00+00:00", "end": hold_to}]}
+    if not account_pause:
+        return document(runs=[], failures=[], holds=hold)
+    failed = {
+        "reason": "account_limit",
+        "cost_usd": 0.0,
+        "slug": "developer",
+        "started_at": hold_to,
+        "ended_at": hold_to,
+    }
+    logged = rules.logged({}, [failed], at=hold_to)
+    logged["pause_log"].append(rules.resumed_entry(at="2026-10-01T10:00:00Z"))
+    return document(runs=[], failures=[failed], holds=hold, **logged)
+
+
+@pytest.mark.parametrize(
+    ("doc", "pr_at", "expected"),
+    [
+        # held and landing last 30 minutes each: the tie goes to the earlier stage, `held`.
+        (_held_doc("2026-10-01T09:30:00+00:00"), "2026-10-01T09:30:00+00:00", "held"),
+        # account_limit and held last 30 minutes each: `account_limit` comes first.
+        (
+            _held_doc("2026-10-01T09:30:00+00:00", account_pause=True),
+            "2026-10-01T10:00:00+00:00",
+            "account_limit",
+        ),
+    ],
+    ids=["held-over-landing", "account_limit-over-held"],
+)
+def test_the_slowest_stage_ties_go_to_the_first_stage_in_family_order(doc, pr_at, expected):
+    got = by_name(
+        scores_of(
+            doc,
+            issue_created_at=ISSUE_AT,
+            pr_created_at=pr_at,
+            pr_merged_at="2026-10-01T10:00:00+00:00",
+        )
+    )
+    assert got["stage_h.held"].value == pytest.approx(0.5)
+    assert got[f"stage_h.{expected}"].value == pytest.approx(0.5)
+    assert [n for n in got if n.startswith("slowest_stage.")] == [f"slowest_stage.{expected}"]

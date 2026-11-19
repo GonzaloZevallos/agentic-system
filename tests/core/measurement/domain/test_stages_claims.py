@@ -107,6 +107,7 @@ def test_stage_precedence_holds_every_stage_once():
         "development",
         "plan",
         "definition",
+        "held",
         "queue",
         "other",
     )
@@ -141,7 +142,7 @@ def test_key_orders_by_rank_then_stage_then_cause():
     assert stages.key(claim(3, "other", "legacy_role")) < stages.key(
         claim(3, "other", "outage_pause")
     )
-    assert stages.key(claim(3, "other")) == (3, 9, 0)
+    assert stages.key(claim(3, "other")) == (3, 10, 0)
     assert stages.key(claim(3, "other", "gap")) == stages.key(claim(3, "other"))
 
 
@@ -413,7 +414,7 @@ def test_the_queue_is_the_time_before_the_first_run_and_each_runs_own_wait():
         "runs": [run(10, 20, queue_wait_s=120), run(30, 40, queue_wait_s=60)],
     }
     found = ask(document, created=5)
-    assert sorted(spans(found, rank=7)) == [
+    assert sorted(spans(found, rank=8)) == [
         (when(5), when(10)),
         (when(8), when(10)),
         (when(29), when(30)),
@@ -426,7 +427,7 @@ def test_the_queue_is_the_time_before_the_first_run_and_each_runs_own_wait():
 def test_a_run_starting_before_the_issue_is_clipped_to_the_creation():
     found = ask({"runs": [run(5, 20)]}, created=10)
     assert spans(found, rank=6) == [(when(10), when(20))]
-    assert spans(found, rank=7) == []
+    assert spans(found, rank=8) == []
 
 
 def test_a_run_ending_after_the_merge_is_clipped_to_the_merge():
@@ -436,23 +437,23 @@ def test_a_run_ending_after_the_merge_is_clipped_to_the_merge():
 
 def test_a_queue_wait_wider_than_the_time_before_the_first_run_stops_at_the_creation():
     found = ask({"runs": [run(10, 20, queue_wait_s=3600)]})
-    assert spans(found, rank=7) == [(when(0), when(10))] * 2
+    assert spans(found, rank=8) == [(when(0), when(10))] * 2
 
 
 def test_a_first_run_after_the_merge_leaves_the_queue_and_drops_the_run():
     found = ask({"runs": [run(60, 70, queue_wait_s=600)]}, created=0, pr_created=40, merged=50)
-    assert spans(found, rank=7) == [(when(0), when(50))]
+    assert spans(found, rank=8) == [(when(0), when(50))]
     assert spans(found, rank=6) == []
 
 
 @pytest.mark.parametrize("wait", [-5, "x", True, None, math.nan, math.inf, -math.inf, [3]])
 def test_a_queue_wait_that_is_not_a_finite_non_negative_number_reads_as_zero(wait):
     found = ask({"runs": [run(10, 20, queue_wait_s=wait)]})
-    assert spans(found, rank=7) == [(when(0), when(10))]
+    assert spans(found, rank=8) == [(when(0), when(10))]
 
 
 def test_a_queue_wait_that_is_missing_reads_as_zero():
-    assert spans(ask({"runs": [run(10, 20)]}), rank=7) == [(when(0), when(10))]
+    assert spans(ask({"runs": [run(10, 20)]}), rank=8) == [(when(0), when(10))]
 
 
 def test_every_claim_lies_inside_the_issue_and_the_merge():
