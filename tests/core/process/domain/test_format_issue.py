@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from agentic.core.process.domain import format_issue as fi
-from agentic.core.process.domain.task import add_format_issues, format_issue_for
+from agentic.core.process.domain.task import OutputRefusal, add_format_issues, format_issue_for
 
 
 @dataclass(frozen=True)
@@ -117,22 +117,31 @@ def test_earlier_rules_of_a_mixed_epoch():
 
 
 def test_evidence_uses_closed_fields_only():
-    # The sentinel sits in the value (measured, never printed); `evidence` has no parameter
-    # through which a failure's `error` or a refusal's `detail` could reach it.
-    sentinel = "SENTINEL-SECRET"
-    output = {"markdown": sentinel}
+    # One sentinel in the refused value, one in each earlier failure's `error` and one in a
+    # refusal's `detail` (carried as the row's `error`, as `run_role` records it), sent through
+    # the real path `earlier_rules(epoch)` -> `evidence`.
+    value_sentinel, error_sentinel, detail_sentinel = "SENT-VALUE", "SENT-ERROR", "SENT-DETAIL"
+    refusal = OutputRefusal("schema_invalid", "markdown", f"bad field: {detail_sentinel}")
+    epoch = [
+        failure("schema", "schema_invalid", error=f"first: {error_sentinel}"),
+        failure("check", "unmapped", error=str(refusal)),
+        failure("schema", "schema_invalid", error=f"last: {error_sentinel}"),
+    ]
+    output = {"markdown": value_sentinel * 2}
     title, body = fi.evidence(
-        "schema_invalid",
-        "markdown",
+        refusal.rule,
+        refusal.field,
         "Developer",
         "acme",
         41,
-        fi.value_len(output, "markdown"),
-        3,
-        [],
+        fi.value_len(output, refusal.field),
+        len(epoch),
+        fi.earlier_rules(epoch),
     )
-    assert sentinel not in title + body
-    assert "value length: 15" in body
+    for sentinel in (value_sentinel, error_sentinel, detail_sentinel, "bad field"):
+        assert sentinel not in title + body
+    assert "value length: 20" in body
+    assert "earlier rules in this epoch: schema_invalid, unmapped" in body
     assert "#41" in body and "acme" in body and "Developer" in body
 
 
