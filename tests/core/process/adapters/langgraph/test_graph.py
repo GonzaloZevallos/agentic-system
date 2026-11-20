@@ -1263,6 +1263,7 @@ def test_exported_graph_uses_the_default_ports():
         "define",
         "diagnose",
         "validate",
+        "early_size",
         "ux_flow",
         "ux_walk",
         "ui_screens",

@@ -3473,3 +3473,27 @@ class Measured:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._graph, name)
+
+
+def early_sized(
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
+    parts: Sequence[dict[str, object]] = (),
+    cost: float = 0.05,
+) -> RawResult:
+    """What the definition sizer answers: the declared size of the whole task and, when it cuts
+    it, the parts (each with the edges' reasons and the default size of a part)."""
+    items = [{**PART_DEFAULTS, **_reasons_for(p), **p} for p in parts]
+    return RawResult(
+        {
+            "markdown": "Bucket read; cut.",
+            "estimated_cost_usd": 5.0,
+            "estimated_files": 5,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
+            "parts": items,
+        },
+        cost,
+    )
