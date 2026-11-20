@@ -194,6 +194,8 @@ class AttemptFailed(Exception):
         check_runs: CheckRuns | None = None,
         rule: RefusalRule | None = None,
         field: str = "",
+        value: str | None = None,
+        detail: str = "",
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -246,6 +248,10 @@ class AttemptFailed(Exception):
         # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
         self.rule = rule
         self.field = field
+        # What the role wrote in `field` and the refusal's own motive, both already cleaned by
+        # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
+        self.value = value
+        self.detail = detail
 
 
 class Presubmit(Protocol):

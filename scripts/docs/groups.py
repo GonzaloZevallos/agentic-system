@@ -204,6 +204,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.pull_request": "landing",
     "domain.rate_limit": "machine",
     "domain.reaping": "machine",
+    "domain.refusal_retry": "machine",
     "domain.restart": "state",
     "domain.retakes": "machine",
     "domain.returns": "state",

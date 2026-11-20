@@ -114,7 +114,11 @@ async def test_a_plan_that_clears_both_floors_leaves_the_patch_as_it_was(tmp_pat
 async def test_a_raise_across_the_line_is_refused_as_not_fitting_and_retried(tmp_path):
     # Spent 140 + declared 20 = 160 does not fit; the retry reads the raised figure and cause.
     runner = ScriptedRunner(
-        tech_lead=[planned(estimated_cost_usd=20.0), planned(estimated_cost_usd=170.0)]
+        tech_lead=[
+            planned(estimated_cost_usd=20.0),
+            planned(estimated_cost_usd=170.0),
+            planned(estimated_cost_usd=170.0),
+        ]
     )
     patch = await plan({**TASK, "cost_usd": 140.0}, cold(tmp_path), memory_ports(runner))
 

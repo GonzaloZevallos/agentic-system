@@ -834,6 +834,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"({state.get('status', 'open')})",
         f"reason:    {state.get('escalated') or 'none: the run stopped without escalating'}",
         f"spent:     {state.get('cost_usd', 0.0):.2f} USD ({phases})",
+        f"split:     {rules.spent_split_line(rules.spent_split(state))}",
         f"task cap:  {r.cap_usd:.2f} USD ({how})",
         f"{DECISION}{_indented(r.decision) if r.decision else 'none'}",
         f"resumes:   {r.target}{_subtasks(r)}",

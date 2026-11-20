@@ -176,11 +176,14 @@ class OutputRefusal(ValueError):
     the error text a check raised stays what it was. `field` is a claim: `run_role.
     refusal_field` keeps it only when the role's schema declares it."""
 
-    def __init__(self, rule: RefusalRule, field: str, detail: str):
+    def __init__(self, rule: RefusalRule, field: str, detail: str, *, value: object = None):
         super().__init__(detail)
         self.rule = rule
         self.field = field
         self.detail = detail
+        # What the role wrote in `field`, when the raise site has it (GH-1017): shown back to
+        # the model once, cleaned and cut by `refusal_retry.clean_value`. `None` is no value.
+        self.value = value
 
 
 class RefusalRepair(TypedDict):
@@ -1171,6 +1174,14 @@ class Failure(TypedDict):
     # `run_role.refusal_field`; never the value. Same conditions as `rule`, and absent when
     # the refusal names no declared field.
     field: NotRequired[str]
+    # What the role wrote in `field`, as `refusal_retry.clean_value` leaves it (one line, at
+    # most 240 characters), so the retry can show it back (GH-1017). Same conditions as `rule`,
+    # and absent when the refusal has no value to show (a missing field, `output_missing`). It
+    # is never a metric label or a span attribute.
+    value: NotRequired[str]
+    # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
+    # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
+    detail: NotRequired[str]
 
 
 class CheckRun(TypedDict):

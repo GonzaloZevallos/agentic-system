@@ -191,18 +191,18 @@ async def test_a_large_pre_estimate_goes_to_the_interview(critic_cfg):
 async def test_a_sizer_that_fails_goes_to_the_interview_and_keeps_its_cost(critic_cfg):
     bad = RawResult({"markdown": "x"}, 0.03, 1, "sz")
     runner = ScriptedRunner(
-        plan_sizer=[bad, bad],
+        plan_sizer=[bad, bad, bad],
         tech_lead_ephemeral=[questions(done=True, session="e1")],
         tech_lead=[planned()],
     )
     patch = await plan(task(CRITIC_ARM), critic_cfg, memory_ports(runner))
 
-    assert runner.slugs == ["plan_sizer", "plan_sizer", "tech_lead_ephemeral", "tech_lead"]
+    assert runner.slugs == ["plan_sizer"] * 3 + ["tech_lead_ephemeral", "tech_lead"]
     assert patch["status"] == "planned"
     assert "escalated" not in patch or not patch["escalated"]
     assert patch["plan_route"]["pre_estimate_usd"] is None
     assert patch["plan_route"]["route"] == "interview"
-    assert patch["cost_usd"] >= 0.06
+    assert patch["cost_usd"] >= 0.09
 
 
 async def test_a_draft_over_the_threshold_is_re_gated_to_the_interview(critic_cfg):
@@ -231,23 +231,23 @@ async def test_a_critic_that_fails_delivers_the_draft_and_records_it(critic_cfg)
     runner = ScriptedRunner(
         plan_sizer=[sized()],
         tech_lead=[planned(session="tl-draft", estimated_cost_usd=20.0)],
-        tech_lead_critic=[bad, bad],
+        tech_lead_critic=[bad, bad, bad],
     )
     patch = await plan(task(CRITIC_ARM), critic_cfg, memory_ports(runner))
 
-    assert runner.slugs == ["plan_sizer", "tech_lead", "tech_lead_critic", "tech_lead_critic"]
+    assert runner.slugs == ["plan_sizer", "tech_lead"] + ["tech_lead_critic"] * 3
     assert patch["status"] == "planned"
     assert patch["estimate"]["cost_usd"] == 20.0
     assert patch["plan_route"]["critic"] == "failed"
     assert not patch.get("escalated")
-    assert patch["cost_usd"] >= 0.02 + 0.3 + 0.2
+    assert patch["cost_usd"] >= 0.02 + 0.3 + 0.3
 
 
 async def test_a_revision_that_fails_delivers_the_draft(critic_cfg):
     bad = RawResult({"markdown": "x"}, 0.1, 1, "tl-final")
     runner = ScriptedRunner(
         plan_sizer=[sized()],
-        tech_lead=[planned(session="tl-draft", estimated_cost_usd=20.0), bad, bad],
+        tech_lead=[planned(session="tl-draft", estimated_cost_usd=20.0), bad, bad, bad],
         tech_lead_critic=[critique("important")],
     )
     patch = await plan(task(CRITIC_ARM), critic_cfg, memory_ports(runner))
@@ -274,7 +274,7 @@ async def test_a_critic_stopped_by_the_task_cap_ends_the_node_with_the_escalatio
 
 async def test_a_draft_that_cannot_be_made_ends_the_node_with_its_escalation(critic_cfg):
     bad = RawResult({"markdown": "x"}, 0.1, 1, "tl")
-    runner = ScriptedRunner(plan_sizer=[sized()], tech_lead=[bad, bad])
+    runner = ScriptedRunner(plan_sizer=[sized()], tech_lead=[bad, bad, bad])
     patch = await plan(task(CRITIC_ARM), critic_cfg, memory_ports(runner))
 
     assert "tech_lead_critic" not in runner.slugs
