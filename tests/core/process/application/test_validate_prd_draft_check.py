@@ -113,10 +113,10 @@ async def test_a_draft_the_validator_refuses_is_retried_with_a_fixed_sentence(
     root, tmp_path, delivered
 ):
     validator = FakeDraftSpecValidator(draft="spec_invalid")
-    ports = ports_for(returned(BODY), returned(BODY), validator=validator)
+    ports = ports_for(returned(BODY), returned(BODY), returned(BODY), validator=validator)
     patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert delivered == []
-    assert len(ports.runner.calls) == 2  # PM was retried once, then the task failed
+    assert len(ports.runner.calls) == 3  # PM was retried twice, then the task failed
     assert "draft Spec refused: draft_invalid:" in ports.runner.prompts("pm")[1]
     assert "spec_draft" not in patch and patch.get("status") != "definition_ready"
 

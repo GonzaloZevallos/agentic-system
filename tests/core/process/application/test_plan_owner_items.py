@@ -125,8 +125,8 @@ async def test_a_plan_that_stands_after_a_due_replan_with_only_tracker_work_does
 
 
 async def test_a_spec_task_with_a_human_item_never_raises(tmp_path):
-    # The plan check refuses a human item under a spec on both attempts: a failure, not a question.
-    runner, cfg = arm_of("cold", tmp_path, *[planned(tracker_items=[ITEM1])] * 2)
+    # The plan check refuses a human item under a spec on all its attempts: a failure, not a question.
+    runner, cfg = arm_of("cold", tmp_path, *[planned(tracker_items=[ITEM1])] * 3)
     patch = await plan({**TASK, "spec": SPEC}, cfg, memory_ports(runner))
 
     assert patch["escalation_class"] == "failure"
