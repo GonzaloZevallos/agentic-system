@@ -1,0 +1,26 @@
+id: GH-1001
+title: Export the monthly report
+type: feature
+status: waiting_on_human
+current_role: Tech Lead efímero
+path: full
+flags:
+  touches_ui: false
+  touches_copy: false
+escalated: 'Interview: Tech Lead efímero→Tech Lead has open questions for the human'
+escalation_class: questions
+runs:
+- role: PM
+  section: PM
+  version: 1
+  session_id: s-pm
+  model: m
+  cost_usd: 0.4
+  turns: 6
+- role: Tech Lead efímero
+  section: 'Interview: Tech Lead efímero→Tech Lead'
+  version: 1
+  session_id: s-interview
+  model: m
+  cost_usd: 0.3
+  turns: 4

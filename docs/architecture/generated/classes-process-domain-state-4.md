@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
     class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
     class spec_delivery__SpecLine["SpecLine"]

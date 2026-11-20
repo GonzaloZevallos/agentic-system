@@ -31,6 +31,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__PushPlan["PushPlan"]
+    class rules__ReportedFailure["ReportedFailure"]
     class rules__RestoreObserved["RestoreObserved"]
     class rules__RestoreSteps["RestoreSteps"]
     class rules__ResumeCandidate["ResumeCandidate"]
@@ -44,5 +46,4 @@ classDiagram
     class spec_approval__ApprovalReading["ApprovalReading"]
     class spec_approval__Comment["Comment"]
     class spec_delivery__DraftReading["DraftReading"]
-    class spec_delivery__Screen["Screen"]
 ```

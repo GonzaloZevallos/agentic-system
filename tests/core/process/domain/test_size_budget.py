@@ -248,3 +248,49 @@ def test_budget_text_with_a_ratio_appends_one_sentence_with_the_max_declarable(r
         f"so up to {budget.TEST_LINES} test lines."
     )
     assert "judged x" in text
+
+
+CAPS = {
+    "hand_files": budget.HAND_FILES,
+    "hand_lines": budget.HAND_LINES,
+    "test_lines": budget.TEST_LINES,
+}
+
+
+def _size_with(field: str, value: int, base: int = 0) -> PlanSize:
+    return PlanSize(**{name: (value if name == field else base) for name in CAPS})
+
+
+@pytest.mark.parametrize("field", CAPS)
+def test_clearly_over_is_strict_at_twice_the_cap_for_each_field(field):
+    limit = CAPS[field] * budget.EARLY_SPLIT_FACTOR
+    assert budget.clearly_over(_size_with(field, limit)) is False
+    assert budget.clearly_over(_size_with(field, limit + 1)) is True
+
+
+def test_clearly_over_is_false_with_every_field_at_exactly_twice_its_cap():
+    twice = PlanSize(*(cap * budget.EARLY_SPLIT_FACTOR for cap in CAPS.values()))
+    assert budget.clearly_over(twice) is False
+
+
+def test_clearly_over_is_false_for_no_size_and_ignores_the_floor_ratio():
+    assert budget.clearly_over(None) is False
+    # Judged at the floor ratio this size would be over twice the cap; as declared it is not.
+    declared = PlanSize(budget.HAND_FILES * budget.EARLY_SPLIT_FACTOR, 1, 1)
+    assert budget.clearly_over(budget.judged(declared)) is True
+    assert budget.clearly_over(declared) is False
+
+
+@pytest.mark.parametrize("field", CAPS)
+def test_crossed_at_one_times_is_what_it_always_returned(field):
+    cap = CAPS[field]
+    assert budget.crossed(_size_with(field, cap)) == ()
+    assert budget.crossed(_size_with(field, cap + 1)) == (field,)
+    assert budget.crossed(_size_with(field, cap * budget.EARLY_SPLIT_FACTOR + 1)) == (field,)
+    assert budget.fits(_size_with(field, cap)) is True
+    assert budget.fits(_size_with(field, cap + 1)) is False
+
+
+def test_crossed_lists_every_over_field_in_field_order():
+    assert budget.crossed(PlanSize(1000, 1000, 1000)) == ("hand_files", "hand_lines", "test_lines")
+    assert budget.crossed(PlanSize(1000, 1, 1000)) == ("hand_files", "test_lines")

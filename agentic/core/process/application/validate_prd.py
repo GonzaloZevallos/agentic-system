@@ -15,19 +15,15 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules, spec_approval
+from ..domain import rules
 from ..domain.roles import PAIR_PM_PA, PM, PM_BUG, Role
 from ..domain.schemas import VerdictWithSpecDraft
 from ..domain.spec_brief import DRAFT_BLOCK
 from ..domain.spec_delivery import (
-    DRAFT_PREVIEW_PATH,
-    approval_instant,
     draft_body_refusal,
-    draft_reading,
     draft_refusal_message,
+    draft_retry,
     draft_text,
-    instant_ok,
-    login_ok,
 )
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from . import spec_draft
@@ -123,28 +119,30 @@ def _with_draft_check(approval: Check, task: Checkout, cfg: Configuration, ports
     """`approval`, then a synchronous check of the draft body PM approved, so a body `deliver`
     would refuse goes back to PM once, with the reason, before the verdict counts. It raises
     `ValueError` (what `run_role` retries on) with the fixed sentence of the cause. The preview of
-    the draft approved by the owner runs only with a well-formed `owner_login` and clock; without
-    them it is skipped, never an error. Nothing is read from the checkout and nothing is written."""
+    the draft approved by the owner runs only with a well-formed `owner_login` and clock
+    (`spec_draft.draft_cause`); without them it is skipped, never an error. Nothing is read from
+    the checkout and nothing is written.
+
+    A draft with more than one slice (`preview_slice_missing`) is refused on the closure's first
+    call past the approval gate, with the fold-or-split sentence, and let through on every later
+    call (`draft_retry`): `deliver` then records it as `split_proposed`. The count is of calls
+    of this closure, whatever refused the earlier one."""
     validator = ports.spec_validator
-    login = cfg.owner_login if login_ok(cfg.owner_login) else None
+    calls = 0
 
     def check(data: dict[str, Any]) -> None:
+        nonlocal calls
         approval(data)
         if validator is None or data.get("verdict") != "approved":
             return
+        calls_before, calls = calls, calls + 1
         body = data.get("spec_draft")
         cause = draft_body_refusal(body)
         if cause is None and isinstance(body, str):
-            text = draft_text(body)
-            draft = validator.validate(text, DRAFT_PREVIEW_PATH, task.base, None, login)
-            preview = None
-            instant = approval_instant(ports.now())
-            if login is not None and instant_ok(instant):
-                approved = spec_approval.approve(text, login, instant)
-                preview = validator.validate(approved, DRAFT_PREVIEW_PATH, task.base, None, login)
-            reading = draft_reading(draft, preview)
-            cause = reading.cause
-        if cause is not None:
+            cause = spec_draft.draft_cause(
+                draft_text(body), validator, task.base, cfg.owner_login, ports.now()
+            ).cause
+        if cause is not None and draft_retry(cause, calls_before) == "refuse":
             raise ValueError(draft_refusal_message(cause))
 
     return check

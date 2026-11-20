@@ -34,6 +34,7 @@ from ..domain import (
     document,
     exempt_queue,
     experiment,
+    hold,
     landing_order,
     launch_order,
     merge_ci,
@@ -80,6 +81,7 @@ from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
     GitError,
+    HeldListMayBeCut,
     IssueComment,
     LaunchAttempt,
     Launcher,
@@ -90,7 +92,11 @@ from .ports import (
     RunRegistration,
     RunRegistry,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
     TrackerTimedOut,
+    TrackerTransient,
+    TrackerUnreachable,
     Upstream,
 )
 from .refusal_note import POLLER_NOTED, note_refusal, read_comments, said
@@ -1005,7 +1011,7 @@ class LandingRound:
     `landing_order.order` answers once `landing_lane.lane_facts` has read the facts, `None` when
     there is none or the head holds no turn."""
     lane_reasons: Mapping[int, landing_order.LaneReason] = field(default_factory=dict)
-    """Why each waiting member that is clean and `merge_now` has no lane: `lane_reason`'s."""
+    """Why each waiting member that is clean has no lane: `lane_reason`'s."""
 
 
 def _stamp(raw: TaskState) -> datetime | None:
@@ -1166,7 +1172,7 @@ def evaluate_landing_order(
     cfg: Configuration | None = None,
     now: datetime | None = None,
     resumes: Sequence[rules.ResumeCandidate] = (),
-    integrating: frozenset[str] = frozenset(),
+    integrating: Mapping[str, str] | None = None,
     *,
     memo: StackMemo,
     skip: frozenset[int] = frozenset(),
@@ -1180,10 +1186,11 @@ def evaluate_landing_order(
     Read-only (GH-621): the members are read as the documents hold them, `landing_order.resumed`
     is applied once, then `advance`. Each entry keeps its `member` as read and what `advance` made
     of it (`turned`); the writer (`_record_turn`) compares the two. `now` defaults to the clock;
-    `resumes` are the product's paused tasks, for `account_paused`. `integrating` are the ids with
-    a live child of an integrating kind (`landing_order.integrates`): with the head among them
-    and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without touching
-    `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the caller's.
+    `resumes` are the product's paused tasks, for `account_paused`. `integrating` maps the ids with
+    a live child of an integrating kind (`landing_order.integrates`) to that kind: with the head
+    among them and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without
+    touching `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the
+    caller's.
     An issue in `skip` (GH-899, a stacked child the round holds) is no member and no entry: it is
     never assessed, never the head and never ordered."""
     now = now or datetime.now(UTC)
@@ -1234,7 +1241,7 @@ def evaluate_landing_order(
     resumed = landing_order.resumed(members, now)
     result, turned = landing_order.advance(resumed, now)
     lane, lane_reasons = _fast_lane(
-        ports, cfg, current_master, entries, turned, result.head, integrating, now
+        ports, cfg, current_master, entries, turned, result.head, integrating or {}, now
     )
     after = iter(turned)
     return LandingRound(
@@ -1251,32 +1258,49 @@ def evaluate_landing_order(
     )
 
 
+@dataclass(frozen=True)
+class _LaneReads:
+    """What the round already computed of each waiting member, transcribed for the fast lane:
+    the `candidates` (issue to pull request head) with the `decisions` they hold, and for each
+    other member whose merge-tree read is clean why it is no candidate."""
+
+    candidates: dict[int, str] = field(default_factory=dict)
+    decisions: dict[int, landing_order.LaneDecision] = field(default_factory=dict)
+    not_candidates: dict[int, Literal["not_merge_ready", "backed_off"]] = field(
+        default_factory=dict
+    )
+
+
 def _lane_candidates(
     entries: Sequence[OrderEntry], head: int, current_master: str, now: datetime
-) -> dict[int, str]:
-    """The waiting members the fast lane may read: assessed this round, decided `merge`, not
-    under a backoff for this pair, with a conflict-free merge-tree read, by their pull request
-    head."""
-    candidates: dict[int, str] = {}
+) -> _LaneReads:
+    """The waiting members the fast lane may read: assessed this round, with a conflict-free
+    merge-tree read and not under a backoff for this pair, whose decision `(kind, reason)` is one
+    `landing_order.lane_decision_of` admits (`LANE_DECISIONS`: this list is not repeated here).
+    A member that reads clean and is not one carries why in `not_candidates`: `backed_off` when
+    `exempt_queue.backed_off` says so for its pair, else `not_merge_ready`. Nothing is read: every
+    fact is one `assess_merge` already produced."""
+    reads = _LaneReads()
     for entry in entries:
         assessed = entry.outcome
         if (
             entry.member is None
             or entry.number == head
             or not isinstance(assessed, MergeAssessment)
+            or assessed.facts.conflicts is not False
         ):
             continue
         pr_head = assessed.facts.pr_head
-        if (
-            assessed.decision.kind == "merge"
-            and pr_head is not None
-            and assessed.facts.conflicts is False
-            and not exempt_queue.backed_off(
-                entry.raw.get("merge_refusal"), pr_head, current_master, now
-            )
-        ):
-            candidates[entry.number] = pr_head
-    return candidates
+        backed_off = pr_head is not None and exempt_queue.backed_off(
+            entry.raw.get("merge_refusal"), pr_head, current_master, now
+        )
+        decision = landing_order.lane_decision_of(assessed.decision.kind, assessed.decision.reason)
+        if pr_head is not None and decision is not None and not backed_off:
+            reads.candidates[entry.number] = pr_head
+            reads.decisions[entry.number] = decision
+        else:
+            reads.not_candidates[entry.number] = "backed_off" if backed_off else "not_merge_ready"
+    return reads
 
 
 def _fast_lane(
@@ -1286,7 +1310,7 @@ def _fast_lane(
     entries: Sequence[OrderEntry],
     members: Sequence[landing_order.Member],
     head_issue: int | None,
-    integrating: frozenset[str],
+    integrating: Mapping[str, str],
     now: datetime,
 ) -> tuple[int | None, dict[int, landing_order.LaneReason]]:
     """The fast lane of a round (GH-681): the member that may merge beside the head and why each
@@ -1294,31 +1318,41 @@ def _fast_lane(
     has been observed (a child run's save may have erased what the document held of it). Nothing is
     read unless the head, as this round observes it, integrates and a waiting member is a
     candidate; the facts are `landing_lane`'s and the predicate and its reasons `landing_order`'s.
-    Read-only: it writes nothing and adds no member state."""
+    A clean member that is no candidate only carries the reason the round already computed
+    (`_lane_candidates`). Read-only: it writes nothing and adds no member state."""
     head = next((m for m in members if m.issue == head_issue), None)
     head_entry = next((e for e in entries if e.number == head_issue), None)
     if cfg is None or head is None or head_entry is None:
         return None, {}
-    candidates = _lane_candidates(entries, head.issue, current_master, now)
-    if not candidates:
-        return None, {}
-    lane_head = landing_lane.LaneHead(
-        head.issue,
-        str(head_entry.raw.get("pull_request")),
-        head_entry.raw,
-        head_entry.task_id in integrating,
-    )
-    with_facts = landing_lane.lane_facts(
-        ports, cfg.product_dir, current_master, members, lane_head, candidates
-    )
-    read_head = next(m for m in with_facts if m.issue == head.issue)
+    reads = _lane_candidates(entries, head.issue, current_master, now)
+    marked = landing_lane.mark_not_candidates(members, reads.not_candidates)
+    read_head = head
+    with_facts = marked
+    if reads.candidates:
+        lane_head = landing_lane.LaneHead(
+            head.issue,
+            str(head_entry.raw.get("pull_request")),
+            head_entry.raw,
+            head_entry.task_id in integrating,
+        )
+        with_facts = landing_lane.lane_facts(
+            ports,
+            cfg.product_dir,
+            current_master,
+            marked,
+            lane_head,
+            reads.candidates,
+            reads.decisions,
+        )
+        read_head = next(m for m in with_facts if m.issue == head.issue)
     reasons: dict[int, landing_order.LaneReason] = {}
     for member in with_facts:
         if member.issue != head.issue:
             reason = landing_order.lane_reason(member, read_head, now)
             if reason is not None:
                 reasons[member.issue] = reason
-    return landing_order.order(with_facts, now).lane, reasons
+    lane = landing_order.order(with_facts, now).lane if reads.candidates else None
+    return lane, reasons
 
 
 LANE_TEXT: dict[landing_order.LaneReason, str] = {
@@ -1330,8 +1364,19 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "head_sync_budget": "head sync budget",
     "member_paths_unknown": "paths unknown",
     "stack_parent_unmerged": "stacked parent unmerged",
+    "not_merge_ready": "not merge ready",
+    "backed_off": "backed off",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
+
+
+def _head_child_kind(round_: LandingRound, integrating: Mapping[str, str] | None) -> str:
+    """The kind of the live integrating child on the head of `round_`: the fast lane never opens
+    unless there is one, so a closed value of `landing_order.INTEGRATING_KINDS`."""
+    for entry in round_.entries:
+        if entry.number == round_.head and integrating is not None:
+            return integrating.get(entry.task_id, "unknown")
+    return "unknown"
 
 
 def _yield_record(
@@ -1510,7 +1555,7 @@ def gather_merges(
     backoff_ends: dict[int, datetime] | None = None,
     held: bool = False,
     resumes: Sequence[rules.ResumeCandidate] = (),
-    integrating: frozenset[str] = frozenset(),
+    integrating: Mapping[str, str] | None = None,
     *,
     memo: StackMemo,
     dry_run: bool,
@@ -1707,12 +1752,24 @@ def gather_merges(
             else:
                 if number == round_.lane:
                     busy_head = round_.head
+                    admitted = landing_order.lane_decision_of(decision.kind, decision.reason)
+                    child = _head_child_kind(round_, integrating)
                     out.append(
-                        f"agentic: poll: auto-merge #{number} -> fast lane behind busy #{busy_head}"
+                        f"agentic: poll: auto-merge #{number} -> fast lane behind busy "
+                        f"#{busy_head} ({child}, {admitted})"
                     )
-                    if not held and busy_head is not None and head is not None:
+                    if not held and busy_head is not None and head is not None and admitted:
                         landing_lane.admit(
-                            ports, task_id, raw, busy_head, head, current_master, now, at_work, out
+                            ports,
+                            task_id,
+                            raw,
+                            busy_head,
+                            head,
+                            current_master,
+                            admitted,
+                            now,
+                            at_work,
+                            out,
                         )
                 found.append(number)
     return found
@@ -2820,6 +2877,40 @@ def deferred_line(deferred: rules.Deferred) -> str:
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
+def held_line(deferred: rules.Deferred) -> str:
+    """The one poll line for a candidate the plan deferred as `held` (GH-839): the issue carries
+    the hold label, so it waits whatever it was going to do. The only builder of it."""
+    return f"agentic: poll: {deferred.kind} #{deferred.issue} waiting (held)"
+
+
+def holds_unread_cause(exc: TrackerCallFailed | TrackerRefused) -> hold.HoldsUnreadCause:
+    """The closed cause of a failed hold read, decided by the type of the exception and never by
+    the text `gh` printed."""
+    if isinstance(exc, TrackerRefused):
+        return "refused"
+    if isinstance(exc, HeldListMayBeCut):
+        return "cut"
+    if isinstance(exc, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(exc, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(exc, TrackerTransient):
+        return "transient"
+    if isinstance(exc, TrackerRateLimited):
+        return "rate_limited"
+    return "failed"
+
+
+def read_held_issues(ports: Ports) -> tuple[frozenset[int], str | None]:
+    """The round's one read of the held issues (GH-839) and, when it failed, the line that says
+    so. A failure never becomes an empty set: the caller starts nothing that round. Only
+    `TrackerCallFailed` and `TrackerRefused` are absorbed; any other exception propagates."""
+    try:
+        return ports.tracker.held_issues(), None
+    except (TrackerCallFailed, TrackerRefused) as exc:
+        return frozenset(), f"agentic: poll: holds unread ({holds_unread_cause(exc)})"
+
+
 _LIVE_ACTIONS: frozenset[rules.PollActionKind] = frozenset(
     {"launch", "resume", "retake", "merge", "land"}
 )
@@ -3103,6 +3194,16 @@ def run_once(
         # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
         swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
+    # GH-839: the round's one read of the issues labelled agentic-hold, only when the volumes
+    # leave the round free to start anything; a read that failed starts nothing.
+    held_issues: frozenset[int] = frozenset()
+    holds_unread = False
+    if not held:
+        held_issues, unread_line = read_held_issues(ports)
+        if unread_line is not None:
+            holds_unread = True
+            hold_lines.append(unread_line)
+    starts_nothing = bool(held) or holds_unread
     # GH-899: before any gatherer, so a stacked child whose parent says wait is evaluated by none
     # of them; the episodes (the note, the row, the seal of `resumed_at`) are written here too, so
     # the time a child was held never counts as quiet. A dry or space-held round writes nothing.
@@ -3138,7 +3239,7 @@ def run_once(
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
     # starts nothing, so it has no order to rank and makes no call.
-    open_refs, refs_note = ([], None) if held else read_open_refs(ports)
+    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
     with registry.exclusive():
         running = registry.live()
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
@@ -3147,9 +3248,11 @@ def run_once(
         exempt_live = len(running) - live
         product = ports.stack.product()
         busy = frozenset(r.task_id for r in running if r.product == product)
-        integrating = frozenset(
-            r.task_id for r in running if r.product == product and landing_order.integrates(r.kind)
-        )
+        integrating = {
+            r.task_id: r.kind
+            for r in running
+            if r.product == product and landing_order.integrates(r.kind)
+        }
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []
@@ -3204,7 +3307,7 @@ def run_once(
                 reruns,
                 backed_off_merges,
                 backoff_ends,
-                bool(held),
+                starts_nothing,
                 resumes,
                 integrating=integrating,
                 memo=stack_memo,
@@ -3229,7 +3332,7 @@ def run_once(
         # round starts nothing, and asking the tracker for its comments would be for nothing.
         orphans: dict[int, int] = {}
         orphan_lines: list[str] = []
-        if not held:
+        if not starts_nothing:
             acting = {
                 *retakes,
                 *crash_retakes,
@@ -3316,6 +3419,8 @@ def run_once(
             exempt_attempts=exempt_records,
             exempt_yield=plan_yielded,
             dependents=dependents,
+            held_issues=held_issues,
+            holds_unread=holds_unread,
         )
         # GH-899: the last word on a held child, whatever a gatherer said: no action on its issue.
         plan = replace(plan, actions=[a for a in plan.actions if a.issue not in stack_held])
@@ -3331,7 +3436,7 @@ def run_once(
             exempt_head,
             backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
             busy=exempt_live > 0,
-            held=bool(held),
+            held=starts_nothing,
             own_live_exempt=own_exempt_live,
         )
         registry.publish_exempt_wait(
@@ -3389,20 +3494,25 @@ def run_once(
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.
+        # GH-839: a held one first, by its reason and before its kind: the one `held_line`.
+        held_deferred = [d for d in plan.deferred if d.reason == "held"]
+        other_deferred = [d for d in plan.deferred if d.reason != "held"]
         deferral_lines = [
-            deferred_line(d) for d in plan.deferred if d.kind not in ("orphan", "launch")
+            deferred_line(d) for d in other_deferred if d.kind not in ("orphan", "launch")
         ]
         deferral_lines += [
             f"agentic: poll: launch #{d.issue} waiting ({d.reason})"
-            for d in plan.deferred
+            for d in other_deferred
             if d.kind == "launch"
         ]
+        deferral_lines += [held_line(d) for d in held_deferred]
         deferral_lines += starvation
         orphan_lines += [
-            rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
+            rules.orphaned_line(d.issue, "no_slot") for d in other_deferred if d.kind == "orphan"
         ]
         reported |= {d.issue for d in plan.deferred if d.kind == "orphan"}
-        if not held:  # a held round starts nothing and its hold lines already say why
+        reported |= {d.issue for d in held_deferred}
+        if not starts_nothing:  # such a round starts nothing and its hold lines say why
             orphan_lines += unaccounted_lines(
                 ports,
                 lock,

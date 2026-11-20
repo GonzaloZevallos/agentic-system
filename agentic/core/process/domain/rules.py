@@ -24,6 +24,7 @@ from . import (
     drawing,
     escalation_prompts,
     exempt_queue,
+    hold,
     launch_order,
     merge_ci,
     presubmit,
@@ -5329,6 +5330,36 @@ class LandCandidate:
     kind: RunKind
 
 
+DeferredKind = Literal["merge", "land", "orphan", "launch", "resume", "retake"]
+DeferredReason = Literal[
+    "no_slot",
+    "land_queued",
+    "exempt_busy",
+    "pause_waiting",
+    "backoff",
+    "pacing",
+    "resume_waiting",
+    "space_held",
+    "schedule",
+    "held",
+]
+
+# The only pairs a `Deferred` may hold (GH-839): `land` and `merge` never carry `held`, a
+# held pull request still lands as it does until the landing part is built.
+DEFERRED_REASONS: Mapping[DeferredKind, frozenset[DeferredReason]] = MappingProxyType(
+    {
+        "merge": frozenset({"backoff", "exempt_busy"}),
+        "land": frozenset({"no_slot", "land_queued", "exempt_busy", "pause_waiting"}),
+        "orphan": frozenset({"no_slot", "held"}),
+        "launch": frozenset(
+            {"held", "space_held", "schedule", "resume_waiting", "pacing", "no_slot"}
+        ),
+        "resume": frozenset({"held"}),
+        "retake": frozenset({"held"}),
+    }
+)
+
+
 @dataclass(frozen=True)
 class Deferred:
     """A merge, land, orphan retake or launch `poll_plan` held back this round, and why: `no_slot`
@@ -5346,21 +5377,18 @@ class Deferred:
     A `launch` (GH-836) is an unblocked candidate the plan did not start, with exactly one of
     `space_held` (the round is held by the free-space floor), `schedule` (its own attempt
     calendar has not come), `resume_waiting` (a resume of the product still waits out its
-    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence."""
+    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence,
+    with `held` (GH-839, its issue carries the hold label) before them all. A `resume` or a
+    `retake` is deferred only as `held`; an `orphan` as `no_slot` or `held`. `DEFERRED_REASONS`
+    lists the legal pairs and a pair outside it raises."""
 
-    kind: Literal["merge", "land", "orphan", "launch"]
+    kind: DeferredKind
     issue: int
-    reason: Literal[
-        "no_slot",
-        "land_queued",
-        "exempt_busy",
-        "pause_waiting",
-        "backoff",
-        "pacing",
-        "resume_waiting",
-        "space_held",
-        "schedule",
-    ]
+    reason: DeferredReason
+
+    def __post_init__(self) -> None:
+        if self.reason not in DEFERRED_REASONS[self.kind]:
+            raise ValueError(f"no deferral of kind {self.kind!r} has the reason {self.reason!r}")
 
 
 def holds_launches(deferred: Deferred) -> bool:
@@ -5381,7 +5409,7 @@ def holds_launches(deferred: Deferred) -> bool:
             return False
         case "backoff":
             return False
-        case "pacing" | "resume_waiting" | "space_held" | "schedule":
+        case "pacing" | "resume_waiting" | "space_held" | "schedule" | "held":
             return False
         case _:
             assert_never(deferred.reason)
@@ -5509,6 +5537,8 @@ def poll_plan(
     backed_off_merges: Sequence[int] = (),
     exempt_yield: bool = False,
     dependents: Mapping[int, int] = {},
+    held_issues: frozenset[int] = frozenset(),
+    holds_unread: bool = False,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -5615,7 +5645,18 @@ def poll_plan(
     not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
     merge starts, because a start would write scratch to a disk that is almost full. It defers
     only the unblocked launch candidates, each `space_held` (GH-836), so it opens no Espera de
-    aterrizaje."""
+    aterrizaje.
+
+    `held_issues` (GH-839, `hold.held`) are the issues the round's one hold read found
+    labelled: each unblocked launch, retake (reboot, crash or orphan) and resume among them is
+    dropped before any slot, pace or calendar is computed and is `Deferred(kind, issue, "held")`,
+    `kind` being `launch`, `retake` or `resume` (`orphan` for an orphan retake), and appears
+    nowhere else. A held resume still counts for `account_paused`, and a held `account_limit`
+    resume still waiting its calendar still stops the launches and lands, as the pause it is;
+    any other held resume's wait stops nobody. Closes and notices are never held; lands and
+    merges are not this part's. `holds_unread` is true when the read failed: the plan is the
+    closes and the notices alone, with nothing deferred. A round held by volumes (`held`)
+    wins over both."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
     unblocked = sorted(
@@ -5624,11 +5665,34 @@ def poll_plan(
     )
     if held:
         return PollPlan(actions, [Deferred("launch", c.issue, "space_held") for c in unblocked])
+    if holds_unread:
+        return PollPlan(actions, [])
     received_slots = available_slots
+
+    deferred: list[Deferred] = []
+    held_launches = [c for c in unblocked if hold.held(c.issue, held_issues)]
+    unblocked = [c for c in unblocked if not hold.held(c.issue, held_issues)]
+    deferred.extend(Deferred("launch", c.issue, "held") for c in held_launches)
+    deferred.extend(
+        Deferred("retake", i, "held")
+        for i in sorted({*retakes, *crash_retakes})
+        if hold.held(i, held_issues)
+    )
+    deferred.extend(
+        Deferred("orphan", i, "held") for i in sorted(orphan_retakes) if hold.held(i, held_issues)
+    )
+    retakes = [i for i in retakes if not hold.held(i, held_issues)]
+    crash_retakes = [i for i in crash_retakes if not hold.held(i, held_issues)]
+    orphan_retakes = [i for i in orphan_retakes if not hold.held(i, held_issues)]
+    all_resumes = resumes
+    deferred.extend(
+        Deferred("resume", r.issue, "held") for r in resumes if hold.held(r.issue, held_issues)
+    )
+    resumes = [r for r in resumes if not hold.held(r.issue, held_issues)]
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
     model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
-    paused = account_paused(resumes, now)
+    paused = account_paused(all_resumes, now)
     land_total = received_slots if land_slots is None else land_slots
     land_ready = bool(model_lands) and not paused and land_total > 0
     land_queued = land_ready and earlier_land_wait
@@ -5675,7 +5739,6 @@ def poll_plan(
             unslotted_orphans.append(action.issue)
     slots_left = max(received_slots - started - (1 if land_plain else 0), 0)
 
-    deferred: list[Deferred] = []
     if paused:
         deferred.extend(Deferred("land", issue, "pause_waiting") for issue in model_lands)
         model_lands = []
@@ -5688,7 +5751,10 @@ def poll_plan(
     deferred.extend(Deferred("orphan", issue, "no_slot") for issue in sorted(unslotted_orphans))
 
     some_resume_still_waiting = any(
-        not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
+        not resume_exhausted(r)
+        and retake_due(r, now) is None
+        and (r.reason == "account_limit" or not hold.held(r.issue, held_issues))
+        for r in all_resumes
     )
     due = [
         c

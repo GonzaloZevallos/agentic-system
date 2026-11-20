@@ -1,4 +1,6 @@
 import hashlib
+import re
+from pathlib import Path
 from typing import Any, get_args
 
 import pytest
@@ -10,6 +12,7 @@ from agentic.core.process.domain.spec_delivery import (
     DraftCause,
     DraftReading,
     Screen,
+    SpecDraftOutcome,
     SpecLine,
     SpecLineMalformed,
     SpecRefusal,
@@ -18,8 +21,10 @@ from agentic.core.process.domain.spec_delivery import (
     body_source,
     derive_flags,
     draft_body_refusal,
+    draft_outcome,
     draft_reading,
     draft_refusal_message,
+    draft_retry,
     draft_text,
     instant_ok,
     login_ok,
@@ -500,3 +505,53 @@ def test_the_preview_path_is_a_spec_path_and_the_login_and_instant_forms() -> No
 
 def test_the_draft_text_is_what_the_body_check_hashes() -> None:
     assert body_sha256(draft_text("## Goal\n")) == _sha("## Goal\n")
+
+
+@pytest.mark.parametrize("cause", get_args(DraftCause))
+@pytest.mark.parametrize("calls_before", [0, 1, 2])
+def test_draft_retry_proposes_a_split_only_for_a_multi_slice_draft_after_a_call(
+    cause: DraftCause, calls_before: int
+) -> None:
+    expected = (
+        "propose_split" if cause == "preview_slice_missing" and calls_before >= 1 else "refuse"
+    )
+    assert draft_retry(cause, calls_before) == expected
+
+
+@pytest.mark.parametrize(
+    ("reading", "expected"),
+    [
+        (DraftReading(True), "written"),
+        (DraftReading(False, "preview_slice_missing"), "split_proposed"),
+        (DraftReading(False, "draft_empty"), "invalid"),
+        (DraftReading(False, "draft_front_matter"), "invalid"),
+        (DraftReading(False, "draft_unhashable"), "invalid"),
+        (DraftReading(False, "draft_invalid"), "invalid"),
+        (DraftReading(False, "draft_not_draft"), "invalid"),
+        (DraftReading(False, "preview_invalid"), "invalid"),
+        (DraftReading(False, "preview_unapproved"), "invalid"),
+    ],
+)
+def test_draft_outcome_of_each_reading(reading: DraftReading, expected: str) -> None:
+    assert draft_outcome(reading) == expected
+    assert expected in get_args(SpecDraftOutcome)
+
+
+def test_draft_outcome_has_a_reading_for_every_cause() -> None:
+    covered = {"preview_slice_missing", "draft_empty", "draft_front_matter", "draft_unhashable"}
+    covered |= {"draft_invalid", "draft_not_draft", "preview_invalid", "preview_unapproved"}
+    assert covered == set(get_args(DraftCause))
+
+
+def test_the_multi_slice_sentence_and_the_prompt_block_agree_on_exactly_one_slice() -> None:
+    block = (
+        Path(__file__).parents[4] / "agentic/core/process/domain/prompts/spec/pm_draft.md"
+    ).read_text(encoding="utf-8")
+    sentence = DRAFT_REFUSAL_REASONS["preview_slice_missing"]
+    for text in (sentence, block):
+        assert "exactly one slice" in text
+        assert "at least one" not in text
+    assert "fold the work into one slice" in sentence
+    assert "docs/specs" not in sentence  # a refusal sentence names no path
+    named = set(re.findall(r"`(split_[a-z_]+)`", block))
+    assert named <= set(get_args(SpecDraftOutcome))
