@@ -1496,3 +1496,6 @@ tasks:
     cost_usd: 0.0469
   GH-1001@review:
     cost_usd: 0.0
+  GH-1031@review:
+    cost_usd: 0.0
+    attempts: 1
