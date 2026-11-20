@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
     class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
     class spec_delivery__SpecLine["SpecLine"]
@@ -45,7 +46,6 @@ classDiagram
     class task__CarveRecord["CarveRecord"]
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
-    class task__CiCancelRerun["CiCancelRerun"]
     spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
     spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```

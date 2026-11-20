@@ -25,6 +25,7 @@ graph TD
     m_domain__hold_record["domain.hold_record"]
     m_domain__lead_time["domain.lead_time"]
     m_domain__legacy_names["domain.legacy_names"]
+    m_domain__refusal["domain.refusal"]
     m_domain__restart["domain.restart"]
     m_domain__returns["domain.returns"]
     m_domain__carve_out --> g_domain__landing

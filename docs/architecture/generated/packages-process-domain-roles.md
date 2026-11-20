@@ -30,6 +30,7 @@ graph TD
     m_domain__copy --> g_domain__state
     m_domain__copy --> m_domain__schemas
     m_domain__denials --> m_domain__roles
+    m_domain__drawing --> g_domain__state
     m_domain__drawing --> m_domain__design
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state

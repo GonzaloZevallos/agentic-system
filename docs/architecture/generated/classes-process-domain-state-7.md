@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
     class task__HeadYield["HeadYield"]
     class task__InterviewStats["InterviewStats"]
@@ -45,10 +46,10 @@ classDiagram
     class task__MergeOutcome["MergeOutcome"]
     class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OutOfBoundsLine["OutOfBoundsLine"]
-    class task__OutputRefusal["OutputRefusal"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
+  - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`

@@ -326,8 +326,8 @@ def _package_imports(source: str) -> set[str]:
     return found
 
 
-def test_drawing_imports_only_design_from_the_package():
-    assert _package_imports(Path(drawing_module.__file__).read_text()) == {".design"}
+def test_drawing_imports_only_design_and_the_refusal_leaf_from_the_package():
+    assert _package_imports(Path(drawing_module.__file__).read_text()) == {".design", ".refusal"}
 
 
 @pytest.mark.parametrize(

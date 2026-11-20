@@ -61,8 +61,8 @@ classDiagram
   - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
 - [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
 - [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.PlanRoute`

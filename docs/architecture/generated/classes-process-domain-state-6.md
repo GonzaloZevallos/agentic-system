@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__EarlySplitRow["EarlySplitRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -45,7 +46,6 @@ classDiagram
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksJob["FullChecksJob"]
     class task__FullChecksRead["FullChecksRead"]
-    class task__FullChecksRecord["FullChecksRecord"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
@@ -58,4 +58,3 @@ classDiagram
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
