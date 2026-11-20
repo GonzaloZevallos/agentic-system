@@ -3449,3 +3449,27 @@ def eval_set_yaml(*issues: int, smoke: int | None = None, extra: str = "") -> st
         ]
     lines.append(f"smoke: {issues[0] if smoke is None else smoke}")
     return "\n".join(lines) + "\n" + extra
+
+
+def measured(state: Mapping[str, Any]) -> dict[str, Any]:
+    """`state` with the early size check already answered (`fits`): the one place the seed row is
+    written, so a test that is not about the early check never runs the definition sizer."""
+    row = {"verdict": "go", "cause": "fits", "at": "2026-01-01T00:00:00+00:00"}
+    return {**state, "early_split": [row]}
+
+
+class Measured:
+    """A compiled graph whose runs on a task start with the early size check answered
+    (`measured`), so a test that is not about it never runs the definition sizer. Anything else
+    is the graph's own."""
+
+    def __init__(self, graph: Any):
+        self._graph = graph
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        if isinstance(input, Mapping):
+            await self._graph.aupdate_state(config, measured({}), as_node="classify")
+        return await self._graph.ainvoke(input, config=config, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._graph, name)

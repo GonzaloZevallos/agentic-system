@@ -45,6 +45,7 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
     BlockingRunner,
+    Measured,
     MemoryCommands,
     MemoryInbox,
     MemoryKnowledge,
@@ -154,6 +155,7 @@ def compiled(
     inbox=None,
     prompts_for=None,
     now=None,
+    early_check=False,
 ):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
@@ -189,9 +191,11 @@ def compiled(
             **({"now": now} if now is not None else {}),
         )
 
-    return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
+    graph = build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
         checkpointer=saver or InMemorySaver()
     )
+    # The early size check is answered unless the test is about it (`early_check=True`).
+    return graph if early_check else Measured(graph)
 
 
 class _Rooted:
