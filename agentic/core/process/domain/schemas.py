@@ -572,6 +572,18 @@ class Part(BaseModel):
     )
 
 
+class DefinitionSize(PlanSize):
+    """The definition sizer's answer (GH-999): `PlanSize` plus the `parts` it cuts the task into,
+    empty unless it judges the task clearly over the size budget. Shape only: whether the parts
+    are acceptable is `early_parts_check`'s call."""
+
+    parts: list[Part] = Field(
+        default_factory=list,
+        description="Empty unless the task is clearly over the size budget: then the parts it "
+        "is cut into, each quoting verbatim, as `>` blocks, the PRD jobs and screens it covers",
+    )
+
+
 class DesignItem(BaseModel):
     """One remark from a lead (UX Lead or UI Lead) or from PM's consolidation (ADR-0040),
     the unit `design_items` is made of. `blocking` means the job cannot be completed as
@@ -1349,6 +1361,62 @@ def parts_check(
     if refusals:
         raise ValueError("; ".join(refusals))
     _size_pass(parts, ratio)
+
+
+def _quote_blocks(body: str) -> list[str]:
+    """The `>` blocks of a body: each run of consecutive lines whose first non-blank character
+    is `>`, with one leading `>` and the space after it stripped from every line and the lines
+    joined by a space, then whitespace-collapsed. A block empty after collapsing is dropped."""
+    blocks: list[list[str]] = []
+    previous_quoted = False
+    for line in body.splitlines():
+        text = line.lstrip()
+        quoted = text.startswith(">")
+        if quoted:
+            text = text[1:]
+            if text.startswith(" "):
+                text = text[1:]
+            if not previous_quoted:
+                blocks.append([])
+            blocks[-1].append(text)
+        previous_quoted = quoted
+    collapsed = (" ".join(" ".join(block).split()) for block in blocks)
+    return [block for block in collapsed if block]
+
+
+def early_parts_check(
+    parts: list[dict[str, Any]],
+    issue: int,
+    prd_text: str,
+    ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
+) -> None:
+    """The one judge of the parts of an early split (GH-999): `parts_check(parts, ratio)` first,
+    which raises on its own; then, for each part in order, `part <n>` is refused (a) when no
+    `>` block of its body is a substring of `prd_text`, and (b) when its body has no `#<issue>`
+    (`#10` is not found inside `#100`). Every refusal of every part is raised as one
+    `ValueError`, joined with `; `, so one retry shows them all.
+
+    A block is a run of consecutive lines whose first non-blank character is `>`; one leading
+    `>` and the space after it are stripped from each line and the lines are joined by a space.
+    Both sides have their whitespace collapsed (`' '.join(text.split())`), so line breaks and
+    spacing do not matter; case does, exactly, and Markdown is not stripped. A block empty after
+    collapsing does not count. The check is loose by design: one real block makes a body pass
+    (a), whatever else it says."""
+    parts_check(parts, ratio)
+    prd = " ".join(prd_text.split())
+    pattern = re.compile(rf"#{issue}(?!\d)")
+    refusals: list[str] = []
+    for number, part in enumerate(parts, 1):
+        body = part["body"]
+        if not any(block in prd for block in _quote_blocks(body)):
+            refusals.append(
+                f"part {number} quotes nothing of the PRD: quote verbatim, as `>` blocks, "
+                "the jobs and screens it covers"
+            )
+        if pattern.search(body) is None:
+            refusals.append(f"part {number} does not reference the original issue #{issue}")
+    if refusals:
+        raise ValueError("; ".join(refusals))
 
 
 def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
