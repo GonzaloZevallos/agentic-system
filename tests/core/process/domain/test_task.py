@@ -97,6 +97,7 @@ def test_reducers_are_read_from_the_annotations():
         "design_items",
         "flakes",
         "tracker_failures",
+        "format_issue",
         "restorations",
         "review_scopes",
         "stack_restacks",

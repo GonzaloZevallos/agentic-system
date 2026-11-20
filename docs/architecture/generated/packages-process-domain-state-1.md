@@ -22,6 +22,7 @@ graph TD
     m_domain__escalation_prompts["domain.escalation_prompts"]
     m_domain__experiment["domain.experiment"]
     m_domain__finding_location["domain.finding_location"]
+    m_domain__format_issue["domain.format_issue"]
     m_domain__hold_record["domain.hold_record"]
     m_domain__lead_time["domain.lead_time"]
     m_domain__legacy_names["domain.legacy_names"]
@@ -41,6 +42,7 @@ graph TD
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared
+    m_domain__format_issue --> g_domain__state__2
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
     m_domain__returns --> g_domain__state__2

@@ -122,7 +122,14 @@ def test_evidence_uses_closed_fields_only():
     sentinel = "SENTINEL-SECRET"
     output = {"markdown": sentinel}
     title, body = fi.evidence(
-        "schema_invalid", "markdown", "Developer", "acme", 41, fi.value_len(output, "markdown"), 3, []
+        "schema_invalid",
+        "markdown",
+        "Developer",
+        "acme",
+        41,
+        fi.value_len(output, "markdown"),
+        3,
+        [],
     )
     assert sentinel not in title + body
     assert "value length: 15" in body

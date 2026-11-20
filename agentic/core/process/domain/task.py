@@ -2849,7 +2849,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 patch[key] = fresh
         elif reducer is add_format_issues:
             held_rules = {r["rule"] for r in old}
-            if fresh_issues := [r for r in add_format_issues([], value) if r["rule"] not in held_rules]:
+            if fresh_issues := [
+                r for r in add_format_issues([], value) if r["rule"] not in held_rules
+            ]:
                 patch[key] = fresh_issues
         elif reducer is add_tracker_actions:
             if add_tracker_actions(old, value) != old:
