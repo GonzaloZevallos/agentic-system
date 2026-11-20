@@ -1,0 +1,17 @@
+id: GH-1004
+title: Export the monthly report
+type: feature
+status: waiting_on_human
+current_role: Tech Lead
+path: full
+fit_question: true
+escalated: The plan does not fit the size budget; split or keep it whole?
+escalation_class: questions
+runs:
+- role: PM
+  section: PM
+  version: 1
+  session_id: s-pm
+  model: m
+  cost_usd: 0.4
+  turns: 6

@@ -37,6 +37,7 @@ classDiagram
     class drawing_answer__Due["Due"]
     class drawing_answer__Exhausted["Exhausted"]
     class drawing_answer__PlanSplit["PlanSplit"]
+    class early_split__Verdict["Verdict"]
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]

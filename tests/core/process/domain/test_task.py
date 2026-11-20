@@ -57,6 +57,7 @@ def test_reducers_are_read_from_the_annotations():
         "plan_settled",
         "merge_ci",
         "full_checks_reads",
+        "early_split",
         "merge_conflict",
         "merge_refusal",
         "worktree_release_lapse",

@@ -29,6 +29,9 @@ LEGACY_FILES = 40
 # factor until `PROVEN_PAIRS` closed tasks carry both figures, then the p90 of the real ratio.
 UNPROVEN_RATIO = 1.5
 PROVEN_PAIRS = 10
+# How far over a cap the declared size must be before the early check splits on it: the declared
+# figures as written, never times `UNPROVEN_RATIO`. Written here and nowhere else.
+EARLY_SPLIT_FACTOR = 2
 # The floor factor: one figure for both fields, or `(files, lines)` once the history proves them.
 Ratio = float | tuple[float, float]
 
@@ -241,10 +244,20 @@ def over_text(size: PlanSize, ratio: Ratio, scope: Literal["part", "plan"]) -> s
 
 def crossed(size: PlanSize) -> tuple[str, ...]:
     """The fields of `size` over their cap, by the name the record stores them under."""
+    return _crossed(size, 1)
+
+
+def clearly_over(size: PlanSize | None) -> bool:
+    """Whether the declared `size`, as written and not times the floor ratio, is strictly over
+    `EARLY_SPLIT_FACTOR` times the cap in any field. Test lines count. No size is not over."""
+    return size is not None and bool(_crossed(size, EARLY_SPLIT_FACTOR))
+
+
+def _crossed(size: PlanSize, factor: int) -> tuple[str, ...]:
     over = (
-        (HAND_FILES_FIELD, size.hand_files > HAND_FILES),
-        (HAND_LINES_FIELD, size.hand_lines > HAND_LINES),
-        (TEST_LINES_FIELD, size.test_lines > TEST_LINES),
+        (HAND_FILES_FIELD, size.hand_files > HAND_FILES * factor),
+        (HAND_LINES_FIELD, size.hand_lines > HAND_LINES * factor),
+        (TEST_LINES_FIELD, size.test_lines > TEST_LINES * factor),
     )
     return tuple(name for name, is_over in over if is_over)
 

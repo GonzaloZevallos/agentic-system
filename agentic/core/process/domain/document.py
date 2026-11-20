@@ -552,6 +552,10 @@ def render(
         # before; parsed back under the same names, nothing reads them to decide.
         **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
+        # The verdicts of the early size check: written only when there is a row, so every
+        # document written before it is byte-identical; parsed back under the same name, and
+        # read only by `early_split.measured`.
+        **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
         **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
