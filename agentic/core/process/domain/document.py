@@ -422,6 +422,8 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    # The document codec is the one place that reads the stored list itself: it sanitises it on
+    # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
     if "format_issue" in state:
         state["format_issue"] = _format_issue_rows(state["format_issue"])
     if "drawing_departures" in state:
