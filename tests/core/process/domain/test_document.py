@@ -2572,3 +2572,9 @@ def test_an_owner_decision_restart_settled_row_round_trips():
         "restart_settled": [row],
     }
     assert _round_trip(state)["restart_settled"] == [row]
+
+
+@pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
+def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
+    """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
+    assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []
