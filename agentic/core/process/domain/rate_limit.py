@@ -1,4 +1,4 @@
-"""The GitHub rate limit as a pause of its own (GH-989): pure rules, nothing produces it yet.
+"""The GitHub rate limit as a pause of its own (GH-989): pure rules.
 
 A run that exhausts its wait for GitHub's rate limit pauses as an external pause under the
 reason `github_rate_limit`, never `account_limit`: the account's limit decisions
@@ -27,6 +27,8 @@ __all__ = [
     "rate_limit_pause_patch",
     "rate_limit_persisted_patch",
     "reset_offset",
+    "cleared_on_close",
+    "tracker_silent",
 ]
 
 # How long a GitHub rate limit may keep a task paused, counted from the first pause of the
@@ -136,3 +138,38 @@ def rate_limit_notice_owed(state: TaskState) -> bool:
     """Whether the human is owed the notice that the limit outlasted the wait: the task is
     escalated with `RATE_LIMIT_PERSISTED` and `rate_limit_noticed_at` is not yet set."""
     return state.get("escalated") == RATE_LIMIT_PERSISTED and not state.get("rate_limit_noticed_at")
+
+
+def _silent(state: TaskState, log: list[PauseEntry], escalated: object) -> bool:
+    """`tracker_silent`'s decision over `state` as a pause log and an `escalated` text would
+    leave it."""
+    if escalated == RATE_LIMIT_PERSISTED:
+        return True
+    return rules.auto_resumable({**state, "pause_log": log}) == "github_rate_limit"
+
+
+def tracker_silent(state: TaskState) -> bool:
+    """Whether `escalate` writes nothing to the tracker (no label, no comment): the one decision.
+    True for a GitHub rate-limit pause that is not persisted (the poller retakes it, a human is
+    owed nothing yet) and, as a defence, for the persisted escalation itself, whose only writer
+    of the label and the notice is the poller. False for every other pause, the account's
+    included."""
+    return _silent(state, state.get("pause_log", []), state.get("escalated"))
+
+
+def cleared_on_close(state: TaskState, patch: dict[str, Any]) -> dict[str, Any]:
+    """`patch` with `rate_limit_paused_at` and `rate_limit_noticed_at` removed, for the final
+    patch of an invocation that ends without a GitHub rate-limit pause (GH-989): the next limit
+    is a new wait. Kept untouched when the state after `patch` is such a pause or the persisted
+    escalation, and a no-op when neither the state nor the patch carries a field. A removed key
+    is written `None`, which `document.render` leaves out: absent from the saved document, never
+    null."""
+    log = [*state.get("pause_log", []), *patch.get("pause_log", [])]
+    if _silent(state, log, patch.get("escalated", state.get("escalated"))):
+        return patch
+    fields = [
+        key
+        for key in ("rate_limit_paused_at", "rate_limit_noticed_at")
+        if state.get(key) or patch.get(key)
+    ]
+    return {**patch, **dict.fromkeys(fields)}
