@@ -34,7 +34,7 @@ from agentic.core.process.domain.roles import (
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
-from agentic.core.process.domain.task import INTEGRATION, Carried
+from agentic.core.process.domain.task import INTEGRATION, Carried, FailureReason
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -4759,6 +4759,38 @@ def _cut(reason: str) -> Any:
         "session_id": "",
         "reason": reason,
     }
+
+
+@pytest.mark.parametrize(
+    ("retries", "reason", "attempts"),
+    [
+        (0, "schema", 1),
+        (0, "check", 1),
+        (0, "stall", 1),
+        (-1, "schema", 0),
+        (1, "schema", 3),
+        (1, "check", 3),
+        (1, "stall", 2),
+        (1, "max_turns", 2),
+        (2, "schema", 3),
+        (2, "other", 3),
+        (4, "schema", 5),
+        (4, "check", 5),
+        (4, "stall", 5),
+    ],
+)
+def test_attempts_for_gives_a_format_failure_at_least_three_and_every_other_retries_plus_one(
+    retries, reason, attempts
+):
+    assert rules.attempts_for(reason, retries) == attempts
+
+
+def test_a_format_failure_never_gets_fewer_attempts_than_any_other_reason():
+    for retries in range(0, 8):
+        for reason in get_args(FailureReason):
+            other = rules.attempts_for(reason, retries)
+            assert rules.attempts_for("schema", retries) >= other
+            assert rules.attempts_for("check", retries) >= other
 
 
 def test_retry_turns_is_the_roles_own_cap_with_no_failure():

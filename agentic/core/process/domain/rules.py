@@ -1805,6 +1805,26 @@ RETRY_TURNS: Mapping[str, int] = MappingProxyType(
 )
 
 
+# The attempts a role run gets after a refusal of its structured output (GH-1017): a delivery
+# refused for its format is retried twice, because the refusal names its rule, field and value
+# and the session that wrote it is still there to fix it.
+FORMAT_ATTEMPTS = 3
+
+
+def attempts_for(last_reason: FailureReason, retries: int) -> int:
+    """How many attempts a role run may make when its last failure is `last_reason`: the
+    one place that decides the bound (`run_with_retry` asks it after every failure, with
+    the failures so far as the count). `retries <= 0` is one attempt, whatever the reason:
+    a shadow review runs with none (`role_retries=0`). A `schema` or `check` failure never
+    gets fewer than `FORMAT_ATTEMPTS`, and more when `retries + 1` is larger; every other
+    reason gets `retries + 1`."""
+    if retries <= 0:
+        return retries + 1
+    if last_reason in ("schema", "check"):
+        return max(FORMAT_ATTEMPTS, retries + 1)
+    return retries + 1
+
+
 def retry_turns(role: Role, failures: Sequence[Failure]) -> int:
     """The turn cap of the next attempt of `role`: its table value when the last failure
     was the harness cutting on `max_turns` and the slug is in `RETRY_TURNS`, `role.max_turns`

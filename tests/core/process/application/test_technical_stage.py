@@ -142,7 +142,7 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
 
 async def test_plan_rejects_a_plan_without_seams_as_a_role_failure(cfg):
     bad = planned({"id": "x", "title": "x", "brief": "b", "seams": []})
-    runner = ScriptedRunner(**{ASK: [questions(done=True)]}, tech_lead=[bad, bad])
+    runner = ScriptedRunner(**{ASK: [questions(done=True)]}, tech_lead=[bad, bad, bad])
     patch = await plan(TASK, cfg, memory_ports(runner))
     assert patch["status"] == "waiting_on_human" and "seams" in patch["failures"][0]["error"]
 
@@ -575,7 +575,7 @@ async def test_a_single_subtask_builds_on_the_task_branch(cfg):
 
 async def test_a_developer_that_does_not_commit_fails_and_is_retried(cfg):
     state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
-    runner = ScriptedRunner(developer=[delivered(), delivered()])
+    runner = ScriptedRunner(developer=[delivered(), delivered(), delivered()])
     patch = await develop(state, cfg, memory_ports(runner))
     assert patch["status"] == "waiting_on_human"
     assert "no commit on the branch" in patch["failures"][0]["error"]
@@ -587,7 +587,7 @@ async def test_a_developer_that_leaves_the_tree_dirty_fails_and_is_retried(cfg):
     # Run 4, `expiring-soon`: the fix sat in the working tree, the branch's HEAD failed
     # the architecture test, and the suite passed against code the branch did not hold.
     state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
-    runner = ScriptedRunner(developer=[delivered(), delivered()])
+    runner = ScriptedRunner(developer=[delivered(), delivered(), delivered()])
     ports = memory_ports(runner)
     checkout = ports.workspace.subtask_checkout("GH-12", "api")
     ports.workspace.moved.add(checkout.path)
@@ -1014,7 +1014,7 @@ async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cf
 
 
 async def test_the_presubmit_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
-    runner = ScriptedRunner(developer=[delivered(), delivered()])
+    runner = ScriptedRunner(developer=[delivered(), delivered(), delivered()])
     ports = memory_ports(runner)
     state, checkout = developing(ports)
     ports.workspace.dirty.add(checkout.path)
