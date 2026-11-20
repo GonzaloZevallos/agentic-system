@@ -55,7 +55,7 @@ from .interview import interview
 from .plan_carve_out import carved
 from .ports import GitError, Ports
 from .reflect_run import closed_documents
-from .run_role import Check, Output, finish, run_role
+from .run_role import Check, Output, finish, run_role, soft_failure
 
 # How the comment that said a part was built whole without asking started. Legacy (GH-592):
 # nothing posts it any more, but issues carry it and a resume still looks past it
@@ -259,7 +259,7 @@ async def _interview_and_plan(
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
-        size_budget=size_budget.budget_text(_size_ratio(history)),
+        size_budget=size_budget.budget_text(cost_history.size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -320,19 +320,6 @@ def _route_record(
     }
 
 
-def _soft(patch: TaskState) -> tuple[TaskState, bool]:
-    """A role's patch when it delivered nothing, as `(what to keep, whether the node stops)`.
-    A role that failed twice is an optional step failing: its failed attempts were paid, so
-    their cost and records are kept and the escalation is not. A cap, or anything that is not
-    a plain failure, stops the node and the patch is the escalation itself."""
-    if patch.get("escalation_class") != "failure":
-        return patch, True
-    kept: TaskState = {"failures": patch["failures"], "cost_usd": patch["cost_usd"]}
-    if "prompts" in patch:
-        kept["prompts"] = patch["prompts"]
-    return kept, False
-
-
 async def _size(
     state: TaskState,
     cfg: Configuration,
@@ -347,7 +334,7 @@ async def _size(
         state, PLAN_SIZER, cfg, ports, cwd=cwd, cost_history=history.text()
     )
     if output is None:
-        kept, _ = _soft(patch)
+        kept, _ = soft_failure(patch)
         return kept, None
     patch.pop("sections", None)
     return patch, output.data
@@ -386,7 +373,7 @@ def _estimate_check(
         ),
         path=task_path.path_of(state),
         path_label=task_path.path_label_of(state),
-        size_ratio=_size_ratio(history),
+        size_ratio=cost_history.size_ratio(history),
         has_spec=bool(state.get("spec")),
         spec_path=state["spec"]["path"] if state.get("spec") else None,
         rejected=drawing_answer.rejected_keys(state) if design is not None else {},
@@ -414,13 +401,6 @@ def _spec_gate(state: TaskState, output: Output | None, role: str, at: str) -> T
 
 def _escalated(gate: TaskState | None) -> bool:
     return gate is not None and gate.get("escalation_class") is not None
-
-
-def _size_ratio(history: cost_history.History) -> size_budget.Ratio:
-    """The floor on the declared hand-written size in force: the history's p90 ratio once it
-    proves one, else the fixed `UNPROVEN_RATIO`. The one figure the prompt, the plan check and
-    the part's fit all read (GH-592)."""
-    return cost_history.size_ratio(history) or size_budget.UNPROVEN_RATIO
 
 
 def _spent(state: TaskState) -> float:
@@ -521,7 +501,7 @@ def _after_delivery(
         or not patch.get("subtasks")
     ):
         return patch
-    fit = schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history))
+    fit = schemas.plan_fits(output.data, history, size_ratio=cost_history.size_ratio(history))
     if fit.fits:
         return patch
     # A plan that is not built leaves nothing alive: no subtasks, no tracker items (GH-798;
@@ -543,7 +523,7 @@ def _judged_remainder(
     ratio. The raise travels in `Judged.floor` to `land`, which never recomputes it."""
     raised, floor = _floored(Output(text="", data=dict(data)), state, history)
     assert raised is not None
-    fit = schemas.plan_fits(raised.data, history, size_ratio=_size_ratio(history))
+    fit = schemas.plan_fits(raised.data, history, size_ratio=cost_history.size_ratio(history))
     return plan_carve_out.Judged(raised, fit, floor)
 
 
@@ -598,7 +578,7 @@ def _steps(
         cfg=cfg,
         fit=None
         if output is None
-        else schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history)),
+        else schemas.plan_fits(output.data, history, size_ratio=cost_history.size_ratio(history)),
     )
 
 
@@ -686,7 +666,7 @@ async def _cold_draft(
         proposed_invariants=proposed_invariants,
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
-        size_budget=size_budget.budget_text(_size_ratio(history)),
+        size_budget=size_budget.budget_text(cost_history.size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -748,7 +728,7 @@ async def _plan_with_critic(
     critic_state: plan_route.CriticState = "ran"
     final, floored = draft, draft_floored
     if critique is None:
-        critic_patch, stopped = _soft(critic_patch)
+        critic_patch, stopped = soft_failure(critic_patch)
         carried = apply(carried, critic_patch)
         if stopped:
             return finish(state, carried, ports)
@@ -773,7 +753,7 @@ async def _plan_with_critic(
             written = revised
         else:
             # The draft stands; the failed revision's attempts were paid and are kept.
-            revised, stopped = _soft(revised)
+            revised, stopped = soft_failure(revised)
             carried = apply(carried, revised)
             if stopped:
                 return finish(state, carried, ports)

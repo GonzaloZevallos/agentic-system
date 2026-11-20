@@ -55,6 +55,7 @@ from ...application.design import consolidate, design_review, ui_screens, ux_flo
 from ...application.develop import develop
 from ...application.diagnose import diagnose
 from ...application.discard import discard
+from ...application.early_size import early_size
 from ...application.escalate import escalate
 from ...application.evaluated import evaluated
 from ...application.final_validation import final_validation
@@ -78,6 +79,7 @@ from ...application.verifiers import Run, verify
 from ...domain import drawing_answer, rules
 from ...domain.experiment import with_switches
 from ...domain.roles import (
+    DEFINITION_SIZER,
     DEVELOPER,
     PJM,
     PM,
@@ -418,6 +420,9 @@ def build_graph(
     # The texts (README.md, 4): `write_copy` is the last rung of `rules.design_step`, so it is
     # reached by the same routing as the design nodes and goes on to the plan.
     graph.add_node("write_copy", _node(write_copy, TECH_WRITER, shared, telemetry, arm_for))
+    # The early size check (GH-999, ADR-0105): right after PM approves the PRD, before the design
+    # branch; `rules.after_definition` sends a feature here while the check is due.
+    graph.add_node("early_size", _node(early_size, DEFINITION_SIZER, shared, telemetry, arm_for))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
@@ -454,7 +459,12 @@ def build_graph(
     graph.add_conditional_edges(
         "validate",
         _route(rules.after_validate),
-        ["define", "diagnose", "ux_flow", "write_copy", "plan", "discard", ESCALATE],
+        ["define", "diagnose", "early_size", "ux_flow", "write_copy", "plan", "discard", ESCALATE],
+    )
+    graph.add_conditional_edges(
+        "early_size",
+        _route(rules.after_early_size),
+        ["split", "ux_flow", "ux_walk", "ui_screens", "write_copy", "plan", ESCALATE],
     )
     graph.add_conditional_edges(
         "ux_flow", _route(rules.after_ux_flow), ["ux_walk", "write_copy", "plan", ESCALATE]
@@ -525,6 +535,7 @@ def build_graph(
             "define",
             "diagnose",
             "validate",
+            "early_size",
             "ux_flow",
             "ux_walk",
             "ui_screens",
