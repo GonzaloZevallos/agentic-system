@@ -2735,6 +2735,17 @@ def test_refusal_field_keeps_only_a_declared_field_or_markdown():
     assert refusal_field(schemas.Classification, None) == ""
 
 
+def test_refusal_field_keeps_a_well_formed_path_into_a_declared_root():
+    schema = TECH_LEAD.schema
+    assert (
+        refusal_field(schema, "parts[1].depends_on_reasons[0]") == "parts[1].depends_on_reasons[0]"
+    )
+    assert refusal_field(schema, "nope[0]") == ""
+    assert refusal_field(schema, "parts[x") == ""
+    assert refusal_field(schema, "parts[1]x") == ""
+    assert refusal_field(schema, "parts..a") == ""
+
+
 def test_an_output_refusal_reads_as_its_detail():
     exc = OutputRefusal("unmapped", "markdown", "the detail")
     assert (str(exc), exc.rule, exc.field, exc.detail) == (
