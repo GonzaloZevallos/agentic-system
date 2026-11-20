@@ -203,6 +203,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.presubmit": "checks",
     "domain.pull_request": "landing",
     "domain.reaping": "machine",
+    "domain.refusal_retry": "machine",
     "domain.restart": "state",
     "domain.retakes": "machine",
     "domain.returns": "state",
