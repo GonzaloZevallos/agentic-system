@@ -136,13 +136,13 @@ async def test_a_returned_subtask_restarts_after_the_turn_wrote_the_findings(con
 async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once(config):
     runner, fakes = blocking(subtask("domain"), subtask("ui", "api"))
     fakes.workspace.dirty.add(MemoryWorkspace.ROOT / "GH-1.domain")
-    runner.queues["developer__domain"] = [delivered(), delivered()]
+    runner.queues["developer__domain"] = [delivered(), delivered(), delivered()]
     runner.hold("tech_lead_review__api")
     run = start(runner, fakes, config)
 
     await runner.started("tech_lead_review__api")
     documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
-    while not saved(documents).get("escalated"):  # domain failed twice
+    while not saved(documents).get("escalated"):  # domain failed three times
         await asyncio.sleep(0.01)
     for _ in range(50):  # let its branch end and the loop fold the escalation in
         await asyncio.sleep(0)
@@ -150,7 +150,7 @@ async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once
     final = await asyncio.wait_for(run, 20)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"].startswith("Developer failed 2 times")
+    assert final["escalated"].startswith("Developer failed 3 times")
     assert final["subtasks"]["api"]["status"] == "approved"  # the drained review counted
     assert "developer__ui" not in runner.began  # api's dependent never started
     assert final["subtasks"]["ui"]["status"] == "pending"
