@@ -202,6 +202,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.poller_units": "machine",
     "domain.presubmit": "checks",
     "domain.pull_request": "landing",
+    "domain.rate_limit": "machine",
     "domain.reaping": "machine",
     "domain.restart": "state",
     "domain.retakes": "machine",
