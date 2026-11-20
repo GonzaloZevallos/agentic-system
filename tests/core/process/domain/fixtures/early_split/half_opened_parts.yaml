@@ -1,0 +1,24 @@
+id: GH-1005
+title: Export the monthly report
+type: feature
+status: developing
+current_role: Tech Lead
+path: full
+parts:
+- title: Domain
+  body: The pure rules.
+  depends_on: []
+- title: Wiring
+  body: The nodes that call them.
+  depends_on:
+  - 1
+split_issues:
+  '1': https://github.com/o/r/issues/11
+runs:
+- role: PM
+  section: PM
+  version: 1
+  session_id: s-pm
+  model: m
+  cost_usd: 0.4
+  turns: 6

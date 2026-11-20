@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
-from ..domain.design import Design, NotReady
+from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
@@ -678,6 +678,12 @@ class ProductStack(Protocol):
         `sample_app`/`compare` commands a design role reaches instead of a browser or
         an arbitrary URL. `None` when the product declares none, which is every
         product that has not handed the human a prototype yet -- never an error."""
+        ...
+
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        """The files under `design.prototype` as the commit `revision` holds them, sorted.
+        Never raises: a whole-repo prototype, one over the cap or one git cannot read comes
+        back as a closed `cause` of the listing, never as git's text."""
         ...
 
     def docs(self, revision: str) -> Docs | None:

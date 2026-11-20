@@ -10,6 +10,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import (
     ci,
     document,
+    landing_order,
     retakes,
     roles,
     rules,
@@ -3610,6 +3611,87 @@ NO_IMPORTANT_DECISIONS = [
 )
 def test_with_no_important_open_the_merge_decision_is_what_it_was(over, expected):
     assert rules.auto_merge_decision(_pin_facts(**over)) == rules.MergeDecision(*expected)
+
+
+# GH-975: the decisions a pull request may hold to merge beside a head that re-integrates. An
+# approved, clean, green pull request whose recorded evidence is on an older master decides
+# `run_checks` (no `ci:`) or `ci_run` (`ci:`): the lane admits both, because the merge verb brings
+# the evidence on the pair (head, current master) itself.
+
+_OLD_MASTER = "c" * 40
+
+
+def _stale_pair(**over):
+    return rules.MergeFacts(
+        **{
+            **vars(_pin_facts(checks_master=_OLD_MASTER, conflicts=False)),
+            **over,
+        }
+    )
+
+
+def test_a_pr_with_checks_on_an_older_master_decides_run_checks_and_the_lane_admits_it():
+    decision = rules.auto_merge_decision(_stale_pair())
+    assert decision == rules.MergeDecision("run_checks", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "run_checks"
+
+
+def test_a_ci_pr_stale_on_master_decides_ci_run_and_the_lane_admits_it():
+    facts = _stale_pair(
+        **_PIN_CI, ci_verdict=ci.CiVerdict("green", (), ()), ci_fresh=False, ci_untrusted=False
+    )
+    decision = rules.auto_merge_decision(facts)
+    assert decision == rules.MergeDecision("ci_run", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "ci_run"
+
+
+def test_a_pr_whose_checks_cover_the_current_master_decides_merge_and_the_lane_admits_it():
+    decision = rules.auto_merge_decision(_pin_facts(conflicts=False))
+    assert decision == rules.MergeDecision("merge", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "merge"
+
+
+def _pair_record(master, outcome):
+    return task.MergeCiRecord(
+        head=PIN_HEAD,
+        master=master,
+        tested="d" * 40,
+        mode="push",
+        published_at="2026-11-03T10:00:00.000Z",
+        republished=False,
+        superseded=[],
+        outcome=outcome,
+    )
+
+
+_CI_STALE = {**_PIN_CI, "ci_verdict": ci.CiVerdict("green", (), ()), "ci_fresh": False}
+_STALE_SPENT = tuple(_pair_record(f"{i:040x}", "stale") for i in range(ci.CI_STALE_PAIRS_MAX))
+
+NOT_ADMITTED = {
+    "untrusted_no_dispatch": {**_CI_STALE, "ci_untrusted": True},
+    "stale_exhausted": {**_CI_STALE, "ci_untrusted": False, "merge_ci": _STALE_SPENT},
+    "wait": {**_PIN_CI, "ci_verdict": _PIN_PENDING, "ci_waited_s": 0.0},
+    "not_approved": {"reviewed_unit_approved": False},
+    "merge_conflict": {"conflicts": True},
+}
+
+
+@pytest.mark.parametrize("over", list(NOT_ADMITTED.values()), ids=list(NOT_ADMITTED))
+def test_a_refusal_or_a_wait_is_never_admitted_by_the_lane(over):
+    decision = rules.auto_merge_decision(_stale_pair(**over))
+    assert decision.kind in {"refuse", "wait"}
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) is None
+
+
+def test_the_untrusted_and_stale_exhausted_pairs_are_the_refusals_the_table_names():
+    reasons = {
+        name: rules.auto_merge_decision(_stale_pair(**NOT_ADMITTED[name])).reason
+        for name in ("untrusted_no_dispatch", "stale_exhausted")
+    }
+    assert reasons == {
+        "untrusted_no_dispatch": "ci_untrusted_no_dispatch",
+        "stale_exhausted": "ci_stale_exhausted",
+    }
 
 
 # GH-294: `reported_severity` and the partition of the open `important` findings.

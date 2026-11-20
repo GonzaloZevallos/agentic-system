@@ -8,6 +8,6 @@ This feature has no approved Spec, so your approval also produces a draft Spec: 
 - `## Decisions`: one top-level bullet per decision you took where the request was silent, each with exactly one indented sub-bullet `  - Reason: <why>`.
 - `## Risks`: the risks of the task as lines of text, or `none`.
 - `## Screens`: when the task touches the UI, say that the screens come from the design stage and write no `###` entry; otherwise say `none`.
-- `## Slices`: at least one `### <slug>` (lowercase, digits and hyphens), each with `#### Acceptance criteria` (at least one bullet) and `#### Risks` (slug bullets, or a single `- none`). A task that is one piece of work is one slice.
+- `## Slices`: exactly one slice, written as one `### <slug>` (lowercase, digits and hyphens), with `#### Acceptance criteria` (one or more bullets) and `#### Risks` (slug bullets, or a single `- none`). A task that is one piece of work is one slice. If it cannot be one slice, a second draft with several slices is recorded as a split proposal and no Spec file is written; then name the parts in your section's `markdown`, one line per part. That is what the plan reads.
 
 Leave `spec_draft` out when your verdict is `returned`.

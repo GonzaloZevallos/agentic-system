@@ -31,6 +31,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
+    class task__PartRecord["PartRecord"]
     class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanRoute["PlanRoute"]
@@ -44,8 +46,6 @@ classDiagram
     class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
-    class task__ReviewScopeRecord["ReviewScopeRecord"]
-    class task__RoleRun["RoleRun"]
 ```
 
 ## Relaciones con otras páginas

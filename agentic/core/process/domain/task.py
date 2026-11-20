@@ -35,7 +35,7 @@ from typing import (
 
 from . import drawing
 from .ci_push import PushKind
-from .landing_order import YieldReason
+from .landing_order import LaneDecision, YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
@@ -544,24 +544,28 @@ NOT_LANE = "not_lane"
 
 class LaneAdmitted(TypedDict):
     """The record on a member's own document that the poller let it merge beside the busy head
-    `head_issue` (GH-681, informative): the pull request head `pr_head`, the `master` it held and
-    when (`at`). No decision reads it."""
+    `head_issue` (GH-681, informative): the pull request head `pr_head`, the `master` it held, the
+    merge `decision` that admitted it (a `LaneDecision`, absent from an admission written before it
+    was kept) and when (`at`). No decision reads it."""
 
     head_issue: int
     pr_head: str
     master: str
     at: str
+    decision: NotRequired[LaneDecision]
 
 
 class LaneMerge(TypedDict):
     """One fast-lane merge recorded in the head's document (`lane_merges`): the member `issue`,
-    the `pr_head` and `master` it was admitted on, and when it merged (`merged_at`, its
-    `auto_merged_at` as stored)."""
+    the `pr_head` and `master` it was admitted on, the `decision` that admitted it (copied from its
+    admission, absent when that had none) and when it merged (`merged_at`, its `auto_merged_at` as
+    stored)."""
 
     issue: int
     pr_head: str
     master: str
     merged_at: str
+    decision: NotRequired[LaneDecision]
 
 
 class TrackerActionDone(TypedDict):
@@ -840,6 +844,38 @@ def _drawing_escalation(
     if unverified_at:
         record["unverified_at"] = unverified_at
     return record
+
+
+EARLY_SPLIT_ROWS_MAX = 3
+# Why the early size check decided as it did, the closed set (`early_split.Cause` is this type).
+EarlySplitCause = Literal["over", "fits", "close", "sizer_failed", "parts_refused"]
+
+
+class EarlySplitRow(TypedDict):
+    """One row of the early-split record: `verdict` (`split` or `go`), `cause` (one of
+    `EarlySplitCause`), `at` the ISO 8601 UTC instant, and the declared figures the sizer gave
+    (`hand_files`, `hand_lines`, `test_lines`, `estimated_cost_usd`), absent when it gave none.
+    The figures are measurement only: no decision reads them."""
+
+    verdict: Literal["split", "go"]
+    cause: EarlySplitCause
+    at: str
+    hand_files: NotRequired[int]
+    hand_lines: NotRequired[int]
+    test_lines: NotRequired[int]
+    estimated_cost_usd: NotRequired[float]
+
+
+def add_early_split(existing: list[EarlySplitRow], new: list[EarlySplitRow]) -> list[EarlySplitRow]:
+    """The rows of `existing` and `new` as one list: appended in arrival order, a row equal in
+    every field to one already there adds nothing, and the first `EARLY_SPLIT_ROWS_MAX` stay (the
+    oldest). The record has a single, serial writer, so this is not commutative. The only way
+    `early_split` is ever written."""
+    joined: list[EarlySplitRow] = []
+    for row in (*existing, *new):
+        if row not in joined:
+            joined.append(row)
+    return joined[:EARLY_SPLIT_ROWS_MAX]
 
 
 ReviewScope = Literal["carried", "resolution", "full"]
@@ -2653,6 +2689,11 @@ class TaskState(TaskInput, total=False):
     # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
     stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
+    # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
+    # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
+    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # decision.
+    early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
     # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept (`delta`
     # emits the valid rows of those, or `after` as it is when `before` has no key, which `apply`
@@ -2814,6 +2855,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 r for r in value if held_pauses.get((r["parent"], r["cause"], r["at"])) != r
             ]:
                 patch[key] = changed_pauses
+        elif reducer is add_early_split:
+            if fresh_early := [r for r in value if r not in old]:
+                patch[key] = fresh_early
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:
