@@ -266,6 +266,7 @@ MEASUREMENT_CLUSTERS: Mapping[str, str] = {
     "domain.evaluation": "scorecard",
     "domain.findings_report": "reports",
     "domain.issue_listing": "reports",
+    "domain.metrics": "scorecard",
     "domain.planning": "reports",
     "domain.playbook_window": "reports",
     "domain.role_usage": "reports",

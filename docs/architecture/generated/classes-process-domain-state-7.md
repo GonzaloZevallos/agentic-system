@@ -45,7 +45,7 @@ classDiagram
     class task__MergeOutcome["MergeOutcome"]
     class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OutOfBoundsLine["OutOfBoundsLine"]
-    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
+    class task__OutputRefusal["OutputRefusal"]
 ```
 
 ## Relaciones con otras páginas

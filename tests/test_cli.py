@@ -7074,3 +7074,47 @@ def test_a_document_with_no_merge_has_nothing_to_retire(monkeypatch, tmp_path):
     scorer = FakeScorer()
     _backfill(monkeypatch, root, ports, scorer)
     assert scorer.events == ["write"]
+
+
+def _refused_failure(reason, rule=None):
+    failure = {"role": "PjM", "attempt": 1, "error": "e", "cost_usd": 0.01, "reason": reason}
+    if rule is not None:
+        failure["rule"] = rule
+    return failure
+
+
+def test_report_prints_the_refusals_by_rule_with_what_was_repaired(capsys):
+    final = {
+        "status": "delivered",
+        "failures": [
+            _refused_failure("check", "parts_when_fits"),
+            _refused_failure("check", "parts_when_fits"),
+            _refused_failure("schema", "output_missing"),
+        ],
+        "runs": [{"repairs": [{"rule": "parts_when_fits", "field": "subtasks"}]}],
+    }
+    cli._report(final, "GH-1", memory_ports())
+    lines = capsys.readouterr().out.splitlines()
+    assert "failures:  3" in lines
+    assert lines[lines.index("failures:  3") + 1] == (
+        "refusals:  output_missing=1 (repaired 0) parts_when_fits=2 (repaired 1)"
+    )
+
+
+def test_report_prints_no_refusals_line_when_there_are_none(capsys):
+    final = {"status": "delivered", "failures": [_refused_failure("account_limit")]}
+    cli._report(final, "GH-1", memory_ports())
+    assert "refusals" not in capsys.readouterr().out
+
+
+def test_report_of_an_escalated_task_prints_the_refusals_before_it_exits(capsys):
+    final = {
+        "status": "waiting_on_human",
+        "escalated": "PjM failed",
+        "failures": [_refused_failure("schema", "schema_invalid")] * 2,
+    }
+    with pytest.raises(SystemExit):
+        cli._report(final, "GH-1", memory_ports())
+    out = capsys.readouterr().out
+    assert "refusals:  schema_invalid=2 (repaired 0)" in out
+    assert out.index("refusals:") < out.index("escalated:")

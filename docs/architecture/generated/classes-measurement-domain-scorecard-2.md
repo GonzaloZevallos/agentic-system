@@ -9,6 +9,7 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 
 ```mermaid
 classDiagram
+    class scorecard__CauseCount["CauseCount"]
     class scorecard__Figure["Figure"]
     class scorecard__Scorecard["Scorecard"]
     class scorecard__ScorecardDocument["ScorecardDocument"]
