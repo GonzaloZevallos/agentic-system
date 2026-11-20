@@ -2,11 +2,13 @@
 
 A role failure is one of four things (README.md, 3 and 14): the harness broke, the
 model ran out of turns, its structured output is missing or invalid, or its
-`markdown` is empty. `run_with_retry` retries once with the error as input: inside the
+`markdown` is empty. `run_with_retry` retries with the error as input: inside the
 session the attempt left when there is one, appended to the prompt of a fresh session
-when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, which
-the use case turns into an escalation. The graph engine's own retry was rejected
-because it reruns the node without telling the model what went wrong.
+when there is none (ADR-0004, addendum). How many attempts it makes is `rules.attempts_for`'s
+call: one retry, two after a refusal of the structured output (GH-1017), whose retry message
+names the rule, the field, the value and the fix (`refusal_retry`). The last failure raises
+`RoleFailure`, which the use case turns into an escalation. The graph engine's own retry was
+rejected because it reruns the node without telling the model what went wrong.
 
 A `max_turns` cut is not an ordinary failure: the harness stopped the attempt on the
 turn cap alone, and the work up to that point may already be done. `_retry_input`
@@ -71,6 +73,7 @@ from ..domain import (
     drawing,
     plan_view,
     playbook,
+    refusal_retry,
     rules,
     schemas,
     spec_assumptions,
@@ -624,7 +627,11 @@ async def run_with_retry(
     )
     guard = _chain(schema_guard, delivery_check)
     clock = now or _now_iso
-    for attempt in range(1, max(retries, 0) + 2):
+    attempt = 0
+    # The bound is `rules.attempts_for`'s, asked after every failure with that failure's reason:
+    # the first attempt always runs, and a refusal of the format earns the third.
+    while not failures or len(failures) < rules.attempts_for(failures[-1]["reason"], retries):
+        attempt += 1
         if before_attempt is not None:
             before_attempt()
         total = max(spent_usd + spent(failures), limits.spent_usd)
@@ -708,6 +715,8 @@ async def run_with_retry(
                     **({"reaped": exc.reaped} if exc.reaped else {}),
                     **({"rule": exc.rule} if refused else {}),
                     **({"field": exc.field} if refused and exc.field else {}),
+                    **({"value": exc.value} if refused and exc.value is not None else {}),
+                    **({"detail": exc.detail} if refused and exc.detail else {}),
                     **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
                     **(
                         {"check_runs_dropped": exc.check_runs.dropped}
@@ -801,13 +810,19 @@ def _retry_input(
     A cut for `reason == "max_turns"` swaps that error for
     `rules.turn_cut_retry_message(role)` (ADR-0004, seventh addendum): the harness
     stopped the attempt on the turn cap alone, so the next attempt is told that,
-    never ordered to "fix" work that did not fail. Every other reason keeps today's
-    message, byte for byte."""
+    never ordered to "fix" work that did not fail. A `schema` or `check` failure that
+    names its rule (GH-1017) gets `refusal_retry.retry_message` instead: the rule, the field,
+    the value and the fix, with the motive. Every other reason keeps today's message, byte
+    for byte, and so does a format failure with no rule."""
     if not failures:
         return prompt, resume
     last = failures[-1]
     if last.get("reason") == "max_turns":
         error = rules.turn_cut_retry_message(role)
+    elif last.get("reason") in ("schema", "check") and "rule" in last:
+        error = refusal_retry.retry_message(
+            last["rule"], last.get("field", ""), last.get("value"), last.get("detail")
+        )
     else:
         error = (
             f"<PreviousAttemptFailed>\n{last['error']}\n</PreviousAttemptFailed>\n\n"
@@ -827,20 +842,47 @@ def refusal_field(schema: type[BaseModel], candidate: object) -> str:
     return ""
 
 
-def _validation_rule(schema: type[BaseModel], exc: ValueError) -> tuple[RefusalRule, str]:
-    """The rule and field `schemas.validate`'s refusal carries. The one place that reads a
-    pydantic error's `ctx`: a validator that raised an `OutputRefusal` has it there, the
-    first such error deciding; any other validation error is `schema_invalid` on the
-    top-level field its `loc` starts with, and any other `ValueError` is `unmapped`."""
+def _value_of(output: object, field: str) -> object:
+    """What the role wrote in the top-level `field` it was refused on, or `None` when there
+    is no such field or the delivery has nothing there."""
+    if not field:
+        return None
+    found = refusal_retry.value_at(output, (field,))
+    return None if found is refusal_retry.MISSING else found
+
+
+def _validation_rule(
+    schema: type[BaseModel], exc: ValueError, output: object
+) -> tuple[RefusalRule, str, object]:
+    """The rule, field and value `schemas.validate`'s refusal carries. The one place that
+    reads a pydantic error's `ctx`: a validator that raised an `OutputRefusal` has it there,
+    the first such error deciding, with the value it carries or else what `output` holds in
+    its field; any other validation error is `schema_invalid` on the top-level field its
+    `loc` starts with, with the leaf its `loc` walks to in `output` (never pydantic's own
+    `input`), and none when the error is a missing field; any other `ValueError` is
+    `unmapped`, with no value."""
     if not isinstance(exc, ValidationError):
-        return "unmapped", ""
+        return "unmapped", "", None
     errors = exc.errors()
     for error in errors:
         refusal = error.get("ctx", {}).get("error")
         if isinstance(refusal, OutputRefusal):
-            return refusal.rule, refusal_field(schema, refusal.field)
-    loc = errors[0]["loc"] if errors else ()
-    return "schema_invalid", refusal_field(schema, loc[0]) if loc else ""
+            field = refusal_field(schema, refusal.field)
+            return refusal.rule, field, _refusal_value(refusal, field, output)
+    first = errors[0] if errors else None
+    loc = first["loc"] if first else ()
+    field = refusal_field(schema, loc[0]) if loc else ""
+    value = None
+    if first and field and first["type"] != "missing":
+        found = refusal_retry.value_at(output, loc)
+        value = None if found is refusal_retry.MISSING else found
+    return "schema_invalid", field, value
+
+
+def _refusal_value(refusal: OutputRefusal, field: str, output: object) -> object:
+    """The value an `OutputRefusal` shows: the one its raise site carries, else what the
+    delivery holds in the field it names once that field survived `refusal_field`."""
+    return refusal.value if refusal.value is not None else _value_of(output, field)
 
 
 def _refused(
@@ -852,9 +894,13 @@ def _refused(
     reason: FailureReason,
     rule: RefusalRule,
     field: str,
+    value: object = None,
+    detail: str = "",
 ) -> AttemptFailed:
     """The `AttemptFailed` of one refusal of the role's output: what the runner measured
-    on the attempt, plus the reason, the rule and the field its raise site decided."""
+    on the attempt, plus the reason, the rule and the field its raise site decided, the value
+    the role wrote there (cleaned here, the one place, by `refusal_retry.clean_value`) and the
+    motive that goes to the retry's `detail` line."""
     return AttemptFailed(
         message,
         cost,
@@ -870,6 +916,8 @@ def _refused(
         check_runs=result.check_runs,
         rule=rule,
         field=field,
+        value=None if value is None else refusal_retry.clean_value(value),
+        detail=refusal_retry.clean_detail(detail) if detail else "",
     )
 
 
@@ -926,30 +974,40 @@ async def _attempt(
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
     except ValueError as exc:
-        rule, field_ = _validation_rule(role.schema, exc)
+        rule, field_, value = _validation_rule(role.schema, exc, result.structured_output)
+        motive = rules.exception_motive(exc)
         raise _refused(
             result,
-            f"structured output invalid: {rules.exception_motive(exc)}",
+            f"structured output invalid: {motive}",
             cost,
             session,
             reason="schema",
             rule=rule,
             field=field_,
+            value=value,
+            detail=motive,
         ) from exc
     if check is not None:
         try:
             check(data)
         except ValueError as exc:
+            motive = rules.exception_motive(exc)
+            rule: RefusalRule = "unmapped"
+            field_ = ""
+            value = None
+            if isinstance(exc, OutputRefusal):
+                rule, field_ = exc.rule, refusal_field(role.schema, exc.field)
+                value = _refusal_value(exc, field_, result.structured_output)
             raise _refused(
                 result,
-                f"structured output invalid: {rules.exception_motive(exc)}",
+                f"structured output invalid: {motive}",
                 cost,
                 session,
                 reason="check",
-                rule=exc.rule if isinstance(exc, OutputRefusal) else "unmapped",
-                field=refusal_field(role.schema, exc.field)
-                if isinstance(exc, OutputRefusal)
-                else "",
+                rule=rule,
+                field=field_,
+                value=value,
+                detail=motive,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -961,6 +1019,7 @@ async def _attempt(
             reason="schema",
             rule="schema_invalid",
             field="markdown",
+            detail="`markdown` is empty; the Markdown section is required",
         )
     return Output(
         text=text,
@@ -1023,7 +1082,7 @@ def estimate_stop_for(
 
 
 def escalation(exc: Escalating, *, at: str) -> TaskState:
-    """The patch of a role that failed twice, or that the task cap stopped: the human
+    """The patch of a role that failed its attempts, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
     the task cap, `failure` for a role `run_with_retry` gave up on.
 
