@@ -194,6 +194,8 @@ class AttemptFailed(Exception):
         check_runs: CheckRuns | None = None,
         rule: RefusalRule | None = None,
         field: str = "",
+        value: str | None = None,
+        detail: str = "",
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -246,6 +248,10 @@ class AttemptFailed(Exception):
         # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
         self.rule = rule
         self.field = field
+        # What the role wrote in `field` and the refusal's own motive, both already cleaned by
+        # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
+        self.value = value
+        self.detail = detail
 
 
 class Presubmit(Protocol):
@@ -914,7 +920,15 @@ class TrackerTransient(TrackerCallFailed):
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
-    bound, never stderr."""
+    bound, never stderr.
+
+    `resets_at` is the aware UTC instant `gh api rate_limit` stated (GH-1031): set when the
+    reset was over the cap or the attempts ran out after a reset was read, `None` when no
+    reset was read or the wait was stopped."""
+
+    def __init__(self, *args: object, status: int | None = None, resets_at: datetime | None = None):
+        super().__init__(*args, status=status)
+        self.resets_at = resets_at
 
 
 class TrackerRefused(ValueError):

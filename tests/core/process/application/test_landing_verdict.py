@@ -261,7 +261,7 @@ def test_a_delivery_without_a_verdict_is_not_valid_so_nothing_is_closed_on_it(
     monkeypatch, tmp_path
 ):
     launcher = FakeLauncher()
-    ports = _diagnoser(_world(monkeypatch), None, None)
+    ports = _diagnoser(_world(monkeypatch), None, None, None)
 
     _land(ports, tmp_path, launcher)
 

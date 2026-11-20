@@ -34,7 +34,7 @@ from agentic.core.process.domain.roles import (
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
-from agentic.core.process.domain.task import INTEGRATION, Carried
+from agentic.core.process.domain.task import INTEGRATION, Carried, FailureReason
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -704,6 +704,59 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
         "review": 4.0,
     }
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
+
+
+_SPLIT_RUNS = [
+    {"role": "PM", "section": "PM", "cost_usd": 1.0},
+    {"role": "Tech Writer", "section": "Tech Writer", "cost_usd": 0.5},
+    {"role": "QA Performance", "section": "QA Performance", "cost_usd": 0.25},
+    {"role": "Tech Lead", "section": "Tech Lead", "cost_usd": 2.0},
+    {"role": "Developer", "section": "Developer: api", "cost_usd": 3.0},
+    {"role": "Tech Lead", "section": "Tech Lead: review api", "cost_usd": 4.0},
+]
+
+
+def test_spent_split_names_a_half_for_every_phase():
+    assert set(rules._SPLIT_OF) == set(rules.PHASES)
+
+
+def test_spent_split_halves_the_phases_and_keeps_the_residual_apart():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.75 + 1.5}
+    split = rules.spent_split(state)
+    # Tech Writer and QA Performance are not recognised by `phase_of`: they count as definition.
+    assert split == {"definition": 1.75 + 2.0, "build": 7.0, "unattributed": 1.5}
+    assert sum(split.values()) == pytest.approx(state["cost_usd"])
+
+
+def test_spent_split_residual_under_the_floor_is_not_shown():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.75 + 0.004}
+    split = rules.spent_split(state)
+    assert split["unattributed"] == 0.0
+    assert 0 < state["cost_usd"] - sum(split.values()) < 0.005
+
+
+def test_spent_split_never_shows_a_negative_unattributed():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.0}
+    split = rules.spent_split(state)
+    assert split["unattributed"] == 0.0
+    assert sum(split.values()) > state["cost_usd"]
+
+
+def test_spent_split_of_a_phase_it_does_not_name_goes_to_unattributed(monkeypatch):
+    monkeypatch.setattr(rules, "spent_by_phase", lambda state: {"development": 2.0, "audit": 3.0})
+    split = rules.spent_split({})
+    assert split == {"definition": 0.0, "build": 2.0, "unattributed": 3.0}
+
+
+def test_spent_split_line_has_one_text_in_both_modes():
+    split: rules.SpentSplit = {"definition": 3.754, "build": 7.0, "unattributed": 1.5}
+    assert (
+        rules.spent_split_line(split)
+        == "definition >= 3.75 USD · build >= 7.00 USD · unattributed 1.50 USD"
+    )
+    assert rules.spent_split_line(split, build_in_parts=True) == (
+        "definition >= 3.75 USD · build: in the parts · unattributed 1.50 USD"
+    )
 
 
 def test_run_ended_is_true_only_for_ready_for_review_discarded_split_and_tracker_only():
@@ -4759,6 +4812,38 @@ def _cut(reason: str) -> Any:
         "session_id": "",
         "reason": reason,
     }
+
+
+@pytest.mark.parametrize(
+    ("retries", "reason", "attempts"),
+    [
+        (0, "schema", 1),
+        (0, "check", 1),
+        (0, "stall", 1),
+        (-1, "schema", 0),
+        (1, "schema", 3),
+        (1, "check", 3),
+        (1, "stall", 2),
+        (1, "max_turns", 2),
+        (2, "schema", 3),
+        (2, "other", 3),
+        (4, "schema", 5),
+        (4, "check", 5),
+        (4, "stall", 5),
+    ],
+)
+def test_attempts_for_gives_a_format_failure_at_least_three_and_every_other_retries_plus_one(
+    retries, reason, attempts
+):
+    assert rules.attempts_for(reason, retries) == attempts
+
+
+def test_a_format_failure_never_gets_fewer_attempts_than_any_other_reason():
+    for retries in range(0, 8):
+        for reason in get_args(FailureReason):
+            other = rules.attempts_for(reason, retries)
+            assert rules.attempts_for("schema", retries) >= other
+            assert rules.attempts_for("check", retries) >= other
 
 
 def test_retry_turns_is_the_roles_own_cap_with_no_failure():

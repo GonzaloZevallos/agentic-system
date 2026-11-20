@@ -62,30 +62,30 @@ def test_verdict_table(size, parts_ok, expected):
 
 
 def test_measured_is_false_with_no_row_no_key_or_one_sizer_failure():
-    assert early_split.measured({}) is False
-    assert early_split.measured({"early_split": []}) is False
-    assert early_split.measured({"early_split": [row("sizer_failed")]}) is False
+    assert rules.early_measured({}) is False
+    assert rules.early_measured({"early_split": []}) is False
+    assert rules.early_measured({"early_split": [row("sizer_failed")]}) is False
 
 
 def test_measured_is_true_after_two_sizer_failures():
     rows = [row("sizer_failed"), row("sizer_failed", at="b")]
-    assert early_split.measured({"early_split": rows}) is True
+    assert rules.early_measured({"early_split": rows}) is True
 
 
 @pytest.mark.parametrize("cause", ["over", "fits", "close", "parts_refused"])
 def test_measured_is_true_for_each_closing_cause_alone(cause):
     verdict = "split" if cause == "over" else "go"
-    assert early_split.measured({"early_split": [row(cause, verdict)]}) is True
+    assert rules.early_measured({"early_split": [row(cause, verdict)]}) is True
 
 
 def test_a_closing_row_after_one_failure_measures():
-    assert early_split.measured({"early_split": [row("sizer_failed"), row("fits")]}) is True
+    assert rules.early_measured({"early_split": [row("sizer_failed"), row("fits")]}) is True
 
 
 def test_measured_reads_only_the_cause():
     plain: Any = {"early_split": [row("close")]}
     figures: Any = {"early_split": [{**row("close"), "hand_files": 99, "estimated_cost_usd": 9.0}]}
-    assert early_split.measured(plain) is early_split.measured(figures) is True
+    assert rules.early_measured(plain) is rules.early_measured(figures) is True
 
 
 def test_add_early_split_appends_to_nothing_and_ignores_an_empty_new():
@@ -109,7 +109,7 @@ def test_add_early_split_keeps_the_oldest_three_and_measured_does_not_change():
     assert len(capped) == task.EARLY_SPLIT_ROWS_MAX
     before: Any = {"early_split": rows}
     after: Any = {"early_split": capped}
-    assert early_split.measured(before) is early_split.measured(after) is True
+    assert rules.early_measured(before) is rules.early_measured(after) is True
 
 
 def test_the_channel_folds_through_apply_and_delta_gives_back_the_new_row():
@@ -133,17 +133,17 @@ def feature(**extra: Any) -> Any:
 
 
 def test_applies_to_a_full_path_feature_with_only_the_definition_done():
-    assert early_split.applies(feature()) is True
+    assert rules.early_size_due(feature()) is True
 
 
 def test_applies_when_the_path_is_absent_which_reads_as_full():
     state = feature()
     del state["path"]
-    assert early_split.applies(state) is True
+    assert rules.early_size_due(state) is True
 
 
 def test_applies_when_a_run_has_no_section_and_is_not_a_plan_role():
-    assert early_split.applies(feature(runs=[{"role": "PM", "version": 1}])) is True
+    assert rules.early_size_due(feature(runs=[{"role": "PM", "version": 1}])) is True
 
 
 @pytest.mark.parametrize(
@@ -173,7 +173,7 @@ def test_applies_when_a_run_has_no_section_and_is_not_a_plan_role():
     ids=lambda extra: "-".join(sorted(extra)) + "-" + str(list(extra.values())[0])[:24],
 )
 def test_each_exclusion_alone_stops_the_check(extra):
-    assert early_split.applies(feature(**extra)) is False
+    assert rules.early_size_due(feature(**extra)) is False
 
 
 @pytest.mark.parametrize(
@@ -188,7 +188,7 @@ def test_each_exclusion_alone_stops_the_check(extra):
     ids=["empty_promotion", "plan_flags_false", "empty_plan_lists", "one_failure", "no_rows"],
 )
 def test_an_empty_or_unfinished_record_does_not_stop_the_check(extra):
-    assert early_split.applies(feature(**extra)) is True
+    assert rules.early_size_due(feature(**extra)) is True
 
 
 @pytest.mark.parametrize(
@@ -199,8 +199,8 @@ def test_an_empty_or_unfinished_record_does_not_stop_the_check(extra):
 def test_a_started_design_ladder_stops_the_check_by_section_or_by_role(role):
     by_section = feature(runs=[{"role": "x", "section": role.name, "version": 1}])
     by_role = feature(runs=[{"role": role.name, "version": 1}])
-    assert early_split.applies(by_section) is False
-    assert early_split.applies(by_role) is False
+    assert rules.early_size_due(by_section) is False
+    assert rules.early_size_due(by_role) is False
 
 
 def drop_keys(*keys: str) -> Callable[[dict[str, Any]], None]:
@@ -236,11 +236,11 @@ def load(name: str) -> dict[str, Any]:
 def test_a_document_written_before_the_check_gives_go_at_each_point_of_the_plan(name):
     state: Any = load(name)
     assert "early_split" not in state
-    assert early_split.applies(state) is False
+    assert rules.early_size_due(state) is False
 
 
 @pytest.mark.parametrize("name", DOCUMENTS)
 def test_the_same_document_without_its_marker_is_still_due(name):
     state: Any = load(name)
     DOCUMENTS[name](state)
-    assert early_split.applies(state) is True
+    assert rules.early_size_due(state) is True

@@ -644,3 +644,10 @@ línea de sistema solo la escribe el rol que entrega. El trabajo "cuando leo una
 escaló, quiero ver cuántas negaciones hubo" (`docs/product/role-failures.md`) queda pendiente
 de una decisión del plan: una línea de sistema en la sección del escalado, nunca de nuevo en
 el motivo.
+
+## Adenda (2026-11-20): un rechazo de formato tiene tres intentos (GH-1017)
+
+La cota de desborde de un `Send` pasa a ser N ramas × tres intentos × el tope por intento cuando
+el fallo es un rechazo de la salida estructurada (`schema` o `check`): ese reintento lleva la
+regla, el campo y el valor rechazados, y la sesión que lo escribió sigue ahí para corregirlo.
+Cualquier otro motivo conserva `reintentos + 1`. La cota la decide solo `rules.attempts_for`.

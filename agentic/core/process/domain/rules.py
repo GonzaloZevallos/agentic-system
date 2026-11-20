@@ -12,7 +12,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict, assert_never, get_args
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
@@ -1805,6 +1805,26 @@ RETRY_TURNS: Mapping[str, int] = MappingProxyType(
 )
 
 
+# The attempts a role run gets after a refusal of its structured output (GH-1017): a delivery
+# refused for its format is retried twice, because the refusal names its rule, field and value
+# and the session that wrote it is still there to fix it.
+FORMAT_ATTEMPTS = 3
+
+
+def attempts_for(last_reason: FailureReason, retries: int) -> int:
+    """How many attempts a role run may make when its last failure is `last_reason`: the
+    one place that decides the bound (`run_with_retry` asks it after every failure, with
+    the failures so far as the count). `retries <= 0` is one attempt, whatever the reason:
+    a shadow review runs with none (`role_retries=0`). A `schema` or `check` failure never
+    gets fewer than `FORMAT_ATTEMPTS`, and more when `retries + 1` is larger; every other
+    reason gets `retries + 1`."""
+    if retries <= 0:
+        return retries + 1
+    if last_reason in ("schema", "check"):
+        return max(FORMAT_ATTEMPTS, retries + 1)
+    return retries + 1
+
+
 def retry_turns(role: Role, failures: Sequence[Failure]) -> int:
     """The turn cap of the next attempt of `role`: its table value when the last failure
     was the harness cutting on `max_turns` and the slug is in `RETRY_TURNS`, `role.max_turns`
@@ -2509,6 +2529,53 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
     if other >= 0.005:
         phases["other"] = other
     return phases
+
+
+class SpentSplit(TypedDict):
+    """The task's cost in two halves and what no run records (GH-999)."""
+
+    definition: float
+    build: float
+    unattributed: float
+
+
+_SPLIT_OF: dict[str, Literal["definition", "build"]] = {
+    "definition": "definition",
+    "plan": "definition",
+    "development": "build",
+    "review": "build",
+}
+
+
+def spent_split(state: TaskState) -> SpentSplit:
+    """The task's cost as definition (`definition` and `plan` phases), build (`development` and
+    `review`) and `unattributed` (the `other` residual of `spent_by_phase`, and any phase
+    `_SPLIT_OF` does not name). Derived only from `spent_by_phase`; never raises; the residual is
+    never apportioned to a phase, so the first two are lower bounds.
+
+    The three sum to `cost_usd` only when the residual reaches `spent_by_phase`'s 0.005 floor;
+    below it the residual is not shown, and a run total above `cost_usd` shows no negative
+    `unattributed`. `phase_of` sends the roles it does not recognise (Tech Writer, QA
+    Performance) to `definition`, so that figure may overstate; `phase_of` is left as it is
+    because `closeness` reads it."""
+    split: SpentSplit = {"definition": 0.0, "build": 0.0, "unattributed": 0.0}
+    for phase, usd in spent_by_phase(state).items():
+        half = _SPLIT_OF.get(phase)
+        if half is None:
+            split["unattributed"] += usd
+        else:
+            split[half] += usd
+    return split
+
+
+def spent_split_line(split: SpentSplit, *, build_in_parts: bool = False) -> str:
+    """The one line that shows `spent_split`. `build_in_parts` says where the build will be
+    spent, in the parts of a split task, instead of a figure of zero."""
+    build = "build: in the parts" if build_in_parts else f"build >= {split['build']:.2f} USD"
+    return (
+        f"definition >= {split['definition']:.2f} USD · {build} · "
+        f"unattributed {split['unattributed']:.2f} USD"
+    )
 
 
 # Routing of the paths of README §2: PjM -> Product Analyst -> PM -> Tech Lead ->
@@ -4220,6 +4287,13 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 # Never read off the API's "resets at" prose (ADR-0029).
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
+# A GitHub rate limit that outlasted its wait (GH-989): the poller retakes it by the minute,
+# 12 slots, and `rate_limit.RATE_LIMIT_WAIT_MAX` bounds the wait itself. Defined here so
+# `rate_limit` imports `rules` and `rules` never imports `rate_limit`. Never the account's
+# limit: no `ACCOUNT_LIMIT_*` decision reads it.
+GITHUB_RATE_LIMIT_SCHEDULE: tuple[int, ...] = (60,) * 12
+RATE_LIMIT_PERSISTED = "GitHub rate limit outlasted 12 h and needs a human"
 
 
 def resumed_entry(*, at: str) -> ResumedPauseEntry:
@@ -7377,3 +7451,95 @@ def fast_forward_blocked(
     if clash:
         return FastForwardBlock("would_overwrite", tuple(clash[:MAX_BLOCK_PATHS]))
     return None
+
+
+# --- The early size check (GH-999) ---
+# Whether the check is still due, and the only reader of the record it leaves in the state
+# (`early_split`). `early_size_due` is the single predicate; `early_measured` reads the cause alone.
+# The decision on a declared size is `early_split.verdict`.
+
+
+def early_measured(state: TaskState) -> bool:
+    """Whether the early check already has its answer: some row of `early_split` has a cause
+    other than `sizer_failed`, or at least two rows are `sizer_failed` (one retry, counted by
+    rows). The only reader of the record, and it reads the cause alone."""
+    causes = [row.get("cause") for row in state.get("early_split", [])]
+    failed = sum(1 for cause in causes if cause == "sizer_failed")
+    return failed >= 2 or len(causes) > failed
+
+
+def _not_a_feature(state: TaskState) -> bool:
+    return state.get("type") != "feature"
+
+
+def _not_full_path(state: TaskState) -> bool:
+    return state.get("path", "full") != "full"
+
+
+def _is_part_of_a_split(state: TaskState) -> bool:
+    return split_part_of(state.get("description", "")) is not None
+
+
+def _is_promoted(state: TaskState) -> bool:
+    return bool(state.get("promotion"))
+
+
+def _is_evaluation(state: TaskState) -> bool:
+    return "evaluation" in state
+
+
+def _ran_a_plan_role(state: TaskState) -> bool:
+    return any(phase_of(run.get("section", run["role"])) == "plan" for run in state.get("runs", []))
+
+
+def _holds_plan_record(state: TaskState) -> bool:
+    return any(
+        (
+            state.get("plan_route"),
+            state.get("estimate"),
+            state.get("planned_size"),
+            state.get("subtasks"),
+            state.get("parts"),
+        )
+    )
+
+
+def _plan_is_due(state: TaskState) -> bool:
+    return bool(state.get("plan_due") or state.get("fit_question"))
+
+
+_LADDER_SECTIONS = frozenset(
+    role.name for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, UI_LEAD, PM_CONSOLIDATOR, TECH_WRITER)
+)
+
+
+def _ladder_started(state: TaskState) -> bool:
+    return any(run.get("section", run["role"]) in _LADDER_SECTIONS for run in state.get("runs", []))
+
+
+# The task is not the kind of work the check is for.
+_OUT_OF_SCOPE: tuple[Callable[[TaskState], bool], ...] = (
+    _not_a_feature,
+    _not_full_path,
+    spec_delivery,
+    _is_part_of_a_split,
+    _is_promoted,
+    _is_evaluation,
+)
+# The plan already started, so the check came too late to be the first word on size.
+_PLAN_STARTED: tuple[Callable[[TaskState], bool], ...] = (
+    _ran_a_plan_role,
+    _holds_plan_record,
+    _plan_is_due,
+)
+_LADDER_STARTED: tuple[Callable[[TaskState], bool], ...] = (_ladder_started,)
+
+
+def early_size_due(state: TaskState) -> bool:
+    """Whether the early check is still due for this task: false for anything but a `feature`
+    on path `full` without a spec; for a part of a split, a promoted task, or an evaluation
+    run; for a task whose plan or design ladder already started; and once `early_measured`."""
+    return not any(
+        exclusion(state)
+        for exclusion in (*_OUT_OF_SCOPE, *_PLAN_STARTED, *_LADDER_STARTED, early_measured)
+    )

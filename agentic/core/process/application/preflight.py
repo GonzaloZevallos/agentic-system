@@ -36,6 +36,8 @@ PLACEHOLDERS = {
     "split_part": "",
     "plan_shape_rule": rules.plan_shape_text("free"),
     "size_budget": size_budget.budget_text(size_budget.UNPROVEN_RATIO),
+    # How a slice is cut: the one text every sizer and the plan prompt cut a split by.
+    "slicing_rules": rules.SLICING_RULES,
     # Empty for a product that declares no `docs`, so the gate renders the prompts as they ship.
     "docs_plan": docs.plan_text(None),
     "docs_review": docs.review_text(None),

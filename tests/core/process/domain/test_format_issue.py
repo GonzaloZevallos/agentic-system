@@ -119,12 +119,19 @@ def test_earlier_rules_of_a_mixed_epoch():
 def test_evidence_uses_closed_fields_only():
     # One sentinel in the refused value, one in each earlier failure's `error` and one in a
     # refusal's `detail` (carried as the row's `error`, as `run_role` records it), sent through
-    # the real path `earlier_rules(epoch)` -> `evidence`.
+    # the real path `earlier_rules(epoch)` -> `evidence`. The row's `value` and `detail` keys
+    # (the retry's text, GH-1017) carry sentinels too: `evidence` reads neither.
     value_sentinel, error_sentinel, detail_sentinel = "SENT-VALUE", "SENT-ERROR", "SENT-DETAIL"
     refusal = OutputRefusal("schema_invalid", "markdown", f"bad field: {detail_sentinel}")
     epoch = [
         failure("schema", "schema_invalid", error=f"first: {error_sentinel}"),
-        failure("check", "unmapped", error=str(refusal)),
+        failure(
+            "check",
+            "unmapped",
+            error=str(refusal),
+            value=f"shown back: {value_sentinel}",
+            detail=f"retry: {detail_sentinel}",
+        ),
         failure("schema", "schema_invalid", error=f"last: {error_sentinel}"),
     ]
     output = {"markdown": value_sentinel * 2}

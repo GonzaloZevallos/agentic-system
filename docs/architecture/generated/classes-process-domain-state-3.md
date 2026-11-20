@@ -38,6 +38,7 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class rules__SpentSplit["SpentSplit"]
     class size_budget__ActualSize["ActualSize"]
     class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]
@@ -45,5 +46,4 @@ classDiagram
     class spec_approval__ApprovalReading["ApprovalReading"]
     class spec_approval__Comment["Comment"]
     class spec_delivery__DraftReading["DraftReading"]
-    class spec_delivery__Screen["Screen"]
 ```

@@ -144,6 +144,7 @@ FailureReason = Literal[
     "upstream",
     "network",
     "disk_full",
+    "github_rate_limit",
     "sdk",
     "stall",
     "render",
@@ -175,11 +176,14 @@ class OutputRefusal(ValueError):
     the error text a check raised stays what it was. `field` is a claim: `run_role.
     refusal_field` keeps it only when the role's schema declares it."""
 
-    def __init__(self, rule: RefusalRule, field: str, detail: str):
+    def __init__(self, rule: RefusalRule, field: str, detail: str, *, value: object = None):
         super().__init__(detail)
         self.rule = rule
         self.field = field
         self.detail = detail
+        # What the role wrote in `field`, when the raise site has it (GH-1017): shown back to
+        # the model once, cleaned and cut by `refusal_retry.clean_value`. `None` is no value.
+        self.value = value
 
 
 class RefusalRepair(TypedDict):
@@ -1121,9 +1125,10 @@ class Failure(TypedDict):
     # this field existed, which reads as `role.max_turns`.
     max_turns: NotRequired[int]
     # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
-    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
-    # only a wait hint, never the reason. Absent on any other failure and on one recorded
-    # before this field existed.
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381),
+    # or the one GitHub's `rate_limit` read gave a `github_rate_limit` failure, bounded by
+    # `rate_limit.rate_limit_pause_patch`'s window: only a wait hint, never the reason. Absent
+    # on any other failure and on one recorded before this field existed.
     resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
@@ -1202,6 +1207,14 @@ class Failure(TypedDict):
     # never the value. Written by the refusal raise site built in #1030 under the same
     # conditions as `rule`, absent when unknown (never `None`); no row carries it before then.
     value_len: NotRequired[int]
+    # What the role wrote in `field`, as `refusal_retry.clean_value` leaves it (one line, at
+    # most 240 characters), so the retry can show it back (GH-1017). Same conditions as `rule`,
+    # and absent when the refusal has no value to show (a missing field, `output_missing`). It
+    # is never a metric label or a span attribute.
+    value: NotRequired[str]
+    # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
+    # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
+    detail: NotRequired[str]
 
 
 class CheckRun(TypedDict):
@@ -2432,6 +2445,13 @@ class TaskState(TaskInput, total=False):
     # True when a fit question or an estimate with parts was decided, the plan node's
     # successful patch writes it False. Absent reads False.
     plan_due: Annotated[bool, last]
+    # The instant (ISO-8601 UTC) the GitHub rate limit first paused this task, kept across
+    # the poller's retakes of the same limit so `rate_limit.rate_limit_exhausted` counts the
+    # whole wait; `rate_limit_noticed_at` is when the human was told it outlasted the wait.
+    # Both absent on a task the GitHub limit never paused. Plain fields, no reducer: `apply`
+    # overrides them, which is what `last` would do.
+    rate_limit_paused_at: str
+    rate_limit_noticed_at: str
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records
@@ -2728,7 +2748,7 @@ class TaskState(TaskInput, total=False):
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
-    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # `rules.early_measured`; a document written before it has none. The figures are read by no
     # decision.
     early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),

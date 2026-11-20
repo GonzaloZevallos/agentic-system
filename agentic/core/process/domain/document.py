@@ -579,7 +579,7 @@ def render(
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # The verdicts of the early size check: written only when there is a row, so every
         # document written before it is byte-identical; parsed back under the same name, and
-        # read only by `early_split.measured`.
+        # read only by `rules.early_measured`.
         **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
@@ -715,6 +715,10 @@ def render(
         # A re-plan owed after the owner's decision (GH-798): written only when true, so a
         # document without it is byte-identical to one written before; absent reads false.
         **({"plan_due": True} if state.get("plan_due") else {}),
+        # The GitHub rate-limit pause's instants (GH-989), written only when set, so a
+        # document the limit never paused is byte-identical to one written before them.
+        **({"rate_limit_paused_at": e} if (e := state.get("rate_limit_paused_at")) else {}),
+        **({"rate_limit_noticed_at": e} if (e := state.get("rate_limit_noticed_at")) else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task
