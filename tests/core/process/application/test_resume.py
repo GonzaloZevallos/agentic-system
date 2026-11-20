@@ -160,7 +160,7 @@ def test_a_document_written_before_the_prd_rename_still_resumes():
     ports.documents.save(document.parse(old))
     resumed = resume.from_document("GH-2", ports)
     assert resumed["status"] == "definition_ready"
-    assert rules.resume_target(resumed) == "plan"
+    assert rules.resume_target(resumed) == "early_size"  # a document with no early_split yet
 
 
 def test_a_document_with_old_role_names_still_resumes():

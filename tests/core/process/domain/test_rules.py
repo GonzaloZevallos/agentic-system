@@ -35,6 +35,7 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried
+from tests.fakes import measured
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -419,7 +420,7 @@ def test_a_pre_change_document_with_no_design_sections_resumes_into_plan():
 
 
 def test_resume_target_of_a_fresh_touches_ui_task_with_nothing_run_starts_at_ux_flow():
-    state = {**UX_FLAGS, "status": "definition_ready"}
+    state = measured({**UX_FLAGS, "status": "definition_ready"})
     assert rules.resume_target(state) == "ux_flow"
 
 

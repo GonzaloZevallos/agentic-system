@@ -5,6 +5,7 @@ verifiers keep following the flags derived from the slice's screens."""
 import pytest
 
 from agentic.core.process.domain import rules
+from tests.fakes import measured
 
 SPEC = {"slice": "a slice"}
 AT = "2026-11-12T10:00:00+00:00"
@@ -35,7 +36,7 @@ def test_after_validate_returned_goes_to_plan_under_a_spec():
 
 def test_after_validate_approval_goes_to_plan_past_the_ladder(ladder_open):
     assert rules.after_validate(feature(status="definition_ready")) == "plan"
-    assert rules.after_validate(feature(status="definition_ready", spec={})) == "ux_flow"
+    assert rules.after_validate(measured(feature(status="definition_ready", spec={}))) == "ux_flow"
 
 
 def test_after_consolidate_returned_goes_to_plan_under_a_spec():
@@ -73,7 +74,7 @@ def test_resume_returned_goes_to_plan_under_a_spec():
 def test_resume_definition_ready_goes_to_plan_past_the_ladder(ladder_open):
     state = feature(status="definition_ready")
     assert rules.resume_target(state) == "plan"
-    assert rules.resume_target({**state, "spec": {}}) == "ux_flow"
+    assert rules.resume_target(measured({**state, "spec": {}})) == "ux_flow"
 
 
 def test_a_promotion_under_a_spec_owes_nothing_and_never_goes_back():
