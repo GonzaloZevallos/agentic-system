@@ -1490,3 +1490,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1014
+  GH-1026@review:
+    cost_usd: 0.0382
