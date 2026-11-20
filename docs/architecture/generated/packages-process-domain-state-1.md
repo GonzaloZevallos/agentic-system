@@ -36,7 +36,6 @@ graph TD
     m_domain__drawing_answer --> g_domain__roles
     m_domain__drawing_answer --> g_domain__state__2
     m_domain__drawing_answer --> m_domain__escalation_prompts
-    m_domain__early_split --> g_domain__roles
     m_domain__early_split --> g_domain__state__2
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
