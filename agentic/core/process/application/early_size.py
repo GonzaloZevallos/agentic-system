@@ -9,6 +9,8 @@ task cap stops the task. It never applies the estimate cap and never writes `est
 
 from __future__ import annotations
 
+from typing import Any
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import cost_history, early_split, rules, schemas, size_budget
@@ -20,7 +22,7 @@ from .run_role import run_role, soft_failure
 
 
 def _row(
-    decided: early_split.Verdict, at: str, size: size_budget.PlanSize | None, data: dict
+    decided: early_split.Verdict, at: str, size: size_budget.PlanSize | None, data: dict[str, Any]
 ) -> EarlySplitRow:
     """The row the verdict leaves: the figures the sizer declared are in it only when it gave
     them, and no decision reads them."""
@@ -33,13 +35,17 @@ def _row(
     return row
 
 
-def _parts_ok(state: TaskState, parts: list[dict], ratio: size_budget.Ratio, data_ok: bool) -> bool:
-    """Whether the parts the sizer proposed pass `early_parts_check` against PM's section."""
-    if not parts or not data_ok:
+def _parts_ok(
+    state: TaskState, ports: Ports, parts: list[dict[str, Any]], ratio: size_budget.Ratio
+) -> bool:
+    """Whether the parts the sizer proposed pass `early_parts_check` against PM's section. A task
+    that is no tracker issue has no `#<issue>` to quote, so its parts are refused."""
+    issue = ports.inbox.issue_of(state["id"])
+    if not parts or issue is None:
         return False
     prd = state.get("sections", {}).get(PM.name, "")
     try:
-        schemas.early_parts_check(parts, int(state["issue_number"]), prd, ratio)
+        schemas.early_parts_check(parts, issue, prd, ratio)
     except ValueError:
         return False
     return True
@@ -70,7 +76,7 @@ async def early_size(state: TaskState, cfg: Configuration, ports: Ports) -> Task
     patch.pop("sections", None)
     size = schemas.declared_size(output.data)
     parts = output.data.get("parts") or []
-    decided = early_split.verdict(size, _parts_ok(state, parts, ratio, size is not None))
+    decided = early_split.verdict(size, _parts_ok(state, ports, parts, ratio))
     patch["early_split"] = [_row(decided, at, size, output.data)]
     if decided.verdict == "split":
         patch["parts"] = parts
