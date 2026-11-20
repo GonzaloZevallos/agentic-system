@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.domain.document import ORIGINAL
 from agentic.core.process.domain.roles import (
+    DEFINITION_SIZER,
     PAIR_PM_PA,
     PJM,
     PLAN_SIZER,
@@ -20,6 +22,7 @@ from agentic.core.process.domain.roles import (
     prompt_hash,
     render,
 )
+from agentic.core.process.domain.schemas import DefinitionSize
 from agentic.shared.configuration import Configuration
 
 EPHEMERAL_ROLES = (TECH_LEAD_EPHEMERAL, TECH_LEAD_EPHEMERAL_PLATFORM, TECH_LEAD_EPHEMERAL_STACK)
@@ -71,6 +74,14 @@ def test_the_plan_sizer_is_a_light_role_with_no_tools(tmp_path):
     assert PLAN_SIZER in ROLES and PLAN_SIZER.slug == "plan_sizer"
     assert PLAN_SIZER.tools == () and PLAN_SIZER.max_turns == 2 and PLAN_SIZER.skills == ()
     assert PLAN_SIZER.runs_on == "actor"
+
+
+def test_the_definition_sizer_is_a_sibling_of_the_plan_sizer_that_reads_the_prd():
+    assert DEFINITION_SIZER in ROLES and DEFINITION_SIZER.slug == "definition_sizer"
+    assert DEFINITION_SIZER.name == "Definition sizer" and DEFINITION_SIZER.runs_on == "actor"
+    assert DEFINITION_SIZER.tools == () and DEFINITION_SIZER.max_turns == 2
+    assert DEFINITION_SIZER.effort == "low" and DEFINITION_SIZER.reads == (ORIGINAL, "PM")
+    assert DEFINITION_SIZER.schema is DefinitionSize
 
 
 def test_the_carve_out_is_one_tech_lead_spec_with_no_tools_and_a_small_budget():
@@ -520,6 +531,7 @@ EXPECTED_CRITERIA = {
     "tech_lead_review": ("engineering",),
     "tech_lead_review_light": ("engineering",),
     "plan_sizer": (),
+    "definition_sizer": (),
     "tech_lead_carve_out": (),
     "tech_lead_critic": ("engineering", "product"),
     "tech_lead_critic_platform": ("engineering", "product"),

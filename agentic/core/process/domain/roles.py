@@ -30,6 +30,7 @@ from .schemas import (
     Consultation,
     CopyDraft,
     CopyReview,
+    DefinitionSize,
     DefinitionTurn,
     Delivery,
     DesignDraft,
@@ -652,6 +653,19 @@ PLAN_SIZER = Role(
     max_turns=2,
 )
 
+# The early size check's sizer (GH-999): after PM approves a PRD it reads the request and the PM
+# section, and returns parts only when the task is clearly over the size budget. It has no tools
+# and belongs to the definition, not to the plan: no planning figure counts it.
+DEFINITION_SIZER = Role(
+    name="Definition sizer",
+    slug="definition_sizer",
+    kind="actor",
+    schema=DefinitionSize,
+    reads=(ORIGINAL, PM.name),
+    effort="low",
+    max_turns=2,
+)
+
 TECH_LEAD_CRITIC = Role(
     name="Plan critic",
     slug="tech_lead_critic",
@@ -885,6 +899,7 @@ ROLES = (
     TECH_LEAD_REVIEWER,
     TECH_LEAD_REVIEWER_LIGHT,
     PLAN_SIZER,
+    DEFINITION_SIZER,
     TECH_LEAD_CRITIC,
     TECH_LEAD_CRITIC_PLATFORM,
     TECH_LEAD_CARVE_OUT,

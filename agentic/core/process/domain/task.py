@@ -2691,7 +2691,7 @@ class TaskState(TaskInput, total=False):
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
-    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # `rules.early_measured`; a document written before it has none. The figures are read by no
     # decision.
     early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),

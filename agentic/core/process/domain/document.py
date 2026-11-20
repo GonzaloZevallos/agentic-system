@@ -554,7 +554,7 @@ def render(
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # The verdicts of the early size check: written only when there is a row, so every
         # document written before it is byte-identical; parsed back under the same name, and
-        # read only by `early_split.measured`.
+        # read only by `rules.early_measured`.
         **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
