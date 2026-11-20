@@ -1805,6 +1805,26 @@ RETRY_TURNS: Mapping[str, int] = MappingProxyType(
 )
 
 
+# The attempts a role run gets after a refusal of its structured output (GH-1017): a delivery
+# refused for its format is retried twice, because the refusal names its rule, field and value
+# and the session that wrote it is still there to fix it.
+FORMAT_ATTEMPTS = 3
+
+
+def attempts_for(last_reason: FailureReason, retries: int) -> int:
+    """How many attempts a role run may make when its last failure is `last_reason`: the
+    one place that decides the bound (`run_with_retry` asks it after every failure, with
+    the failures so far as the count). `retries <= 0` is one attempt, whatever the reason:
+    a shadow review runs with none (`role_retries=0`). A `schema` or `check` failure never
+    gets fewer than `FORMAT_ATTEMPTS`, and more when `retries + 1` is larger; every other
+    reason gets `retries + 1`."""
+    if retries <= 0:
+        return retries + 1
+    if last_reason in ("schema", "check"):
+        return max(FORMAT_ATTEMPTS, retries + 1)
+    return retries + 1
+
+
 def retry_turns(role: Role, failures: Sequence[Failure]) -> int:
     """The turn cap of the next attempt of `role`: its table value when the last failure
     was the harness cutting on `max_turns` and the slug is in `RETRY_TURNS`, `role.max_turns`
@@ -7424,3 +7444,95 @@ def fast_forward_blocked(
     if clash:
         return FastForwardBlock("would_overwrite", tuple(clash[:MAX_BLOCK_PATHS]))
     return None
+
+
+# --- The early size check (GH-999) ---
+# Whether the check is still due, and the only reader of the record it leaves in the state
+# (`early_split`). `early_size_due` is the single predicate; `early_measured` reads the cause alone.
+# The decision on a declared size is `early_split.verdict`.
+
+
+def early_measured(state: TaskState) -> bool:
+    """Whether the early check already has its answer: some row of `early_split` has a cause
+    other than `sizer_failed`, or at least two rows are `sizer_failed` (one retry, counted by
+    rows). The only reader of the record, and it reads the cause alone."""
+    causes = [row.get("cause") for row in state.get("early_split", [])]
+    failed = sum(1 for cause in causes if cause == "sizer_failed")
+    return failed >= 2 or len(causes) > failed
+
+
+def _not_a_feature(state: TaskState) -> bool:
+    return state.get("type") != "feature"
+
+
+def _not_full_path(state: TaskState) -> bool:
+    return state.get("path", "full") != "full"
+
+
+def _is_part_of_a_split(state: TaskState) -> bool:
+    return split_part_of(state.get("description", "")) is not None
+
+
+def _is_promoted(state: TaskState) -> bool:
+    return bool(state.get("promotion"))
+
+
+def _is_evaluation(state: TaskState) -> bool:
+    return "evaluation" in state
+
+
+def _ran_a_plan_role(state: TaskState) -> bool:
+    return any(phase_of(run.get("section", run["role"])) == "plan" for run in state.get("runs", []))
+
+
+def _holds_plan_record(state: TaskState) -> bool:
+    return any(
+        (
+            state.get("plan_route"),
+            state.get("estimate"),
+            state.get("planned_size"),
+            state.get("subtasks"),
+            state.get("parts"),
+        )
+    )
+
+
+def _plan_is_due(state: TaskState) -> bool:
+    return bool(state.get("plan_due") or state.get("fit_question"))
+
+
+_LADDER_SECTIONS = frozenset(
+    role.name for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, UI_LEAD, PM_CONSOLIDATOR, TECH_WRITER)
+)
+
+
+def _ladder_started(state: TaskState) -> bool:
+    return any(run.get("section", run["role"]) in _LADDER_SECTIONS for run in state.get("runs", []))
+
+
+# The task is not the kind of work the check is for.
+_OUT_OF_SCOPE: tuple[Callable[[TaskState], bool], ...] = (
+    _not_a_feature,
+    _not_full_path,
+    spec_delivery,
+    _is_part_of_a_split,
+    _is_promoted,
+    _is_evaluation,
+)
+# The plan already started, so the check came too late to be the first word on size.
+_PLAN_STARTED: tuple[Callable[[TaskState], bool], ...] = (
+    _ran_a_plan_role,
+    _holds_plan_record,
+    _plan_is_due,
+)
+_LADDER_STARTED: tuple[Callable[[TaskState], bool], ...] = (_ladder_started,)
+
+
+def early_size_due(state: TaskState) -> bool:
+    """Whether the early check is still due for this task: false for anything but a `feature`
+    on path `full` without a spec; for a part of a split, a promoted task, or an evaluation
+    run; for a task whose plan or design ladder already started; and once `early_measured`."""
+    return not any(
+        exclusion(state)
+        for exclusion in (*_OUT_OF_SCOPE, *_PLAN_STARTED, *_LADDER_STARTED, early_measured)
+    )

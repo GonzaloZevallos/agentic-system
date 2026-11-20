@@ -85,6 +85,8 @@ marcada en ningún lado hace fallar el chequeo con su propio nombre.
 | `agentic.role.queue_wait` | — | — | Sin span ni atributo propio: sigue en el documento de tarea, `runs[].queue_wait_s` |
 | `agentic.role.failures` | `agentic.role.failures` | rol | Intentos fallidos de la patch, array `"motivo=conteo"` (sin `role.slug`/`phase`: esa dimensión no tiene span propio, sigue en el documento de tarea) |
 | `agentic.role.failure_cost_usd` | `agentic.role.failure_cost_usd` | rol | Costo de los intentos fallidos, array `"motivo=costo"`, misma reducción de dimensión que la anterior |
+| `agentic.role.refusals` | `agentic.role.refusals` | rol | Rechazos de la salida estructurada de la patch por regla, array `"regla=conteo"`, con ids del conjunto cerrado `RefusalRule`; solo si hubo alguno, y nunca el campo ni el valor |
+| `agentic.role.repairs` | `agentic.role.repairs` | rol | Rechazos que la corrida reparó, array `"regla=conteo"`, mismos ids que el anterior; solo si hubo alguno (hoy vacío hasta que la parte de reparación lo llene) |
 | `agentic.role.tokens` | `agentic.role.tokens` | rol | Tokens de la patch entera, array `"kind=conteo"`, sumados sobre todas sus corridas; antes una muestra por corrida |
 | `agentic.role.calls` | — | — | Sin atributo: sigue en el documento de tarea, `runs[].calls` |
 | `agentic.role.turns` | `agentic.role.turns` | rol | Turnos de la última corrida de la patch, bare desde antes de esta tarea |

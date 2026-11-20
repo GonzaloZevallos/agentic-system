@@ -114,16 +114,16 @@ async def test_an_answer_that_skips_a_visible_question_is_refused_in_the_turn(cf
     assert transcript is not None and "escalated" not in patch
     assert runner.slugs.count(ANSWER) == 2
 
-    twice = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer(), _answer()]})
-    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(twice))
-    assert transcript is None and "PM failed 2 times" in patch["escalated"]
+    thrice = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer(), _answer(), _answer()]})
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(thrice))
+    assert transcript is None and "PM failed 3 times" in patch["escalated"]
     assert "Q1 is marked visible but has no drawing check" in patch["failures"][0]["error"]
 
 
 async def test_the_interviewer_that_closes_with_visible_questions_is_refused(cfg):
-    runner = ScriptedRunner(**{ASK: [_ask(done=True), _ask(done=True)]})
+    runner = ScriptedRunner(**{ASK: [_ask(done=True)] * 3})
     transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(runner))
-    assert transcript is None and "Product Analyst failed 2 times" in patch["escalated"]
+    assert transcript is None and "Product Analyst failed 3 times" in patch["escalated"]
 
 
 async def test_a_rejected_key_that_comes_back_is_refused_with_its_number_and_no_key(cfg):
@@ -133,7 +133,7 @@ async def test_a_rejected_key_that_comes_back_is_refused_with_its_number_and_no_
     rejected = [{**rows[0], "answer": {"verdict": "reject", "by": "comment", "at": "T1"}}]
     state = {**TASK, "drawing_departures": rejected}
     back = _answer([_check(verdict="departs")], [_departure()])
-    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [back, back]})
+    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [back, back, back]})
     transcript, patch = await interview(state, INTERVIEW_DEFINITION, cfg, _ports(runner))
     assert transcript is None
     error = patch["failures"][0]["error"]
@@ -155,7 +155,7 @@ def _rejected_state() -> dict[str, Any]:
 
 async def test_a_retake_after_a_reject_shows_the_row_and_closes_only_with_a_match(cfg):
     other = _answer([_check(element="other")])
-    ports = _ports(ScriptedRunner(**{ASK: [_ask(session="q4")], ANSWER: [other, other]}))
+    ports = _ports(ScriptedRunner(**{ASK: [_ask(session="q4")], ANSWER: [other] * 3}))
     transcript, patch = await interview(_rejected_state(), INTERVIEW_DEFINITION, cfg, ports)
     assert (
         transcript is None
@@ -433,7 +433,7 @@ async def test_a_short_citation_resolves_in_the_interview_and_the_listing_is_rea
 async def test_an_unreadable_listing_refuses_a_short_path_and_says_so_once(cfg, capsys):
     stack = _CountingStack(design=DESIGN)  # unreadable by default
     short = {**_check(), "drawing": "Home.png"}
-    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer([short]), _answer([short])]})
+    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer([short])] * 3})
     transcript, patch = await interview(
         TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner, stack=stack)
     )

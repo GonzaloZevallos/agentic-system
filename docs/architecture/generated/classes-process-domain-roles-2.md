@@ -44,8 +44,8 @@ classDiagram
     class schemas__CopyFinding["CopyFinding"]
     class schemas__CopyReview["CopyReview"]
     class schemas__CritiqueFinding["CritiqueFinding"]
+    class schemas__DefinitionSize["DefinitionSize"]
     class schemas__DefinitionTurn["DefinitionTurn"]
-    class schemas__Delivery["Delivery"]
     schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
@@ -64,4 +64,4 @@ classDiagram
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
-  - `schemas.Delivery` hereda de `schemas.RoleOutput`
+  - `schemas.DefinitionSize` hereda de `schemas.PlanSize`

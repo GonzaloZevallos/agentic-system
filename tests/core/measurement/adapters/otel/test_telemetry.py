@@ -12,6 +12,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.measurement.domain import metrics
+from agentic.core.process.application.run_role import RoleFailure, escalation
+from agentic.core.process.domain.roles import PJM
 from agentic.shared.stage0 import CHECKOUT
 from tests.readme_metrics import Family, _documented
 
@@ -246,6 +248,15 @@ DELIVERY_KEYS = {
 }
 
 
+def _refused(reason, rule=None, field=None):
+    failure = {"role": "PjM", "attempt": 1, "error": "e", "cost_usd": 0.01, "reason": reason}
+    if rule is not None:
+        failure["rule"] = rule
+    if field is not None:
+        failure["field"] = field
+    return failure
+
+
 def _run(role, slug, section, cost, model="m", session="s"):
     return {
         "role": role,
@@ -294,7 +305,10 @@ def _maximal_patch() -> dict:
         "reason": "schema",
         "slug": "developer",
         "section": "Developer: api",
+        "rule": "schema_invalid",
+        "field": "type",
     }
+    run["repairs"] = [{"rule": "schema_invalid", "field": "type"}]
     return {
         "runs": [run],
         "failures": [failure],
@@ -411,6 +425,33 @@ def _check(name="tests", command="pytest", passed=True, duration_s=1.0):
             },
             DELIVERY_KEYS | {"agentic.role.tokens", "agentic.role.tool_calls"},
             id="tokens-and-tool-calls-present",
+        ),
+        pytest.param(
+            {
+                "failures": [_refused("schema", "output_missing"), _refused("other")],
+                "cost_usd": 0.05,
+            },
+            {"agentic.role.failures", "agentic.role.failure_cost_usd", "agentic.role.refusals"},
+            id="refusals-present",
+        ),
+        pytest.param(
+            {
+                "runs": [
+                    _run("PjM", "pjm", "PjM", 0.1)
+                    | {"repairs": [{"rule": "parts_when_fits", "field": "subtasks"}]}
+                ],
+                "cost_usd": 0.1,
+            },
+            DELIVERY_KEYS | {"agentic.role.repairs"},
+            id="repairs-present",
+        ),
+        pytest.param(
+            {
+                "failures": [_refused("account_limit"), _refused("schema")],
+                "cost_usd": 0.05,
+            },
+            {"agentic.role.failures", "agentic.role.failure_cost_usd"},
+            id="no-rule-on-any-failure-no-refusals",
         ),
         pytest.param(
             {
@@ -1224,3 +1265,42 @@ def test_the_path_attributes_are_closed_values_and_carry_no_risk_id_or_promotion
     assert span.attributes["agentic.task.path"] == "light"
     rendered = repr(dict(span.attributes))
     assert "money-rounding" not in rendered and "billing" not in rendered
+
+
+def test_refusals_and_repairs_are_counted_per_rule_and_never_name_a_field(spans):
+    patch = {
+        "failures": [
+            _refused("check", "parts_when_fits", "subtasks"),
+            _refused("check", "parts_when_fits", "subtasks"),
+            _refused("schema", "output_missing"),
+        ],
+        "runs": [
+            _run("Tech Lead", "tech_lead", "Plan", 0.1)
+            | {"repairs": [{"rule": "parts_when_fits", "field": "subtasks"}]}
+        ],
+        "cost_usd": 0.1,
+    }
+    with telemetry.role_span("Tech Lead", "tech_lead", "gym-saas", arm="default") as run:
+        run.finish(patch)
+    span = spans.get_finished_spans()[-1]
+    assert span.attributes["agentic.role.refusals"] == (
+        "output_missing=1",
+        "parts_when_fits=2",
+    )
+    assert span.attributes["agentic.role.repairs"] == ("parts_when_fits=1",)
+    assert "subtasks" not in str(span.attributes)
+
+
+def test_an_escalation_patch_with_two_refusals_carries_the_counts(spans):
+    patch = escalation(
+        RoleFailure(
+            PJM,
+            [_refused("schema", "schema_invalid", "type"), _refused("schema", "output_missing")],
+        ),
+        at="2026-11-19T00:00:00+00:00",
+    )
+    with telemetry.role_span("PjM", "pjm", "gym-saas", arm="default") as run:
+        run.finish(patch)
+    span = spans.get_finished_spans()[-1]
+    assert span.attributes["agentic.role.refusals"] == ("output_missing=1", "schema_invalid=1")
+    assert "agentic.role.repairs" not in span.attributes
