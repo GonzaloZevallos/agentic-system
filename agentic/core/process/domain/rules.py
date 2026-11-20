@@ -4288,6 +4288,13 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
 
+# A GitHub rate limit that outlasted its wait (GH-989): the poller retakes it by the minute,
+# 12 slots, and `rate_limit.RATE_LIMIT_WAIT_MAX` bounds the wait itself. Defined here so
+# `rate_limit` imports `rules` and `rules` never imports `rate_limit`. Never the account's
+# limit: no `ACCOUNT_LIMIT_*` decision reads it.
+GITHUB_RATE_LIMIT_SCHEDULE: tuple[int, ...] = (60,) * 12
+RATE_LIMIT_PERSISTED = "GitHub rate limit outlasted 12 h and needs a human"
+
 
 def resumed_entry(*, at: str) -> ResumedPauseEntry:
     """The one constructor of the `resumed` entry that closes an epoch (the poller's retake,
