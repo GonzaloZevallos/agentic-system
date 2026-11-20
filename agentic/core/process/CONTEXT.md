@@ -533,6 +533,14 @@ _Campo_: sin término de arte
 Máximo de devoluciones por par antes de que la decisión única (`rules.on_return_limit`) elija: seguir contando, reiniciar o escalar. Hoy 2. El par Tech Lead→Developer de una subtarea elegible reinicia (Reinicio limpio) en el primer límite y escala en el segundo; los demás pares escalan en el primero.
 _Campo_: sin término de arte; `max_iter` en CrewAI y `max_turns` en el OpenAI Agents SDK topean el loop de un agente solo, no el ida y vuelta entre dos
 
+**Marcador de rechazo**:
+La línea `<!-- agentic-refusal: <regla> -->` con la que termina el cuerpo del issue de una regla de rechazo de formato. `marker` la escribe y `matches` es su único lector: solo vale como última línea no vacía del cuerpo y compara la regla exacta, así que una cita en medio del cuerpo o una regla que prefija a otra no coinciden. Es una convención, no una autenticación: cualquier autor puede escribirla (`domain/format_issue.py`).
+_Campo_: sin término de arte
+
+**Issue de rechazo de formato**:
+El issue que se abre por una regla de rechazo de la salida estructurada de un rol (`RefusalRule`). Su registro es `FormatIssueRecord` (`rule`, `url`, `at`) en `TaskState.format_issue`: un registro por regla, gana la primera escritura (`add_format_issues`, que une dos escritores simultáneos) y la única lectura es `format_issue_for` (`domain/task.py`).
+_Campo_: sin término de arte
+
 ### Cómo termina una corrida
 
 **Listo para revisión**:
