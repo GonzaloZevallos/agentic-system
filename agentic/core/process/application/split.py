@@ -119,12 +119,15 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         f"{n}. {parts[n - 1]['title']}: {issues[str(n)]}" for n in range(1, len(parts) + 1)
     )
     unfinished = "" if swept.complete else f"{_unfinished(swept)}\n\n"
+    spent = rules.spent_split(current)
+    spent_line = rules.spent_split_line(spent, build_in_parts=round(spent["build"], 2) == 0.0)
     try:
         ports.tracker.comment(
             task_id,
             f"{SPLIT}the estimate does not fit one task, so it was split into {len(parts)} "
             f"issues, each with its own pull request:\n\n{listed}\n\n"
             f"{plan_view.split_comment_block(parts)}\n\n"
+            f"{spent_line}\n\n"
             "This task is NOT relaunched: the parts replace it.\n\n"
             f"{unfinished}Task document: `{document.relative_path(task_id)}`",
         )

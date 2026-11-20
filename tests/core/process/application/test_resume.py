@@ -274,6 +274,10 @@ def test_a_resume_under_the_flat_ceiling_goes_on_to_the_returned_integration(cfg
     assert "reason:    " + CAP in text
     assert "spent:     60.00 USD (definition 0.00, plan 0.00, development 25.00, " in text
     assert "review 25.00, other 10.00)" in text
+    state = paused(cost_usd=60.0)
+    split_line = rules.spent_split_line(rules.spent_split(state))
+    assert split_line == "definition >= 0.00 USD · build >= 50.00 USD · unattributed 10.00 USD"
+    assert f"\nsplit:     {split_line}\n" in text
     assert "task cap:  250.00 USD (ceiling 250)" in text
     assert "resumes:   integrate (integration)" in text
     assert "session:   Developer: integration: d1" in text
