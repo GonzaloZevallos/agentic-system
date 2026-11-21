@@ -45,4 +45,5 @@ classDiagram
     class rules__MergeDecision["MergeDecision"]
     class rules__MergeFacts["MergeFacts"]
     class rules__PollAction["PollAction"]
+    class rules__PollPlan["PollPlan"]
 ```

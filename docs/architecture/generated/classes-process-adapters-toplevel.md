@@ -16,6 +16,7 @@ classDiagram
     class evaluation__EvaluationTracker["EvaluationTracker"]
     class evaluation__EvaluationWorkspace["EvaluationWorkspace"]
     class evaluation__EvaluationWrite["EvaluationWrite"]
+    class playbook_land_record__FilesystemLandRecord["FilesystemLandRecord"]
     class telemetry__NoTelemetry["NoTelemetry"]
     class telemetry__RoleSpan["RoleSpan"]
     class telemetry__Telemetry["Telemetry"]

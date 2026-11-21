@@ -236,3 +236,35 @@ estado parecía un plan solo de tracker. Se decide:
 - Un plan que no se construye (`part_over_line`) no deja `tracker_items` vivos.
 
 Cita el ADR-0062 sin enmendarlo.
+
+## Adenda (2026-11-21, GH-1004 parte 2): el plan retenido se restaura si el dueño acepta todas las desviaciones
+
+Cuando el plan escala por una desviación del dibujo (`stage: plan`) conserva el plan que armó
+(`plan_held`, parte 1). La reanudación que sigue a la respuesta del dueño ya no lo descarta
+siempre: si el dueño aceptó todas las desviaciones que ese plan declaró, se restaura sin volver a
+planificar. Se decide:
+
+- La regla (`drawing_answer.plan_stands_pre`, pura, más `plan_stands`): la respuesta reabre el
+  plan (`plan_resume`); el plan retenido es de la misma ronda y de la misma estimación; todas las
+  desviaciones que declaró están aceptadas según `plan_split` sobre el estado con las respuestas
+  ya plegadas; la decisión son solo líneas de veredicto (`drawing.only_verdicts`); el plan no
+  tiene ítem `human`, ni `promote`, ni `parts`; la tarea no tiene `promotion` ni `fit_question`;
+  y el tope de subtareas de una tarea ligera no pide promoción. Una fila rechazada de otra
+  puerta, fuera de lo que declaró el plan, no la bloquea.
+- El plan debe pasar otra vez el mismo chequeo de estimación (`plan.estimate_check`). Lo corre
+  `resume.prepare`, y solo cuando `plan_stands_pre` ya se cumple, sobre el plan retenido tal como
+  se guardó; cualquier excepción, o un diseño que ya no existe, lo da por fallido.
+- El chequeo juzga el gasto al momento de reanudar, incluido el costo del propio nodo plan. Un
+  plan cerca de la línea puede fallar ahora y, en ese caso, se planifica de nuevo como hasta
+  hoy: el fallo es seguro.
+- Con todo eso, `drawing_answer.resume_patch` (que sigue siendo la única composición del parche)
+  llama una sola vez a `rules.resumed` sobre el estado con las subtareas restauradas, deja el
+  estado `planned`, escribe `plan_due` en falso y `plan_held` en `None`; `rules.resume_target`
+  da `integrate`. `rules.resumed` sigue siendo el único que escribe `plan_due` en verdadero.
+- El nodo `pause` recibe el resultado del chequeo por `Resumption.answer()` (`plan_recheck`, solo
+  cuando es verdadero) y lo descarta si las etiquetas del dueño agregan una promoción
+  (`relabelled`): en ese caso, o si `prepare` y el nodo discrepan, el parche es el de siempre.
+
+No cubre: las desviaciones de la entrevista de definición, de la entrevista de solución ni de la
+entrega (siguen replanificando o siguiendo como hasta hoy); las tareas con `promotion`, ya
+presente o agregada por la etiqueta del dueño; ni una pregunta de ajuste (`fit_question`).

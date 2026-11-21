@@ -15,7 +15,7 @@ sequenceDiagram
     participant Poller
     participant Resume as agentic resume
     Graph->>Escalate: a role, a pair or the cap cannot go on
-    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment
+    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment (nothing for an unpersisted github_rate_limit pause)
     Escalate->>Pause: the same state
     Pause->>Pause: interrupt, checkpoint saved
     Note over Graph,Pause: the run ends, nothing is spent while it waits
@@ -24,7 +24,7 @@ sequenceDiagram
         Owner->>Resume: agentic resume --issue N
     else mechanical cut (role failure, account limit, full disk, CI without a verdict, transient delivery)
         Poller->>Resume: spawn resume --issue N --yes --detach --by-poller
-        Poller->>GitHub: Auto-resumed comment, once the spawn returned a pid
+        Poller->>GitHub: Auto-resumed comment, once the spawn returned a pid (none for a github_rate_limit pause)
         Resume->>GitHub: Resumed by the poller comment, which does not reset the retake budget
     end
     Resume->>GitHub: comments since the last system one
@@ -42,7 +42,14 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:needs_a_human` lo dice, y comenta el issue con el
    prefijo `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`). Una pausa
    causada solo por el límite de la cuenta, que el poller retoma sola, no lleva la etiqueta
-   (glosario de `agentic/core/process/CONTEXT.md`).
+   (glosario de `agentic/core/process/CONTEXT.md`). Una pausa `github_rate_limit` que no está
+   persistida va más lejos: `agentic/core/process/domain/rate_limit.py:tracker_silent` vale
+   verdadero y `escalate` solo guarda el documento, sin etiqueta y sin comentario `Escalated: `
+   (lo mismo para el escalado `RATE_LIMIT_PERSISTED`, cuyo único escritor es el poller). El parche
+   que `escalate` guarda y devuelve pasa por
+   `agentic/core/process/domain/rate_limit.py:cleared_on_close`: un escalado de cualquier otra
+   clase borra `rate_limit_paused_at` y `rate_limit_noticed_at` del documento, porque el próximo
+   límite es una espera nueva; la pausa `github_rate_limit` los conserva.
 2. **La pausa.** El nodo `pause` va después de `escalate` y no tiene efectos
    (`agentic/core/process/adapters/langgraph/graph.py:pause`). Ahí vive el `interrupt()`:
    LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso volvería a
@@ -78,6 +85,26 @@ sequenceDiagram
      deja un único comentario `Retakes spent: `
      (`agentic/core/process/application/poll.py:_announce_spent`). Si una persona habló después
      del sistema, la pausa ya es del humano y el poller no la toca.
+   - La pausa `github_rate_limit` no tiene comentario `Escalated: ` desde donde medir:
+     `agentic/core/process/application/poll.py:gather_resumes` la delega en
+     `agentic/core/process/application/poll.py:_rate_limit_candidate`, que toma el `since` del
+     instante `at` de su entrada de escalado (`agentic/core/process/domain/rate_limit.py:pause_at`),
+     cuenta las retomas por los `Resumed by the poller: ` posteriores a `at`
+     (`agentic/core/process/domain/rate_limit.py:poller_retakes`) y, si hay un reinicio dicho,
+     retoma en `resets_at` más el desfase del producto
+     (`agentic/core/process/domain/rate_limit.py:governing_reset`, `retake_due_at`); sin él, por
+     hora. Una persona que comenta después de `at` y del último comentario del sistema frena las
+     retomas (`agentic/core/process/domain/rate_limit.py:person_spoke`). Esta pausa no gasta el
+     presupuesto de retomas ni el tope mecánico, así que `execute` no deja `Auto-resumed: `;
+     solo queda el `Resumed by the poller: ` de la reanudación.
+   - A las 12 h contadas desde `rate_limit_paused_at`, y sin leer ningún comentario,
+     `agentic/core/process/application/poll.py:rate_limit_escalations` escribe el escalado
+     persistido (`agentic/core/process/domain/rate_limit.py:persist_due`) y avisa al humano: pone
+     `needs-human` con `Tracker.put_label` y deja el comentario `Escalated: ` con `Tracker.note`
+     (salvo que `agentic/core/process/domain/rate_limit.py:notice_posted` ya lo encuentre). Los
+     fallos van a `tracker_failures` y la ronda sigue; recién con ambas escrituras se sella
+     `rate_limit_noticed_at`, así que el aviso se reintenta hasta que llegó. No corre en rondas
+     retenidas ni en `--dry-run`, ni sobre una tarea con corrida o lock vivos.
 4. **Antes de gastar.** `agentic/core/process/application/resume.py:prepare` decide la
    reanudación: toma como decisión todos los comentarios posteriores al último del sistema
    (`agentic/core/process/application/resume.py:human_decision`), se niega si el tope ya está
@@ -97,6 +124,11 @@ sequenceDiagram
    (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
    `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
    `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
+   Excepción (GH-1004): si el dueño aceptó todas las desviaciones que declaró el plan retenido
+   (`plan_held`), con una decisión de solo veredictos y sin promoción, y el chequeo de
+   estimación que `resume.prepare` corre otra vez pasa, `resume_patch` restaura las subtareas
+   del plan retenido: `plan_due` en falso, estado `planned`, y la tarea sigue a `integrate`
+   sin planificar de nuevo (`drawing_answer.plan_stands_pre`).
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`

@@ -125,3 +125,43 @@ async def test_drawing_flags_reach_prepare_and_a_malformed_one_is_refused_before
             drawing=("oops",),
         )
     assert "Resume?" not in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("from_document", [True, False])
+@pytest.mark.parametrize("by_poller", [True, False])
+async def test_by_poller_reaches_prepare_on_every_branch_and_defaults_to_a_manual_resume(
+    tmp_path, monkeypatch, from_document, by_poller
+):
+    """GH-989: the poller's `--by-poller` must reach `prepare`, or a poller retake of a GitHub
+    rate-limit pause clears the clock as a manual resume does. Omitted, it is a manual one."""
+    seen: list[bool] = []
+    real = cli.resuming.prepare
+
+    def spy(*args, by_poller=False, **kwargs):
+        seen.append(by_poller)
+        return real(*args, by_poller=by_poller, **kwargs)
+
+    monkeypatch.setattr(cli.resuming, "prepare", spy)
+    _thread(monkeypatch, {"id": "GH-1", "status": "developing"}, ("developer",))
+    cfg = Configuration(product_dir=tmp_path)
+    await cli._resume(
+        "GH-1",
+        cfg,
+        _ports(),
+        from_document=from_document,
+        dry_run=True,
+        checkpointer=_Saver(),
+        by_poller=by_poller,
+    )
+    assert seen == [by_poller]
+    seen.clear()
+    await cli._resume(
+        "GH-1",
+        cfg,
+        _ports(),
+        from_document=from_document,
+        dry_run=True,
+        checkpointer=_Saver(),
+    )
+    assert seen == [False]

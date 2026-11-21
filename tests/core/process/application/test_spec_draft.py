@@ -4,6 +4,7 @@ for the checkout."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from agentic.core.process.application.ports import RawResult, Upstream
 from agentic.core.process.application.spec_draft import deliver
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain.spec_delivery import (
+    DRAFT_PREVIEW_PATH,
     body_sha256,
     draft_text,
     render_approved_front_matter,
@@ -112,10 +114,10 @@ async def test_an_approved_valid_draft_is_written_committed_and_recorded(root, c
     }
     assert "spec" not in patch  # a draft is not a spec delivery
     assert "spec" not in apply(STATE, patch)
-    # The pre-check read the draft and its approved preview under the preview path; deliver then
-    # read the draft once more under the real one.
-    assert len(validator.calls) == 3
-    assert validator.calls[-1] == (text, DRAFT, "base0", None, "owner")
+    # The pre-check and `deliver` each read the draft and its approved preview, via `draft_cause`.
+    assert len(validator.calls) == 4
+    assert validator.calls[2] == (text, DRAFT_PREVIEW_PATH, "base0", None, "owner")
+    assert validator.calls[3][0].startswith("---\nstatus: approved\napproved_by: owner\n")
     assert ports.workspace.commits == [
         (root, "T-1: product definition"),
         (root, "T-1: draft Spec"),
@@ -206,10 +208,14 @@ async def test_when_no_draft_is_due_nothing_is_validated_written_or_recorded(roo
     assert ports.workspace.commits == [(root, "T-1: product definition")]
 
 
-async def test_a_draft_that_fails_the_pre_check_twice_escalates_and_is_never_written(root, cfg):
-    ports = ports_for(returned(), returned(), validator=FakeSpecValidator("spec_invalid"))
+async def test_a_draft_that_fails_the_pre_check_on_every_attempt_escalates_and_is_never_written(
+    root, cfg
+):
+    ports = ports_for(
+        returned(), returned(), returned(), validator=FakeSpecValidator("spec_invalid")
+    )
     patch = await validate_prd(STATE, cfg, ports)
-    assert len(ports.runner.calls) == 2
+    assert len(ports.runner.calls) == 3
     assert "spec_draft" not in patch and patch["status"] != "definition_ready"
     assert not (root / "docs").exists()
 
@@ -337,3 +343,40 @@ async def test_a_symlink_at_the_target_is_invalid(root, cfg):
     patch = await validate_prd(STATE, cfg, ports)
     assert patch["spec_draft"] == {"outcome": "invalid"}
     assert not (root / "elsewhere.md").exists()
+
+
+async def test_a_multi_slice_draft_is_a_split_proposal_with_no_file_and_no_commit(root, cfg):
+    validator = FakeDraftSpecValidator(preview="slice_missing")
+    record, ports = await delivered(BODY, validator, cfg)
+    assert record == {"outcome": "split_proposed", "sha256": body_sha256(draft_text(BODY))}
+    assert not (root / "docs").exists()
+    assert ports.workspace.commits == []
+
+
+async def test_a_draft_that_does_not_validate_once_approved_is_invalid_and_never_on_disk(root, cfg):
+    for preview in ("spec_invalid", "spec_unapproved"):
+        record, ports = await delivered(BODY, FakeDraftSpecValidator(preview=preview), cfg)
+        assert record == {"outcome": "invalid"}
+        assert not (root / "docs").exists() and ports.workspace.commits == []
+
+
+async def test_a_malformed_owner_login_skips_the_preview_and_the_draft_is_written(root, cfg):
+    bad = Configuration(product_dir=cfg.product_dir, owner_login="a b")
+    validator = FakeDraftSpecValidator(preview="slice_missing")  # would refuse, if asked
+    record, _ = await delivered(BODY, validator, bad)
+    assert record["outcome"] == "written"
+    assert [c[4] for c in validator.calls] == [None]
+
+
+async def test_a_multi_slice_second_draft_leaves_the_written_file_and_adds_no_commit(root, cfg):
+    ports = ports_for(validator=FakeDraftSpecValidator())
+    task = await task_checkout_in_thread(STATE, cfg, ports)
+    first = deliver(STATE, {"spec_draft": BODY}, task, cfg, ports)
+    commits = list(ports.workspace.commits)
+    ports = replace(ports, spec_validator=FakeDraftSpecValidator(preview="slice_missing"))
+    again = deliver(
+        {**STATE, "spec_draft": first}, {"spec_draft": BODY + "\nMore.\n"}, task, cfg, ports
+    )
+    assert again["outcome"] == "split_proposed" and "path" not in again and "commit" not in again
+    assert (root / DRAFT).read_text(encoding="utf-8") == draft_text(BODY)
+    assert ports.workspace.commits == commits

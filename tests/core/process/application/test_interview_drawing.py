@@ -9,7 +9,7 @@ from agentic.core.process.application import interview_drawing
 from agentic.core.process.application.interview import _escalate_drawing, interview
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.domain import drawing, drawing_answer, spec_assumptions, task
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Design, PrototypeListing
 from agentic.core.process.domain.roles import (
     INTERVIEW_DEFINITION,
     INTERVIEW_SOLUTION,
@@ -114,16 +114,16 @@ async def test_an_answer_that_skips_a_visible_question_is_refused_in_the_turn(cf
     assert transcript is not None and "escalated" not in patch
     assert runner.slugs.count(ANSWER) == 2
 
-    twice = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer(), _answer()]})
-    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(twice))
-    assert transcript is None and "PM failed 2 times" in patch["escalated"]
+    thrice = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer(), _answer(), _answer()]})
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(thrice))
+    assert transcript is None and "PM failed 3 times" in patch["escalated"]
     assert "Q1 is marked visible but has no drawing check" in patch["failures"][0]["error"]
 
 
 async def test_the_interviewer_that_closes_with_visible_questions_is_refused(cfg):
-    runner = ScriptedRunner(**{ASK: [_ask(done=True), _ask(done=True)]})
+    runner = ScriptedRunner(**{ASK: [_ask(done=True)] * 3})
     transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(runner))
-    assert transcript is None and "Product Analyst failed 2 times" in patch["escalated"]
+    assert transcript is None and "Product Analyst failed 3 times" in patch["escalated"]
 
 
 async def test_a_rejected_key_that_comes_back_is_refused_with_its_number_and_no_key(cfg):
@@ -133,7 +133,7 @@ async def test_a_rejected_key_that_comes_back_is_refused_with_its_number_and_no_
     rejected = [{**rows[0], "answer": {"verdict": "reject", "by": "comment", "at": "T1"}}]
     state = {**TASK, "drawing_departures": rejected}
     back = _answer([_check(verdict="departs")], [_departure()])
-    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [back, back]})
+    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [back, back, back]})
     transcript, patch = await interview(state, INTERVIEW_DEFINITION, cfg, _ports(runner))
     assert transcript is None
     error = patch["failures"][0]["error"]
@@ -155,7 +155,7 @@ def _rejected_state() -> dict[str, Any]:
 
 async def test_a_retake_after_a_reject_shows_the_row_and_closes_only_with_a_match(cfg):
     other = _answer([_check(element="other")])
-    ports = _ports(ScriptedRunner(**{ASK: [_ask(session="q4")], ANSWER: [other, other]}))
+    ports = _ports(ScriptedRunner(**{ASK: [_ask(session="q4")], ANSWER: [other] * 3}))
     transcript, patch = await interview(_rejected_state(), INTERVIEW_DEFINITION, cfg, ports)
     assert (
         transcript is None
@@ -370,6 +370,92 @@ def test_a_departure_already_held_as_a_row_is_not_raised_by_this_round():
     again = interview_drawing.Collector(DESIGN)
     again.collect(role, data, held)
     assert again.raised_now is False and again.pending(held) == []
+
+
+LISTED = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None, files=(PATH,))
+
+
+def test_a_departure_cited_short_is_stored_with_its_full_path():
+    collector = interview_drawing.Collector(LISTED)
+    short = {**_departure(), "drawing": "Home.png"}
+    collector.collect(INTERVIEW_DEFINITION.interviewee, {"departures": [short]}, {})
+    (held,) = collector.pending({})
+    assert held.drawing == PATH
+    assert list(collector.new) == [KEY]
+    (row,) = task.departure_records(None, [held], "T0")
+    assert row["drawing"] == PATH and row["key"] == KEY
+
+
+def test_a_short_matches_check_clears_the_owed_full_path_row():
+    state = _rejected_state()
+    collector = interview_drawing.Collector(LISTED)
+    short = {**_check(), "drawing": "Home.png"}
+    patch = collector.collect(INTERVIEW_DEFINITION.interviewee, {"drawing_checks": [short]}, state)
+    assert [r["fix_passes"] for r in patch["drawing_departures"]] == [1]
+
+
+def test_a_citation_the_check_already_accepted_but_resolve_refuses_keeps_the_raw_path():
+    collector = interview_drawing.Collector(LISTED)
+    odd = {**_departure(), "drawing": "pantallas/Elsewhere.png"}
+    collector.collect(INTERVIEW_DEFINITION.interviewee, {"departures": [odd]}, {})
+    (held,) = collector.pending({})
+    assert held.drawing == "pantallas/Elsewhere.png"
+
+
+class _CountingStack(MemoryStack):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.listed = 0
+
+    def prototype_files(self, revision, design):
+        self.listed += 1
+        return super().prototype_files(revision, design)
+
+
+async def test_a_short_citation_resolves_in_the_interview_and_the_listing_is_read_once(cfg):
+    stack = _CountingStack(design=DESIGN, prototype=PrototypeListing((PATH,), "listed"))
+    short = {**_check(verdict="departs"), "drawing": "Home.png"}
+    runner = ScriptedRunner(
+        **{
+            ASK: [_ask(), _ask(done=True, visible=())],
+            ANSWER: [_answer([short], [{**_departure(), "drawing": "Home.png"}])],
+        }
+    )
+    transcript, patch = await interview(
+        TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner, stack=stack)
+    )
+    assert transcript is None and patch["status"] == "waiting_on_human"
+    (row,) = patch["drawing_departures"]
+    assert row["drawing"] == PATH and row["key"] == KEY
+    assert stack.listed == 1
+
+
+async def test_an_unreadable_listing_refuses_a_short_path_and_says_so_once(cfg, capsys):
+    stack = _CountingStack(design=DESIGN)  # unreadable by default
+    short = {**_check(), "drawing": "Home.png"}
+    runner = ScriptedRunner(**{ASK: [_ask()], ANSWER: [_answer([short])] * 3})
+    transcript, patch = await interview(
+        TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner, stack=stack)
+    )
+    assert (
+        transcript is None
+        and "cite the full path, pantallas/<name>" in patch["failures"][0]["error"]
+    )
+    err = capsys.readouterr().err
+    assert err.count("agentic: drawing: prototype not listed (unreadable)") == 1
+    assert stack.listed == 1
+
+
+async def test_the_listing_is_not_read_for_an_interview_without_a_drawing_seat(cfg):
+    from tests.core.process.application.test_interview import TL_ANSWER_P, TL_ASK_P
+    from tests.fakes import answers as plain_answers
+
+    stack = _CountingStack(design=DESIGN)
+    runner = ScriptedRunner(
+        **{TL_ASK_P: [questions(1), questions(done=True)], TL_ANSWER_P: [plain_answers(1)]}
+    )
+    await interview(TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner, stack=stack))
+    assert stack.listed == 0
 
 
 async def test_the_new_rows_and_the_pause_log_share_one_clock_read(cfg):

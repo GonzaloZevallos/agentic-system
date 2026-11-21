@@ -393,6 +393,7 @@ _APPLICATION = Path(__file__).resolve().parents[4] / "agentic/core/process/appli
 _NOTE_CALLERS = {
     ("merge", "_note"),
     ("poll", "_announce_spent"),
+    ("poll", "_send_rate_limit_notice"),
     ("refusal_note", "note_refusal"),
     ("resume", "announce"),
     ("stack_hold", "_open_episode"),
@@ -417,7 +418,7 @@ def _note_callers(root: Path) -> set[tuple[str, str]]:
     return found
 
 
-def test_the_tracker_note_callers_of_the_application_are_the_known_five():
+def test_the_tracker_note_callers_of_the_application_are_the_known_six():
     found = _note_callers(_APPLICATION)
     assert found == _NOTE_CALLERS, (
         f"new Tracker.note callers: {sorted(found - _NOTE_CALLERS)}; "

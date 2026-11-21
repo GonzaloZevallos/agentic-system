@@ -1,0 +1,20 @@
+id: GH-1002
+title: Export the monthly report
+type: feature
+status: waiting_on_human
+current_role: Tech Lead
+path: full
+escalated: The plan's estimate is above the task's cap
+escalation_class: estimate
+estimate:
+  cost_usd: 31.5
+  files: 12
+  declared_usd: 24.0
+runs:
+- role: PM
+  section: PM
+  version: 1
+  session_id: s-pm
+  model: m
+  cost_usd: 0.4
+  turns: 6

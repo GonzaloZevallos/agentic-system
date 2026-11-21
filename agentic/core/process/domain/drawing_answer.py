@@ -6,8 +6,9 @@ and worded; `prompt_cause` the only reading of which drawing cause a pause carri
 `section_lines` the only rendering of the rows a role reads; `classify` the only rule that
 crosses a `departs` check with `departures` and with `drawing_departures`; `plan_split` the only
 reading of the owner's verdict on a departure the plan declares; `plan_resume` and `resume_patch`
-the only composition of the patch that resumes a pause the owner answered. Imports only the
-domain's `task`, `rules`, `drawing`, `escalation_prompts` and `schemas`."""
+the only composition of the patch that resumes a pause the owner answered, and `plan_stands_pre`
+the only decision that the plan the node held is restored (GH-1004). Imports only the domain's
+`task`, `rules`, `drawing`, `escalation_prompts`, `plan_revision`, `tracker_items` and `schemas`."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal
 
-from . import drawing, escalation_prompts, rules, task
+from . import drawing, escalation_prompts, plan_revision, rules, task, tracker_items
 from .schemas import DrawingCheck, DrawingDeparture
 
 Cause = Literal["drawing_departure", "drawing_cap"]
@@ -217,7 +218,8 @@ def plan_split(state: task.TaskState, departures: Sequence[drawing.Departure]) -
 def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> bool:
     """Whether the owner's answer reopens the plan: the pause is a live drawing one
     (`prompt_cause`), the resumption answered at least one row, and the gate that asked was the
-    plan's. A stale `plan` record under another pause never does."""
+    plan's. A stale `plan` record under another pause never does. That the plan is owed does not
+    say it is planned again: `plan_stands` can restore the held one (`resume_patch`)."""
     record = state.get("drawing_escalation")
     return (
         prompt_cause(state) is not None
@@ -227,6 +229,82 @@ def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord])
     )
 
 
+def plan_stands_pre(
+    state: task.TaskState, answered: Sequence[task.DepartureRecord], decision: str | None
+) -> bool:
+    """Whether the plan held when the plan node escalated stands without a re-plan (GH-1004),
+    before the recheck of its estimate: the owner's answer reopens the plan (`plan_resume`), the
+    held plan is the one of this round and this estimate, the owner accepted every departure it
+    declared (read through `plan_split` on `state` with `answered` folded by the field's own
+    reducer, only from `held["departures"]`), said nothing but verdicts (`only_verdicts`), and the
+    plan is plain: no `human` tracker item, no `promote`, no `parts`, a task with no `promotion`
+    nor `fit_question`, and the restored subtasks need no promotion for a light path. Pure."""
+    held = state.get("plan_held")
+    record = state.get("drawing_escalation")
+    if held is None or record is None or not plan_resume(state, answered):
+        return False
+    if held["round"] != record["round"] or held["estimate"] != state.get("estimate"):
+        return False
+    if "promotion" in state or state.get("fit_question") or not drawing.only_verdicts(decision):
+        return False
+    plan = held["plan"]
+    if (
+        tracker_items.human_items(plan.get("tracker_items") or [])
+        or plan.get("promote")
+        or plan.get("parts")
+    ):
+        return False
+    folded = _with_rows(state, answered)
+    split = plan_split(folded, [drawing.Departure(**d) for d in held["departures"]])
+    if split.rejected or split.open:
+        return False
+    restored = _with_subtasks(state, _restored(held))
+    return rules.plan_over_cap_request(restored) is None
+
+
+def _with_rows(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> task.TaskState:
+    """`state` with `answered` folded in by `apply`, so the field's own reducer
+    (`add_drawing_departures`) runs. The patch repeats the three identity keys, which `apply`
+    overwrites with the same values."""
+    return task.apply(
+        state,
+        task.TaskState(
+            id=state["id"],
+            title=state["title"],
+            description=state["description"],
+            drawing_departures=list(answered),
+        ),
+    )
+
+
+def _with_subtasks(state: task.TaskState, restored: dict[str, task.Subtask]) -> task.TaskState:
+    """`state` with `restored` merged in by `apply` (the reducer of `subtasks`)."""
+    return task.apply(
+        state,
+        task.TaskState(
+            id=state["id"],
+            title=state["title"],
+            description=state["description"],
+            subtasks=restored,
+        ),
+    )
+
+
+def _restored(held: task.PlanHeld) -> dict[str, task.Subtask]:
+    return plan_revision.written_subtasks(None, held["plan"]["subtasks"])
+
+
+def plan_stands(
+    state: task.TaskState,
+    answered: Sequence[task.DepartureRecord],
+    decision: str | None,
+    recheck: bool,
+) -> bool:
+    """`plan_stands_pre` and the plan check passed again (`recheck`): the one decision that the
+    held plan is restored instead of planned again."""
+    return plan_stands_pre(state, answered, decision) and recheck
+
+
 def resume_patch(
     state: task.TaskState,
     decision: str | None,
@@ -234,14 +312,39 @@ def resume_patch(
     answered: Sequence[task.DepartureRecord],
     *,
     at: str,
+    plan_recheck: bool = False,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task given the rows the owner `answered` (none for any
-    other pause): `rules.resumed`, told by `plan_resume` whether the plan is owed, plus the
-    answered rows when there are some. The only composition of that patch and the only caller
-    of `plan_resume`, so the only source of `rules.resumed`'s `drawing_plan`."""
-    patch = rules.resumed(
-        state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
-    )
+    other pause): `rules.resumed`, plus the answered rows when there are some. The only
+    composition of that patch and the only caller of `plan_resume`. `by_poller` (GH-989) goes
+    through to `rules.resumed`: the poller's own retake keeps the GitHub rate limit's instants.
+
+    When `plan_stands` (the owner accepted every departure the plan declared and `plan_recheck`
+    says the plan passes its check again) the held plan is restored: `rules.resumed` is called
+    once on the state with the subtasks written, so the status is `planned` and no re-plan is
+    owed, and the patch writes the subtasks, `plan_due` False (explicit: a `last` reducer ignores
+    a missing key) and `plan_held` None. Otherwise `rules.resumed` is told by `plan_resume`
+    whether the plan is owed (the only source of its `drawing_plan`), and `plan_held` is cleared
+    only when the state held one."""
+    held = state.get("plan_held")
+    if held is not None and plan_stands(state, answered, decision, plan_recheck):
+        restored = _restored(held)
+        patch = rules.resumed(
+            _with_subtasks(state, restored), decision, estimate, at=at, by_poller=by_poller
+        )
+        patch.update(subtasks=restored, plan_due=False, plan_held=None)
+    else:
+        patch = rules.resumed(
+            state,
+            decision,
+            estimate,
+            at=at,
+            drawing_plan=plan_resume(state, answered),
+            by_poller=by_poller,
+        )
+        if held is not None:
+            patch["plan_held"] = None
     if answered:
         patch["drawing_departures"] = list(answered)
     return patch

@@ -34,18 +34,19 @@ classDiagram
     class playbook__Applied["Applied"]
     class playbook__Archived["Archived"]
     class playbook__Backing["Backing"]
+    class playbook__CitationFacts["CitationFacts"]
     class playbook__Delta["Delta"]
     class playbook__Demotion["Demotion"]
     class playbook__Evidence["Evidence"]
     class playbook__Item["Item"]
     class playbook__Pending["Pending"]
     class playbook__Playbook["Playbook"]
+    class playbook__Refusal["Refusal"]
+    class playbook__Rejected["Rejected"]
+    class playbook__Scored["Scored"]
     playbook__Applied --> playbook__Playbook
     playbook__Archived --> playbook__Item
     playbook__Demotion --> playbook__Delta
+    playbook__Refusal --> playbook__Delta
+    playbook__Scored --> playbook__Playbook
 ```
-
-## Relaciones con otras páginas
-
-- [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
-  - `playbook.Refusal` se asocia con `playbook.Delta`

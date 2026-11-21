@@ -37,6 +37,7 @@ SWALLOWED_TRACKER_CALLS = {
     "unlabel": ("GH-1", "needs-human"),
     "note": ("GH-1", "text"),
     "drop_label": ("GH-1", "needs-human"),
+    "put_label": ("GH-1", "needs-human"),
 }
 READS_TRACKER = (
     "branch_ci",

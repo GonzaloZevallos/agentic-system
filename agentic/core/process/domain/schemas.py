@@ -35,6 +35,7 @@ from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIAB
 from .drawing import departure_key, normalize_drawing
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
 from .pull_request import api_break_reason, is_reject_reason
+from .refusal import OutputRefusal, RefusalRule
 from .task import (
     INTEGRATION,
     CopyCategory,
@@ -569,6 +570,18 @@ class Part(BaseModel):
         "navigation, or behind a flag, and where. With no edges it must hold if this part "
         "lands alone, in any order among its siblings; a guard that waits for a sibling is "
         "an edge with a reason"
+    )
+
+
+class DefinitionSize(PlanSize):
+    """The definition sizer's answer (GH-999): `PlanSize` plus the `parts` it cuts the task into,
+    empty unless it judges the task clearly over the size budget. Shape only: whether the parts
+    are acceptable is `early_parts_check`'s call."""
+
+    parts: list[Part] = Field(
+        default_factory=list,
+        description="Empty unless the task is clearly over the size budget: then the parts it "
+        "is cut into, each quoting verbatim, as `>` blocks, the PRD jobs and screens it covers",
     )
 
 
@@ -1345,10 +1358,71 @@ def parts_check(
     try:
         _migration_check(parts)
     except ValueError as refusal:
-        refusals.append(str(refusal))
+        refusals.append((None, "", str(refusal)))
+    if refusals:
+        # One message for the retry; the rule and field are the first entry that has a rule.
+        joined = "; ".join(text for _, _, text in refusals)
+        for rule, field, _ in refusals:
+            if rule is not None:
+                raise OutputRefusal(rule, field, joined)
+        raise ValueError(joined)
+    _size_pass(parts, ratio)
+
+
+def _quote_blocks(body: str) -> list[str]:
+    """The `>` blocks of a body: each run of consecutive lines whose first non-blank character
+    is `>`, with one leading `>` and the space after it stripped from every line and the lines
+    joined by a space, then whitespace-collapsed. A block empty after collapsing is dropped."""
+    blocks: list[list[str]] = []
+    previous_quoted = False
+    for line in body.splitlines():
+        text = line.lstrip()
+        quoted = text.startswith(">")
+        if quoted:
+            text = text[1:]
+            if text.startswith(" "):
+                text = text[1:]
+            if not previous_quoted:
+                blocks.append([])
+            blocks[-1].append(text)
+        previous_quoted = quoted
+    collapsed = (" ".join(" ".join(block).split()) for block in blocks)
+    return [block for block in collapsed if block]
+
+
+def early_parts_check(
+    parts: list[dict[str, Any]],
+    issue: int,
+    prd_text: str,
+    ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
+) -> None:
+    """The one judge of the parts of an early split (GH-999): `parts_check(parts, ratio)` first,
+    which raises on its own; then, for each part in order, `part <n>` is refused (a) when no
+    `>` block of its body is a substring of `prd_text`, and (b) when its body has no `#<issue>`
+    (`#10` is not found inside `#100`). Every refusal of every part is raised as one
+    `ValueError`, joined with `; `, so one retry shows them all.
+
+    A block is a run of consecutive lines whose first non-blank character is `>`; one leading
+    `>` and the space after it are stripped from each line and the lines are joined by a space.
+    Both sides have their whitespace collapsed (`' '.join(text.split())`), so line breaks and
+    spacing do not matter; case does, exactly, and Markdown is not stripped. A block empty after
+    collapsing does not count. The check is loose by design: one real block makes a body pass
+    (a), whatever else it says."""
+    parts_check(parts, ratio)
+    prd = " ".join(prd_text.split())
+    pattern = re.compile(rf"#{issue}(?!\d)")
+    refusals: list[str] = []
+    for number, part in enumerate(parts, 1):
+        body = part["body"]
+        if not any(block in prd for block in _quote_blocks(body)):
+            refusals.append(
+                f"part {number} quotes nothing of the PRD: quote verbatim, as `>` blocks, "
+                "the jobs and screens it covers"
+            )
+        if pattern.search(body) is None:
+            refusals.append(f"part {number} does not reference the original issue #{issue}")
     if refusals:
         raise ValueError("; ".join(refusals))
-    _size_pass(parts, ratio)
 
 
 def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
@@ -1362,31 +1436,46 @@ def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
     )
 
 
-def _reason_pass(parts: list[dict[str, Any]]) -> list[str]:
+def _reason_pass(parts: list[dict[str, Any]]) -> list[tuple[RefusalRule | None, str, str]]:
     """Every refusal of the reasons and `overlap_risk` of the parts, in part order, then
-    field order: one retry shows all of them."""
-    refusals: list[str] = []
+    field order: one retry shows all of them. Each is its rule (`None` when none claims it
+    yet), the field path it names and its text."""
+    refusals: list[tuple[RefusalRule | None, str, str]] = []
     for number, part in enumerate(parts, 1):
         edges = len(part["depends_on"])
         reasons = part.get("depends_on_reasons", [])
         if len(reasons) != edges:
             refusals.append(
-                f"part {number} has {edges} depends_on and {len(reasons)} depends_on_reasons: "
-                + _edge_fix(part, edges, len(reasons))
+                (
+                    None,
+                    "",
+                    f"part {number} has {edges} depends_on and {len(reasons)} depends_on_reasons: "
+                    + _edge_fix(part, edges, len(reasons)),
+                )
             )
         for index, reason in enumerate(reasons):
-            refusal = plan_view.part_line_refusal(
+            found = plan_view.part_line_cause(
                 number, f"depends_on_reasons[{index}]", reason, may_be_empty=False
             )
-            if refusal:
-                refusals.append(f"{refusal}: one plain line naming what the other part creates")
+            if found:
+                cause, words = found
+                text = f"{words}: one plain line naming what the other part creates"
+                if cause == "too_long":
+                    field = f"parts[{number - 1}].depends_on_reasons[{index}]"
+                    refusals.append(("depends_on_reason_too_long", field, text))
+                else:
+                    refusals.append((None, "", text))
         refusal = plan_view.part_line_refusal(
             number, "overlap_risk", part.get("overlap_risk", ""), may_be_empty=True
         )
         if refusal:
             refusals.append(
-                f"{refusal}: one plain line naming the files another independent part also "
-                "touches, or empty"
+                (
+                    None,
+                    "",
+                    f"{refusal}: one plain line naming the files another independent part "
+                    "also touches, or empty",
+                )
             )
     return refusals
 
@@ -1400,15 +1489,17 @@ def _size_pass(parts: list[dict[str, Any]], ratio: size_budget.Ratio) -> None:
     from .rules import estimate_fits
 
     refusals = []
+    first_over = None
     for number, part in enumerate(parts, 1):
         size = declared_size(part)
         if size is not None and not estimate_fits(0.0, 0, None, size, ratio):
+            first_over = number if first_over is None else first_over
             refusals.append(
                 f"part {number} does not fit the size budget: "
                 + size_budget.over_text(size, ratio, "part")
             )
-    if refusals:
-        raise ValueError("; ".join(refusals))
+    if first_over is not None:
+        raise OutputRefusal("part_over_budget", f"parts[{first_over - 1}]", "; ".join(refusals))
 
 
 def _migration_check(parts: list[dict[str, Any]]) -> None:
@@ -1792,7 +1883,11 @@ def plan_check_for(
             _light_check(data, path, path_label)
         files, declared = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
-            raise ValueError("estimated_files must be at least one file: every task changes one")
+            raise OutputRefusal(
+                "estimated_files_empty",
+                "estimated_files",
+                "estimated_files must be at least one file: every task changes one",
+            )
         # A floor never refuses a plan: the system raises the figure and fit is judged once,
         # on it (GH-529).
         size = floor_size(data)
@@ -1811,18 +1906,24 @@ def plan_check_for(
                     "subtasks and no parts"
                 )
             if fits:
-                raise ValueError(
+                raise OutputRefusal(
+                    "parts_when_fits",
+                    "parts",
                     f"{words} fits: write subtasks "
-                    "and no parts; a task is split only when it does not fit"
+                    "and no parts; a task is split only when it does not fit",
                 )
             return
         if not fits and not fit_waived and not at_cap:
-            raise ValueError(
+            raise OutputRefusal(
+                "estimate_below_spent_floor"
+                if raised is not None and raised.cause == "spent"
+                else "estimate_does_not_fit",
+                "estimated_cost_usd",
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
                 "at least two tasks, each a task of its own, and no subtasks. "
                 f"{_size_words(fit, size_ratio)}"
-                f"{SPLIT_NOT_WAIVED}"
+                f"{SPLIT_NOT_WAIVED}",
             )
         if plan_shape != DEFAULT_PLAN_SHAPE:
             _single_check(subtasks, data.get("integration") or "")

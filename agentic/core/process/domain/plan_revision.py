@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .task import INTEGRATION, Subtask
+from .task import INTEGRATION, Subtask, TaskState
 
 # What makes a subtask "the same" across a re-plan: the fields a plan writes about it.
 _PLANNED = ("brief", "seams", "depends_on", "screens")
@@ -29,6 +29,33 @@ def pending(item: Mapping[str, Any]) -> Subtask:
     if item.get("screens"):
         built["screens"] = item["screens"]
     return built
+
+
+def revising(state: TaskState) -> bool:
+    """Whether this plan call revises the plan the task already has (GH-591): subtasks exist and
+    a promotion re-planned the task. Anything else is a first plan, byte for byte as before."""
+    return bool(state.get("subtasks")) and bool(state.get("promotion"))
+
+
+def revised_from(state: TaskState) -> dict[str, Subtask] | None:
+    """The subtasks a revising plan call starts from, `None` for a first plan."""
+    return dict(state["subtasks"]) if revising(state) else None
+
+
+def written_subtasks(
+    revising: Mapping[str, Subtask] | None, raw: Sequence[Mapping[str, Any]]
+) -> dict[str, Subtask]:
+    """The `subtasks` a plan call writes from the plan's raw ones: a first plan (`revising` is
+    `None`) builds each one `pending`; a promoted task revises the plan it has (GH-591), so only
+    the changed and the new subtasks are written, an unchanged one keeping its state and
+    `reviewed_head`. Pure; the one place a plan's subtasks are built."""
+    if revising is None:
+        return {s["id"]: pending(s) for s in raw}
+    return revise(
+        revising,
+        raw,
+        approved_work=any(v.get("status") == "approved" for v in revising.values()),
+    )
 
 
 def revise(

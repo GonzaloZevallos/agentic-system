@@ -603,3 +603,79 @@ def test_the_status_exceptions_still_build_from_a_message_alone():
     assert TrackerTransient("m").status is None
     assert TrackerRefused("m").status is None
     assert TrackerRefused("m", status=404).status == 404
+
+
+# --- the reset a rate limit carries (GH-1031) ----------------------------------------------
+
+
+def _reset_json(reset):
+    return json.dumps({"resources": {"core": {"remaining": 0, "reset": reset}}})
+
+
+def test_a_reset_over_the_cap_carries_the_instant_it_read():
+    from datetime import UTC, datetime
+
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    run = _script(_failed(RATE_LIMITED), _reset_json(1100))
+    call, _ = _retrying(run, clock, cap=60)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at == datetime.fromtimestamp(1100, UTC)
+    assert raised.value.resets_at.utcoffset().total_seconds() == 0
+    assert clock.sleeps == []
+
+
+def test_exhausted_rate_limited_attempts_carry_the_last_reset_read():
+    from datetime import UTC, datetime
+
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    run = _script(
+        _failed(RATE_LIMITED),
+        _reset_json(1010),
+        _failed(RATE_LIMITED),
+        _reset_json(1030),
+        _failed(RATE_LIMITED),
+    )
+    call, _ = _retrying(run, clock)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at == datetime.fromtimestamp(1030, UTC)
+    reads = [c for c in run.calls if c[1:] == ["api", "rate_limit"]]
+    assert len(reads) == 2
+    assert len(run.calls) == 5
+
+
+def test_a_stopped_rate_limit_wait_carries_no_reset():
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    stop = _Stop(after=1, clock=clock)
+    run = _script(_failed(RATE_LIMITED), _reset_json(1050), "never")
+    call, _ = _retrying(run, clock, stop=stop)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at is None
+
+
+@pytest.mark.parametrize("read", ["rate limited", "bad json"])
+def test_a_failed_rate_limit_read_carries_no_reset(read):
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    unreadable = _failed(RATE_LIMITED) if read == "rate limited" else "not json"
+    run = _script(*[_failed(RATE_LIMITED), unreadable] * 2, _failed(RATE_LIMITED))
+    call, _ = _retrying(run, _Clock())
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at is None
+
+
+def test_rate_limited_builds_from_a_message_alone_and_keeps_status():
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    assert TrackerRateLimited("m").resets_at is None
+    assert TrackerRateLimited("m", status=403).status == 403
+    assert TrackerRateLimited("m", status=403).resets_at is None
