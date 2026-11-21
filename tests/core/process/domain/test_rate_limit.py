@@ -416,3 +416,103 @@ def test_cleared_on_close_is_a_no_op_without_the_field_and_never_writes_a_null_t
     saved = document.render(task.apply(state, closed))
     assert "rate_limit_paused_at" not in saved and "rate_limit_noticed_at" not in saved
     assert not any(name.startswith("rate_limit") for name in document.parse(saved))
+
+
+# -- the poller's side (GH-989 part 2): pure decisions over facts ----------------------------
+
+SYSTEM = ("Escalated: ", "Resumed by the poller: ")
+
+
+def _at(**delta: float) -> datetime:
+    return AT + timedelta(**delta)
+
+
+def test_pause_at_is_the_current_epochs_last_escalation_and_none_when_unreadable():
+    log = [
+        {"kind": "escalation", "value": "failure", "at": _at(hours=-5).isoformat()},
+        {"kind": "resumed", "at": _at(hours=-4).isoformat()},
+        {"kind": "failure", "value": "github_rate_limit", "section": ""},
+        {"kind": "escalation", "value": "failure", "at": AT_S},
+    ]
+    assert rate_limit.pause_at(_state(log)) == AT
+    assert rate_limit.pause_at(_state(log[:2])) is None
+    assert rate_limit.pause_at(_state([{"kind": "escalation", "value": "failure"}])) is None
+    for bad in ("not a date", "2026-11-20T12:00:00", 5):
+        assert (
+            rate_limit.pause_at(_state([{"kind": "escalation", "value": "x", "at": bad}])) is None
+        )
+
+
+def test_person_spoke_needs_a_non_system_comment_strictly_after_the_pause_and_the_last_system():
+    spoke = rate_limit.person_spoke
+    for seconds in (0, -1, -119, -121):
+        assert not spoke([("hi", _at(seconds=seconds))], AT, SYSTEM)
+    assert spoke([("hi", _at(seconds=1))], AT, SYSTEM)
+    assert not spoke([("Resumed by the poller: x", _at(seconds=1))], AT, SYSTEM)
+    after_system = [("hi", _at(seconds=5)), ("Resumed by the poller: x", _at(seconds=9))]
+    assert not spoke(after_system, AT, SYSTEM)
+    assert spoke([*after_system, ("hi again", _at(seconds=10))], AT, SYSTEM)
+
+
+def test_poller_retakes_counts_only_prefixed_comments_strictly_after_the_pause():
+    prefix = "Resumed by the poller: "
+    comments = [
+        (prefix + "a", _at(seconds=-1)),
+        (prefix + "b", AT),
+        (prefix + "c", _at(seconds=1)),
+        ("Auto-resumed: d", _at(seconds=2)),
+        (prefix + "e", _at(minutes=70)),
+    ]
+    assert rate_limit.poller_retakes(comments, AT, prefix) == 2
+
+
+def test_retake_due_at_follows_the_stated_reset_once_then_the_hourly_calendar():
+    due = rate_limit.retake_due_at
+    reset = _at(minutes=20)
+    target = reset + reset_offset("p")
+    assert due(reset, AT, 0, "p", target - timedelta(seconds=1)) is None or reset_offset("p") == (
+        timedelta(0)
+    )
+    assert due(reset, AT, 0, "p", target) == target
+    # A retake already made: the reset no longer governs, the hourly slot does.
+    assert due(reset, AT, 1, "p", _at(minutes=59)) is None
+    assert due(reset, AT, 1, "p", _at(minutes=60)) == _at(minutes=60)
+    assert due(None, AT, 0, "p", _at(minutes=60)) == _at(minutes=60)
+    assert due(None, AT, 12, "p", _at(hours=99)) is None
+
+
+def _paused_state(paused_at: datetime = AT) -> Any:
+    return _state(
+        [_fail("github_rate_limit"), _esc()],
+        escalated="GitHub rate limit outlasted the wait",
+        rate_limit_paused_at=paused_at.isoformat(),
+    )
+
+
+def test_persist_due_reads_the_document_alone_and_only_after_the_wait_max():
+    state = _paused_state()
+    assert not rate_limit.persist_due(state, AT + RATE_LIMIT_WAIT_MAX - timedelta(seconds=1))
+    assert rate_limit.persist_due(state, AT + RATE_LIMIT_WAIT_MAX)
+    assert not rate_limit.persist_due({**state, "escalated": ""}, AT + RATE_LIMIT_WAIT_MAX)
+    other = _state([_fail("other"), _esc()], escalated="x", rate_limit_paused_at=AT_S)
+    assert not rate_limit.persist_due(other, AT + RATE_LIMIT_WAIT_MAX)
+
+
+def test_notice_posted_matches_the_heading_strictly_after_the_pause_only():
+    heading = f"Escalated: {RATE_LIMIT_PERSISTED}"
+    assert rate_limit.notice_posted([(heading, _at(seconds=1))], AT, heading)
+    assert rate_limit.notice_posted([(heading + "\n\nmore", _at(seconds=1))], AT, heading)
+    assert not rate_limit.notice_posted([(heading, _at(seconds=-1))], AT, heading)
+    assert not rate_limit.notice_posted([(heading, AT)], AT, heading)
+    assert not rate_limit.notice_posted([("Escalated: something else", _at(hours=1))], AT, heading)
+
+
+def test_the_new_decisions_never_read_the_clock_tolerance():
+    source = Path(rate_limit.__file__).read_text()
+    assert "CLOCK_TOLERANCE" not in source
+
+
+def test_governing_reset_adds_the_products_offset_once_and_needs_a_stated_reset():
+    reset = _at(minutes=20)
+    assert rate_limit.governing_reset(reset, "p") == reset + reset_offset("p")
+    assert rate_limit.governing_reset(None, "p") is None
