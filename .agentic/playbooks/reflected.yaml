@@ -1526,3 +1526,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1015
+  GH-935@review:
+    cost_usd: 0.0662
+    decisions: 1

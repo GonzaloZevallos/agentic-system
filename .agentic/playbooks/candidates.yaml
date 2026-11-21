@@ -2214,3 +2214,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-21T02:40:16.605+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add an entry to a registry, cluster map or other ordered table, keep it in its sorted place and run the tests that cover that table, such as the docs tests, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Keep every tracker item's text at most 240 characters; put longer detail in the task document and link it, so the TechPlan output validates.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - human_decision
+  added_at: '2026-11-21T06:49:06.049+00:00'
