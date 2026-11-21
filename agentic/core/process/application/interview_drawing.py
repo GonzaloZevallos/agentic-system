@@ -22,12 +22,15 @@ from ..domain.task import TaskState
 from .run_role import Check
 
 
-def _refusing(reason_of: Callable[[dict[str, Any]], str | None]) -> Check:
-    """The one adapter of a reason (`str | None`) into the `ValueError` `run_role` retries on;
-    the text is the reason's own, nothing added."""
+def _refusing(reason_of: Callable[[dict[str, Any]], ValueError | str | None]) -> Check:
+    """The one adapter of a reason into the `ValueError` `run_role` retries on: a text becomes
+    a plain `ValueError`, and a refusal that already carries its rule (`OutputRefusal`) is
+    raised as it is. The text is the reason's own, nothing added."""
 
     def check(data: dict[str, Any]) -> None:
         reason = reason_of(data)
+        if isinstance(reason, ValueError):
+            raise reason
         if reason is not None:
             raise ValueError(reason)
 
@@ -53,7 +56,7 @@ def check_for(
     rejected = drawing_answer.rejected_keys(state)
     owed = drawing_answer.must_match(state, role.slug)
     return _refusing(
-        lambda data: drawing.interview_check(
+        lambda data: drawing.interview_refusal(
             visible,
             [DrawingCheck(**c) for c in data.get("drawing_checks", [])],
             [DrawingDeparture(**d) for d in data.get("departures", [])],

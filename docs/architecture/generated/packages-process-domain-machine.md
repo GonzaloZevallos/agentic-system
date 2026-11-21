@@ -20,6 +20,7 @@ graph TD
     m_domain__poller_units["domain.poller_units"]
     m_domain__rate_limit["domain.rate_limit"]
     m_domain__reaping["domain.reaping"]
+    m_domain__refusal["domain.refusal"]
     m_domain__refusal_retry["domain.refusal_retry"]
     m_domain__retakes["domain.retakes"]
     m_domain__scratch["domain.scratch"]

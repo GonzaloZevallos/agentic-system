@@ -104,6 +104,11 @@ sequenceDiagram
    (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
    `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
    `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
+   Excepción (GH-1004): si el dueño aceptó todas las desviaciones que declaró el plan retenido
+   (`plan_held`), con una decisión de solo veredictos y sin promoción, y el chequeo de
+   estimación que `resume.prepare` corre otra vez pasa, `resume_patch` restaura las subtareas
+   del plan retenido: `plan_due` en falso, estado `planned`, y la tarea sigue a `integrate`
+   sin planificar de nuevo (`drawing_answer.plan_stands_pre`).
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`

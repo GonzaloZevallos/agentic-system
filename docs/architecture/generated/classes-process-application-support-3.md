@@ -28,17 +28,15 @@ classDiagram
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
     class ports__LabelTimeline["LabelTimeline"]
+    class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
     class ports__ListMayBeCut["ListMayBeCut"]
     class ports__ListedPullRequest["ListedPullRequest"]
-    class ports__LoadReader["LoadReader"]
 ```
 
 ## Relaciones con otras páginas
 
-- [application: checks](classes-process-application-checks.md)
-  - `presubmit.Readiness` se asocia con `ports.LoadReader`
 - [application: reflection](classes-process-application-reflection.md)
   - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 4)](classes-process-application-support-4.md)

@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import Literal, Protocol
 
 from .design import Capture, Design
+from .refusal import OutputRefusal
 
 DRAWING_RULE = (
     "Anything visible that departs from an approved drawing is decided by the owner, "
@@ -232,6 +233,13 @@ def _lines_of(text: str) -> list[tuple[int, Verdict]]:
     return [(c.number, c.verdict) for c in _classify(text) if c.verdict is not None]
 
 
+def only_verdicts(text: str | None) -> bool:
+    """Whether a decision says nothing but verdicts: `None` or blank, or every non-empty line
+    is a whole verdict line (`_VERDICT_LINE`). Any other line, a quote or a fence included, is
+    the owner saying something else."""
+    return all(_VERDICT_LINE.match(line) for line in (text or "").splitlines() if line.strip())
+
+
 def verdicts(text: str) -> Verdicts:
     """The verdicts one comment gives: a number with two different verdicts in it is
     `contradicted` and not `given`; the same verdict twice counts once."""
@@ -357,9 +365,14 @@ class Resolved:
 
 @dataclass(frozen=True)
 class Refused:
-    """A cited drawing that does not resolve: `reason` is the text given back to the model."""
+    """A cited drawing that does not resolve: `reason` is the text given back to the model.
+    `cause` says why, as data: `undeclared` (the design does not declare it), `ambiguous`
+    (more than one listed drawing matches) or `invalid` (not a path at all). `source` is the
+    field path the caller said the citation came from, `""` when it said none."""
 
     reason: str
+    cause: Literal["undeclared", "ambiguous", "invalid"] | None = None
+    source: str = ""
 
 
 _CLOSE_MATCH_CUTOFF = 0.6
@@ -380,7 +393,7 @@ def _expected_form(prototype: str) -> str:
     return "cite the full path" if prototype == "." else f"cite the full path, {prototype}/<name>"
 
 
-def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
+def resolve(design: Design, cited: str, who: str, source: str = "") -> Resolved | Refused:
     """The only place that turns a cited drawing into its full path from the repo root, or says
     why it cannot. `who` is the subject of a refusal. In order: a capture image by its exact
     path; with no listing (`design.files` empty) the prefix rule (the prototype's own
@@ -388,7 +401,8 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
     path under the prototype, then the one listed file whose trailing path segments equal the
     cited ones (a bare name, or a path relative to the prototype's parent). Two or more such
     files are a refusal listing up to three, never a pick. A refusal always names the expected
-    form; the closest listed file comes only from `design.files`, never from model text."""
+    form; the closest listed file comes only from `design.files`, never from model text. `source`
+    is the field path of the citation, given by the caller and only carried on a `Refused`."""
     prototype = posixpath.normpath(design.prototype)
     try:
         path = normalize_drawing(cited)
@@ -398,7 +412,7 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
             if prototype == "."
             else _expected_form(prototype)
         )
-        return Refused(f"{who} cites a drawing path that is not valid; {where}")
+        return Refused(f"{who} cites a drawing path that is not valid; {where}", "invalid", source)
     if any(path == capture.image for capture in design.captures):
         return Resolved(path)
     if not design.files:
@@ -406,7 +420,9 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
             return Resolved(path)
         return Refused(
             f"{who} cites {_echo(cited)}, which the design does not declare; "
-            f"{_expected_form(prototype)}"
+            f"{_expected_form(prototype)}",
+            "undeclared",
+            source,
         )
     images = {capture.image for capture in design.captures}
     listed = tuple(f for f in design.files if f not in images)
@@ -425,7 +441,9 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
         extra = f" (+{more} more)" if more > 0 else ""
         return Refused(
             f"{who} cites {_echo(cited)}, which matches more than one drawing: "
-            f"{shown}{extra}; {_expected_form(prototype)}"
+            f"{shown}{extra}; {_expected_form(prototype)}",
+            "ambiguous",
+            source,
         )
     refusal = (
         f"{who} cites {_echo(cited)}, which the design does not declare; "
@@ -440,7 +458,90 @@ def resolve(design: Design, cited: str, who: str) -> Resolved | Refused:
     if close:
         closest = next(f for f in listed if posixpath.basename(f) == close[0])
         refusal += f", such as {closest}"
-    return Refused(refusal)
+    return Refused(refusal, "undeclared", source)
+
+
+def _unmapped(reason: str) -> OutputRefusal:
+    return OutputRefusal("unmapped", "", reason)
+
+
+def _drawing_refusal(found: Refused) -> OutputRefusal:
+    if found.cause == "undeclared":
+        return OutputRefusal("drawing_path_undeclared", found.source, found.reason)
+    return _unmapped(found.reason)
+
+
+def interview_refusal(
+    visible: Sequence[int],
+    checks: Sequence[CheckLike],
+    departures: Sequence[DepartureLike],
+    declared: Design,
+    rejected: Mapping[str, int],
+    must_match: Mapping[str, int],
+) -> OutputRefusal | None:
+    """Why the interviewer's drawing checks are refused, `None` when they hold. `rejected` and
+    `must_match` map a departure key to its number. A reason names `Q<n>`, a ref or `Drawing
+    #n`, never a key. The refusal carries its rule and field path where the table names one: a
+    question visible with no check, a drawing the design does not declare (on a check, or on a
+    departure); any other reason is `unmapped` with no field."""
+    for n in sorted(set(visible)):
+        ref = question_ref(n)
+        if not any(c.subject == "question" and c.ref == ref for c in checks):
+            return OutputRefusal(
+                "visible_without_drawing_check",
+                "drawing_checks",
+                f"{ref} is marked visible but has no drawing check",
+            )
+    departing: set[str] = set()
+    matched: set[str] = set()
+    keyed: list[tuple[CheckLike, str]] = []
+    for index, check in enumerate(checks):
+        resolved: str | None = None
+        if check.drawing is not None:
+            found = resolve(declared, check.drawing, check.ref, f"drawing_checks[{index}].drawing")
+            if isinstance(found, Refused):
+                return _drawing_refusal(found)
+            resolved = found.path
+        if check.verdict not in ("matches", "departs"):
+            continue
+        if resolved is None or check.element is None:
+            return _unmapped(
+                f"{check.ref} says {check.verdict} without naming the drawing and the element"
+            )
+        try:
+            key = departure_key(resolved, check.element)
+        except ValueError:
+            return _unmapped(f"{check.ref} cites an element that is empty")
+        (departing if check.verdict == "departs" else matched).add(key)
+        keyed.append((check, key))
+    raised: set[str] = set()
+    for index, departure in enumerate(departures):
+        who = f"a departure of {_echo(departure.drawing)}"
+        found = resolve(declared, departure.drawing, who, f"departures[{index}].drawing")
+        if isinstance(found, Refused):
+            return _drawing_refusal(found)
+        try:
+            key = departure_key(found.path, departure.element)
+        except ValueError:
+            return _unmapped(f"{who} cites an element that is empty")
+        raised.add(key)
+        if key not in departing:
+            return _unmapped(f"{who} has no departs check")
+    for check, key in keyed:
+        if check.verdict == "departs" and key not in raised:
+            return _unmapped(f"{check.ref} says departs but carries no departure for it")
+    for key, number in rejected.items():
+        if key in departing:
+            return _unmapped(
+                f"Drawing #{number} was rejected by the owner and cannot come back as a "
+                "departure: make it match the drawing or leave it out"
+            )
+    for key, number in must_match.items():
+        if key not in matched:
+            return _unmapped(
+                f"Drawing #{number} was rejected and must now match: add a matches check for it"
+            )
+    return None
 
 
 def interview_check(
@@ -451,59 +552,10 @@ def interview_check(
     rejected: Mapping[str, int],
     must_match: Mapping[str, int],
 ) -> str | None:
-    """Why the interviewer's drawing checks are refused, `None` when they hold. `rejected` and
-    `must_match` map a departure key to its number. A reason names `Q<n>`, a ref or `Drawing
-    #n`, never a key."""
-    for n in sorted(set(visible)):
-        ref = question_ref(n)
-        if not any(c.subject == "question" and c.ref == ref for c in checks):
-            return f"{ref} is marked visible but has no drawing check"
-    departing: set[str] = set()
-    matched: set[str] = set()
-    keyed: list[tuple[CheckLike, str]] = []
-    for check in checks:
-        resolved: str | None = None
-        if check.drawing is not None:
-            found = resolve(declared, check.drawing, check.ref)
-            if isinstance(found, Refused):
-                return found.reason
-            resolved = found.path
-        if check.verdict not in ("matches", "departs"):
-            continue
-        if resolved is None or check.element is None:
-            return f"{check.ref} says {check.verdict} without naming the drawing and the element"
-        try:
-            key = departure_key(resolved, check.element)
-        except ValueError:
-            return f"{check.ref} cites an element that is empty"
-        (departing if check.verdict == "departs" else matched).add(key)
-        keyed.append((check, key))
-    raised: set[str] = set()
-    for departure in departures:
-        who = f"a departure of {_echo(departure.drawing)}"
-        found = resolve(declared, departure.drawing, who)
-        if isinstance(found, Refused):
-            return found.reason
-        try:
-            key = departure_key(found.path, departure.element)
-        except ValueError:
-            return f"{who} cites an element that is empty"
-        raised.add(key)
-        if key not in departing:
-            return f"{who} has no departs check"
-    for check, key in keyed:
-        if check.verdict == "departs" and key not in raised:
-            return f"{check.ref} says departs but carries no departure for it"
-    for key, number in rejected.items():
-        if key in departing:
-            return (
-                f"Drawing #{number} was rejected by the owner and cannot come back as a "
-                "departure: make it match the drawing or leave it out"
-            )
-    for key, number in must_match.items():
-        if key not in matched:
-            return f"Drawing #{number} was rejected and must now match: add a matches check for it"
-    return None
+    """Why the interviewer's drawing checks are refused as text, `None` when they hold:
+    `interview_refusal`'s detail."""
+    refusal = interview_refusal(visible, checks, departures, declared, rejected, must_match)
+    return None if refusal is None else refusal.detail
 
 
 _FLAG = re.compile(r"^([0-9]+)=(accept|reject)$")

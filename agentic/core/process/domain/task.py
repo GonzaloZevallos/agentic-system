@@ -40,6 +40,8 @@ from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .refusal import OutputRefusal as OutputRefusal
+from .refusal import RefusalRule as RefusalRule
 from .size_budget import ActualSize, PlanSize
 from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
 from .task_path import Path as TaskPath
@@ -150,40 +152,6 @@ FailureReason = Literal[
     "render",
     "other",
 ]
-# The closed set of ids a refusal of a role's structured output carries (GH-1011): decided
-# only at the raise site in `run_role._attempt`, never read back from an error's text.
-# `output_missing` the role delivered no structured output, `schema_invalid` the schema's
-# own validation refused it, `unmapped` a `ValueError` no rule claims yet; the rest are the
-# plan and drawing refusals a check raises as an `OutputRefusal`.
-RefusalRule = Literal[
-    "preview_slice_missing",
-    "visible_without_drawing_check",
-    "drawing_path_undeclared",
-    "parts_when_fits",
-    "estimate_does_not_fit",
-    "part_over_budget",
-    "depends_on_reason_too_long",
-    "estimated_files_empty",
-    "estimate_below_spent_floor",
-    "output_missing",
-    "schema_invalid",
-    "unmapped",
-]
-
-
-class OutputRefusal(ValueError):
-    """A refusal of a role's delivery that names its own rule. `str(exc)` is `detail`, so
-    the error text a check raised stays what it was. `field` is a claim: `run_role.
-    refusal_field` keeps it only when the role's schema declares it."""
-
-    def __init__(self, rule: RefusalRule, field: str, detail: str, *, value: object = None):
-        super().__init__(detail)
-        self.rule = rule
-        self.field = field
-        self.detail = detail
-        # What the role wrote in `field`, when the raise site has it (GH-1017): shown back to
-        # the model once, cleaned and cut by `refusal_retry.clean_value`. `None` is no value.
-        self.value = value
 
 
 class RefusalRepair(TypedDict):
@@ -470,7 +438,8 @@ def add_assumptions(existing: list[AssumptionRow], new: list[AssumptionRow]) -> 
     return list(joined.values())
 
 
-TrackerTarget = Literal["comment", "label"]
+# `issue` (GH-1011) is the format-refusal issue the filing built in #1030 opens or comments on.
+TrackerTarget = Literal["comment", "label", "issue"]
 TrackerFailureClass = Literal["timed_out", "unreachable", "transient", "rate_limited", "refused"]
 TRACKER_FAILURES_MAX = 10
 
@@ -507,6 +476,33 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+class FormatIssueRecord(TypedDict):
+    """The issue filed for one refusal rule (GH-1011): the rule, the issue's URL and when
+    (ISO UTC). One per rule in `TaskState.format_issue`, read only through `format_issue_for`."""
+
+    rule: RefusalRule
+    url: str
+    at: str
+
+
+def add_format_issues(
+    existing: list[FormatIssueRecord], new: list[FormatIssueRecord]
+) -> list[FormatIssueRecord]:
+    """The records of `existing` and `new` as one list: one entry per rule, the first write
+    wins and the first-write order is kept, so two simultaneous writers merge to one record
+    per rule. The only way `format_issue` is ever written."""
+    joined: dict[str, FormatIssueRecord] = {}
+    for record in (*existing, *new):
+        joined.setdefault(record["rule"], record)
+    return list(joined.values())
+
+
+def format_issue_for(entries: Sequence[FormatIssueRecord], rule: str) -> FormatIssueRecord | None:
+    """The record of `rule` in `entries`, `None` when none was filed. The only read of
+    `TaskState.format_issue`: no module indexes the list itself."""
+    return next((r for r in entries if r["rule"] == rule), None)
 
 
 class RefusalNoted(TypedDict):
@@ -1174,6 +1170,11 @@ class Failure(TypedDict):
     # `run_role.refusal_field`; never the value. Same conditions as `rule`, and absent when
     # the refusal names no declared field.
     field: NotRequired[str]
+    # The size of the refused value (a string's length, a list's or dict's item count) at the
+    # same top-level key as `field`, from `format_issue.value_len` on the raw structured output,
+    # never the value. Written by the refusal raise site built in #1030 under the same
+    # conditions as `rule`, absent when unknown (never `None`); no row carries it before then.
+    value_len: NotRequired[int]
     # What the role wrote in `field`, as `refusal_retry.clean_value` leaves it (one line, at
     # most 240 characters), so the retry can show it back (GH-1017). Same conditions as `rule`,
     # and absent when the refusal has no value to show (a missing field, `output_missing`). It
@@ -1871,6 +1872,21 @@ class EstimateRecord(TypedDict):
     files: int
     # The Tech Lead's own figure, written only when the system raised `cost_usd` above it.
     declared_usd: NotRequired[float]
+
+
+class PlanHeld(TypedDict):
+    """The plan the plan node dropped when it escalated on drawing departures the owner has not
+    answered (GH-1004), kept whole so the answer's re-plan can start from it.
+
+    `estimate` is the one figure that counts: exactly the estimate the same patch stored, after
+    the floor and the lift. `plan["estimated_cost_usd"]` is kept only because the plan dict is
+    stored whole. Part 2 restores `estimate` from this record, never runs `_floored` again on
+    the stored plan, and clears the record; this part never clears it."""
+
+    plan: dict[str, Any]
+    departures: list[dict[str, Any]]
+    round: int
+    estimate: EstimateRecord
 
 
 class EstimateRevision(TypedDict):
@@ -2688,6 +2704,10 @@ class TaskState(TaskInput, total=False):
     # per `(target, cls)`, at most ten, never `gh`'s text. Read with
     # `.get("tracker_failures", [])`: a document written before this field has none.
     tracker_failures: Annotated[list[TrackerFailureRecord], add_tracker_failures]
+    # The issue filed for each refusal rule (GH-1011), `add_format_issues`: one record per
+    # rule, the first write wins. Read with `format_issue_for`, never by indexing the list; a
+    # document written before this field has none. Nothing writes it before #1030.
+    format_issue: Annotated[list[FormatIssueRecord], add_format_issues]
     # The restorations of an archived task (GH-406), `add_restorations`: one row per archive
     # it was brought back from, each with the `landing` length at that moment. Read with
     # `.get("restorations", [])` -- only through `rules.live_landing` and `rules.restored`;
@@ -2729,6 +2749,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The plan held while the owner answers the plan's own drawing departures (GH-1004,
+    # `PlanHeld`). Written only by the plan node's escalation of open plan-stage departures; no
+    # route reads it yet. `document.render` writes it explicitly, after `drawing_escalation`.
+    plan_held: Annotated[PlanHeld | None, last]
     # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
@@ -2830,6 +2854,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_format_issues:
+            held_rules = {r["rule"] for r in old}
+            if fresh_issues := [
+                r for r in add_format_issues([], value) if r["rule"] not in held_rules
+            ]:
+                patch[key] = fresh_issues
         elif reducer is add_tracker_actions:
             if add_tracker_actions(old, value) != old:
                 patch[key] = value
