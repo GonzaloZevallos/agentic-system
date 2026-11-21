@@ -167,6 +167,28 @@ FIXTURES: dict[str, object] = {
     "owner_decision_unbuilt": NOW,
     "owner_decision_seen": NOW,
     "owner_decision_route": "developer",
+    "rate_limit_paused_at": NOW,
+    "rate_limit_noticed_at": "2026-11-18T11:00:00Z",
+    "format_issue": [
+        {"rule": "parts_when_fits", "url": "https://github.com/acme/shop/issues/9", "at": NOW}
+    ],
+    "early_split": [
+        {
+            "verdict": "split",
+            "cause": "over",
+            "at": NOW,
+            "hand_files": 12,
+            "hand_lines": 340,
+            "test_lines": 90,
+            "estimated_cost_usd": 4.5,
+        }
+    ],
+    "plan_held": {
+        "plan": {"summary": "Two parts"},
+        "departures": [{"drawing": "home", "element": "cta"}],
+        "round": 1,
+        "estimate": {"cost_usd": 3.5, "files": 4},
+    },
     "spec_cause": "contradiction",
     "spec_refusal": {"cause": "spec_invalid", "detail": ["slice"]},
     "spec": _SPEC_PATCH["spec"],
