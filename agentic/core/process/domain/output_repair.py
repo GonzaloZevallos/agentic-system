@@ -79,7 +79,11 @@ def parts_dropped_when_fits(
     raw: Mapping[str, object], context: RepairContext
 ) -> dict[str, Any] | None:
     """`raw` without `parts` (`parts_when_fits`), only when `subtasks` is a non-empty list:
-    a plan with neither is not a plan that fits, and the refusal stands."""
+    a plan with neither is not a plan that fits, and the refusal stands.
+
+    Known gap (GH-1016 review): `plan_check_for` refuses `parts` and `subtasks` together with a
+    plain `ValueError` before it raises `parts_when_fits`, so through the real plan check this
+    repair is not reached today; it applies to any check that raises the rule with subtasks."""
     subtasks = raw.get("subtasks")
     if "parts" not in raw or not isinstance(subtasks, list) or not subtasks:
         return None
