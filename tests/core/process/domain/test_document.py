@@ -2574,6 +2574,80 @@ def test_an_owner_decision_restart_settled_row_round_trips():
     assert _round_trip(state)["restart_settled"] == [row]
 
 
+def _held() -> dict[str, object]:
+    # Two equal rows, never one object twice: yaml would write the second as an anchor.
+    return {
+        "plan": {
+            "estimated_cost_usd": 12.5,
+            "summary": "Plan ñandú",
+            "drawing_departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        },
+        "departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        "round": 2,
+        "estimate": {"cost_usd": 12.5, "files": 3, "declared_usd": 8.25},
+    }
+
+
+def test_a_held_plan_renders_after_the_escalation_and_round_trips():
+    state = {
+        **_departure_base(),
+        "drawing_escalation": {"round": 2, "numbers": [1], "cause": "drawing_departure"},
+        "plan_held": _held(),
+    }
+    text = document.render(state)
+    assert text.split("drawing_escalation:\n", 1)[1].split("subtasks: {}", 1)[0] == (
+        "  round: 2\n  numbers:\n  - 1\n  cause: drawing_departure\n"
+        "plan_held:\n"
+        "  plan:\n"
+        "    estimated_cost_usd: 12.5\n"
+        "    summary: Plan ñandú\n"
+        "    drawing_departures:\n"
+        "    - key: hero\n"
+        "      reason: añadí un héroe\n"
+        "  departures:\n"
+        "  - key: hero\n"
+        "    reason: añadí un héroe\n"
+        "  round: 2\n"
+        "  estimate:\n"
+        "    cost_usd: 12.5\n"
+        "    files: 3\n"
+        "    declared_usd: 8.25\n"
+    )
+    parsed = document.parse(text)
+    assert parsed["plan_held"] == _held()
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+@pytest.mark.parametrize("extra", [{}, {"plan_held": None}])
+def test_a_state_without_a_held_plan_writes_the_frontmatter_it_always_did(extra):
+    text = document.render({**_departure_base(), **extra})
+    assert text == document.render(_departure_base())
+    assert "plan_held" not in text
+    assert "plan_held" not in document.parse(text)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "text",
+        {**_held(), "plan": "x"},
+        {**_held(), "departures": "x"},
+        {**_held(), "departures": ["x"]},
+        {**_held(), "round": "2"},
+        {**_held(), "round": True},
+        {**_held(), "estimate": {"files": 3}},
+        {**_held(), "estimate": {"cost_usd": "9", "files": 3}},
+        {**_held(), "estimate": 9},
+    ],
+)
+def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\nplan_held: " + json.dumps(bad) + "\n---\n", 1
+    )
+    assert "plan_held" in stored
+    assert "plan_held" not in document.parse(stored)
+
+
 @pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
 def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
     """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
