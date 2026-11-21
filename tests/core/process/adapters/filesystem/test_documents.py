@@ -604,3 +604,39 @@ def test_a_ci_escalation_entry_with_its_timing_and_jobs_round_trips_unchanged(tm
     assert loaded["pause_log"] == log
     documents.save(loaded)
     assert documents.load("T-1")["pause_log"] == log
+
+
+def test_format_issue_round_trips_through_the_document_and_resume(tmp_path):
+    """GH-1011: the records survive `save`/`load`, `format_issue_for` finds each url on the
+    resumed state, whole rows only are kept, and an old document without `value_len` loads."""
+    from agentic.core.process.application.resume import state_from
+    from agentic.core.process.domain.task import format_issue_for
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    at = "2026-11-20T00:00:00+00:00"
+    failure = {"role": "r", "attempt": 1, "error": "e", "cost_usd": 0.0, "session_id": "s"}
+    state = {
+        "id": "T-9",
+        "title": "t",
+        "description": "d",
+        "sections": {},
+        "failures": [failure],
+        "format_issue": [
+            {"rule": "unmapped", "url": "https://github.com/o/r/issues/3", "at": at},
+            {"rule": "output_missing", "url": "https://github.com/o/r/issues/4", "at": at},
+            {"rule": "not_a_rule", "url": "https://github.com/o/r/issues/5", "at": at},
+            {"rule": "schema_invalid", "url": 7, "at": at},
+            {"rule": "part_over_budget", "url": "https://github.com/o/r/issues/6", "at": ""},
+        ],
+    }
+    documents.save(state)
+    loaded = documents.load("T-9")
+    assert loaded is not None
+    assert [r["rule"] for r in loaded["format_issue"]] == ["unmapped", "output_missing"]
+    resumed = state_from(loaded)
+    unmapped = format_issue_for(resumed["format_issue"], "unmapped")
+    missing = format_issue_for(resumed["format_issue"], "output_missing")
+    assert unmapped is not None and unmapped["url"].endswith("/3")
+    assert missing is not None and missing["url"].endswith("/4")
+    assert format_issue_for(resumed["format_issue"], "schema_invalid") is None
+    assert "value_len" not in resumed["failures"][0]

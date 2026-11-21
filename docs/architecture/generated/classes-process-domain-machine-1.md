@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -35,12 +36,13 @@ classDiagram
     class exempt_queue__ExemptFacts["ExemptFacts"]
     class exempt_queue__ExemptRank["ExemptRank"]
     class exempt_queue__ExemptWait["ExemptWait"]
+    class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
+    class refusal__OutputRefusal["OutputRefusal"]
     class retakes__Budget["Budget"]
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]
     class scratch__Orphans["Orphans"]
-    class scratch__Owner["Owner"]
 ```

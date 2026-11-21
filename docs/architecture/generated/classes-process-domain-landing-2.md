@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -47,5 +48,5 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

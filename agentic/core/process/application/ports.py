@@ -18,12 +18,13 @@ from typing import Any, Literal, Protocol
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
-from ..domain.design import Design, NotReady
+from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.playbook_land import LandAttempt
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
@@ -55,14 +56,20 @@ from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
     DependencyState,
+    Failure,
     FailureReason,
     FlakeRecord,
+    FormatIssueRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRepair,
+    RefusalRule,
     TaskInput,
     TaskState,
     TrackerFailure,
+    TrackerFailureClass,
+    TrackerFailureRecord,
 )
 from .limits import RunLimits
 
@@ -191,6 +198,12 @@ class AttemptFailed(Exception):
         space: SpaceReading | None = None,
         enospc: bool = False,
         check_runs: CheckRuns | None = None,
+        rule: RefusalRule | None = None,
+        field: str = "",
+        value: str | None = None,
+        detail: str = "",
+        repairs: Sequence[RefusalRepair] = (),
+        value_len: int | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -239,6 +252,21 @@ class AttemptFailed(Exception):
         # The Developer's own check runs before this attempt broke (`RawResult.check_runs`);
         # empty at every raise site but the runner's own and `run_role._attempt`'s.
         self.check_runs = check_runs if check_runs is not None else CheckRuns()
+        # The refusal rule and the schema field it names (GH-1011), decided at the raise
+        # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
+        self.rule = rule
+        self.field = field
+        # What the role wrote in `field` and the refusal's own motive, both already cleaned by
+        # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
+        self.value = value
+        self.detail = detail
+        # The refusals this attempt repaired before the one that failed it (GH-1016): its own
+        # record, never another attempt's; empty at every other site.
+        self.repairs = list(repairs)
+        # The size of the refused value, measured by `run_role._refused` on the raw structured
+        # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
+        # at every other site and when the size is unknown.
+        self.value_len = value_len
 
 
 class Presubmit(Protocol):
@@ -331,6 +359,16 @@ class RoleRunner(Protocol):
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
     ) -> RawResult: ...
+
+
+class LandRecord(Protocol):
+    """The last landing attempt of a product's playbook PR, kept outside every checkout so it
+    survives a stage0 rotation. A record that is missing, unreadable or of another version
+    loads as `None`."""
+
+    def load(self, product: str) -> LandAttempt | None: ...
+
+    def save(self, product: str, attempt: LandAttempt) -> None: ...
 
 
 class TaskDocuments(Protocol):
@@ -673,6 +711,12 @@ class ProductStack(Protocol):
         product that has not handed the human a prototype yet -- never an error."""
         ...
 
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        """The files under `design.prototype` as the commit `revision` holds them, sorted.
+        Never raises: a whole-repo prototype, one over the cap or one git cannot read comes
+        back as a closed `cause` of the listing, never as git's text."""
+        ...
+
     def docs(self, revision: str) -> Docs | None:
         """The optional `docs` block (`core.knowledge`): the
         command that regenerates every generated doc artifact and the paths it owns, as the
@@ -871,6 +915,13 @@ class TrackerCallFailed(ValueError):
         self.status = status
 
 
+class HeldListMayBeCut(TrackerCallFailed):
+    """`Tracker.held_issues` returned a page of exactly `HELD_LIMIT` held issues, so the list
+    may be cut and a held issue could be past it (GH-839). Not a transport failure: it does not
+    clear on a retry, only when holds are released or `HELD_LIMIT` is raised. A
+    `TrackerCallFailed`, so a round that ends on one names the one class."""
+
+
 class TrackerTimedOut(TrackerCallFailed):
     """A `gh` call ran out of time (GH-266). Declared here so `application/` and `cli.py`
     can name it without importing an adapter. The message names the call and the bound,
@@ -894,7 +945,15 @@ class TrackerTransient(TrackerCallFailed):
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
-    bound, never stderr."""
+    bound, never stderr.
+
+    `resets_at` is the aware UTC instant `gh api rate_limit` stated (GH-1031): set when the
+    reset was over the cap or the attempts ran out after a reset was read, `None` when no
+    reset was read or the wait was stopped."""
+
+    def __init__(self, *args: object, status: int | None = None, resets_at: datetime | None = None):
+        super().__init__(*args, status=status)
+        self.resets_at = resets_at
 
 
 class TrackerRefused(ValueError):
@@ -1642,6 +1701,9 @@ class ListedPullRequest:
     body: str
     merge_commit: str
     branch: str
+    cross_repository: bool | None = None
+    """`True` for a pull request from a fork, `False` for one from this repository, `None`
+    when the tracker did not say (or an older caller built the value without it)."""
 
 
 @dataclass(frozen=True)
@@ -1859,6 +1921,12 @@ class Tracker(Protocol):
         a page today."""
         ...
 
+    def held_issues(self) -> frozenset[int]:
+        """The open issues labelled `HOLD_LABEL` (GH-839), one bounded `gh issue list`. Raises
+        `TrackerCallFailed` when the read fails or cannot be trusted: `HeldListMayBeCut` for a
+        page of exactly `HELD_LIMIT` rows, which may be a cut list."""
+        ...
+
     def issue_state(self, number: int) -> IssueState:
         """The structured facts `poll_plan`'s predicates read off one issue -- a launch
         candidate or a blocker alike (GH-137)."""
@@ -1881,14 +1949,65 @@ class Tracker(Protocol):
         cannot answer raises `ValueError` (`TrackerTimedOut` included), as every read."""
         ...
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         """Merges the pull request at `reference`, the URL `deliver` stored (the same key
         `pull_request` takes), only if its head is still `head_sha` (GH-178: the sha the
         automatic-merge decision was taken on, never "whatever is there now"), and returns
         the method used. Raises `MergeCallFailed` (a `ValueError`) when the tracker refuses
         -- the head moved, a check or a rule blocks it, the pull request is not open, the
-        reference is unreadable -- carrying the class of the step that failed."""
+        reference is unreadable -- carrying the class of the step that failed. `method`
+        `None` takes the first method the repository allows, as always; `"merge"` takes a
+        merge commit or nothing: a repository without them raises
+        `MergeCallFailed("no_merge_method")` and merges nothing."""
         ...
+
+
+@dataclass(frozen=True)
+class SystemRepo:
+    """The system's own repo as two reads and one write the verb needs: the `tracker` that
+    opens the issue and the `inbox` that lists the open ones. Built by the composition
+    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
+
+    tracker: Tracker
+    inbox: Inbox
+
+
+def tracker_failure_class(error: ValueError) -> TrackerFailureClass | None:
+    """The closed class of a `gh` failure by the type of the error, never by its text;
+    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
+    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
+    does not absorb."""
+    if isinstance(error, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(error, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(error, TrackerTransient):
+        return "transient"
+    if isinstance(error, TrackerRateLimited):
+        return "rate_limited"
+    if isinstance(error, TrackerRefused):
+        return "refused"
+    return None
+
+
+class FormatFiler(Protocol):
+    """Files, or comments on, the system's issue of a format refusal (GH-1011): the shape
+    `run_role` calls, declared here so `ports.py` never imports the class that implements it.
+    Never raises. Returns the record to keep (`None` when nothing was written) and the
+    `tracker_failures` rows of a write that did not land."""
+
+    def file(
+        self,
+        *,
+        task_id: str,
+        issue_number: int,
+        product: str,
+        role: str,
+        failures: Sequence[Failure],
+        existing: Sequence[FormatIssueRecord],
+    ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]: ...
 
 
 class LabelTimeline(Protocol):
@@ -2613,6 +2732,9 @@ class Ports:
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now
+    # Files or comments the issue of a format refusal in the system's repo (GH-1011). `None`
+    # files nothing, which is how every run went before it existed (dry-run, evaluation).
+    format_filing: FormatFiler | None = None
 
 
 class Stage0Store(Protocol):

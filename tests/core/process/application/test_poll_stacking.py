@@ -3,12 +3,15 @@ pair is landable, memoised per window. In-memory ports with counting wrappers: n
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 
 from agentic.core.process.application import landing, merge, poll
 from agentic.core.process.application.ports import IssueState, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
+from agentic.core.process.domain import landing_order
 from agentic.core.process.domain.task import VERDICT_UNLANDABLE, StackParent
 from tests.core.process.application.test_poll import _cfg, _Locks
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _HeldLocks, _ports
@@ -145,7 +148,11 @@ def test_the_poller_round_gives_its_children_one_memo(tmp_path):
     )
     assert found == []
     assert calls["issue_state"] == 1
-    assert any("stack_parent_unmerged" in line for line in lines)
+    # GH-838: a held child is never head, so the line says why it waits.
+    assert lines == [
+        f"agentic: poll: auto-merge #{n} -> waiting (unread, stacked parent unmerged) with no head"
+        for n in (5, 6)
+    ]
 
 
 def test_a_land_reads_the_parent_once_for_its_order_note_and_once_for_its_own_decision(tmp_path):
@@ -349,3 +356,67 @@ def test_a_failing_write_is_said_in_one_line_and_does_not_end_the_round(tmp_path
     lines = _round(ports, tmp_path)
     assert sum("stack_unfetchable not recorded" in line for line in lines) == 2
     assert any("auto-merge #5" in line for line in lines)
+
+
+# --- GH-838 part 2: `stack_held` of a landing-order member ---------------------------------------
+
+
+def _stack_member(ports, assessed, number: int = 5):
+    return poll._member(
+        ports,
+        None,
+        _Locks(),
+        f"GH-{number}",
+        number,
+        ports.documents.load(f"GH-{number}"),
+        assessed,
+    )
+
+
+def test_a_stacked_child_whose_parent_is_unmerged_is_a_held_member():
+    ports = _stacked(5)
+    assessed = _assess(ports)
+    assert assessed.facts.stack is not None
+    assert _stack_member(ports, assessed).stack_held is True
+
+
+def test_a_stacked_child_whose_ancestry_could_not_be_read_is_held():
+    ports = _stacked(5)
+    ports.workspace.ancestor_errors.add(PARENT)
+    assessed = _assess(ports)
+    assert assessed.facts.stack is not None
+    assessed = dataclasses.replace(
+        assessed,
+        facts=dataclasses.replace(
+            assessed.facts,
+            stack=dataclasses.replace(assessed.facts.stack, parent_in_upstream=None),
+        ),
+    )
+    assert _stack_member(ports, assessed).stack_held is True
+
+
+def test_a_task_with_no_stack_record_is_not_held_and_reads_nothing():
+    ports = _ports(5)
+    assessed = _assess(ports)
+    assert assessed.facts.stack is None
+    calls = _count(ports)
+    assert _stack_member(ports, assessed).stack_held is False
+    assert calls == {"issue_state": 0, "fetch_commit": 0, "is_ancestor": 0}
+
+
+def test_a_member_built_without_an_assessment_is_not_held():
+    ports = _stacked(5)
+    assert _stack_member(ports, None).stack_held is False
+
+
+def test_the_member_makes_no_read_of_its_own():
+    ports = _stacked(5)
+    assessed = _assess(ports)
+    calls = _count(ports)
+    assert _stack_member(ports, assessed).stack_held is True
+    assert calls == {"issue_state": 0, "fetch_commit": 0, "is_ancestor": 0}
+
+
+def test_every_lane_reason_has_poller_text():
+    assert set(poll.LANE_TEXT) == set(get_args(landing_order.LaneReason))
+    assert poll.LANE_TEXT["stack_parent_unmerged"] == "stacked parent unmerged"

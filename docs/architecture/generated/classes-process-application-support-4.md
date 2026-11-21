@@ -19,6 +19,10 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__ListMayBeCut["ListMayBeCut"]
+    class ports__ListedPullRequest["ListedPullRequest"]
+    class ports__LoadReader["LoadReader"]
+    class ports__LockHeld["LockHeld"]
     class ports__LockRecord["LockRecord"]
     class ports__MasterWindow["MasterWindow"]
     class ports__MergeCallFailed["MergeCallFailed"]
@@ -29,20 +33,14 @@ classDiagram
     class ports__PerfRunner["PerfRunner"]
     class ports__Ports["Ports"]
     class ports__Presubmit["Presubmit"]
-    class ports__ProcessReaper["ProcessReaper"]
-    class ports__ProductKnowledge["ProductKnowledge"]
-    class ports__ProductStack["ProductStack"]
-    class ports__Prompts["Prompts"]
-    ports__Ports --> ports__ProcessReaper
-    ports__Ports --> ports__ProductKnowledge
-    ports__Ports --> ports__ProductStack
-    ports__Ports --> ports__Prompts
+    ports__LockHeld o-- ports__LockRecord
 ```
 
 ## Relaciones con otras páginas
 
 - [application: checks](classes-process-application-checks.md)
   - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
+  - `presubmit.Readiness` se asocia con `ports.LoadReader`
 - [application: landing](classes-process-application-landing.md)
   - `landing_plan.LandingContext` se asocia con `ports.Ports`
 - [application: support (parte 1)](classes-process-application-support-1.md)
@@ -52,13 +50,15 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Commands`
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
 - [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.LockHeld` agrega a `ports.LockRecord`
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.ProcessReaper`
+  - `ports.Ports` se asocia con `ports.ProductKnowledge`
+  - `ports.Ports` se asocia con `ports.ProductStack`
+  - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
-- [application: support (parte 6)](classes-process-application-support-6.md)
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
-- [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.Ports` se asocia con `ports.Workspace`

@@ -2302,6 +2302,7 @@ async def _resume(
                     estimate=estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
@@ -2330,6 +2331,7 @@ async def _resume(
                     estimate=estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             elif not snapshot.interrupts and (
                 rules.resume_source(snapshot.next, crashed=True) == "document"
@@ -2348,6 +2350,7 @@ async def _resume(
                     estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
@@ -2362,6 +2365,7 @@ async def _resume(
                     pending,
                     estimate,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
         except resuming.WaitingOnHuman as exc:
             raise CannotStart(str(exc), code=1) from exc
@@ -3726,6 +3730,14 @@ def _report(final: TaskState, task_id: str, ports: Ports) -> None:
     print(f"roles:     {', '.join(final.get('sections', {}))}")
     print(f"returns:   {final.get('returns', {})}")
     print(f"failures:  {len(final.get('failures', []))}")
+    if refusals := delivery_metrics.refusals_by_rule(
+        final.get("failures", []), final.get("runs", [])
+    ):
+        items = (
+            f"{rule}={n['refused']} (repaired {n['repaired']})"
+            for rule, n in sorted(refusals.items())
+        )
+        print(f"refusals:  {' '.join(items)}")
     if final.get("escalated"):
         print(f"escalated: {final['escalated']}")
     for question in final.get("questions_for_human", []):

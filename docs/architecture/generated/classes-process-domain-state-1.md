@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 9, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 10, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
+  - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -36,13 +37,13 @@ classDiagram
     class drawing_answer__Due["Due"]
     class drawing_answer__Exhausted["Exhausted"]
     class drawing_answer__PlanSplit["PlanSplit"]
+    class early_split__Verdict["Verdict"]
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]
+    class hold_record__HoldUnknown["HoldUnknown"]
+    class hold_record__LabelEvent["LabelEvent"]
+    class hold_record__Unreadable["hold_record.Unreadable"]
     class lead_time__Known["Known"]
-    class lead_time__Unreadable["Unreadable"]
-    class rules__BlockerReport["BlockerReport"]
-    class rules__CiGate["CiGate"]
-    class rules__Commit["Commit"]
-    class rules__Deferred["Deferred"]
+    class lead_time__Unreadable["lead_time.Unreadable"]
 ```

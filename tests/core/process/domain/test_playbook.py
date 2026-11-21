@@ -7,7 +7,10 @@ from agentic.core.process.domain import roles
 from agentic.core.process.domain.playbook import (
     ACCOUNTABLE,
     ARCHIVE_AFTER,
+    ARCHIVE_SCORE,
+    ARCHIVE_STALE,
     GRACE_TASKS,
+    HELPFUL_CAP,
     KEEP_CONFIDENCE,
     KEEP_MIN_TASKS,
     PLAYBOOK_MAX_CHARS,
@@ -25,6 +28,8 @@ from agentic.core.process.domain.playbook import (
     Pending,
     Playbook,
     Rejected,
+    Scored,
+    ScoredTask,
     accountable,
     apply,
     archive_due,
@@ -40,6 +45,9 @@ from agentic.core.process.domain.playbook import (
     parse,
     render_file,
     return_backing,
+    returned_categories,
+    score,
+    score_task,
     section,
     shared_term,
 )
@@ -594,13 +602,198 @@ def test_keep_is_confidence_or_two_tasks_and_a_lone_human_decision_needs_two(
     assert keep(confidence, seen, frozenset(sources)) is kept
 
 
-def test_archive_due_has_its_edges_at_the_threshold_and_never_without_a_prompt_date():
+def test_archive_due_has_its_edges_at_the_threshold_and_never_stale_without_a_prompt_date():
     aged = replace(item(1), in_prompt_since="2026-09-01")
-    assert archive_due(aged, ARCHIVE_AFTER - 1, False) is False
-    assert archive_due(aged, ARCHIVE_AFTER, False) is True
-    assert archive_due(aged, ARCHIVE_AFTER * 3, True) is False  # backed or cited since
+    assert archive_due(aged, ARCHIVE_AFTER - 1) is None
+    assert archive_due(aged, ARCHIVE_AFTER) == ARCHIVE_STALE
+    assert archive_due(aged, None) is None  # no count: it does not age
     # never in a prompt (its PR did not merge): `added_at` is not a clock
-    assert archive_due(item(1), ARCHIVE_AFTER * 3, False) is False
+    assert archive_due(item(1), ARCHIVE_AFTER * 3) is None
+
+
+@pytest.mark.parametrize(
+    ("merged_at", "due"),
+    [("2026-08-31", True), ("2026-09-01", True), ("2026-09-02", False)],
+)
+def test_only_a_merge_after_the_day_the_item_entered_the_prompt_backs_it(merged_at, due):
+    aged = replace(item(1), in_prompt_since="2026-09-01T10:00:00.000+00:00", last_applied=merged_at)
+    assert archive_due(aged, ARCHIVE_AFTER * 2) == (ARCHIVE_STALE if due else None)
+
+
+@pytest.mark.parametrize(
+    ("helpful", "harmful", "cause"),
+    [(0, 2, ARCHIVE_SCORE), (0, 5, ARCHIVE_SCORE), (0, 1, None), (3, 0, None)],
+)
+def test_archive_due_by_score_for_any_item_whatever_its_age(helpful, harmful, cause):
+    fresh = replace(item(1), helpful=helpful, harmful=harmful)  # never in a prompt
+    assert archive_due(fresh, None) == cause
+    assert archive_due(replace(fresh, in_prompt_since="2026-09-01"), 1) == cause
+
+
+# ---- score, the counters and the new keys ------------------------------------------
+
+
+def test_a_file_with_the_new_keys_round_trips_and_one_without_them_stays_byte_identical():
+    text = (
+        "items:\n- id: developer-1\n  lesson: Run the suite.\n  category: process-suite-red\n"
+        "  since: empty\n  seen_in:\n  - GH-1\n  added_at: '2026-10-05'\n"
+        "  last_applied: '2026-10-20'\n  in_prompt_since: '2026-10-10T00:00:00.000+00:00'\n"
+        "  helpful: 3\n  harmful: 1\n  scored_until: 2026-10-21T00:00:00.000+00:00|GH-7\n"
+    )
+    book = parse(text, "developer")
+    assert (book.items[0].helpful, book.items[0].harmful) == (3, 1)
+    assert render_file(book) == text
+    zeros = text.replace("helpful: 3", "helpful: 0").replace("harmful: 1", "harmful: 0")
+    bare = zeros.replace("  helpful: 0\n  harmful: 0\n", "")
+    assert render_file(parse(zeros, "developer")) == bare
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"helpful": True},
+        {"harmful": -1},
+        {"helpful": "1"},
+        {"harmful": 1.0},
+        {"scored_until": "no-separator"},
+        {"scored_until": 5},
+    ],
+)
+def test_parse_item_rejects_a_counter_or_a_mark_of_the_wrong_kind(overrides):
+    with pytest.raises(ValueError, match="developer-1"):
+        parse(_file(**overrides), "developer")
+
+
+def test_the_score_starts_at_two_and_combines_the_counters():
+    assert score(item()) == 2
+    assert score(replace(item(), helpful=3, harmful=1)) == 4
+
+
+BEFORE = "2026-10-01T00:00:00.000+00:00"
+AFTER = "2026-10-02T00:00:00.000+00:00"
+
+
+def lesson_book(*categories: str) -> Playbook:
+    items = tuple(
+        replace(item(n, f"Lesson {n}.", ()), category=c, in_prompt_since=BEFORE)
+        for n, c in enumerate(categories, 1)
+    )
+    return Playbook("developer", items)
+
+
+def task(
+    n: int = 1,
+    returned: tuple[str, ...] = (),
+    *,
+    ended: str | None = None,
+    first_run_at: str = AFTER,
+    playbook_changed: bool = False,
+) -> ScoredTask:
+    return ScoredTask(
+        f"GH-{n}",
+        f"2026-10-{n + 2:02d}T00:00:00.000+00:00" if ended is None else ended,
+        first_run_at,
+        playbook_changed,
+        frozenset(returned),
+    )
+
+
+def counters(scored: Scored) -> list[tuple[int, int]]:
+    return [(i.helpful, i.harmful) for i in scored.playbook.items]
+
+
+def test_an_exclusive_lesson_with_no_return_in_its_category_is_helpful():
+    scored = score_task(lesson_book("spec-scope"), task())
+    assert counters(scored) == [(1, 0)] and scored.unattributed is False
+
+
+def test_an_exclusive_lesson_whose_category_came_back_is_harmful():
+    scored = score_task(lesson_book("spec-scope"), task(returned=("spec-scope",)))
+    assert counters(scored) == [(0, 1)] and scored.unattributed is False
+
+
+def test_a_category_two_lessons_share_moves_no_counter_and_is_unattributed_once():
+    book = lesson_book("spec-scope", "spec-scope", "design")
+    scored = score_task(book, task(returned=("spec-scope",)))
+    assert counters(scored) == [(0, 0), (0, 0), (1, 0)]
+    assert scored.unattributed is True
+
+
+def test_a_returned_category_no_lesson_covers_moves_nothing():
+    scored = score_task(lesson_book("design"), task(returned=("spec-scope",)))
+    assert counters(scored) == [(1, 0)] and scored.unattributed is False
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"first_run_at": BEFORE},  # ran before the lesson reached a prompt
+        {"playbook_changed": True},
+    ],
+)
+def test_a_task_the_lesson_was_not_in_the_prompt_of_or_that_changed_the_playbook_counts_nothing(
+    case,
+):
+    book = lesson_book("spec-scope")
+    assert score_task(book, task(**case)).playbook == book
+    never = Playbook("developer", (replace(book.items[0], in_prompt_since=""),))
+    assert score_task(never, task()).playbook == never
+
+
+def test_a_task_without_an_end_scores_nothing_and_moves_no_mark():
+    book = lesson_book("spec-scope", "spec-scope")
+    assert score_task(book, task(ended="")) == Scored(book, False)
+
+
+def test_helpful_stops_at_the_cap_and_five_exclusive_returns_archive_the_lesson():
+    book = lesson_book("spec-scope")
+    for n in range(1, 21):
+        book = score_task(book, task(n)).playbook
+    assert (book.items[0].helpful, score(book.items[0])) == (HELPFUL_CAP, 5)
+    for n in range(21, 24):
+        book = score_task(book, task(n, ("spec-scope",))).playbook
+    assert score(book.items[0]) == 2 and archive_due(book.items[0], None) is None
+    for n in range(24, 26):
+        book = score_task(book, task(n, ("spec-scope",))).playbook
+    assert score(book.items[0]) == 0
+    kept, shelf = archive_stale(book, (), {}, now=NOW)
+    assert kept.items == () and [a.reason for a in shelf] == [ARCHIVE_SCORE]
+
+
+def test_the_same_task_twice_counts_once_and_an_older_task_after_a_newer_one_is_ignored():
+    book = lesson_book("spec-scope")
+    once = score_task(book, task(5)).playbook
+    assert score_task(once, task(5)).playbook == once
+    assert score_task(once, task(3)).playbook == once
+    assert once.items[0].scored_until == "2026-10-07T00:00:00.000+00:00|GH-5"
+
+
+def test_two_tasks_that_ended_together_both_count_once_in_either_order():
+    ended = "2026-10-05T00:00:00.000+00:00"
+    first, second = task(1, ended=ended), task(2, ended=ended)
+    book = lesson_book("spec-scope")
+    both = score_task(score_task(book, first).playbook, second).playbook
+    assert counters(Scored(both, False)) == [(2, 0)]
+    again = score_task(both, first).playbook
+    assert again == both and score_task(both, second).playbook == both
+    # the pair is ordered by id, so the other order loses the earlier id, never counts it twice
+    reverse = score_task(score_task(book, second).playbook, first).playbook
+    assert counters(Scored(reverse, False)) == [(1, 0)]
+
+
+def test_returned_categories_are_the_returns_attributable_to_the_slug_not_only_reviews():
+    entries = [
+        entry("spec-scope", None),
+        entry("process-suite-red"),
+        {"pair": "x", "category": "y"},
+    ]
+    assert returned_categories(entries, "feature", "developer") == {
+        "spec-scope",
+        "process-suite-red",
+    }
+    assert returned_categories(entries, "feature", "product_analyst") == frozenset()
+    definition = {"pair": "PM→Product Analyst", "category": "spec-scope", "reason": "r"}
+    assert returned_categories([definition], "feature", "product_analyst") == {"definition"}
 
 
 # ---- evidence from the four sources ----------------------------------------------------
@@ -723,18 +916,101 @@ def test_an_add_that_matches_an_archived_item_restores_it_with_its_id_and_seen_i
     assert fresh.playbook.items[0].id == "developer-5"
 
 
-def test_archive_stale_moves_only_the_due_items_and_deletes_nothing():
+def test_archive_stale_moves_only_the_due_items_with_their_cause_and_deletes_nothing():
     aged = replace(item(1, "Lesson one."), in_prompt_since="2026-09-01")
     young = replace(item(2, "Lesson two."), in_prompt_since="2026-10-01")
-    book = Playbook("developer", (aged, young, item(3, "Lesson three.")))
-    aging = {
-        "developer-1": (ARCHIVE_AFTER, False),
-        "developer-2": (ARCHIVE_AFTER - 1, False),
-        "developer-3": (ARCHIVE_AFTER * 2, False),
-    }
+    scored = replace(item(4, "Lesson four."), harmful=2)  # never in a prompt, score 0
+    book = Playbook("developer", (aged, young, item(3, "Lesson three."), scored))
+    aging = {"developer-1": ARCHIVE_AFTER, "developer-2": ARCHIVE_AFTER - 1, "developer-3": 99}
     kept, shelf = archive_stale(book, (), aging, now=NOW)
     assert [i.id for i in kept.items] == ["developer-2", "developer-3"]
-    assert [(a.item, a.reason, a.archived_at) for a in shelf] == [(aged, "stale", NOW)]
+    assert [(a.item, a.reason, a.archived_at) for a in shelf] == [
+        (aged, ARCHIVE_STALE, NOW),
+        (scored, ARCHIVE_SCORE, NOW),
+    ]
+
+
+def scored_out(**counts: int) -> tuple[Archived, ...]:
+    old = replace(
+        item(4, LESSON, ("GH-1", "GH-2")),
+        in_prompt_since="2026-09-01",
+        scored_until="x|GH-9",
+        **counts,
+    )
+    return (Archived(old, ARCHIVE_SCORE, "2026-10-01"),)
+
+
+def test_a_score_archived_lesson_with_one_new_task_and_low_confidence_stays_a_candidate():
+    ev = {"GH-3": evidence("process-suite-red")}
+    low = replace(add(LESSON, "GH-3"), confidence="low")
+    result = run([low], ev=ev, archived=scored_out(harmful=2))
+    assert result.playbook.items == () and result.held == (low,)
+    assert [c.seen_in for c in result.candidates] == [("GH-3",)]
+    assert len(result.archived) == 1  # still on the shelf, no new id was made
+
+
+def test_a_task_the_archived_lesson_already_has_is_not_new_evidence():
+    ev = {"GH-1": evidence("process-suite-red")}
+    result = run([add(LESSON, "GH-1")], ev=ev, archived=scored_out(harmful=2))
+    assert result.playbook.items == () and result.candidates == ()
+    assert "already counted" in result.refused[0].reason
+
+
+def test_two_new_tasks_restore_a_score_archived_lesson_with_its_id_and_the_counters_reset():
+    ev = {"GH-3": evidence("process-suite-red"), "GH-4": evidence("process-suite-red")}
+    low = replace(add(LESSON, "GH-3", "GH-4"), confidence="low")
+    result = run([low], ev=ev, archived=scored_out(helpful=1, harmful=2))
+    restored = result.playbook.items[0]
+    assert (restored.id, restored.seen_in) == ("developer-4", ("GH-1", "GH-2", "GH-3", "GH-4"))
+    assert (restored.helpful, restored.harmful, restored.scored_until) == (0, 0, "")
+    assert restored.in_prompt_since == "" and result.archived == ()
+
+
+def test_the_waiting_candidates_tasks_count_as_new_evidence_and_the_candidate_is_consumed():
+    ev = {"GH-3": evidence("process-suite-red"), "GH-4": evidence("process-suite-red")}
+    low = replace(add(LESSON, "GH-3"), confidence="low")
+    first = run([low], ev=ev, archived=scored_out(harmful=2))
+    second = run(
+        [replace(low, tasks=("GH-4",))], ev=ev, candidates=first.candidates, archived=scored_out()
+    )
+    assert second.playbook.items[0].seen_in == ("GH-1", "GH-2", "GH-3", "GH-4")
+    assert second.candidates == ()
+
+
+def test_a_waiting_candidates_tasks_the_archived_lesson_already_has_are_not_new_evidence():
+    ev = {"GH-1": evidence("process-suite-red"), "GH-3": evidence("process-suite-red")}
+    waiting = Pending("developer", "process-suite-red", LESSON, "low", ("GH-1",), ("return",), NOW)
+    low = replace(add(LESSON, "GH-3"), confidence="low")
+    result = run([low], ev=ev, candidates=(waiting,), archived=scored_out(harmful=2))
+    assert result.playbook.items == () and len(result.archived) == 1
+    assert [c.seen_in for c in result.candidates] == [("GH-3",)]  # GH-1 is not new
+
+
+def test_a_score_restore_into_a_playbook_in_grace_at_the_cap_is_held_and_stays_archived():
+    full = full_playbook()
+    ev = {"GH-3": evidence("process-suite-red")}
+    result = run([add(LESSON, "GH-3")], full, ev=ev, archived=scored_out(harmful=2))
+    assert result.playbook == full and result.applied == ()
+    assert len(result.capped) == 1 and len(result.archived) == 1
+    assert result.archived[0].item.harmful == 2  # nothing was reset: it did not come back
+
+
+def test_high_confidence_restores_a_score_archived_lesson_on_one_new_task():
+    result = run(
+        [add(LESSON, "GH-3")],
+        ev={"GH-3": evidence("process-suite-red")},
+        archived=scored_out(harmful=2),
+    )
+    assert result.playbook.items[0].id == "developer-4" and result.candidates == ()
+
+
+def test_a_stale_archived_lesson_restores_directly_on_one_task_with_the_counters_reset():
+    old = replace(item(4, LESSON, ("GH-1",)), harmful=1, scored_until="x|GH-9")
+    shelf = (Archived(old, ARCHIVE_STALE, "2026-10-01"),)
+    low = replace(add(LESSON, "GH-3"), confidence="low")
+    result = run([low], ev={"GH-3": evidence("process-suite-red")}, archived=shelf)
+    restored = result.playbook.items[0]
+    assert (restored.id, restored.harmful, restored.scored_until) == ("developer-4", 0, "")
 
 
 def test_a_playbook_file_of_today_reads_the_same_and_the_new_keys_are_optional():

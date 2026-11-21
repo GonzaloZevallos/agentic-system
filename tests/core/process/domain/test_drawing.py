@@ -10,9 +10,14 @@ from agentic.core.process.domain.drawing import (
     DEPARTURE_ESCALATIONS_MAX,
     DRAWING_RULE,
     DRAWING_SEATS,
+    PLAN_WRITERS,
     Departure,
+    Refused,
+    Resolved,
+    UnverifiedAsk,
     Verdicts,
     answers,
+    block_rule,
     departure_key,
     departure_question,
     flag_verdict,
@@ -22,9 +27,11 @@ from agentic.core.process.domain.drawing import (
     normalize_drawing,
     question_numbers,
     question_ref,
+    resolve,
     row_is_open,
     rule_for,
     screens_due,
+    unverified_lines,
     unverified_question,
     verdicts,
 )
@@ -38,6 +45,29 @@ def test_a_declared_design_has_the_rule():
 
 def test_no_design_has_no_rule():
     assert rule_for(None, "tech_lead") == ""
+    assert rule_for(None, "tech_lead", plan=True) == ""
+
+
+_DESIGN = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
+
+
+def test_the_plan_writer_with_plan_gets_where_its_departures_go():
+    assert PLAN_WRITERS == frozenset({"tech_lead"})
+    plain = rule_for(_DESIGN, "tech_lead")
+    planned = rule_for(_DESIGN, "tech_lead", plan=True)
+    assert planned.startswith(plain + " ")
+    assert "`drawing_departures`" in planned and "never taken as an assumption" in planned
+
+
+@pytest.mark.parametrize("slug", ["developer", "pm_interviewee", "tech_lead_critic", "unknown"])
+def test_plan_changes_nothing_for_a_role_outside_the_plan_writers(slug):
+    assert rule_for(_DESIGN, slug, plan=True) == rule_for(_DESIGN, slug)
+
+
+def test_the_body_that_carries_the_placeholder_leaves_the_block_empty():
+    assert block_rule("a\n{{drawing_rule}}\nb", "RULE") == ""
+    assert block_rule("a\nb", "RULE") == "RULE"
+    assert block_rule("a\nb", "") == ""
 
 
 def _departure(**over: str) -> Departure:
@@ -296,8 +326,8 @@ def _package_imports(source: str) -> set[str]:
     return found
 
 
-def test_drawing_imports_only_design_from_the_package():
-    assert _package_imports(Path(drawing_module.__file__).read_text()) == {".design"}
+def test_drawing_imports_only_design_and_the_refusal_leaf_from_the_package():
+    assert _package_imports(Path(drawing_module.__file__).read_text()) == {".design", ".refusal"}
 
 
 @pytest.mark.parametrize(
@@ -352,6 +382,45 @@ def test_unverified_question_names_the_ref_and_the_drawing():
     line = unverified_question("Q2", "pantallas/Home.png")
     assert "Q2" in line and "pantallas/Home.png" in line and "\n" not in line
     assert "Q3" in unverified_question("Q3", None)
+
+
+@dataclass(frozen=True)
+class _Check:
+    subject: str
+    ref: str
+    verdict: str
+    drawing: str | None = None
+    element: str | None = None
+
+
+def test_unverified_lines_normalises_the_path_and_maps_none_to_empty():
+    checks = [
+        _Check("question", "Q1", "unverified", "pantallas/./Home.png"),
+        _Check("question", "Q2", "unverified", None),
+    ]
+    assert unverified_lines(checks) == [
+        UnverifiedAsk(
+            "Q1", "pantallas/Home.png", unverified_question("Q1", "pantallas/./Home.png")
+        ),
+        UnverifiedAsk("Q2", "", unverified_question("Q2", None)),
+    ]
+
+
+def test_unverified_lines_skips_screens_and_other_verdicts_and_keeps_input_order():
+    checks = [
+        _Check("question", "Q3", "unverified", "b.png"),
+        _Check("screen", "s.png", "unverified", "s.png"),
+        _Check("question", "Q1", "matches", "a.png", "x"),
+        _Check("question", "Q2", "departs", "a.png", "x"),
+        _Check("question", "Q1", "unverified", "a.png"),
+    ]
+    assert [a.ref for a in unverified_lines(checks)] == ["Q3", "Q1"]
+    assert unverified_lines([]) == []
+
+
+def test_unverified_lines_refuses_an_invalid_path():
+    with pytest.raises(ValueError):
+        unverified_lines([_Check("question", "Q1", "unverified", "/abs.png")])
 
 
 TEXT = "**Q1** one?\nrecommendation\n\n**Q2** two?"
@@ -545,3 +614,178 @@ def test_the_rule_has_one_line_variant_per_seat_and_the_base_for_any_other_slug(
 def test_without_a_design_no_slug_has_a_rule():
     for slug in (*DRAWING_SEATS, "tech_lead"):
         assert rule_for(None, slug) == ""
+
+
+PROTO = "docs/design/pantallas"
+LISTED = Design(
+    prototype=PROTO,
+    entry="Home",
+    sample_app=None,
+    compare=None,
+    captures=(Capture(image="docs/capturas/Login.png", screen="Login"),),
+    files=(
+        f"{PROTO}/Home.dc.html",
+        f"{PROTO}/InicioCompu.dc.html",
+        f"{PROTO}/sub/Card.dc.html",
+        f"{PROTO}/sub/Card.dc.html.bak",
+        f"{PROTO}/sub/Twin.dc.html",
+        f"{PROTO}/other/Twin.dc.html",
+    ),
+)
+
+
+def test_resolve_accepts_the_full_path():
+    assert resolve(LISTED, f"{PROTO}/InicioCompu.dc.html", "Q1") == Resolved(
+        f"{PROTO}/InicioCompu.dc.html"
+    )
+
+
+def test_resolve_accepts_a_path_relative_to_the_prototype():
+    assert resolve(LISTED, "sub/Card.dc.html", "Q1") == Resolved(f"{PROTO}/sub/Card.dc.html")
+
+
+def test_resolve_accepts_a_path_relative_to_the_prototypes_parent():
+    assert resolve(LISTED, "pantallas/InicioCompu.dc.html", "Q1") == Resolved(
+        f"{PROTO}/InicioCompu.dc.html"
+    )
+
+
+def test_resolve_accepts_a_bare_name_that_exists_once():
+    assert resolve(LISTED, "InicioCompu.dc.html", "Q1") == Resolved(f"{PROTO}/InicioCompu.dc.html")
+    assert resolve(LISTED, "./Card.dc.html", "Q1") == Resolved(f"{PROTO}/sub/Card.dc.html")
+
+
+def test_resolve_refuses_an_ambiguous_name_listing_candidates_and_never_picking_one():
+    refused = resolve(LISTED, "Twin.dc.html", "Q1")
+    assert isinstance(refused, Refused)
+    assert "more than one" in refused.reason and "Q1" in refused.reason
+    assert f"{PROTO}/other/Twin.dc.html" in refused.reason
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
+    assert f"{PROTO}/sub/Twin.dc.html" in refused.reason
+
+
+def test_resolve_lists_at_most_three_candidates():
+    files = tuple(f"{PROTO}/d{i}/X.html" for i in range(5))
+    design = Design(PROTO, "X", None, None, files=files)
+    refused = resolve(design, "X.html", "Q1")
+    assert isinstance(refused, Refused)
+    assert refused.reason.count("/X.html") == 3 and "+2 more" in refused.reason
+
+
+def test_resolve_refuses_an_unknown_file_naming_the_form_and_the_closest_file():
+    refused = resolve(LISTED, "pantallas/InicioComp.dc.html", "Q3")
+    assert isinstance(refused, Refused)
+    assert "Q3" in refused.reason and f"cite the full path, {PROTO}/<name>" in refused.reason
+    assert f"such as {PROTO}/InicioCompu.dc.html" in refused.reason
+
+
+def test_resolve_gives_no_suggestion_when_nothing_is_close():
+    refused = resolve(LISTED, "zzzzzz.qq", "Q3")
+    assert isinstance(refused, Refused)
+    assert f"{PROTO}/<name>" in refused.reason and "such as" not in refused.reason
+
+
+def test_resolve_refuses_a_full_path_under_the_prototype_that_is_not_listed():
+    refused = resolve(LISTED, f"{PROTO}/Missing.dc.html", "Q1")
+    assert isinstance(refused, Refused) and "does not declare" in refused.reason
+
+
+def test_resolve_without_a_listing_keeps_the_prefix_rule_and_names_the_form():
+    unlisted = Design(PROTO, "Home", None, None)
+    assert resolve(unlisted, f"{PROTO}/Any.html", "Q1") == Resolved(f"{PROTO}/Any.html")
+    refused = resolve(unlisted, "Any.html", "Q1")
+    assert isinstance(refused, Refused) and f"{PROTO}/<name>" in refused.reason
+    assert "such as" not in refused.reason
+
+
+def test_resolve_with_the_whole_repo_as_prototype_accepts_any_relative_path():
+    whole = Design(".", "Home", None, None)
+    assert resolve(whole, "a/b.html", "Q1") == Resolved("a/b.html")
+    refused = resolve(whole, "../x", "Q1")
+    assert isinstance(refused, Refused) and "relative path inside the repo" in refused.reason
+
+
+def test_resolve_names_the_prototype_for_an_invalid_path_and_never_the_exception():
+    refused = resolve(LISTED, "/abs.html", "Q1")
+    assert isinstance(refused, Refused)
+    assert "not valid" in refused.reason
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
+    assert "must be relative" not in refused.reason
+
+
+def test_resolve_accepts_a_capture_image_by_its_exact_path_only():
+    assert resolve(LISTED, "docs/capturas/Login.png", "Q1") == Resolved("docs/capturas/Login.png")
+    assert isinstance(resolve(LISTED, "Login.png", "Q1"), Refused)
+
+
+def test_resolve_does_not_offer_a_capture_as_candidate():
+    design = Design(PROTO, "H", None, None, (Capture("a/Login.png", "L"),), (f"{PROTO}/Home.html",))
+    refused = resolve(design, "Logn.png", "Q1")
+    assert isinstance(refused, Refused) and "such as" not in refused.reason
+
+
+def test_resolve_cleans_the_text_it_echoes_back():
+    refused = resolve(LISTED, "zz\nyy`{{ww}}" + "q" * 300, "Q1")
+    assert isinstance(refused, Refused)
+    for bad in ("\n", "`", "{{", "}}"):
+        assert bad not in refused.reason
+    assert len(refused.reason) < 400
+
+
+def test_interview_check_keys_a_bare_name_as_its_full_path():
+    home = f"{PROTO}/Home.dc.html"
+    key = f"{home}:title"
+    checks = [Chk("question", "Q1", "matches", "Home.dc.html", "Title")]
+    assert interview_check([1], checks, [], LISTED, {}, {key: 2}) is None
+    assert interview_check([1], checks, [], LISTED, {}, {f"{home}:other": 2}) is not None
+    departs = [Chk("question", "Q1", "departs", "Home.dc.html", "Title")]
+    assert interview_check([1], departs, [Dep("Home.dc.html", "Title")], LISTED, {}, {}) is None
+    reason = interview_check(
+        [1], departs, [Dep("pantallas/Home.dc.html", "Title")], LISTED, {key: 4}, {}
+    )
+    assert reason is not None and "Drawing #4" in reason
+
+
+def test_interview_check_refuses_an_unknown_file_naming_the_expected_form():
+    checks = [Chk("question", "Q1", "matches", "pantallas/Nope.dc.html", "Title")]
+    reason = interview_check([1], checks, [], LISTED, {}, {})
+    assert reason is not None and f"{PROTO}/<name>" in reason
+    reason = interview_check([], [], [Dep("Twin.dc.html", "T")], LISTED, {}, {})
+    assert reason is not None and "more than one" in reason
+
+
+@pytest.mark.parametrize(
+    ("design", "cited"),
+    [
+        (LISTED, "Twin.dc.html"),
+        (LISTED, "/abs.html"),
+        (LISTED, "../x.html"),
+        (LISTED, "Nope.html"),
+        (LISTED, f"{PROTO}/Missing.html"),
+        (Design(PROTO, "Home", None, None), "Any.html"),
+        (Design(PROTO, "Home", None, None), "a:b.html"),
+    ],
+)
+def test_every_refusal_under_a_subdirectory_prototype_names_the_expected_form(design, cited):
+    refused = resolve(design, cited, "Q1")
+    assert isinstance(refused, Refused)
+    assert f"cite the full path, {PROTO}/<name>" in refused.reason
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, True),
+        ("", True),
+        ("  \n\t\n", True),
+        ("Drawing 1: accept", True),
+        ("  drawing 12: REJECT  \n\nDrawing 3: accept\n\n", True),
+        ("Drawing 1: accept\nthanks!", False),
+        ("Drawing 1: accept and ship it", False),
+        ("looks fine", False),
+        ("Drawing 1: maybe", False),
+        ("> Drawing 1: accept", False),
+    ],
+)
+def test_only_verdicts_is_true_for_nothing_or_verdict_lines_alone(text, expected):
+    assert drawing_module.only_verdicts(text) is expected

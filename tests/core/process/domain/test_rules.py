@@ -10,6 +10,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import (
     ci,
     document,
+    landing_order,
     retakes,
     roles,
     rules,
@@ -33,7 +34,7 @@ from agentic.core.process.domain.roles import (
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
-from agentic.core.process.domain.task import INTEGRATION, Carried
+from agentic.core.process.domain.task import INTEGRATION, Carried, FailureReason
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -703,6 +704,59 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
         "review": 4.0,
     }
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
+
+
+_SPLIT_RUNS = [
+    {"role": "PM", "section": "PM", "cost_usd": 1.0},
+    {"role": "Tech Writer", "section": "Tech Writer", "cost_usd": 0.5},
+    {"role": "QA Performance", "section": "QA Performance", "cost_usd": 0.25},
+    {"role": "Tech Lead", "section": "Tech Lead", "cost_usd": 2.0},
+    {"role": "Developer", "section": "Developer: api", "cost_usd": 3.0},
+    {"role": "Tech Lead", "section": "Tech Lead: review api", "cost_usd": 4.0},
+]
+
+
+def test_spent_split_names_a_half_for_every_phase():
+    assert set(rules._SPLIT_OF) == set(rules.PHASES)
+
+
+def test_spent_split_halves_the_phases_and_keeps_the_residual_apart():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.75 + 1.5}
+    split = rules.spent_split(state)
+    # Tech Writer and QA Performance are not recognised by `phase_of`: they count as definition.
+    assert split == {"definition": 1.75 + 2.0, "build": 7.0, "unattributed": 1.5}
+    assert sum(split.values()) == pytest.approx(state["cost_usd"])
+
+
+def test_spent_split_residual_under_the_floor_is_not_shown():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.75 + 0.004}
+    split = rules.spent_split(state)
+    assert split["unattributed"] == 0.0
+    assert 0 < state["cost_usd"] - sum(split.values()) < 0.005
+
+
+def test_spent_split_never_shows_a_negative_unattributed():
+    state = {"runs": _SPLIT_RUNS, "cost_usd": 10.0}
+    split = rules.spent_split(state)
+    assert split["unattributed"] == 0.0
+    assert sum(split.values()) > state["cost_usd"]
+
+
+def test_spent_split_of_a_phase_it_does_not_name_goes_to_unattributed(monkeypatch):
+    monkeypatch.setattr(rules, "spent_by_phase", lambda state: {"development": 2.0, "audit": 3.0})
+    split = rules.spent_split({})
+    assert split == {"definition": 0.0, "build": 2.0, "unattributed": 3.0}
+
+
+def test_spent_split_line_has_one_text_in_both_modes():
+    split: rules.SpentSplit = {"definition": 3.754, "build": 7.0, "unattributed": 1.5}
+    assert (
+        rules.spent_split_line(split)
+        == "definition >= 3.75 USD · build >= 7.00 USD · unattributed 1.50 USD"
+    )
+    assert rules.spent_split_line(split, build_in_parts=True) == (
+        "definition >= 3.75 USD · build: in the parts · unattributed 1.50 USD"
+    )
 
 
 def test_run_ended_is_true_only_for_ready_for_review_discarded_split_and_tracker_only():
@@ -3612,6 +3666,87 @@ def test_with_no_important_open_the_merge_decision_is_what_it_was(over, expected
     assert rules.auto_merge_decision(_pin_facts(**over)) == rules.MergeDecision(*expected)
 
 
+# GH-975: the decisions a pull request may hold to merge beside a head that re-integrates. An
+# approved, clean, green pull request whose recorded evidence is on an older master decides
+# `run_checks` (no `ci:`) or `ci_run` (`ci:`): the lane admits both, because the merge verb brings
+# the evidence on the pair (head, current master) itself.
+
+_OLD_MASTER = "c" * 40
+
+
+def _stale_pair(**over):
+    return rules.MergeFacts(
+        **{
+            **vars(_pin_facts(checks_master=_OLD_MASTER, conflicts=False)),
+            **over,
+        }
+    )
+
+
+def test_a_pr_with_checks_on_an_older_master_decides_run_checks_and_the_lane_admits_it():
+    decision = rules.auto_merge_decision(_stale_pair())
+    assert decision == rules.MergeDecision("run_checks", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "run_checks"
+
+
+def test_a_ci_pr_stale_on_master_decides_ci_run_and_the_lane_admits_it():
+    facts = _stale_pair(
+        **_PIN_CI, ci_verdict=ci.CiVerdict("green", (), ()), ci_fresh=False, ci_untrusted=False
+    )
+    decision = rules.auto_merge_decision(facts)
+    assert decision == rules.MergeDecision("ci_run", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "ci_run"
+
+
+def test_a_pr_whose_checks_cover_the_current_master_decides_merge_and_the_lane_admits_it():
+    decision = rules.auto_merge_decision(_pin_facts(conflicts=False))
+    assert decision == rules.MergeDecision("merge", None)
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) == "merge"
+
+
+def _pair_record(master, outcome):
+    return task.MergeCiRecord(
+        head=PIN_HEAD,
+        master=master,
+        tested="d" * 40,
+        mode="push",
+        published_at="2026-11-03T10:00:00.000Z",
+        republished=False,
+        superseded=[],
+        outcome=outcome,
+    )
+
+
+_CI_STALE = {**_PIN_CI, "ci_verdict": ci.CiVerdict("green", (), ()), "ci_fresh": False}
+_STALE_SPENT = tuple(_pair_record(f"{i:040x}", "stale") for i in range(ci.CI_STALE_PAIRS_MAX))
+
+NOT_ADMITTED = {
+    "untrusted_no_dispatch": {**_CI_STALE, "ci_untrusted": True},
+    "stale_exhausted": {**_CI_STALE, "ci_untrusted": False, "merge_ci": _STALE_SPENT},
+    "wait": {**_PIN_CI, "ci_verdict": _PIN_PENDING, "ci_waited_s": 0.0},
+    "not_approved": {"reviewed_unit_approved": False},
+    "merge_conflict": {"conflicts": True},
+}
+
+
+@pytest.mark.parametrize("over", list(NOT_ADMITTED.values()), ids=list(NOT_ADMITTED))
+def test_a_refusal_or_a_wait_is_never_admitted_by_the_lane(over):
+    decision = rules.auto_merge_decision(_stale_pair(**over))
+    assert decision.kind in {"refuse", "wait"}
+    assert landing_order.lane_decision_of(decision.kind, decision.reason) is None
+
+
+def test_the_untrusted_and_stale_exhausted_pairs_are_the_refusals_the_table_names():
+    reasons = {
+        name: rules.auto_merge_decision(_stale_pair(**NOT_ADMITTED[name])).reason
+        for name in ("untrusted_no_dispatch", "stale_exhausted")
+    }
+    assert reasons == {
+        "untrusted_no_dispatch": "ci_untrusted_no_dispatch",
+        "stale_exhausted": "ci_stale_exhausted",
+    }
+
+
 # GH-294: `reported_severity` and the partition of the open `important` findings.
 
 
@@ -4677,6 +4812,38 @@ def _cut(reason: str) -> Any:
         "session_id": "",
         "reason": reason,
     }
+
+
+@pytest.mark.parametrize(
+    ("retries", "reason", "attempts"),
+    [
+        (0, "schema", 1),
+        (0, "check", 1),
+        (0, "stall", 1),
+        (-1, "schema", 0),
+        (1, "schema", 3),
+        (1, "check", 3),
+        (1, "stall", 2),
+        (1, "max_turns", 2),
+        (2, "schema", 3),
+        (2, "other", 3),
+        (4, "schema", 5),
+        (4, "check", 5),
+        (4, "stall", 5),
+    ],
+)
+def test_attempts_for_gives_a_format_failure_at_least_three_and_every_other_retries_plus_one(
+    retries, reason, attempts
+):
+    assert rules.attempts_for(reason, retries) == attempts
+
+
+def test_a_format_failure_never_gets_fewer_attempts_than_any_other_reason():
+    for retries in range(0, 8):
+        for reason in get_args(FailureReason):
+            other = rules.attempts_for(reason, retries)
+            assert rules.attempts_for("schema", retries) >= other
+            assert rules.attempts_for("check", retries) >= other
 
 
 def test_retry_turns_is_the_roles_own_cap_with_no_failure():

@@ -279,7 +279,7 @@ async def test_validate_escalates_at_the_limit(cfg):
 
 async def test_approving_a_feature_without_definitions_is_a_role_failure(cfg):
     empty = verdict("approved", definitions=[])
-    ports = memory_ports(ScriptedRunner(pm=[empty, empty]))
+    ports = memory_ports(ScriptedRunner(pm=[empty, empty, empty]))
     state = {**TASK, "type": "feature"}
     patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "waiting_on_human"

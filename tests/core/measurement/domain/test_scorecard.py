@@ -123,6 +123,7 @@ def test_external_reasons_exclude_account_limit_upstream_network_and_disk_full()
         "upstream",
         "network",
         "disk_full",
+        "github_rate_limit",
     }
 
 
@@ -741,3 +742,16 @@ def test_the_scorecard_keeps_no_list_of_external_failure_reasons_of_its_own():
 
     assert not hasattr(scorecard, "EXTERNAL_FAILURE_REASONS")
     assert scorecard.EXTERNAL_REASONS is rules.EXTERNAL_REASONS
+
+
+def test_an_escalation_with_the_cause_stack_base_orphaned_counts_under_its_own_row():
+    # GH-838: `cycle.escalations` labels each entry by its `cause`, so the orphaned refusal is its
+    # own row, never folded into its class. (No process code writes this cause on an entry today:
+    # the refusal is human-owned and the landing takes no escalating step for it.)
+    figures = _escalation_pause(cause="stack_base_orphaned", cls="questions")
+
+    card = scorecard.build([figures])
+
+    assert [(r.cause, r.escalations) for r in card.escalations_by_cause] == [
+        ("stack_base_orphaned", 1)
+    ]

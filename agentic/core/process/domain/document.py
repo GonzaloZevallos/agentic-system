@@ -24,7 +24,7 @@ from typing import Any, cast, get_args
 import yaml
 
 from . import size_budget, spec_delivery, tracker_items
-from .landing_order import LANE_MERGES_MAX, YieldReason, instant
+from .landing_order import LANE_MERGES_MAX, YieldReason, admitted_decision, instant
 from .legacy_names import rename_legacy_roles
 from .task import (
     HEAD_YIELDS_MAX,
@@ -34,6 +34,8 @@ from .task import (
     CarveOutcome,
     CarveRecord,
     DepartureRecord,
+    FormatIssueRecord,
+    RefusalRule,
     RoleRun,
     assumption_text,
 )
@@ -104,7 +106,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
 # one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
 # `stack_pauses` (GH-899) is the list of waits of a stacked child, which the poller's hold replaces
-# whole with `add_stack_pauses`' result.
+# whole with `add_stack_pauses`' result. `format_issue` (GH-1011) is the issue filed per refusal
+# rule, replaced whole with `add_format_issues`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -120,6 +123,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flake_comments",
         "flakes",
         "tracker_failures",
+        "format_issue",
         "lead_time",
         "head_yields",
         "lane_admitted",
@@ -141,6 +145,7 @@ _FLOW_KEYS = (
     "merge_refusal",
     "flakes",
     "tracker_failures",
+    "format_issue",
     "lead_time",
     "head_yields",
     "lane_admitted",
@@ -197,7 +202,8 @@ _LANE_KEYS = ("lane_admitted", "lane_recorded", "lane_merges")
 
 def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
     """`entry` as `{key: value}` for `keys` (an `int` `issue` or `head_issue`, `str` shas, an
-    aware instant), `None` when it is not whole; a `bool` is not an issue."""
+    aware instant), `None` when it is not whole; a `bool` is not an issue. A `decision` that is a
+    `LaneDecision` is kept, any other value is dropped: an older entry has none."""
     if not isinstance(entry, Mapping):
         return None
     out: dict[str, Any] = {}
@@ -212,6 +218,9 @@ def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
         if not ok:
             return None
         out[key] = value
+    decision = admitted_decision(entry.get("decision"))
+    if decision is not None:
+        out["decision"] = decision
     return out
 
 
@@ -219,6 +228,7 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     """The fast lane's keys (GH-681, informative) of `source` as the document keeps them, the only
     place they are validated, called by `render` and by `from_frontmatter`. `lane_admitted` is
     kept when it holds an `int` `head_issue`, `str` `pr_head` and `master` and an aware `at`;
+    its `decision`, when a `LaneDecision`, is kept with it;
     `lane_recorded` when it is an aware instant or `not_lane`; `lane_merges` as its whole entries
     only, the last `LANE_MERGES_MAX`, and omitted when none is left. `None` and anything malformed
     read as absent. Never raises."""
@@ -280,9 +290,11 @@ _ESCALATION_STAGES = ("plan", "delivery")
 
 def _escalation_record(raw: object) -> dict[str, Any] | None:
     """The stored `drawing_escalation` read back as `{round, numbers, cause}` plus `stage` when it
-    is `plan`; `None` when it is not whole (`round` an int of at least 1, `numbers` a list of
-    ints, `cause` and `stage` from their closed sets), so a hand-edited record is dropped, as
-    an invalid size record is, and never fails the load."""
+    is `plan`, `unverified` (a list of strings) and `unverified_at` (a string) when present;
+    `None` when it is not whole (`round` an int of at least 1, `numbers` a list of ints, `cause`
+    and `stage` from their closed sets), so a hand-edited record is dropped, as an invalid size
+    record is, and never fails the load. A malformed `unverified` or `unverified_at` is dropped
+    alone, as a bad optional field, and the record stays."""
     if not isinstance(raw, Mapping):
         return None
     round_, numbers, cause, stage = (raw.get(k) for k in ("round", "numbers", "cause", "stage"))
@@ -301,7 +313,57 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
         "numbers": numbers,
         "cause": cause,
         **({"stage": "plan"} if stage == "plan" else {}),
+        **(
+            {"unverified": unverified}
+            if isinstance(unverified := raw.get("unverified"), list)
+            and unverified
+            and all(isinstance(p, str) for p in unverified)
+            else {}
+        ),
+        **({"unverified_at": at} if isinstance(at := raw.get("unverified_at"), str) and at else {}),
     }
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _plan_held_record(raw: object) -> dict[str, Any] | None:
+    """The stored `plan_held` (GH-1004) as it was written, or `None` when it is not whole: not a
+    mapping, a `plan` that is not one, `departures` that are not a list of mappings, a `round`
+    that is not an int, or an `estimate` that is not a mapping with a numeric `cost_usd`. A
+    hand-edited record is dropped as absent, as `_escalation_record` does, and never fails the
+    load."""
+    if not isinstance(raw, Mapping):
+        return None
+    plan, departures, round_, estimate = (
+        raw.get(k) for k in ("plan", "departures", "round", "estimate")
+    )
+    cost = estimate.get("cost_usd") if isinstance(estimate, Mapping) else None
+    if not (
+        isinstance(plan, Mapping)
+        and isinstance(departures, list)
+        and all(isinstance(d, Mapping) for d in departures)
+        and _is_int(round_)
+        and isinstance(cost, int | float)
+        and not isinstance(cost, bool)
+    ):
+        return None
+    return dict(raw)
+
+
+def _format_issue_rows(raw: object) -> list[FormatIssueRecord]:
+    """The records of a stored `format_issue` list that are whole: a `rule` of `RefusalRule` and a
+    non-empty `str` `url` and `at`. Any other record is dropped, and a value that is not a list
+    reads as none: a hand-edited document never fails to load for it."""
+    rules = get_args(RefusalRule)
+    return [
+        {"rule": item["rule"], "url": item["url"], "at": item["at"]}
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and item.get("rule") in rules
+        and all(isinstance(item.get(k), str) and item[k] for k in ("url", "at"))
+    ]
 
 
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
@@ -388,6 +450,10 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    # The document codec is the one place that reads the stored list itself: it sanitises it on
+    # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
+    if "format_issue" in state:
+        state["format_issue"] = _format_issue_rows(state["format_issue"])
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     if "drawing_escalation" in state:
@@ -395,6 +461,11 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             del state["drawing_escalation"]
         else:
             state["drawing_escalation"] = escalation
+    if "plan_held" in state:
+        if (held := _plan_held_record(state["plan_held"])) is None:
+            del state["plan_held"]
+        else:
+            state["plan_held"] = held
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -519,6 +590,8 @@ def render(
         # The best-effort tracker writes that failed (GH-389): closed class, target and time,
         # written only when there is one, as one flow line so `record_closure` replaces it.
         **({"tracker_failures": _LANDING_PLACEHOLDER} if state.get("tracker_failures") else {}),
+        # The issue filed per refusal rule (GH-1011): one flow line, written only when there is one.
+        **({"format_issue": _LANDING_PLACEHOLDER} if state.get("format_issue") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
@@ -537,6 +610,10 @@ def render(
         # before; parsed back under the same names, nothing reads them to decide.
         **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
+        # The verdicts of the early size check: written only when there is a row, so every
+        # document written before it is byte-identical; parsed back under the same name, and
+        # read only by `rules.early_measured`.
+        **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
         **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
@@ -566,6 +643,11 @@ def render(
             if (e := _escalation_record(state.get("drawing_escalation")))
             else {}
         ),
+        # The plan held while the owner answers its own departures (GH-1004), written whenever the
+        # key is there and not `None`, never otherwise, so a document without it is byte-identical
+        # to one written before. Kept out of `RECORD_KEYS` and `_FLOW_KEYS`; `parse` drops a
+        # record that is not whole.
+        **({"plan_held": h} if (h := state.get("plan_held")) is not None else {}),
         # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
         # there and never when it is absent, so a document without it is byte-identical to one
         # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.
@@ -651,6 +733,9 @@ def render(
         # GH-784: when resume closed a pause without building the owner's answer, written only
         # when set so a document without it is byte-identical; read back under the same name.
         **({"owner_decision_unbuilt": e} if (e := state.get("owner_decision_unbuilt")) else {}),
+        # GH-960: the last decision acted on and its route, written only when set.
+        **({"owner_decision_seen": e} if (e := state.get("owner_decision_seen")) else {}),
+        **({"owner_decision_route": e} if (e := state.get("owner_decision_route")) else {}),
         # The delivery assumptions and the cause of a spec delivery's `questions` pause
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.
@@ -668,6 +753,10 @@ def render(
         # A re-plan owed after the owner's decision (GH-798): written only when true, so a
         # document without it is byte-identical to one written before; absent reads false.
         **({"plan_due": True} if state.get("plan_due") else {}),
+        # The GitHub rate-limit pause's instants (GH-989), written only when set, so a
+        # document the limit never paused is byte-identical to one written before them.
+        **({"rate_limit_paused_at": e} if (e := state.get("rate_limit_paused_at")) else {}),
+        **({"rate_limit_noticed_at": e} if (e := state.get("rate_limit_noticed_at")) else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

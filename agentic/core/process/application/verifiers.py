@@ -14,7 +14,10 @@ returns without a model being paid for. Only when a CI verdict has to be waited 
 
 A verifier that raises never takes its siblings down: the others finish, their merged delta
 is written to the document and the first exception, in verifier order, is raised. A verifier
-that escalates leaves the others' deltas in the combined patch. When nothing returned and
+that escalates leaves the others' deltas in the combined patch. The drawing departures the
+final leads left unanswered (`drawing_raised`) are folded into that patch here, once, by
+`drawing_answer.fold_raised`: an owner escalation, also over a sibling's pending error, unless
+a sibling escalated first. When nothing returned and
 nothing escalated, the capability files `final_validation` approved with are committed here,
 once, on the head that was judged (`rules.close_docs_committable`); files owed on another
 head are dropped."""
@@ -27,7 +30,7 @@ import anyio
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import drawing_answer, rules
 from ..domain.roles import DEVELOPER_INTEGRATOR, PM_FINAL, QA_PERFORMANCE, TECH_WRITER_REVIEW, Role
 from ..domain.rules import Verifier
 from ..domain.task import TaskState, apply
@@ -94,7 +97,12 @@ async def verify(
             group.start_soon(guarded, name)
 
     merged = rules.combined_return(state, patches) if patches else {}
+    escalated_before = bool(apply(state, merged).get("escalated"))
+    merged = drawing_answer.fold_raised(state, merged, ports.now())
     if errors:
+        if not escalated_before and apply(state, merged).get("escalated"):
+            # The owner's escalation, folded here, is the pause: the error is not raised over it.
+            return finish(state, merged, ports)
         if patches:
             finish(state, merged, ports)
         raise errors[next(name for name in rules.VERIFIER_ORDER if name in errors)]

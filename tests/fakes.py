@@ -36,6 +36,7 @@ from agentic.core.process.application.ports import (
     ExperimentFile,
     FastForwardView,
     FlagVocabulary,
+    FormatFiler,
     FreeSpace,
     GitError,
     Grant,
@@ -88,12 +89,13 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     JobLog,
 )
-from agentic.core.process.domain.design import Design, NotReady
+from agentic.core.process.domain.design import Design, NotReady, PrototypeListing
 from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
+from agentic.core.process.domain.playbook_land import LandAttempt
 from agentic.core.process.domain.presubmit import (
     ApiBreakLine,
     CheckResult,
@@ -113,13 +115,16 @@ from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
+    Failure,
     FlakeRecord,
+    FormatIssueRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
     TrackerFailure,
+    TrackerFailureRecord,
 )
 from agentic.shared.configuration import Configuration
 
@@ -488,6 +493,7 @@ class MemoryStack:
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
         adr_naming: Literal["numbered", "dated"] = "numbered",
+        prototype: PrototypeListing | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -504,6 +510,8 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # Unreadable by default: a test that wants short drawing paths resolved injects a listing.
+        self.declared_prototype = prototype or PrototypeListing((), "unreadable")
         # None is a product that declares no `docs` block: no generated docs, today's gate.
         self.declared_docs = docs
         # Empty is a product that declares no `generated` globs: only the lockfiles and `docs`.
@@ -678,6 +686,10 @@ class MemoryStack:
     def design(self, revision: str) -> Design | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_design
+
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        # Not tracked in `revisions` either; `listed` is what a test injects.
+        return self.declared_prototype
 
     def docs(self, revision: str) -> Docs | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1774,6 +1786,9 @@ class MemoryTracker:
         self.close_comments: dict[str, str] = {}
         self.close_issue_failures: list[Exception] = []
         self.queue_error: Exception | None = None
+        # GH-839: the issues `held_issues` answers, and the error it raises instead.
+        self.held: set[int] = set()
+        self.held_issues_error: Exception | None = None
         self.states: dict[int, IssueState] = {}
         # GH-137 blocking finding: a number here makes `issue_state` raise `ValueError`
         # (`gh`'s own failure shape, `GhTracker._gh`) instead of answering, so a
@@ -1814,6 +1829,7 @@ class MemoryTracker:
         # class, the adapter's own shape; with it unset the error stays a plain `ValueError`.
         # `events` is every `pull_request`, `merge` and `comment` call in order.
         self.merge_calls: list[tuple[str, str]] = []
+        self.merge_methods: list[str | None] = []  # the `method` of each entry of `merge_calls`
         self.merge_method = "squash"
         self.merge_error: str | None = None
         self.merge_failure: MergeFailure | None = None
@@ -1898,10 +1914,13 @@ class MemoryTracker:
             return dataclasses.replace(pr, head_oid=self.head_oid)
         return pr
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         pull_request_number(reference)  # rejected before anything is recorded, as the adapter does
         self.events.append("merge")
         self.merge_calls.append((reference, head_sha))
+        self.merge_methods.append(method)
         if self.merge_error is not None:
             if self.merge_failure is not None:
                 raise MergeCallFailed(self.merge_failure, self.merge_error)
@@ -2107,6 +2126,11 @@ class MemoryTracker:
         if self.queue_error is not None:
             raise self.queue_error
         return sorted(self._queue)
+
+    def held_issues(self) -> frozenset[int]:
+        if self.held_issues_error is not None:
+            raise self.held_issues_error
+        return frozenset(self.held)
 
     def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         if self.close_issue_failures:
@@ -2364,6 +2388,38 @@ class FakeStopFlag:
         self.marked = True
 
 
+class FakeFormatFiler:
+    """GH-1030: the format-refusal filing, recording each call and answering `answer`."""
+
+    def __init__(
+        self, answer: tuple[FormatIssueRecord | None, list[TrackerFailureRecord]] = (None, [])
+    ) -> None:
+        self.answer = answer
+        self.calls: list[dict[str, object]] = []
+
+    def file(
+        self,
+        *,
+        task_id: str,
+        issue_number: int,
+        product: str,
+        role: str,
+        failures: Sequence[Failure],
+        existing: Sequence[FormatIssueRecord],
+    ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]:
+        self.calls.append(
+            {
+                "task_id": task_id,
+                "issue_number": issue_number,
+                "product": product,
+                "role": role,
+                "failures": list(failures),
+                "existing": list(existing),
+            }
+        )
+        return self.answer
+
+
 class FakePerfLock:
     """GH-318: `acquire` answers `available` and counts; `release` counts. With a `stop` flag
     that is set, `acquire` raises `RunStopped` and takes nothing (GH-385)."""
@@ -2564,6 +2620,66 @@ class FakeSpecValidator:
         return self.result
 
 
+class FakeDraftSpecValidator(FakeSpecValidator):
+    """GH-594 part 5c-1: answers `result` (`spec_unapproved`) for a draft text and `preview` for an
+    approved one, and records every call as `FakeSpecValidator` does. `preview` is a contract
+    unless a test sets another answer."""
+
+    PREVIEW: SpecContract = {
+        "path": "docs/specs/draft.md",
+        "slice": "x",
+        "commit": "a" * 40,
+        "sha256": "b" * 64,
+        "criteria": [],
+        "screens": [],
+        "risks": [],
+        "touches_ui": False,
+        "touches_copy": False,
+    }
+
+    def __init__(
+        self,
+        draft: SpecContract | SpecCause = "spec_unapproved",
+        preview: SpecContract | SpecCause = PREVIEW,
+    ) -> None:
+        super().__init__(draft)
+        self.preview = preview
+
+    def validate(
+        self, text: str, path: str, commit: str, slice_id: str | None, owner_login: str | None
+    ) -> SpecContract | SpecCause:
+        super().validate(text, path, commit, slice_id, owner_login)
+        return self.result if "status: draft" in text else self.preview
+
+
+class CommittingWorkspace(MemoryWorkspace):
+    """GH-594 part 5c-1: a workspace whose commits hold what the checkout has, so a draft Spec
+    can be read back at the commit that wrote it. Each `commit_all` makes a new full sha
+    (`full_head`) and snapshots every `docs/specs/*.md` of the checkout at it, so `show` answers
+    the text as it was at that commit. With `pinned_head` set, nothing is committed (`commit_all`
+    answers `None`, as git does with nothing to commit) and `full_head` is that sha: what `show`
+    knows of it is whatever the test put in `files`."""
+
+    def __init__(self, pinned_head: str | None = None) -> None:
+        super().__init__()
+        self.pinned_head = pinned_head
+
+    def commit_all(self, path: Path, message: str) -> str | None:
+        super().commit_all(path, message)
+        if self.pinned_head is not None:
+            return None
+        sha = self.full_head(path)
+        for entry in sorted((path / "docs/specs").glob("*.md")):
+            if not entry.is_file():
+                continue
+            text = entry.read_text(encoding="utf-8")
+            self.files[(sha, f"docs/specs/{entry.name}")] = text
+        return sha
+
+    def full_head(self, path: Path) -> str:
+        return self.pinned_head or f"{len(self.commits):040x}"
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2747,6 +2863,22 @@ class FakeBoardSent:
         self.memory = memory
 
 
+class FakeLandRecord:
+    """The playbook landing record, in memory: one attempt per product, `saved` keeps every
+    attempt it was given."""
+
+    def __init__(self, attempts: dict[str, LandAttempt] | None = None) -> None:
+        self.attempts: dict[str, LandAttempt] = dict(attempts or {})
+        self.saved: list[tuple[str, LandAttempt]] = []
+
+    def load(self, product: str) -> LandAttempt | None:
+        return self.attempts.get(product)
+
+    def save(self, product: str, attempt: LandAttempt) -> None:
+        self.saved.append((product, attempt))
+        self.attempts[product] = attempt
+
+
 _INSTANTS = ("at", "started_at", "ended_at")
 
 
@@ -2805,6 +2937,7 @@ def memory_ports(
     spec_reader: SpecReader | None = None,
     spec_validator: SpecValidator | None = None,
     now: Callable[[], str] | None = None,
+    format_filing: FormatFiler | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2820,7 +2953,7 @@ def memory_ports(
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
         check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
-        **({} if limits is None else {"limits": limits}),
+        limits=limits if limits is not None else RunLimits(),
         now=now if now is not None else stepping_now(),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
@@ -2834,6 +2967,7 @@ def memory_ports(
         experiment=experiment,
         spec_reader=spec_reader,
         spec_validator=spec_validator,
+        format_filing=format_filing,
     )
 
 

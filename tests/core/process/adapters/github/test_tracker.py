@@ -11,7 +11,9 @@ from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github import tracker as tracker_module
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
+    HeldListMayBeCut,
     MergeCallFailed,
+    TrackerCallFailed,
     TrackerTimedOut,
     TrackerUnreachable,
 )
@@ -23,6 +25,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
+from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
@@ -591,6 +594,92 @@ def test_queue_is_every_open_agentic_issue_sorted_ascending():
     ]
 
 
+HELD_ARGV = [
+    "gh",
+    "issue",
+    "list",
+    "--label",
+    HOLD_LABEL,
+    "--state",
+    "open",
+    "--json",
+    "number",
+    "--limit",
+    str(HELD_LIMIT),
+]
+
+
+def _held_rows(count: int) -> str:
+    return json.dumps([{"number": number} for number in range(1, count + 1)])
+
+
+def test_held_issues_asks_for_the_open_held_issues_in_one_bounded_page():
+    run = Recorder(stdout=_held_rows(3))
+    assert GhTracker(Path("/p"), run).held_issues() == frozenset({1, 2, 3})
+    assert run.calls == [HELD_ARGV]
+
+
+def test_no_held_issue_is_an_empty_set():
+    assert GhTracker(Path("/p"), Recorder(stdout="[]")).held_issues() == frozenset()
+
+
+def test_a_page_one_row_short_of_the_limit_is_a_complete_list():
+    held = GhTracker(Path("/p"), Recorder(stdout=_held_rows(HELD_LIMIT - 1))).held_issues()
+    assert len(held) == HELD_LIMIT - 1
+
+
+def test_a_page_of_exactly_the_limit_may_be_cut_and_raises():
+    with pytest.raises(HeldListMayBeCut):
+        GhTracker(Path("/p"), Recorder(stdout=_held_rows(HELD_LIMIT))).held_issues()
+
+
+def test_a_full_page_raises_even_when_it_holds_a_duplicate():
+    rows = [{"number": number} for number in range(1, HELD_LIMIT)] + [{"number": 1}]
+    assert len(rows) == HELD_LIMIT
+    with pytest.raises(HeldListMayBeCut):
+        GhTracker(Path("/p"), Recorder(stdout=json.dumps(rows))).held_issues()
+
+
+def test_a_duplicate_inside_a_short_page_collapses():
+    rows = [{"number": number} for number in range(1, HELD_LIMIT - 1)] + [{"number": 1}]
+    assert len(rows) == HELD_LIMIT - 1
+    held = GhTracker(Path("/p"), Recorder(stdout=json.dumps(rows))).held_issues()
+    assert len(held) == HELD_LIMIT - 2
+
+
+def test_a_failed_gh_call_raises_tracker_call_failed_naming_no_stderr():
+    with pytest.raises(TrackerCallFailed) as raised:
+        GhTracker(Path("/p"), Recorder(fail=True)).held_issues()
+    assert not isinstance(raised.value, HeldListMayBeCut)
+    assert "no auth" not in str(raised.value)
+    assert isinstance(raised.value.__cause__, ValueError)
+
+
+def test_a_stalled_gh_call_passes_through_as_tracker_timed_out():
+    with pytest.raises(TrackerTimedOut):
+        GhTracker(Path("/p"), _stalls_at("issue", "list")).held_issues()
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not json",
+        "",
+        json.dumps({"number": 3}),
+        json.dumps([3]),
+        json.dumps([{"title": "x"}]),
+        json.dumps([{"number": "3"}]),
+        json.dumps([{"number": True}]),
+        json.dumps([{"number": 3.0}]),
+    ],
+)
+def test_an_unreadable_or_mis_shaped_answer_raises_tracker_call_failed(stdout):
+    with pytest.raises(TrackerCallFailed) as raised:
+        GhTracker(Path("/p"), Recorder(stdout=stdout)).held_issues()
+    assert type(raised.value) is TrackerCallFailed
+    assert not isinstance(raised.value, HeldListMayBeCut)
+
+
 def test_issue_state_reads_blocked_by_state_reason_and_the_closing_merge_commit():
     class Run(Recorder):
         def __call__(self, args, cwd, capture_output, text, check):
@@ -732,6 +821,33 @@ def test_merge_with_no_allowed_method_raises_and_merges_nothing():
     assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
 
 
+def test_merge_with_method_merge_and_merge_commits_allowed_uses_merge_and_pins_the_head():
+    run = MethodRecorder(True, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge") == "merge"
+    assert run.calls[-1] == ["gh", "pr", "merge", "7", "--merge", "--match-head-commit", "abc123"]
+
+
+@pytest.mark.parametrize(
+    "allowed", [(False, True, True), (False, False, True), (False, False, False)]
+)
+def test_merge_with_method_merge_without_merge_commits_raises_no_merge_method_and_merges_nothing(
+    allowed,
+):
+    run = MethodRecorder(*allowed)
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge")
+    assert raised.value.failure == "no_merge_method"
+    assert type(raised.value) is MergeCallFailed
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+    assert run.calls[-1][1:3] == ["repo", "view"]
+
+
+def test_merge_without_method_still_falls_back_to_squash_when_merge_commits_are_off():
+    run = MethodRecorder(False, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method=None) == "squash"
+    assert run.calls[-1][4] == "--squash"
+
+
 def test_merge_never_asks_for_auto_or_branch_deletion():
     run = MethodRecorder(True, True, True)
     GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
@@ -801,6 +917,47 @@ def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_cla
         GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert raised.value.failure == "gh_rejected"
     assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
+
+
+# -- list_pull_requests -------------------------------------------------------------------
+
+
+def _listed(**extra):
+    row = {
+        "number": 3,
+        "url": "https://github.com/o/r/pull/3",
+        "state": "OPEN",
+        "body": "b",
+        "mergeCommit": None,
+        "headRefName": "agentic/playbook",
+    }
+    return json.dumps([{**row, **extra}])
+
+
+def test_list_pull_requests_asks_for_is_cross_repository():
+    run = Recorder(stdout=_listed())
+    GhTracker(Path("/p"), run).list_pull_requests()
+    fields = run.calls[0][run.calls[0].index("--json") + 1].split(",")
+    assert "isCrossRepository" in fields
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"isCrossRepository": True}, True),
+        ({"isCrossRepository": False}, False),
+        ({}, None),
+        ({"isCrossRepository": None}, None),
+        ({"isCrossRepository": "false"}, None),
+        ({"isCrossRepository": 0}, None),
+    ],
+    ids=["true", "false", "missing", "null", "string", "number"],
+)
+def test_list_pull_requests_maps_cross_repository_and_unreadable_values_to_none(extra, expected):
+    run = Recorder(stdout=_listed(**extra))
+    (listed,) = GhTracker(Path("/p"), run).list_pull_requests()
+    assert listed.cross_repository is expected
+    assert (listed.number, listed.branch, listed.state) == (3, "agentic/playbook", "OPEN")
 
 
 # -- pull_requests_on ---------------------------------------------------------------------

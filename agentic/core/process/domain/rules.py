@@ -12,7 +12,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict, assert_never, get_args
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
@@ -24,6 +24,7 @@ from . import (
     drawing,
     escalation_prompts,
     exempt_queue,
+    hold,
     launch_order,
     merge_ci,
     presubmit,
@@ -1804,6 +1805,26 @@ RETRY_TURNS: Mapping[str, int] = MappingProxyType(
 )
 
 
+# The attempts a role run gets after a refusal of its structured output (GH-1017): a delivery
+# refused for its format is retried twice, because the refusal names its rule, field and value
+# and the session that wrote it is still there to fix it.
+FORMAT_ATTEMPTS = 3
+
+
+def attempts_for(last_reason: FailureReason, retries: int) -> int:
+    """How many attempts a role run may make when its last failure is `last_reason`: the
+    one place that decides the bound (`run_with_retry` asks it after every failure, with
+    the failures so far as the count). `retries <= 0` is one attempt, whatever the reason:
+    a shadow review runs with none (`role_retries=0`). A `schema` or `check` failure never
+    gets fewer than `FORMAT_ATTEMPTS`, and more when `retries + 1` is larger; every other
+    reason gets `retries + 1`."""
+    if retries <= 0:
+        return retries + 1
+    if last_reason in ("schema", "check"):
+        return max(FORMAT_ATTEMPTS, retries + 1)
+    return retries + 1
+
+
 def retry_turns(role: Role, failures: Sequence[Failure]) -> int:
     """The turn cap of the next attempt of `role`: its table value when the last failure
     was the harness cutting on `max_turns` and the slug is in `RETRY_TURNS`, `role.max_turns`
@@ -2508,6 +2529,53 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
     if other >= 0.005:
         phases["other"] = other
     return phases
+
+
+class SpentSplit(TypedDict):
+    """The task's cost in two halves and what no run records (GH-999)."""
+
+    definition: float
+    build: float
+    unattributed: float
+
+
+_SPLIT_OF: dict[str, Literal["definition", "build"]] = {
+    "definition": "definition",
+    "plan": "definition",
+    "development": "build",
+    "review": "build",
+}
+
+
+def spent_split(state: TaskState) -> SpentSplit:
+    """The task's cost as definition (`definition` and `plan` phases), build (`development` and
+    `review`) and `unattributed` (the `other` residual of `spent_by_phase`, and any phase
+    `_SPLIT_OF` does not name). Derived only from `spent_by_phase`; never raises; the residual is
+    never apportioned to a phase, so the first two are lower bounds.
+
+    The three sum to `cost_usd` only when the residual reaches `spent_by_phase`'s 0.005 floor;
+    below it the residual is not shown, and a run total above `cost_usd` shows no negative
+    `unattributed`. `phase_of` sends the roles it does not recognise (Tech Writer, QA
+    Performance) to `definition`, so that figure may overstate; `phase_of` is left as it is
+    because `closeness` reads it."""
+    split: SpentSplit = {"definition": 0.0, "build": 0.0, "unattributed": 0.0}
+    for phase, usd in spent_by_phase(state).items():
+        half = _SPLIT_OF.get(phase)
+        if half is None:
+            split["unattributed"] += usd
+        else:
+            split[half] += usd
+    return split
+
+
+def spent_split_line(split: SpentSplit, *, build_in_parts: bool = False) -> str:
+    """The one line that shows `spent_split`. `build_in_parts` says where the build will be
+    spent, in the parts of a split task, instead of a figure of zero."""
+    build = "build: in the parts" if build_in_parts else f"build >= {split['build']:.2f} USD"
+    return (
+        f"definition >= {split['definition']:.2f} USD · {build} · "
+        f"unattributed {split['unattributed']:.2f} USD"
+    )
 
 
 # Routing of the paths of README §2: PjM -> Product Analyst -> PM -> Tech Lead ->
@@ -3609,10 +3677,13 @@ def resumed(
     *,
     at: str,
     drawing_plan: bool = False,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
     `drawing_plan` (GH-766) owes the plan again: only `drawing_answer.resume_patch` passes it.
+    `by_poller` (GH-989) is the poller's own retake: it keeps the GitHub rate limit's two
+    instants, so the wait counts across retakes; any other resume clears them.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
     from the merges it just did, and only that one knows what conflicted. Returns a
@@ -3630,6 +3701,12 @@ def resumed(
         # counts toward what the poller may retry on its own next time.
         "pause_log": [resumed_entry(at=at)],
     }
+    if not by_poller:
+        # Cleared as `None`, which `apply` writes over the plain field and `document.render`
+        # leaves out: the saved document has no such key, never a null. Written only when set.
+        for key in ("rate_limit_paused_at", "rate_limit_noticed_at"):
+            if state.get(key):
+                patch[key] = None
     if state.get("spec"):
         patch["spec_cause"] = None
     if state.get("spec_refusal"):
@@ -4115,6 +4192,12 @@ def _open_to_a_resume(state: TaskState, task_id: str, descends: bool) -> bool:
     sub = state.get("subtasks", {}).get(unit) if unit else None
     if not descends or sub is None or sub.get("branch") != task_branch(task_id):
         return False
+    return no_human_decision_pending(state)
+
+
+def no_human_decision_pending(state: TaskState) -> bool:
+    """Whether the task has nothing a human has to decide: no pull request, the pause (if any) a
+    failure's, no question for the human, no fit question. The one place the rule is written."""
     if state.get("pull_request"):
         return False
     if state.get("escalation_class") not in (None, "failure"):
@@ -4165,12 +4248,19 @@ def increment_patch(state: TaskState) -> dict[str, Any]:
 # and every fact it decides over arrive as arguments (README.md, 14), never a port, a
 # `subprocess` or a `Path`.
 
-# The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
-# issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
-# provider's own server, the network down, or the disk full. `rules.auto_resumable` reads this
+# The `FailureReason`s a pause never needed a human for (ADR-0029, extended by
+# issue #137's own `network`, GH-391's `disk_full` and GH-989's `github_rate_limit`): the
+# account's own quota, the provider's own server, the network down, the disk full, or GitHub's
+# rate limit. `rules.auto_resumable` reads this
 # tuple, and so does the measurement (`core.measurement.domain.scorecard`, for its own failures),
 # which imports it rather than keeping a copy; `rules.pause_kind` is the one classifier of a pause.
-EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
+EXTERNAL_REASONS: tuple[FailureReason, ...] = (
+    "account_limit",
+    "upstream",
+    "network",
+    "disk_full",
+    "github_rate_limit",
+)
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
@@ -4213,6 +4303,13 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 # Never read off the API's "resets at" prose (ADR-0029).
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
+# A GitHub rate limit that outlasted its wait (GH-989): the poller retakes it by the minute,
+# 12 slots, and `rate_limit.RATE_LIMIT_WAIT_MAX` bounds the wait itself. Defined here so
+# `rate_limit` imports `rules` and `rules` never imports `rate_limit`. Never the account's
+# limit: no `ACCOUNT_LIMIT_*` decision reads it.
+GITHUB_RATE_LIMIT_SCHEDULE: tuple[int, ...] = (60,) * 12
+RATE_LIMIT_PERSISTED = "GitHub rate limit outlasted 12 h and needs a human"
 
 
 def resumed_entry(*, at: str) -> ResumedPauseEntry:
@@ -4362,15 +4459,20 @@ def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
     return "human" if _resume_key(entries) is None else "external"
 
 
+# The failure reasons whose entry may carry a stated `resets_at`.
+_RESET_STATING_REASONS: tuple[FailureReason, ...] = ("account_limit", "github_rate_limit")
+
+
 def stated_reset(state: TaskState) -> datetime | None:
-    """The latest `resets_at` among the current epoch's `account_limit` failure entries
-    (ADR-0039, addendum GH-381), the latest by time whatever order they were logged in;
+    """The latest `resets_at` among the current epoch's `account_limit` and `github_rate_limit`
+    failure entries (ADR-0039, addendum GH-381; GH-989), the latest by time whatever order they
+    were logged in;
     entries without one, or with one that is not ISO-8601 with an offset, are ignored.
     `None` when none states a reset: the pause then follows its calendar as ever."""
     stated = [
         _instant(entry.get("resets_at"))
         for entry in _current_epoch(state)
-        if entry["kind"] == "failure" and entry["value"] == "account_limit"
+        if entry["kind"] == "failure" and entry["value"] in _RESET_STATING_REASONS
     ]
     return max((t for t in stated if t is not None), default=None)
 
@@ -4399,7 +4501,10 @@ def schedule_for(reason: ResumeKey, chase_prior: int = 0) -> tuple[int, ...]:
     `RETAKE_SCHEDULE`, bounded by `MECHANICAL_RETAKE_MAX`): the flat `ACCOUNT_LIMIT_SCHEDULE` for
     a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
     reached `ACCOUNT_LIMIT_CHASE_MAX`, the growing `RETAKE_SCHEDULE` for everything
-    else. The only place a reason maps to a calendar; no other reason is ever hourly."""
+    else, and the minutely `GITHUB_RATE_LIMIT_SCHEDULE` for GitHub's rate limit (GH-989). The
+    only place a reason maps to a calendar; no other reason is ever hourly."""
+    if reason == "github_rate_limit":
+        return GITHUB_RATE_LIMIT_SCHEDULE
     if reason != "account_limit":
         return RETAKE_SCHEDULE
     return (
@@ -4444,9 +4549,12 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     interview's own section (`failed_interviews`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
-    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593)."""
+    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593); GitHub's rate
+    limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s."""
     if reason in MECHANICAL_CAUSES:
         return MECHANICAL_RETAKE_MAX
+    if reason == "github_rate_limit":
+        return len(GITHUB_RATE_LIMIT_SCHEDULE)
     if reason == "account_limit":
         return len(ACCOUNT_LIMIT_SCHEDULE)
     return 1 if failed_interviews(state) else len(RETAKE_SCHEDULE)
@@ -5134,9 +5242,10 @@ def account_limit_due(
 
 def _governing_reset(r: ResumeCandidate) -> datetime | None:
     """The stated reset that decides `r`'s due time, `None` when none does: only an
-    `account_limit` pause that is not yet retaken and has not spent the persisted week
-    (`account_limit_persisted` escalates it, whatever the hint says)."""
-    if r.reason != "account_limit" or r.retaken or account_limit_persisted(r):
+    `account_limit` or `github_rate_limit` pause that is not yet retaken and, for the account's,
+    has not spent the persisted week (`account_limit_persisted` escalates it, whatever the hint
+    says)."""
+    if r.reason not in _RESET_STATING_REASONS or r.retaken or account_limit_persisted(r):
         return None
     return r.resets_at
 
@@ -5218,10 +5327,11 @@ def needs_a_human(state: TaskState) -> bool:
     `account_limit`) and that has not spent the hourly week (`ACCOUNT_LIMIT_PERSISTED`,
     the escalation that is left to the human). Everything else keeps the label: an
     `upstream` or `network` pause, a mixed set of external and own failures, an
-    escalation that is not a failure."""
-    if state.get("escalated") == ACCOUNT_LIMIT_PERSISTED:
+    escalation that is not a failure. GitHub's rate limit (`github_rate_limit`, GH-989) is the
+    same, until it outlasts its wait and escalates as `RATE_LIMIT_PERSISTED`."""
+    if state.get("escalated") in (ACCOUNT_LIMIT_PERSISTED, RATE_LIMIT_PERSISTED):
         return True
-    return auto_resumable(state) != "account_limit"
+    return auto_resumable(state) not in ("account_limit", "github_rate_limit")
 
 
 @dataclass(frozen=True)
@@ -5276,6 +5386,36 @@ class LandCandidate:
     kind: RunKind
 
 
+DeferredKind = Literal["merge", "land", "orphan", "launch", "resume", "retake"]
+DeferredReason = Literal[
+    "no_slot",
+    "land_queued",
+    "exempt_busy",
+    "pause_waiting",
+    "backoff",
+    "pacing",
+    "resume_waiting",
+    "space_held",
+    "schedule",
+    "held",
+]
+
+# The only pairs a `Deferred` may hold (GH-839): `land` and `merge` never carry `held`, a
+# held pull request still lands as it does until the landing part is built.
+DEFERRED_REASONS: Mapping[DeferredKind, frozenset[DeferredReason]] = MappingProxyType(
+    {
+        "merge": frozenset({"backoff", "exempt_busy"}),
+        "land": frozenset({"no_slot", "land_queued", "exempt_busy", "pause_waiting"}),
+        "orphan": frozenset({"no_slot", "held"}),
+        "launch": frozenset(
+            {"held", "space_held", "schedule", "resume_waiting", "pacing", "no_slot"}
+        ),
+        "resume": frozenset({"held"}),
+        "retake": frozenset({"held"}),
+    }
+)
+
+
 @dataclass(frozen=True)
 class Deferred:
     """A merge, land, orphan retake or launch `poll_plan` held back this round, and why: `no_slot`
@@ -5293,21 +5433,18 @@ class Deferred:
     A `launch` (GH-836) is an unblocked candidate the plan did not start, with exactly one of
     `space_held` (the round is held by the free-space floor), `schedule` (its own attempt
     calendar has not come), `resume_waiting` (a resume of the product still waits out its
-    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence."""
+    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence,
+    with `held` (GH-839, its issue carries the hold label) before them all. A `resume` or a
+    `retake` is deferred only as `held`; an `orphan` as `no_slot` or `held`. `DEFERRED_REASONS`
+    lists the legal pairs and a pair outside it raises."""
 
-    kind: Literal["merge", "land", "orphan", "launch"]
+    kind: DeferredKind
     issue: int
-    reason: Literal[
-        "no_slot",
-        "land_queued",
-        "exempt_busy",
-        "pause_waiting",
-        "backoff",
-        "pacing",
-        "resume_waiting",
-        "space_held",
-        "schedule",
-    ]
+    reason: DeferredReason
+
+    def __post_init__(self) -> None:
+        if self.reason not in DEFERRED_REASONS[self.kind]:
+            raise ValueError(f"no deferral of kind {self.kind!r} has the reason {self.reason!r}")
 
 
 def holds_launches(deferred: Deferred) -> bool:
@@ -5328,7 +5465,7 @@ def holds_launches(deferred: Deferred) -> bool:
             return False
         case "backoff":
             return False
-        case "pacing" | "resume_waiting" | "space_held" | "schedule":
+        case "pacing" | "resume_waiting" | "space_held" | "schedule" | "held":
             return False
         case _:
             assert_never(deferred.reason)
@@ -5456,6 +5593,8 @@ def poll_plan(
     backed_off_merges: Sequence[int] = (),
     exempt_yield: bool = False,
     dependents: Mapping[int, int] = {},
+    held_issues: frozenset[int] = frozenset(),
+    holds_unread: bool = False,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -5562,7 +5701,18 @@ def poll_plan(
     not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
     merge starts, because a start would write scratch to a disk that is almost full. It defers
     only the unblocked launch candidates, each `space_held` (GH-836), so it opens no Espera de
-    aterrizaje."""
+    aterrizaje.
+
+    `held_issues` (GH-839, `hold.held`) are the issues the round's one hold read found
+    labelled: each unblocked launch, retake (reboot, crash or orphan) and resume among them is
+    dropped before any slot, pace or calendar is computed and is `Deferred(kind, issue, "held")`,
+    `kind` being `launch`, `retake` or `resume` (`orphan` for an orphan retake), and appears
+    nowhere else. A held resume still counts for `account_paused`, and a held `account_limit`
+    resume still waiting its calendar still stops the launches and lands, as the pause it is;
+    any other held resume's wait stops nobody. Closes and notices are never held; lands and
+    merges are not this part's. `holds_unread` is true when the read failed: the plan is the
+    closes and the notices alone, with nothing deferred. A round held by volumes (`held`)
+    wins over both."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
     unblocked = sorted(
@@ -5571,11 +5721,34 @@ def poll_plan(
     )
     if held:
         return PollPlan(actions, [Deferred("launch", c.issue, "space_held") for c in unblocked])
+    if holds_unread:
+        return PollPlan(actions, [])
     received_slots = available_slots
+
+    deferred: list[Deferred] = []
+    held_launches = [c for c in unblocked if hold.held(c.issue, held_issues)]
+    unblocked = [c for c in unblocked if not hold.held(c.issue, held_issues)]
+    deferred.extend(Deferred("launch", c.issue, "held") for c in held_launches)
+    deferred.extend(
+        Deferred("retake", i, "held")
+        for i in sorted({*retakes, *crash_retakes})
+        if hold.held(i, held_issues)
+    )
+    deferred.extend(
+        Deferred("orphan", i, "held") for i in sorted(orphan_retakes) if hold.held(i, held_issues)
+    )
+    retakes = [i for i in retakes if not hold.held(i, held_issues)]
+    crash_retakes = [i for i in crash_retakes if not hold.held(i, held_issues)]
+    orphan_retakes = [i for i in orphan_retakes if not hold.held(i, held_issues)]
+    all_resumes = resumes
+    deferred.extend(
+        Deferred("resume", r.issue, "held") for r in resumes if hold.held(r.issue, held_issues)
+    )
+    resumes = [r for r in resumes if not hold.held(r.issue, held_issues)]
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
     model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
-    paused = account_paused(resumes, now)
+    paused = account_paused(all_resumes, now)
     land_total = received_slots if land_slots is None else land_slots
     land_ready = bool(model_lands) and not paused and land_total > 0
     land_queued = land_ready and earlier_land_wait
@@ -5622,7 +5795,6 @@ def poll_plan(
             unslotted_orphans.append(action.issue)
     slots_left = max(received_slots - started - (1 if land_plain else 0), 0)
 
-    deferred: list[Deferred] = []
     if paused:
         deferred.extend(Deferred("land", issue, "pause_waiting") for issue in model_lands)
         model_lands = []
@@ -5635,7 +5807,10 @@ def poll_plan(
     deferred.extend(Deferred("orphan", issue, "no_slot") for issue in sorted(unslotted_orphans))
 
     some_resume_still_waiting = any(
-        not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
+        not resume_exhausted(r)
+        and retake_due(r, now) is None
+        and (r.reason == "account_limit" or not hold.held(r.issue, held_issues))
+        for r in all_resumes
     )
     due = [
         c
@@ -7305,3 +7480,95 @@ def fast_forward_blocked(
     if clash:
         return FastForwardBlock("would_overwrite", tuple(clash[:MAX_BLOCK_PATHS]))
     return None
+
+
+# --- The early size check (GH-999) ---
+# Whether the check is still due, and the only reader of the record it leaves in the state
+# (`early_split`). `early_size_due` is the single predicate; `early_measured` reads the cause alone.
+# The decision on a declared size is `early_split.verdict`.
+
+
+def early_measured(state: TaskState) -> bool:
+    """Whether the early check already has its answer: some row of `early_split` has a cause
+    other than `sizer_failed`, or at least two rows are `sizer_failed` (one retry, counted by
+    rows). The only reader of the record, and it reads the cause alone."""
+    causes = [row.get("cause") for row in state.get("early_split", [])]
+    failed = sum(1 for cause in causes if cause == "sizer_failed")
+    return failed >= 2 or len(causes) > failed
+
+
+def _not_a_feature(state: TaskState) -> bool:
+    return state.get("type") != "feature"
+
+
+def _not_full_path(state: TaskState) -> bool:
+    return state.get("path", "full") != "full"
+
+
+def _is_part_of_a_split(state: TaskState) -> bool:
+    return split_part_of(state.get("description", "")) is not None
+
+
+def _is_promoted(state: TaskState) -> bool:
+    return bool(state.get("promotion"))
+
+
+def _is_evaluation(state: TaskState) -> bool:
+    return "evaluation" in state
+
+
+def _ran_a_plan_role(state: TaskState) -> bool:
+    return any(phase_of(run.get("section", run["role"])) == "plan" for run in state.get("runs", []))
+
+
+def _holds_plan_record(state: TaskState) -> bool:
+    return any(
+        (
+            state.get("plan_route"),
+            state.get("estimate"),
+            state.get("planned_size"),
+            state.get("subtasks"),
+            state.get("parts"),
+        )
+    )
+
+
+def _plan_is_due(state: TaskState) -> bool:
+    return bool(state.get("plan_due") or state.get("fit_question"))
+
+
+_LADDER_SECTIONS = frozenset(
+    role.name for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, UI_LEAD, PM_CONSOLIDATOR, TECH_WRITER)
+)
+
+
+def _ladder_started(state: TaskState) -> bool:
+    return any(run.get("section", run["role"]) in _LADDER_SECTIONS for run in state.get("runs", []))
+
+
+# The task is not the kind of work the check is for.
+_OUT_OF_SCOPE: tuple[Callable[[TaskState], bool], ...] = (
+    _not_a_feature,
+    _not_full_path,
+    spec_delivery,
+    _is_part_of_a_split,
+    _is_promoted,
+    _is_evaluation,
+)
+# The plan already started, so the check came too late to be the first word on size.
+_PLAN_STARTED: tuple[Callable[[TaskState], bool], ...] = (
+    _ran_a_plan_role,
+    _holds_plan_record,
+    _plan_is_due,
+)
+_LADDER_STARTED: tuple[Callable[[TaskState], bool], ...] = (_ladder_started,)
+
+
+def early_size_due(state: TaskState) -> bool:
+    """Whether the early check is still due for this task: false for anything but a `feature`
+    on path `full` without a spec; for a part of a split, a promoted task, or an evaluation
+    run; for a task whose plan or design ladder already started; and once `early_measured`."""
+    return not any(
+        exclusion(state)
+        for exclusion in (*_OUT_OF_SCOPE, *_PLAN_STARTED, *_LADDER_STARTED, early_measured)
+    )

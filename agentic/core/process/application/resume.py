@@ -22,7 +22,7 @@ from typing import Literal, cast, get_type_hints
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, drawing, drawing_answer, rules
+from ..domain import cost_history, document, drawing, drawing_answer, rules
 from ..domain import landing as landing_rules
 from ..domain.retakes import RESUMED_BY_POLLER, RETAKES_SPENT
 from ..domain.task import (
@@ -33,8 +33,9 @@ from ..domain.task import (
     apply,
 )
 from ..domain.tracker_items import DONE, PLAN_NOTE
-from . import landing_plan
+from . import landing_plan, plan
 from .archive import STARTED_OVER
+from .checkouts import task_base
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
@@ -52,6 +53,7 @@ from .poll import (
     assess_merge,
 )
 from .ports import GitError, Ports, Workspace
+from .reflect_run import closed_documents
 from .refusal_note import AUTO_MERGE_REFUSED
 from .run_role import task_cap
 from .stack_facts import StackMemo
@@ -149,6 +151,9 @@ class Resumption:
     drawing_answers: tuple[DepartureRecord, ...] = ()
     # The `<n>=<verdict>` of the answers above that arrived by `--drawing`, for the summary.
     drawing_flagged: tuple[str, ...] = ()
+    # GH-1004: the plan check passed again for the held plan this resume restores
+    # (`drawing_answer.plan_stands`). The graph's `pause` node reads it back through `answer()`.
+    plan_recheck: bool = False
 
     def answer(self) -> dict[str, object]:
         """What the graph resumes with: the decision, the `--estimate` when given, and the
@@ -158,6 +163,8 @@ class Resumption:
             out["estimate"] = self.estimate
         if self.drawing_answers:
             out["drawing_departures"] = list(self.drawing_answers)
+        if self.plan_recheck:
+            out["plan_recheck"] = True
         return out
 
 
@@ -534,6 +541,7 @@ def prepare(
     estimate: float | None = None,
     increment: Increment | None = None,
     drawing_flags: Sequence[str] = (),
+    by_poller: bool = False,
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
@@ -544,6 +552,9 @@ def prepare(
     task paused at the cap of its estimate. It is itself the human's decision (the poller
     never passes one); on any other pause it is a usage error. `--task-budget` stays the
     flat cap's, read below, whatever the estimate in force.
+
+    `by_poller` (GH-989) is the poller's own retake, which keeps the GitHub rate limit's two
+    instants (`rules.resumed`); a manual resume leaves it false and clears them.
 
     `drawing_flags` are the `--drawing <n>=accept|reject` of a pause on drawing departures
     (GH-766): any misuse is a `ValueError`, and on such a pause the answers are read by
@@ -573,6 +584,7 @@ def prepare(
         )
     decision = None
     answered: list[DepartureRecord] = []
+    plan_recheck = False
     if pending:
         resumed, target = paused, ", ".join(pending)
     else:
@@ -601,7 +613,10 @@ def prepare(
             at = ports.now()
             settled = apply(
                 paused,
-                {**rules.resumed(paused, decision, estimate, at=at), "owner_decision_unbuilt": at},
+                {
+                    **rules.resumed(paused, decision, estimate, at=at, by_poller=by_poller),
+                    "owner_decision_unbuilt": at,
+                },
             )
             return Resumption(
                 task_id,
@@ -634,7 +649,16 @@ def prepare(
             )
         owed = _owed_publication(task_id, paused, source, cfg, ports)
         paused = apply(paused, {"publish_owed": owed})
-        patch = drawing_answer.resume_patch(paused, decision, estimate, answered, at=ports.now())
+        plan_recheck = _plan_recheck(paused, answered, decision, cfg, ports)
+        patch = drawing_answer.resume_patch(
+            paused,
+            decision,
+            estimate,
+            answered,
+            at=ports.now(),
+            plan_recheck=plan_recheck,
+            by_poller=by_poller,
+        )
         resumed = apply(paused, patch)
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
@@ -670,6 +694,7 @@ def prepare(
         target,
         cap,
         interrupted=bool(pending),
+        plan_recheck=plan_recheck,
         estimate=estimate,
         increment=increment,
         drawing_answers=tuple(answered),
@@ -677,6 +702,37 @@ def prepare(
             f"{row['number']}={flags[row['number']]}" for row in answered if row["number"] in flags
         ),
     )
+
+
+def _plan_recheck(
+    paused: TaskState,
+    answered: Sequence[DepartureRecord],
+    decision: str | None,
+    cfg: Configuration,
+    ports: Ports,
+) -> bool:
+    """Whether the plan held when the plan node escalated passes its check again (GH-1004), asked
+    only when `drawing_answer.plan_stands_pre` holds: any other resume reads no design, history,
+    workflow or stack. The check is the plan node's own (`plan.estimate_check`, judging the spend
+    at resume time) run on the held plan exactly as stored; a stack or document that cannot be
+    read, or a design the product no longer declares, is no recheck and the task plans again."""
+    if not drawing_answer.plan_stands_pre(paused, answered, decision):
+        return False
+    held = paused.get("plan_held")
+    if held is None:
+        return False
+    try:
+        design = ports.stack.design(task_base(paused, ports))
+        if design is None:
+            return False
+        history = cost_history.build(closed_documents(ports))
+        part_of = rules.split_part_of(paused.get("description", ""))  # the plan node's `_part_of`
+        folded = apply(paused, {"drawing_departures": list(answered)})
+        check = plan.estimate_check(cfg, folded, history, part_of, ports, design)
+        check(dict(held["plan"]))  # raises for a plan the check refuses
+    except Exception:
+        return False  # any failure of the recheck means: plan again, as today
+    return True
 
 
 def settle(r: Resumption, ports: Ports) -> TaskState:
@@ -834,6 +890,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"({state.get('status', 'open')})",
         f"reason:    {state.get('escalated') or 'none: the run stopped without escalating'}",
         f"spent:     {state.get('cost_usd', 0.0):.2f} USD ({phases})",
+        f"split:     {rules.spent_split_line(rules.spent_split(state))}",
         f"task cap:  {r.cap_usd:.2f} USD ({how})",
         f"{DECISION}{_indented(r.decision) if r.decision else 'none'}",
         f"resumes:   {r.target}{_subtasks(r)}",

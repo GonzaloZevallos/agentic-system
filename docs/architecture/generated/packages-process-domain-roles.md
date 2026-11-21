@@ -13,6 +13,7 @@ Esta página muestra los módulos del grupo `roles` de `domain` y los imports qu
 graph TD
     g_domain__checks["checks (grupo)"]
     g_domain__landing["landing (grupo)"]
+    g_domain__machine["machine (grupo)"]
     g_domain__state["state (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_domain__copy["domain.copy"]
@@ -30,6 +31,7 @@ graph TD
     m_domain__copy --> g_domain__state
     m_domain__copy --> m_domain__schemas
     m_domain__denials --> m_domain__roles
+    m_domain__drawing --> g_domain__machine
     m_domain__drawing --> m_domain__design
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state
@@ -38,6 +40,7 @@ graph TD
     m_domain__schema_guard --> g_domain__state
     m_domain__schemas --> g_domain__checks
     m_domain__schemas --> g_domain__landing
+    m_domain__schemas --> g_domain__machine
     m_domain__schemas --> g_domain__state
     m_domain__schemas --> g_pkg__agentic__shared
     m_domain__schemas --> m_domain__drawing

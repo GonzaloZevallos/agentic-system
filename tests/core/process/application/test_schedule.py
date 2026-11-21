@@ -21,7 +21,9 @@ from agentic.core.process.domain.task import (
     add_assumptions,
     add_drawing_departures,
     add_drawing_escalation,
+    add_early_split,
     add_flakes,
+    add_format_issues,
     add_full_checks_reads,
     add_merge_ci,
     add_restorations,
@@ -35,6 +37,7 @@ from agentic.core.process.domain.task import (
     first,
     last,
     merge,
+    merge_subtasks,
     sticky_true,
 )
 from agentic.shared.configuration import Configuration
@@ -405,7 +408,7 @@ def value_for(key: str, branch: str, n: int):
         return 0.25 * (n % 3 + 1)
     if reducer is operator.add:
         return [f"{branch}:{key}:{n}"]
-    if reducer is merge or reducer is first:
+    if reducer is merge or reducer is merge_subtasks or reducer is first:
         return {f"{branch}:{n % 2}": f"{key}:{n}"}
     if reducer is add_flakes:
         return [{"check": f"c{n % 2}", "head": "h", "gate": "g", "tests": [f"{branch}{n}"]}]
@@ -418,6 +421,11 @@ def value_for(key: str, branch: str, n: int):
         # row that differed by branch would depend on which branch landed first.
         target = "comment" if n % 2 else "label"
         return [{"target": target, "cls": "transient", "at": f"{target}-at"}]
+    if reducer is add_format_issues:
+        # One record per rule, `url` and `at` a function of the rule alone: the first record seen
+        # wins, so a record that differed by branch would depend on which branch landed first.
+        rule = ("unmapped", "output_missing")[n % 2]
+        return [{"rule": rule, "url": f"https://x/{rule}", "at": f"{rule}-at"}]
     if reducer is add_tracker_actions:
         # One record per hash, a function of the hash alone: the first record seen wins, so a
         # record that differed by branch would depend on which branch landed first.
@@ -454,6 +462,11 @@ def value_for(key: str, branch: str, n: int):
         # One row per (parent, cause, at), a function of that key alone: a later row replaces
         # the earlier, so a row that differed by branch would depend on which landed last.
         return [{"parent": 7, "cause": "c", "at": f"t{n % 3}", "resumed_at": None}]
+    if reducer is add_early_split:
+        # The record has one serial writer, so the reducer is not commutative; the one row every
+        # branch writes is the same, and an equal row adds nothing, so the fold cannot depend on
+        # which branch landed first.
+        return [{"verdict": "go", "cause": "fits", "at": "t"}]
     if reducer is add_shadow_reviews:
         # One row per subtask, a function of the subtask alone: the first row seen wins, so a
         # row that differed by branch would depend on which branch landed first.
@@ -530,11 +543,14 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add,
             operator.add,
             merge,
+            merge_subtasks,
             first,
             add_assumptions,
             add_drawing_departures,
             add_drawing_escalation,
+            add_early_split,
             add_flakes,
+            add_format_issues,
             add_full_checks_reads,
             add_merge_ci,
             add_restorations,
@@ -643,3 +659,41 @@ def test_the_branch_documents_hand_everything_but_save_to_the_wrapped_port():
     assert docs.load("GH-1") is not None
     docs.record_closure("GH-1", {"closed_at": "now"})
     assert inner.closures["GH-1"] == {"closed_at": "now"}
+
+
+async def test_no_delta_of_a_fan_out_carries_the_subtasks_reset_and_both_siblings_survive(
+    cfg, monkeypatch
+):
+    from agentic.core.process.application import schedule
+    from agentic.core.process.domain.task import SUBTASKS_RESET
+
+    produced: list[dict] = []
+    real = schedule.delta
+
+    def recording(before, after):
+        out = real(before, after)
+        produced.append(out)
+        return out
+
+    monkeypatch.setattr(schedule, "delta", recording)
+    inner = MemoryDocuments()
+    h = Harness(["a", "b"])
+    h.saves["b"] = 1
+    start = task(sub("a"), sub("b"))
+    run = asyncio.create_task(
+        run_subtasks(start, cfg, memory_ports(documents=inner), h.branch, h.turn, 2, ready)
+    )
+    await h.started_("a", "b")
+    for gate in h.gates.values():
+        gate.set()
+    result = await asyncio.wait_for(run, WAIT_S)
+
+    assert h.turns >= 1 and produced
+    for patch in [*produced, result]:
+        assert SUBTASKS_RESET not in patch.get("subtasks", {})
+    folded = apply(start, result)
+    assert {sid: s["status"] for sid, s in folded["subtasks"].items()} == {
+        "a": "approved",
+        "b": "approved",
+    }
+    assert all(SUBTASKS_RESET not in doc["subtasks"] for doc in inner.saved)
