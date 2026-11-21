@@ -2279,3 +2279,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-21T15:37:38.600+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When you change a port contract or a flow, update the matching docs/architecture pages in the same change, and grep them for the flow's steps and the port's name before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1038
+  sources:
+  - finding
+  added_at: '2026-11-21T22:50:00.511+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you route a new case into an existing code path, read what that path emits (comments, labels, side effects) and check it against each plan invariant before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1038
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T22:50:00.511+00:00'
