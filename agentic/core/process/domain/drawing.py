@@ -233,6 +233,13 @@ def _lines_of(text: str) -> list[tuple[int, Verdict]]:
     return [(c.number, c.verdict) for c in _classify(text) if c.verdict is not None]
 
 
+def only_verdicts(text: str | None) -> bool:
+    """Whether a decision says nothing but verdicts: `None` or blank, or every non-empty line
+    is a whole verdict line (`_VERDICT_LINE`). Any other line, a quote or a fence included, is
+    the owner saying something else."""
+    return all(_VERDICT_LINE.match(line) for line in (text or "").splitlines() if line.strip())
+
+
 def verdicts(text: str) -> Verdicts:
     """The verdicts one comment gives: a number with two different verdicts in it is
     `contradicted` and not `given`; the same verdict twice counts once."""

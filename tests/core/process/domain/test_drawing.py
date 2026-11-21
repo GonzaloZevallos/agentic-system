@@ -770,3 +770,22 @@ def test_every_refusal_under_a_subdirectory_prototype_names_the_expected_form(de
     refused = resolve(design, cited, "Q1")
     assert isinstance(refused, Refused)
     assert f"cite the full path, {PROTO}/<name>" in refused.reason
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, True),
+        ("", True),
+        ("  \n\t\n", True),
+        ("Drawing 1: accept", True),
+        ("  drawing 12: REJECT  \n\nDrawing 3: accept\n\n", True),
+        ("Drawing 1: accept\nthanks!", False),
+        ("Drawing 1: accept and ship it", False),
+        ("looks fine", False),
+        ("Drawing 1: maybe", False),
+        ("> Drawing 1: accept", False),
+    ],
+)
+def test_only_verdicts_is_true_for_nothing_or_verdict_lines_alone(text, expected):
+    assert drawing_module.only_verdicts(text) is expected

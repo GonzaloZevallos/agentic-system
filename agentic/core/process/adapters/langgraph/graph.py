@@ -276,16 +276,19 @@ def _pause_node(ports_of: PortsOf):
         while rules.tracker_item_pause(state) and not (answer.get("decision") or "").strip():
             answer = interrupt(payload) or {}
         ports = ports_of(cfg, config)
-        # GH-766: the rows `resume.prepare` answered, folded by the field's reducer.
+        # The owner's labels as they are now (GH-591): `path:full` promotes, nothing demotes.
+        relabel = relabelled(state, ports)
+        # GH-766: the rows `resume.prepare` answered, folded by the field's reducer. GH-1004: the
+        # held plan is restored only when `prepare` rechecked it and the relabel adds no promotion.
         resumed = drawing_answer.resume_patch(
             state,
             answer.get("decision"),
             answer.get("estimate"),
             answer.get("drawing_departures") or [],
             at=ports.now(),
+            plan_recheck=bool(answer.get("plan_recheck", False)) and "promotion" not in relabel,
         )
-        # The owner's labels as they are now (GH-591): `path:full` promotes, nothing demotes.
-        return apply(resumed, relabelled(state, ports))
+        return apply(resumed, relabel)
 
     return pause
 
