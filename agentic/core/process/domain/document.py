@@ -34,6 +34,8 @@ from .task import (
     CarveOutcome,
     CarveRecord,
     DepartureRecord,
+    FormatIssueRecord,
+    RefusalRule,
     RoleRun,
     assumption_text,
 )
@@ -104,7 +106,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
 # one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
 # `stack_pauses` (GH-899) is the list of waits of a stacked child, which the poller's hold replaces
-# whole with `add_stack_pauses`' result.
+# whole with `add_stack_pauses`' result. `format_issue` (GH-1011) is the issue filed per refusal
+# rule, replaced whole with `add_format_issues`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -120,6 +123,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flake_comments",
         "flakes",
         "tracker_failures",
+        "format_issue",
         "lead_time",
         "head_yields",
         "lane_admitted",
@@ -141,6 +145,7 @@ _FLOW_KEYS = (
     "merge_refusal",
     "flakes",
     "tracker_failures",
+    "format_issue",
     "lead_time",
     "head_yields",
     "lane_admitted",
@@ -319,6 +324,20 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
     }
 
 
+def _format_issue_rows(raw: object) -> list[FormatIssueRecord]:
+    """The records of a stored `format_issue` list that are whole: a `rule` of `RefusalRule` and a
+    non-empty `str` `url` and `at`. Any other record is dropped, and a value that is not a list
+    reads as none: a hand-edited document never fails to load for it."""
+    rules = get_args(RefusalRule)
+    return [
+        {"rule": item["rule"], "url": item["url"], "at": item["at"]}
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and item.get("rule") in rules
+        and all(isinstance(item.get(k), str) and item[k] for k in ("url", "at"))
+    ]
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -403,6 +422,10 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    # The document codec is the one place that reads the stored list itself: it sanitises it on
+    # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
+    if "format_issue" in state:
+        state["format_issue"] = _format_issue_rows(state["format_issue"])
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     if "drawing_escalation" in state:
@@ -534,6 +557,8 @@ def render(
         # The best-effort tracker writes that failed (GH-389): closed class, target and time,
         # written only when there is one, as one flow line so `record_closure` replaces it.
         **({"tracker_failures": _LANDING_PLACEHOLDER} if state.get("tracker_failures") else {}),
+        # The issue filed per refusal rule (GH-1011): one flow line, written only when there is one.
+        **({"format_issue": _LANDING_PLACEHOLDER} if state.get("format_issue") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),

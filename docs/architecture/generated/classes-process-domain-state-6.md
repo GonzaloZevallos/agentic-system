@@ -43,9 +43,9 @@ classDiagram
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
+    class task__FormatIssueRecord["FormatIssueRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksJob["FullChecksJob"]
-    class task__FullChecksRead["FullChecksRead"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
