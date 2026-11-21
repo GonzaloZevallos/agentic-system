@@ -15,7 +15,7 @@ sequenceDiagram
     participant Poller
     participant Resume as agentic resume
     Graph->>Escalate: a role, a pair or the cap cannot go on
-    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment
+    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment (nothing for an unpersisted github_rate_limit pause)
     Escalate->>Pause: the same state
     Pause->>Pause: interrupt, checkpoint saved
     Note over Graph,Pause: the run ends, nothing is spent while it waits
@@ -42,7 +42,14 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:needs_a_human` lo dice, y comenta el issue con el
    prefijo `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`). Una pausa
    causada solo por el límite de la cuenta, que el poller retoma sola, no lleva la etiqueta
-   (glosario de `agentic/core/process/CONTEXT.md`).
+   (glosario de `agentic/core/process/CONTEXT.md`). Una pausa `github_rate_limit` que no está
+   persistida va más lejos: `agentic/core/process/domain/rate_limit.py:tracker_silent` vale
+   verdadero y `escalate` solo guarda el documento, sin etiqueta y sin comentario `Escalated: `
+   (lo mismo para el escalado `RATE_LIMIT_PERSISTED`, cuyo único escritor es el poller). El parche
+   que `escalate` guarda y devuelve pasa por
+   `agentic/core/process/domain/rate_limit.py:cleared_on_close`: un escalado de cualquier otra
+   clase borra `rate_limit_paused_at` y `rate_limit_noticed_at` del documento, porque el próximo
+   límite es una espera nueva; la pausa `github_rate_limit` los conserva.
 2. **La pausa.** El nodo `pause` va después de `escalate` y no tiene efectos
    (`agentic/core/process/adapters/langgraph/graph.py:pause`). Ahí vive el `interrupt()`:
    LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso volvería a
@@ -97,6 +104,11 @@ sequenceDiagram
    (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
    `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
    `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
+   Excepción (GH-1004): si el dueño aceptó todas las desviaciones que declaró el plan retenido
+   (`plan_held`), con una decisión de solo veredictos y sin promoción, y el chequeo de
+   estimación que `resume.prepare` corre otra vez pasa, `resume_patch` restaura las subtareas
+   del plan retenido: `plan_due` en falso, estado `planned`, y la tarea sigue a `integrate`
+   sin planificar de nuevo (`drawing_answer.plan_stands_pre`).
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`

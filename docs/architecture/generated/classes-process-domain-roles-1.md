@@ -34,17 +34,22 @@ classDiagram
     class design__Capture["Capture"]
     class design__Design["Design"]
     class design__NotReady["NotReady"]
+    class design__PrototypeListing["PrototypeListing"]
     class docs__DiagramBudget["DiagramBudget"]
     class docs__Docs["Docs"]
     class drawing__CheckLike["CheckLike"]
     class drawing__Departure["Departure"]
     class drawing__DepartureLike["DepartureLike"]
+    class drawing__Refused["Refused"]
+    class drawing__Resolved["Resolved"]
     class drawing__UnverifiedAsk["UnverifiedAsk"]
     class drawing__Verdicts["Verdicts"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]
-    class roles__Prompt["Prompt"]
-    class roles__Role["Role"]
-    roles__Interview --> roles__Role
-    roles__Pair --> roles__Role
 ```
+
+## Relaciones con otras páginas
+
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `roles.Interview` se asocia con `roles.Role`
+  - `roles.Pair` se asocia con `roles.Role`

@@ -100,6 +100,7 @@ ROLE_STAGES: dict[str, CycleStage] = {
             "tech_writer",
             "product_analyst_bug",
             "pm_bug",
+            "definition_sizer",
         ),
         "definition",
     ),

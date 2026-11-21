@@ -8,6 +8,7 @@ Seam: `reflect_run.reflect (with Ports of test and a fake model)`, `reflect_run.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -244,16 +245,34 @@ def _ux_documents(remark_in: int | None) -> list[dict]:
     return docs
 
 
-@pytest.mark.parametrize("remark_in, archived", [(None, True), (5, False)])
-def test_an_item_backed_by_a_design_remark_does_not_age_out_and_one_nothing_backs_does(
-    remark_in, archived
-):
+@pytest.mark.parametrize("remark_in", [None, 5])
+def test_a_design_remark_in_the_items_category_no_longer_backs_it_only_a_merge_does(remark_in):
     playbooks = {"ux_designer": pb.Playbook("ux_designer", (_ux_item(),))}
     documents = _ux_documents(remark_in)
     reflected = {f"{d['id']}@review": pc.Entry(0.1) for d in documents}
     gone = reflect_run._archive_stale(documents, reflected, playbooks, (), "2026-11-01")
-    assert bool(gone) is archived
-    assert (playbooks["ux_designer"].items == ()) is archived
+    assert [a.reason for a in gone] == [pb.ARCHIVE_STALE]
+    assert playbooks["ux_designer"].items == ()
+
+
+def test_a_merge_after_the_day_the_item_entered_the_prompt_still_backs_it():
+    merged = replace(_ux_item(), last_applied="2026-10-15")
+    playbooks = {"ux_designer": pb.Playbook("ux_designer", (merged,))}
+    documents = _ux_documents(None)
+    reflected = {f"{d['id']}@review": pc.Entry(0.1) for d in documents}
+    assert reflect_run._archive_stale(documents, reflected, playbooks, (), "2026-11-01") == ()
+    assert playbooks["ux_designer"].items == (merged,)
+
+
+def test_a_human_decision_backing_of_the_category_without_a_merge_does_not_stop_the_archive():
+    item = replace(_ux_item(), category="human-decision")
+    playbooks = {"ux_designer": pb.Playbook("ux_designer", (item,))}
+    documents = _ux_documents(None)
+    for d in documents:
+        d["sections"] = {"Human": "### Decision 1\n\nname the empty state of every screen"}
+    reflected = {f"{d['id']}@review": pc.Entry(0.1) for d in documents}
+    gone = reflect_run._archive_stale(documents, reflected, playbooks, (), "2026-11-01")
+    assert [a.item.id for a in gone] == ["ux_designer-1"]
 
 
 async def test_a_retry_of_a_decision_read_asks_again_for_the_decisions_that_failed(tmp_path):

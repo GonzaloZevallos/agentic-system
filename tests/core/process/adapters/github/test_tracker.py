@@ -821,6 +821,33 @@ def test_merge_with_no_allowed_method_raises_and_merges_nothing():
     assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
 
 
+def test_merge_with_method_merge_and_merge_commits_allowed_uses_merge_and_pins_the_head():
+    run = MethodRecorder(True, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge") == "merge"
+    assert run.calls[-1] == ["gh", "pr", "merge", "7", "--merge", "--match-head-commit", "abc123"]
+
+
+@pytest.mark.parametrize(
+    "allowed", [(False, True, True), (False, False, True), (False, False, False)]
+)
+def test_merge_with_method_merge_without_merge_commits_raises_no_merge_method_and_merges_nothing(
+    allowed,
+):
+    run = MethodRecorder(*allowed)
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge")
+    assert raised.value.failure == "no_merge_method"
+    assert type(raised.value) is MergeCallFailed
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+    assert run.calls[-1][1:3] == ["repo", "view"]
+
+
+def test_merge_without_method_still_falls_back_to_squash_when_merge_commits_are_off():
+    run = MethodRecorder(False, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method=None) == "squash"
+    assert run.calls[-1][4] == "--squash"
+
+
 def test_merge_never_asks_for_auto_or_branch_deletion():
     run = MethodRecorder(True, True, True)
     GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
@@ -890,6 +917,47 @@ def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_cla
         GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert raised.value.failure == "gh_rejected"
     assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
+
+
+# -- list_pull_requests -------------------------------------------------------------------
+
+
+def _listed(**extra):
+    row = {
+        "number": 3,
+        "url": "https://github.com/o/r/pull/3",
+        "state": "OPEN",
+        "body": "b",
+        "mergeCommit": None,
+        "headRefName": "agentic/playbook",
+    }
+    return json.dumps([{**row, **extra}])
+
+
+def test_list_pull_requests_asks_for_is_cross_repository():
+    run = Recorder(stdout=_listed())
+    GhTracker(Path("/p"), run).list_pull_requests()
+    fields = run.calls[0][run.calls[0].index("--json") + 1].split(",")
+    assert "isCrossRepository" in fields
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"isCrossRepository": True}, True),
+        ({"isCrossRepository": False}, False),
+        ({}, None),
+        ({"isCrossRepository": None}, None),
+        ({"isCrossRepository": "false"}, None),
+        ({"isCrossRepository": 0}, None),
+    ],
+    ids=["true", "false", "missing", "null", "string", "number"],
+)
+def test_list_pull_requests_maps_cross_repository_and_unreadable_values_to_none(extra, expected):
+    run = Recorder(stdout=_listed(**extra))
+    (listed,) = GhTracker(Path("/p"), run).list_pull_requests()
+    assert listed.cross_repository is expected
+    assert (listed.number, listed.branch, listed.state) == (3, "agentic/playbook", "OPEN")
 
 
 # -- pull_requests_on ---------------------------------------------------------------------

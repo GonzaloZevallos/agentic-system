@@ -181,6 +181,11 @@ TRUTH = {
     ("disk_full", "ci_gh_unreadable"): CHECKS,
     ("disk_full", "ci_run_unfinished"): CHECKS,
     ("disk_full", "delivery_transient"): OUTAGE,
+    ("github_rate_limit", None): OUTAGE,
+    ("github_rate_limit", "ci_gh_unavailable"): CHECKS,
+    ("github_rate_limit", "ci_gh_unreadable"): CHECKS,
+    ("github_rate_limit", "ci_run_unfinished"): CHECKS,
+    ("github_rate_limit", "delivery_transient"): OUTAGE,
 }
 
 
@@ -197,7 +202,7 @@ def _truth_gaps(table):
 
 def test_the_truth_table_covers_every_external_reason_and_mechanical_cause():
     assert _truth_gaps(TRUTH) == (set(), set())
-    assert len(TRUTH) == 25
+    assert len(TRUTH) == 30
 
 
 def test_the_coverage_guard_rejects_a_table_missing_a_reason_or_a_cause():

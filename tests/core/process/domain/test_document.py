@@ -240,6 +240,31 @@ def test_assignment_is_the_only_difference_a_document_gains():
     assert [line for line in plain if line not in assigned] == []
 
 
+EARLY_SPLIT_ROWS = [
+    {"verdict": "go", "cause": "sizer_failed", "at": "2026-11-19T10:00:00Z"},
+    {
+        "verdict": "split",
+        "cause": "over",
+        "at": "2026-11-19T10:05:00Z",
+        "hand_files": 34,
+        "hand_lines": 900,
+        "test_lines": 1300,
+        "estimated_cost_usd": 41.5,
+    },
+]
+
+
+def test_early_split_rows_round_trip_through_the_frontmatter():
+    rendered = document.render(golden_state(early_split=EARLY_SPLIT_ROWS))
+    assert document.parse(rendered)["early_split"] == EARLY_SPLIT_ROWS
+
+
+def test_a_document_without_early_split_reads_no_key_and_renders_as_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(early_split=[])) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert "early_split" not in document.parse(document.render(golden_state()))
+
+
 EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
 
 
@@ -2549,3 +2574,107 @@ def test_an_owner_decision_restart_settled_row_round_trips():
         "restart_settled": [row],
     }
     assert _round_trip(state)["restart_settled"] == [row]
+
+
+def _held() -> dict[str, object]:
+    # Two equal rows, never one object twice: yaml would write the second as an anchor.
+    return {
+        "plan": {
+            "estimated_cost_usd": 12.5,
+            "summary": "Plan ñandú",
+            "drawing_departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        },
+        "departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        "round": 2,
+        "estimate": {"cost_usd": 12.5, "files": 3, "declared_usd": 8.25},
+    }
+
+
+def test_a_held_plan_renders_after_the_escalation_and_round_trips():
+    state = {
+        **_departure_base(),
+        "drawing_escalation": {"round": 2, "numbers": [1], "cause": "drawing_departure"},
+        "plan_held": _held(),
+    }
+    text = document.render(state)
+    assert text.split("drawing_escalation:\n", 1)[1].split("subtasks: {}", 1)[0] == (
+        "  round: 2\n  numbers:\n  - 1\n  cause: drawing_departure\n"
+        "plan_held:\n"
+        "  plan:\n"
+        "    estimated_cost_usd: 12.5\n"
+        "    summary: Plan ñandú\n"
+        "    drawing_departures:\n"
+        "    - key: hero\n"
+        "      reason: añadí un héroe\n"
+        "  departures:\n"
+        "  - key: hero\n"
+        "    reason: añadí un héroe\n"
+        "  round: 2\n"
+        "  estimate:\n"
+        "    cost_usd: 12.5\n"
+        "    files: 3\n"
+        "    declared_usd: 8.25\n"
+    )
+    parsed = document.parse(text)
+    assert parsed["plan_held"] == _held()
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+@pytest.mark.parametrize("extra", [{}, {"plan_held": None}])
+def test_a_state_without_a_held_plan_writes_the_frontmatter_it_always_did(extra):
+    text = document.render({**_departure_base(), **extra})
+    assert text == document.render(_departure_base())
+    assert "plan_held" not in text
+    assert "plan_held" not in document.parse(text)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "text",
+        {**_held(), "plan": "x"},
+        {**_held(), "departures": "x"},
+        {**_held(), "departures": ["x"]},
+        {**_held(), "round": "2"},
+        {**_held(), "round": True},
+        {**_held(), "estimate": {"files": 3}},
+        {**_held(), "estimate": {"cost_usd": "9", "files": 3}},
+        {**_held(), "estimate": 9},
+    ],
+)
+def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\nplan_held: " + json.dumps(bad) + "\n---\n", 1
+    )
+    assert "plan_held" in stored
+    assert "plan_held" not in document.parse(stored)
+
+
+@pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
+def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
+    """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
+    assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []
+
+
+def test_failure_repairs_survive_the_document_round_trip_and_are_counted():
+    from agentic.core.measurement.domain import metrics
+
+    repairs = [{"rule": "depends_on_reason_too_long", "field": "parts[1].depends_on_reasons[0]"}]
+    failure = {
+        "role": "Tech Lead",
+        "attempt": 1,
+        "error": "structured output invalid: too big",
+        "cost_usd": 0.5,
+        "session_id": "s",
+        "reason": "check",
+        "rule": "part_over_budget",
+        "field": "parts",
+        "repairs": repairs,
+    }
+    loaded = document.parse(document.render(golden_state(failures=[failure])))
+
+    assert loaded["failures"][0]["repairs"] == repairs
+    assert metrics.refusals_by_rule(loaded["failures"], loaded.get("runs", [])) == {
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "part_over_budget": {"refused": 1, "repaired": 0},
+    }

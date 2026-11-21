@@ -7,7 +7,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application import escalate
-from agentic.core.process.domain import rules, task, tracker_items
+from agentic.core.process.domain import rate_limit, rules, task, tracker_items
 from agentic.core.process.domain.spec_delivery import SpecRouteCause
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
@@ -241,3 +241,53 @@ def test_a_drawing_pause_with_no_issue_number_shows_only_prose():
     text = escalate.comment(_drawing_state(), Configuration(product_dir="/tmp/p"), ports)
     assert "--drawing" not in text.replace("`Drawing <n>", "")
     assert "agentic resume" not in text.split("Options:")[0]
+
+
+# --- GH-989: the GitHub rate limit pauses without telling the tracker -------------------------
+
+CLOCK = "2026-11-19T00:00:00+00:00"
+NOW = "2026-11-19T01:00:00+00:00"
+
+
+def limited(**extra):
+    base = {"id": "GH-12", "status": "developing", "rate_limit_paused_at": CLOCK, **extra}
+    return task.apply(base, rate_limit.rate_limit_pause_patch(base, resets_at=None, at=NOW))
+
+
+@pytest.mark.anyio
+async def test_a_github_rate_limit_pause_saves_the_document_and_writes_nothing_to_the_tracker(cfg):
+    ports = memory_ports()
+    paused = limited()
+
+    patch = await escalate.escalate(paused, cfg, ports)
+
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert ports.documents.last["rate_limit_paused_at"] == NOW
+    assert patch == {}
+
+
+@pytest.mark.anyio
+async def test_the_persisted_escalation_also_writes_nothing_from_the_node(cfg):
+    ports = memory_ports()
+    persisted = task.apply(
+        limited(), rate_limit.rate_limit_persisted_patch(at="2026-11-19T13:00:00+00:00")
+    )
+
+    await escalate.escalate(persisted, cfg, ports)
+
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert ports.documents.last["escalated"] == rate_limit.RATE_LIMIT_PERSISTED
+
+
+@pytest.mark.anyio
+async def test_an_ordinary_escalation_still_labels_and_comments_and_clears_the_clock(cfg):
+    ports = memory_ports()
+    ordinary = {**raised(), "rate_limit_paused_at": CLOCK, "rate_limit_noticed_at": NOW}
+
+    patch = await escalate.escalate(ordinary, cfg, ports)
+
+    assert ports.tracker.labels == [("GH-12", "needs-human")]
+    assert len(ports.tracker.comments) == 1
+    assert patch == {"rate_limit_paused_at": None, "rate_limit_noticed_at": None}
+    assert ports.documents.last.get("rate_limit_paused_at") is None
+    assert ports.documents.last.get("rate_limit_noticed_at") is None

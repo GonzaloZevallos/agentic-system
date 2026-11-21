@@ -221,6 +221,59 @@ def test_failures_by_reason_counts_and_sums_cost():
     assert metrics.failures_by_reason([]) == {}
 
 
+def _refusal(reason, rule=None, field=None):
+    failure = {"cost_usd": 0.01, "reason": reason}
+    if rule is not None:
+        failure["rule"] = rule
+    if field is not None:
+        failure["field"] = field
+    return failure
+
+
+def test_refusals_by_rule_counts_three_attempts_refusing_a_b_b():
+    failures = [
+        _refusal("schema", "output_missing"),
+        _refusal("check", "parts_when_fits", "confidence"),
+        _refusal("check", "parts_when_fits", "confidence"),
+    ]
+    assert metrics.refusals_by_rule(failures, []) == {
+        "output_missing": {"refused": 1, "repaired": 0},
+        "parts_when_fits": {"refused": 2, "repaired": 0},
+    }
+
+
+def test_refusals_by_rule_skips_what_is_not_a_refusal():
+    failures = [
+        {"cost_usd": 0.01},  # recorded before `reason` existed
+        _refusal("account_limit"),
+        _refusal("stall"),
+        # A rule on a reason that is not a refusal is never counted.
+        _refusal("disk_full", "schema_invalid", "type"),
+        _refusal("schema"),  # a refusal recorded before `rule` existed
+    ]
+    assert metrics.refusals_by_rule(failures, []) == {}
+    assert metrics.refusals_by_rule([], []) == {}
+
+
+def test_refusals_by_rule_counts_the_repairs_of_every_run():
+    runs = [
+        run("Tech Lead", 1, 0.1) | {"repairs": [{"rule": "parts_when_fits", "field": "subtasks"}]},
+        run("Tech Lead", 2, 0.1)
+        | {
+            "repairs": [
+                {"rule": "parts_when_fits", "field": "subtasks"},
+                {"rule": "estimate_does_not_fit", "field": "estimate"},
+            ]
+        },
+        run("PjM", 1, 0.1),  # no repairs key
+    ]
+    failures = [_refusal("check", "parts_when_fits", "subtasks")]
+    assert metrics.refusals_by_rule(failures, runs) == {
+        "parts_when_fits": {"refused": 1, "repaired": 2},
+        "estimate_does_not_fit": {"refused": 0, "repaired": 1},
+    }
+
+
 def test_run_duration_s_is_ended_minus_started():
     run = {
         "started_at": "2026-09-18T10:00:00.000+00:00",
@@ -680,3 +733,17 @@ def test_task_size_value_never_reads_a_missing_or_foreign_size_as_small():
 def test_task_promoted_is_true_only_when_a_promotion_was_recorded():
     assert metrics.task_promoted({"promotion": {"kind": "owner", "text": "x"}}) is True
     assert metrics.task_promoted({}) is False
+
+
+def test_refusals_by_rule_counts_the_repairs_a_failed_attempt_made():
+    failures = [
+        _refusal("check", "part_over_budget", "parts")
+        | {"repairs": [{"rule": "depends_on_reason_too_long", "field": "parts"}]},
+        _refusal("check", "part_over_budget", "parts"),  # no repairs key
+    ]
+    runs = [run("Tech Lead", 1, 0.1) | {"repairs": [{"rule": "parts_when_fits", "field": "parts"}]}]
+    assert metrics.refusals_by_rule(failures, runs) == {
+        "part_over_budget": {"refused": 2, "repaired": 0},
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "parts_when_fits": {"refused": 0, "repaired": 1},
+    }

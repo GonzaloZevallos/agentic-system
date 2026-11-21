@@ -6,10 +6,11 @@ from dataclasses import replace
 
 import pytest
 
-from agentic.core.process.application.plan import plan
+from agentic.core.process.application.plan import plan, plan_repair
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.output_repair import REPAIRS, RepairContext
 from agentic.core.process.domain.size_budget import PROVEN_PAIRS, ActualSize, PlanSize
-from agentic.core.process.domain.task import apply
+from agentic.core.process.domain.task import OutputRefusal, apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
 from tests.core.process.domain.test_tracker_item_kinds_prompt import PARAGRAPH_WITH_OPEN_ISSUE
@@ -840,3 +841,68 @@ async def test_an_evaluation_run_never_carves_and_escalates_as_before(arm, tmp_p
     assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
     assert "carve_out" not in patch and "subtasks" not in patch
     assert "part 2 of GH-316" in patch["escalated"]
+
+
+# --- GH-1016: the plan's raw output is repaired inside the attempt -------------------------
+
+LONG_REASON = " ".join(f"word{i:03d}" for i in range(60))
+
+
+def long_reason_parts():
+    first = {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []}
+    second = {
+        "title": "Screens",
+        "body": "Translate the screens.",
+        "depends_on": [1],
+        "depends_on_reasons": [LONG_REASON],
+    }
+    return planned_parts(first, second)
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_each_plan_call_site_repairs_a_long_reason_in_one_attempt(arm, tmp_path):
+    if arm == "cold":
+        runner, cfg = ScriptedRunner(tech_lead=[long_reason_parts()]), cold(tmp_path)
+    else:
+        runner, cfg = interview_runner(long_reason_parts()), interviewed(tmp_path)
+    patch = await plan(TASK, cfg, memory_ports(runner))
+
+    field = "parts[1].depends_on_reasons[0]"
+    assert runner.slugs.count("tech_lead") == 1 and patch["failures"] == []
+    assert patch["runs"][-1]["repairs"] == [{"rule": "depends_on_reason_too_long", "field": field}]
+    assert f"System repair: depends_on_reason_too_long on {field}" in patch["sections"]["Tech Lead"]
+    assert len(patch["parts"][1]["depends_on_reasons"][0]) <= 240
+
+
+def test_the_plan_repair_is_the_registry_and_a_stale_closure_agrees_with_a_fresh_one():
+    from agentic.core.process.domain import cost_history, schemas
+    from agentic.core.process.domain.roles import TECH_LEAD
+
+    assert plan_repair() is REPAIRS
+    raw = long_reason_parts().structured_output
+    history = cost_history.build([])
+
+    def verdict(check, candidate):
+        try:
+            check(schemas.validate(TECH_LEAD.schema, candidate, {}))
+        except OutputRefusal as exc:
+            return exc.rule
+        return None
+
+    shared = schemas.plan_check_for(history, 0.0)
+    assert verdict(shared, raw) == "depends_on_reason_too_long"
+    repaired = REPAIRS["depends_on_reason_too_long"](raw, RepairContext())
+    assert repaired is not None
+    again = verdict(shared, repaired)
+    assert again == verdict(schemas.plan_check_for(history, 0.0), repaired) is None
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_a_refused_remainder_is_never_repaired(arm, tmp_path):
+    task, runner, cfg = depth_cap(arm, tmp_path, carve=[declined()])
+    patch = await plan(task, cfg, carve_ports(runner))
+
+    assert patch["carve_out"] == {"outcome": "failed"}
+    assert all("repairs" not in f for f in patch.get("failures", []))
+    assert all("repairs" not in r for r in patch.get("runs", []))
+    assert "System repair" not in str(patch.get("sections", {}))

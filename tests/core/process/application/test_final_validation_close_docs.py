@@ -128,7 +128,7 @@ async def test_approved_with_no_definitions_writes_nothing(tmp_path):
 )
 async def test_an_invalid_definition_is_rejected_and_nothing_is_written(bad, tmp_path):
     workspace = MemoryWorkspace()
-    runner = runner_with(*[final_verdict("approved", definitions=[bad])] * 2)
+    runner = runner_with(*[final_verdict("approved", definitions=[bad])] * 3)
 
     patch, ports = await run(state(), runner, tmp_path, workspace)
 
@@ -142,7 +142,9 @@ async def test_a_returned_verdict_with_definitions_is_rejected(tmp_path):
     workspace = MemoryWorkspace()
     returned = final_verdict("returned", blocking=["x"], definitions=[capability()])
 
-    patch, ports = await run(state(), runner_with(returned, returned), tmp_path, workspace)
+    patch, ports = await run(
+        state(), runner_with(returned, returned, returned), tmp_path, workspace
+    )
 
     assert ports.knowledge.definitions == {}
     assert workspace.path_commits == []

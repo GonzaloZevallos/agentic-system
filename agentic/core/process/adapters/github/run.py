@@ -18,6 +18,7 @@ import subprocess
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -324,22 +325,27 @@ def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
 
 def _retry_wait(
     kind: _Kind, attempt: int, retry: GhRetry, run: Run, cwd: Path, call: str
-) -> tuple[float, str | None]:
-    """Seconds to wait before the next attempt, or the reason to give up instead."""
+) -> tuple[float, str | None, float | None]:
+    """Seconds to wait before the next attempt, or the reason to give up instead, and the
+    reset (epoch seconds) read on this call, `None` when none was."""
     if attempt >= retry.attempts:
-        return 0, f"gh {call} {_PHRASES[kind]} on each of {retry.attempts} attempts"
+        return 0, f"gh {call} {_PHRASES[kind]} on each of {retry.attempts} attempts", None
     if kind != "rate_limited":
-        return retry.backoff(attempt), None
+        return retry.backoff(attempt), None, None
     reset = _rate_limit_reset(run, cwd)
     if reset is None:
-        return retry.backoff(attempt), None
+        return retry.backoff(attempt), None, None
     seconds = max(reset - retry.now(), 0)
     if seconds > retry.max_wait_s:
-        return 0, (
-            f"gh {call} {_PHRASES[kind]}; its reset is {seconds:g} s away, "
-            f"over the {retry.max_wait_s:g} s bound"
+        return (
+            0,
+            (
+                f"gh {call} {_PHRASES[kind]}; its reset is {seconds:g} s away, "
+                f"over the {retry.max_wait_s:g} s bound"
+            ),
+            reset,
         )
-    return seconds, None
+    return seconds, None, reset
 
 
 def run_gh(
@@ -369,11 +375,17 @@ def run_gh(
     `TrackerUnreachable`, `TrackerTimedOut` or `TrackerRateLimited` (also when the reset is
     over `retry.max_wait_s`, with no sleep, or the stop flag ends the wait).
 
+    A `TrackerRateLimited` carries `resets_at` (GH-1031), the aware UTC instant of a reset
+    read from `gh api rate_limit`, never from stderr, on exactly two paths: the reset just
+    read is over `retry.max_wait_s`, and the attempts ran out (the last reset read). A stopped
+    wait, a read that failed and every other kind carry `None`. No extra call is made.
+
     When `gh` printed an HTTP status (`http_status`), the refusal and the exhaustion message
     end with ` (HTTP nnn)` and the exception carries it as `status` (GH-438); nothing else
     `gh` printed is added."""
     call = " ".join(args[:2])
     attempt = 1
+    last_reset: float | None = None
     while True:
         try:
             result = run(["gh", *args], cwd=cwd, capture_output=True, text=True, check=True)
@@ -406,7 +418,9 @@ def run_gh(
         else:
             return result.stdout.strip()
         assert retry is not None  # only a policy reaches a retryable kind
-        seconds, giving_up = _retry_wait(kind, attempt, retry, run, cwd, call)
+        seconds, giving_up, reset = _retry_wait(kind, attempt, retry, run, cwd, call)
+        if reset is not None:
+            last_reset = reset
         if giving_up is None:
             log(
                 f"agentic: gh {call} {_PHRASES[kind]}; "
@@ -416,6 +430,13 @@ def run_gh(
                 attempt += 1
                 continue
             giving_up = f"gh {call} {_PHRASES[kind]}; the wait was stopped"
+        elif kind == "rate_limited" and last_reset is not None:
+            # Over the cap, or the attempts ran out: the one reset GitHub stated.
+            raise TrackerRateLimited(
+                _with_status(giving_up, status),
+                status=status,
+                resets_at=datetime.fromtimestamp(last_reset, tz=UTC),
+            ) from cause
         raise _ERRORS[kind](_with_status(giving_up, status), status=status) from cause
 
 

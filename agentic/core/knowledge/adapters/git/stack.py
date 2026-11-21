@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Literal
 import yaml
 
 from ....process.application.ports import RiskArea
-from ....process.domain.design import Design
+from ....process.domain.design import PROTOTYPE_FILES_MAX, Design, PrototypeListing
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
 from ....process.domain.presubmit import ApiBreakLine, CiCover, CiDispatch, RerunForm
@@ -136,6 +137,30 @@ class GitStack:
     def design(self, revision: str) -> Design | None:
         data, source = self._declaration(revision)
         return stack.design(data, source)
+
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        """The files under the design's prototype as `revision` holds them (never the working
+        tree). Never raises and never keeps git's text: a whole-repo prototype is not listed
+        (and git is not called), more than `PROTOTYPE_FILES_MAX` files is `over_cap`, and any
+        git failure is `unreadable`."""
+        prototype = posixpath.normpath(design.prototype)
+        if prototype == ".":
+            return PrototypeListing((), "whole_repo")
+        try:
+            done = subprocess.run(
+                ["git", "ls-tree", "-r", "--name-only", "-z", revision, "--", f"{prototype}/"],
+                cwd=self.product_dir,
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            return PrototypeListing((), "unreadable")
+        if done.returncode != 0:
+            return PrototypeListing((), "unreadable")
+        names = [n for n in done.stdout.decode("utf-8", errors="replace").split("\0") if n]
+        if len(names) > PROTOTYPE_FILES_MAX:
+            return PrototypeListing((), "over_cap")
+        return PrototypeListing(tuple(sorted(names)), "listed")
 
     def docs(self, revision: str) -> Docs | None:
         data, source = self._declaration(revision)

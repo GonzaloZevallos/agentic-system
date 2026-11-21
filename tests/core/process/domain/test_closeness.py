@@ -310,6 +310,7 @@ def test_the_plan_critic_section_and_the_sizer_run_count_as_the_plan_phase():
     assert rules.phase_of("Plan critic") == "plan"
     # The sizer writes no section, so its run is keyed by the role's name (`closeness`).
     assert rules.phase_of("Plan sizer") == "plan"
+    assert rules.phase_of("Definition sizer") == "definition"
     assert rules.phase_of("PM") == "definition"  # what the new names must not widen
     state = {"runs": [{"role": "Plan sizer", "cost_usd": 0.1}]}
     assert rules.closeness(state) == PLAN

@@ -19,13 +19,15 @@ Only the consultant leaves questions for the human.
 
 from __future__ import annotations
 
+import dataclasses
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import drawing_answer, rules, spec_assumptions
+from ..domain import drawing, drawing_answer, rules, spec_assumptions
 from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
 from ..domain.task import (
@@ -180,6 +182,17 @@ async def interview(
     )
 
     design = ports.stack.design(task_base(state, ports))  # read once: `None` changes nothing
+    if design is not None and spec.interviewee.slug in drawing.DRAWING_SEATS:
+        # The prototype's files at the task base, once per invocation: what lets a drawing cited
+        # short resolve to its full path (`drawing.resolve`), never read per role run.
+        listing = ports.stack.prototype_files(task_base(state, ports), design)
+        design = dataclasses.replace(design, files=listing.files)
+        if listing.cause not in ("listed", "whole_repo"):
+            print(
+                f"agentic: drawing: prototype not listed ({listing.cause}); "
+                "short drawing paths are refused",
+                file=sys.stderr,
+            )
     drawn = interview_drawing.collector_for(spec.interviewee, design)
 
     def failed(patch: TaskState) -> tuple[None, TaskState]:

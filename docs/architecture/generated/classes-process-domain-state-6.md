@@ -31,9 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__DrawingEscalation["DrawingEscalation"]
-    class task__DrawingEscalationPatch["DrawingEscalationPatch"]
-    class task__DrawingRow["DrawingRow"]
+    class task__EarlySplitRow["EarlySplitRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -45,14 +43,20 @@ classDiagram
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
-    task__DrawingEscalationPatch --> task__DrawingEscalation
-    task__DrawingEscalationPatch --|> task__EscalationPatch
+    class task__FormatIssueRecord["FormatIssueRecord"]
+    class task__FullCheckEntry["FullCheckEntry"]
+    class task__FullChecksJob["FullChecksJob"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
+  - `task.FullChecksJob` hereda de `task.CiLogRecord`
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.PlanHeld` se asocia con `task.EstimateRecord`
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`
