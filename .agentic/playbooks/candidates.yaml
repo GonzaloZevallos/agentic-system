@@ -2233,3 +2233,12 @@ candidates:
   sources:
   - human_decision
   added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you write a helper, look for an existing one with the same logic and call or reuse it, even if it is private to another module, rather than copying its body where the two can drift.
+  confidence: low
+  seen_in:
+  - GH-1009
+  sources:
+  - finding
+  added_at: '2026-11-21T07:19:34.113+00:00'

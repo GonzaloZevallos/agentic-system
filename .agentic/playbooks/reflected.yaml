@@ -1529,3 +1529,13 @@ tasks:
   GH-935@review:
     cost_usd: 0.0662
     decisions: 1
+  GH-1009@review:
+    cost_usd: 0.0339
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1009
