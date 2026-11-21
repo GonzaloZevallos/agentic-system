@@ -225,8 +225,8 @@ def refusals_by_rule(
     carry a `rule` and whose recorded reason is `schema` or `check` (`run_with_retry` writes
     it only then; any other entry is skipped), `repaired` counts the entries of every run's
     `repairs` and of every failure's own (a repair made on an attempt that then failed
-    still happened, GH-1016). A rule appears only when one of its two numbers is above zero. The rule is
-    read from the entry, never mapped from its error text (GH-1011)."""
+    still happened, GH-1016). A rule appears only when one of its two numbers is above zero.
+    The rule is read from the entry, never mapped from its error text (GH-1011)."""
     counts: dict[RefusalRule, RefusalCounts] = {}
     for failure in failures:
         for repair in failure.get("repairs", []):

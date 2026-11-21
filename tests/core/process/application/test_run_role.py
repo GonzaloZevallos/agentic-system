@@ -34,6 +34,7 @@ from agentic.core.process.domain import refusal_retry, rules, schemas, spec_brie
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.drawing import DRAWING_RULE
+from agentic.core.process.domain.output_repair import REPAIRS, repair_note
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
@@ -59,9 +60,7 @@ from agentic.core.process.domain.roles import (
     reads_by_index,
     render,
 )
-from agentic.core.process.domain.output_repair import REPAIRS, repair_note
 from agentic.core.process.domain.rules import RETRY_TURNS
-from agentic.core.process.domain.task_path import TEXT_MAX
 from agentic.core.process.domain.schemas import (
     RoleOutput,
     TechAnswers,
@@ -70,6 +69,7 @@ from agentic.core.process.domain.schemas import (
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.spec_brief import fenced_section, protected_line
 from agentic.core.process.domain.task import FailureReason, OutputRefusal, apply, delta
+from agentic.core.process.domain.task_path import TEXT_MAX
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryPrompts,
