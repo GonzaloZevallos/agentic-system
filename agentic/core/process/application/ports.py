@@ -60,6 +60,7 @@ from ..domain.task import (
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRepair,
     RefusalRule,
     TaskInput,
     TaskState,
@@ -196,6 +197,7 @@ class AttemptFailed(Exception):
         field: str = "",
         value: str | None = None,
         detail: str = "",
+        repairs: Sequence[RefusalRepair] = (),
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -252,6 +254,9 @@ class AttemptFailed(Exception):
         # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
         self.value = value
         self.detail = detail
+        # The refusals this attempt repaired before the one that failed it (GH-1016): its own
+        # record, never another attempt's; empty at every other site.
+        self.repairs = list(repairs)
 
 
 class Presubmit(Protocol):
