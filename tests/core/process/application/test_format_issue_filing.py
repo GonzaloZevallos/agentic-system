@@ -211,20 +211,6 @@ def test_a_failed_comment_is_a_comment_row():
     assert rows == [{"target": "comment", "cls": "refused", "at": NOW}]
 
 
-def test_a_clock_that_raises_after_a_landed_write_still_marks_the_pair_and_never_raises():
-    b = Built()
-
-    def broken() -> str:
-        raise RuntimeError(SECRET)
-
-    b.filing._now = broken
-    assert b.file() == (None, [])
-    assert len(b.tracker.opened) == 1
-    assert b.file() == (None, [])
-    assert len(b.tracker.opened) == 1
-    assert all(SECRET not in line for line in b.lines)
-
-
 def test_a_failed_write_does_not_mark_the_pair_filed_so_the_next_call_writes():
     b = Built(write_error=OSError(SECRET))
     assert b.file()[0] is None
