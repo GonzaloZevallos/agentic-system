@@ -94,6 +94,7 @@ from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandid
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
+from agentic.core.process.domain.playbook_land import LandAttempt
 from agentic.core.process.domain.presubmit import (
     ApiBreakLine,
     CheckResult,
@@ -1824,6 +1825,7 @@ class MemoryTracker:
         # class, the adapter's own shape; with it unset the error stays a plain `ValueError`.
         # `events` is every `pull_request`, `merge` and `comment` call in order.
         self.merge_calls: list[tuple[str, str]] = []
+        self.merge_methods: list[str | None] = []  # the `method` of each entry of `merge_calls`
         self.merge_method = "squash"
         self.merge_error: str | None = None
         self.merge_failure: MergeFailure | None = None
@@ -1908,10 +1910,13 @@ class MemoryTracker:
             return dataclasses.replace(pr, head_oid=self.head_oid)
         return pr
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         pull_request_number(reference)  # rejected before anything is recorded, as the adapter does
         self.events.append("merge")
         self.merge_calls.append((reference, head_sha))
+        self.merge_methods.append(method)
         if self.merge_error is not None:
             if self.merge_failure is not None:
                 raise MergeCallFailed(self.merge_failure, self.merge_error)
@@ -2820,6 +2825,22 @@ class FakeBoardSent:
     def save(self, memory: SentMemory) -> None:
         self.saved.append(memory)
         self.memory = memory
+
+
+class FakeLandRecord:
+    """The playbook landing record, in memory: one attempt per product, `saved` keeps every
+    attempt it was given."""
+
+    def __init__(self, attempts: dict[str, LandAttempt] | None = None) -> None:
+        self.attempts: dict[str, LandAttempt] = dict(attempts or {})
+        self.saved: list[tuple[str, LandAttempt]] = []
+
+    def load(self, product: str) -> LandAttempt | None:
+        return self.attempts.get(product)
+
+    def save(self, product: str, attempt: LandAttempt) -> None:
+        self.saved.append((product, attempt))
+        self.attempts[product] = attempt
 
 
 _INSTANTS = ("at", "started_at", "ended_at")
