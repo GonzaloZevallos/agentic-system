@@ -2242,3 +2242,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-21T07:19:34.113+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: When a plan adds a repair or fallback branch, trace the real validation path to confirm an earlier guard does not make it unreachable, and require a test that reaches it through that path.
+  confidence: medium
+  seen_in:
+  - GH-1016
+  sources:
+  - finding
+  added_at: '2026-11-21T08:56:05.723+00:00'

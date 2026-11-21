@@ -1539,3 +1539,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1009
+  GH-1016@review:
+    cost_usd: 0.0396
