@@ -57,6 +57,7 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
         lines.extend(
             f"- {phase}: {usd:.2f} USD" for phase, usd in rules.spent_by_phase(state).items()
         )
+        lines.append(f"\n{rules.spent_split_line(rules.spent_split(state))}")
         budget = rules.suggested_budget(state, cfg.max_budget_usd)
         resume = f"{resume} --task-budget {budget}" if resume else ""
     lines.append(f"\nTask document: `{document.relative_path(state['id'])}`")

@@ -146,6 +146,7 @@ FailureReason = Literal[
     "upstream",
     "network",
     "disk_full",
+    "github_rate_limit",
     "sdk",
     "stall",
     "render",
@@ -437,7 +438,8 @@ def add_assumptions(existing: list[AssumptionRow], new: list[AssumptionRow]) -> 
     return list(joined.values())
 
 
-TrackerTarget = Literal["comment", "label"]
+# `issue` (GH-1011) is the format-refusal issue the filing built in #1030 opens or comments on.
+TrackerTarget = Literal["comment", "label", "issue"]
 TrackerFailureClass = Literal["timed_out", "unreachable", "transient", "rate_limited", "refused"]
 TRACKER_FAILURES_MAX = 10
 
@@ -474,6 +476,33 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+class FormatIssueRecord(TypedDict):
+    """The issue filed for one refusal rule (GH-1011): the rule, the issue's URL and when
+    (ISO UTC). One per rule in `TaskState.format_issue`, read only through `format_issue_for`."""
+
+    rule: RefusalRule
+    url: str
+    at: str
+
+
+def add_format_issues(
+    existing: list[FormatIssueRecord], new: list[FormatIssueRecord]
+) -> list[FormatIssueRecord]:
+    """The records of `existing` and `new` as one list: one entry per rule, the first write
+    wins and the first-write order is kept, so two simultaneous writers merge to one record
+    per rule. The only way `format_issue` is ever written."""
+    joined: dict[str, FormatIssueRecord] = {}
+    for record in (*existing, *new):
+        joined.setdefault(record["rule"], record)
+    return list(joined.values())
+
+
+def format_issue_for(entries: Sequence[FormatIssueRecord], rule: str) -> FormatIssueRecord | None:
+    """The record of `rule` in `entries`, `None` when none was filed. The only read of
+    `TaskState.format_issue`: no module indexes the list itself."""
+    return next((r for r in entries if r["rule"] == rule), None)
 
 
 class RefusalNoted(TypedDict):
@@ -1064,9 +1093,10 @@ class Failure(TypedDict):
     # this field existed, which reads as `role.max_turns`.
     max_turns: NotRequired[int]
     # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
-    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
-    # only a wait hint, never the reason. Absent on any other failure and on one recorded
-    # before this field existed.
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381),
+    # or the one GitHub's `rate_limit` read gave a `github_rate_limit` failure, bounded by
+    # `rate_limit.rate_limit_pause_patch`'s window: only a wait hint, never the reason. Absent
+    # on any other failure and on one recorded before this field existed.
     resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
@@ -1140,6 +1170,19 @@ class Failure(TypedDict):
     # `run_role.refusal_field`; never the value. Same conditions as `rule`, and absent when
     # the refusal names no declared field.
     field: NotRequired[str]
+    # The size of the refused value (a string's length, a list's or dict's item count) at the
+    # same top-level key as `field`, from `format_issue.value_len` on the raw structured output,
+    # never the value. Written by the refusal raise site built in #1030 under the same
+    # conditions as `rule`, absent when unknown (never `None`); no row carries it before then.
+    value_len: NotRequired[int]
+    # What the role wrote in `field`, as `refusal_retry.clean_value` leaves it (one line, at
+    # most 240 characters), so the retry can show it back (GH-1017). Same conditions as `rule`,
+    # and absent when the refusal has no value to show (a missing field, `output_missing`). It
+    # is never a metric label or a span attribute.
+    value: NotRequired[str]
+    # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
+    # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
+    detail: NotRequired[str]
 
 
 class CheckRun(TypedDict):
@@ -1831,6 +1874,21 @@ class EstimateRecord(TypedDict):
     declared_usd: NotRequired[float]
 
 
+class PlanHeld(TypedDict):
+    """The plan the plan node dropped when it escalated on drawing departures the owner has not
+    answered (GH-1004), kept whole so the answer's re-plan can start from it.
+
+    `estimate` is the one figure that counts: exactly the estimate the same patch stored, after
+    the floor and the lift. `plan["estimated_cost_usd"]` is kept only because the plan dict is
+    stored whole. Part 2 restores `estimate` from this record, never runs `_floored` again on
+    the stored plan, and clears the record; this part never clears it."""
+
+    plan: dict[str, Any]
+    departures: list[dict[str, Any]]
+    round: int
+    estimate: EstimateRecord
+
+
 class EstimateRevision(TypedDict):
     """One estimate a human decided on: `human` is what they wrote, `proposed` the one the
     stopped task proposed and they accepted."""
@@ -2370,6 +2428,13 @@ class TaskState(TaskInput, total=False):
     # True when a fit question or an estimate with parts was decided, the plan node's
     # successful patch writes it False. Absent reads False.
     plan_due: Annotated[bool, last]
+    # The instant (ISO-8601 UTC) the GitHub rate limit first paused this task, kept across
+    # the poller's retakes of the same limit so `rate_limit.rate_limit_exhausted` counts the
+    # whole wait; `rate_limit_noticed_at` is when the human was told it outlasted the wait.
+    # Both absent on a task the GitHub limit never paused. Plain fields, no reducer: `apply`
+    # overrides them, which is what `last` would do.
+    rate_limit_paused_at: str
+    rate_limit_noticed_at: str
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records
@@ -2639,6 +2704,10 @@ class TaskState(TaskInput, total=False):
     # per `(target, cls)`, at most ten, never `gh`'s text. Read with
     # `.get("tracker_failures", [])`: a document written before this field has none.
     tracker_failures: Annotated[list[TrackerFailureRecord], add_tracker_failures]
+    # The issue filed for each refusal rule (GH-1011), `add_format_issues`: one record per
+    # rule, the first write wins. Read with `format_issue_for`, never by indexing the list; a
+    # document written before this field has none. Nothing writes it before #1030.
+    format_issue: Annotated[list[FormatIssueRecord], add_format_issues]
     # The restorations of an archived task (GH-406), `add_restorations`: one row per archive
     # it was brought back from, each with the `landing` length at that moment. Read with
     # `.get("restorations", [])` -- only through `rules.live_landing` and `rules.restored`;
@@ -2662,7 +2731,7 @@ class TaskState(TaskInput, total=False):
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
-    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # `rules.early_measured`; a document written before it has none. The figures are read by no
     # decision.
     early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
@@ -2680,6 +2749,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The plan held while the owner answers the plan's own drawing departures (GH-1004,
+    # `PlanHeld`). Written only by the plan node's escalation of open plan-stage departures; no
+    # route reads it yet. `document.render` writes it explicitly, after `drawing_escalation`.
+    plan_held: Annotated[PlanHeld | None, last]
     # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
@@ -2781,6 +2854,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_format_issues:
+            held_rules = {r["rule"] for r in old}
+            if fresh_issues := [
+                r for r in add_format_issues([], value) if r["rule"] not in held_rules
+            ]:
+                patch[key] = fresh_issues
         elif reducer is add_tracker_actions:
             if add_tracker_actions(old, value) != old:
                 patch[key] = value

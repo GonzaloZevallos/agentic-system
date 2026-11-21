@@ -31,7 +31,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class rules__PollPlan["PollPlan"]
     class rules__PushPlan["PushPlan"]
     class rules__ReportedFailure["ReportedFailure"]
     class rules__RestoreObserved["RestoreObserved"]
@@ -39,6 +38,7 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class rules__SpentSplit["SpentSplit"]
     class size_budget__ActualSize["ActualSize"]
     class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]

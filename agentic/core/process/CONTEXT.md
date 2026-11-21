@@ -533,6 +533,14 @@ _Campo_: sin término de arte
 Máximo de devoluciones por par antes de que la decisión única (`rules.on_return_limit`) elija: seguir contando, reiniciar o escalar. Hoy 2. El par Tech Lead→Developer de una subtarea elegible reinicia (Reinicio limpio) en el primer límite y escala en el segundo; los demás pares escalan en el primero.
 _Campo_: sin término de arte; `max_iter` en CrewAI y `max_turns` en el OpenAI Agents SDK topean el loop de un agente solo, no el ida y vuelta entre dos
 
+**Marcador de rechazo**:
+La línea `<!-- agentic-refusal: <regla> -->` con la que termina el cuerpo del issue de una regla de rechazo de formato. `marker` la escribe y `matches` es su único lector: solo vale como última línea no vacía del cuerpo y compara la regla exacta, así que una cita en medio del cuerpo o una regla que prefija a otra no coinciden. Es una convención, no una autenticación: cualquier autor puede escribirla (`domain/format_issue.py`).
+_Campo_: sin término de arte
+
+**Issue de rechazo de formato**:
+El issue que se abre por una regla de rechazo de la salida estructurada de un rol (`RefusalRule`). Su registro es `FormatIssueRecord` (`rule`, `url`, `at`) en `TaskState.format_issue`: un registro por regla, gana la primera escritura (`add_format_issues`, que une dos escritores simultáneos) y la única lectura es `format_issue_for` (`domain/task.py`).
+_Campo_: sin término de arte
+
 ### Cómo termina una corrida
 
 **Listo para revisión**:
@@ -642,7 +650,7 @@ _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para
 _Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`), y un disco lleno otro (`disk_full`): externo, como el límite de la cuenta, porque falló la máquina y no el rol. Un prompt que no se puede renderizar (un placeholder sin valor, o un archivo que la instantánea de la corrida no pudo leer) también es un fallo de rol, con el motivo `render`: no se reintenta, no cuesta nada (el rol nunca corrió) y es propio, un error nuestro y no de la máquina. Guarda los instantes de su propio intento (`started_at`, cuando empezó, y `ended_at`, cuando se atrapó el fallo; ISO-8601 UTC, ausentes en un fallo anterior) y las corridas de chequeo del Developer que alcanzó a lanzar.
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay; un rechazo de la salida estructurada (esquema o chequeo) se reintenta dos veces (tres intentos, `rules.attempts_for`) y el reintento lleva la regla, el campo, el valor, el motivo y una línea de corrección. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`), y un disco lleno otro (`disk_full`): externo, como el límite de la cuenta, porque falló la máquina y no el rol. Un prompt que no se puede renderizar (un placeholder sin valor, o un archivo que la instantánea de la corrida no pudo leer) también es un fallo de rol, con el motivo `render`: no se reintenta, no cuesta nada (el rol nunca corrió) y es propio, un error nuestro y no de la máquina. Que el límite de tasa de GitHub supere la espera es otro motivo, `github_rate_limit`: lo escribe `rate_limit.rate_limit_pause_patch`, nunca bajo `account_limit`, y todavía nada lo produce. Guarda los instantes de su propio intento (`started_at`, cuando empezó, y `ended_at`, cuando se atrapó el fallo; ISO-8601 UTC, ausentes en un fallo anterior) y las corridas de chequeo del Developer que alcanzó a lanzar.
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 

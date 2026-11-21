@@ -39,6 +39,7 @@ classDiagram
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
+    class refusal__OutputRefusal["OutputRefusal"]
     class retakes__Budget["Budget"]
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]

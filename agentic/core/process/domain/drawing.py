@@ -602,7 +602,8 @@ for _reason, _names in (
     ),
     (
         "never decides what a person sees",
-        "pjm plan_sizer landing_diagnoser reflector qa_performance tech_lead_carve_out",
+        "pjm plan_sizer definition_sizer landing_diagnoser reflector qa_performance "
+        "tech_lead_carve_out",
     ),
 ):
     _NO_DRAWING_RULE.update(dict.fromkeys(_names.split(), _reason))

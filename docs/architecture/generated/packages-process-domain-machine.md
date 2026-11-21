@@ -18,7 +18,10 @@ graph TD
     m_domain__exempt_queue["domain.exempt_queue"]
     m_domain__launch_order["domain.launch_order"]
     m_domain__poller_units["domain.poller_units"]
+    m_domain__rate_limit["domain.rate_limit"]
     m_domain__reaping["domain.reaping"]
+    m_domain__refusal["domain.refusal"]
+    m_domain__refusal_retry["domain.refusal_retry"]
     m_domain__retakes["domain.retakes"]
     m_domain__scratch["domain.scratch"]
     m_domain__stage0_rotation["domain.stage0_rotation"]
@@ -27,6 +30,8 @@ graph TD
     m_domain__account_reset --> g_domain__state
     m_domain__exempt_queue --> g_domain__state
     m_domain__poller_units --> m_domain__stage0_rotation
+    m_domain__rate_limit --> g_domain__state
+    m_domain__refusal_retry --> g_domain__state
     m_domain__stage0_rotation --> g_domain__state
     m_domain__stage0_window --> g_domain__checks
     m_domain__stage0_window --> m_domain__stage0_rotation

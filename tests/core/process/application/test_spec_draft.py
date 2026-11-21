@@ -208,10 +208,14 @@ async def test_when_no_draft_is_due_nothing_is_validated_written_or_recorded(roo
     assert ports.workspace.commits == [(root, "T-1: product definition")]
 
 
-async def test_a_draft_that_fails_the_pre_check_twice_escalates_and_is_never_written(root, cfg):
-    ports = ports_for(returned(), returned(), validator=FakeSpecValidator("spec_invalid"))
+async def test_a_draft_that_fails_the_pre_check_on_every_attempt_escalates_and_is_never_written(
+    root, cfg
+):
+    ports = ports_for(
+        returned(), returned(), returned(), validator=FakeSpecValidator("spec_invalid")
+    )
     patch = await validate_prd(STATE, cfg, ports)
-    assert len(ports.runner.calls) == 2
+    assert len(ports.runner.calls) == 3
     assert "spec_draft" not in patch and patch["status"] != "definition_ready"
     assert not (root / "docs").exists()
 

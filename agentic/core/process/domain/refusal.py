@@ -34,8 +34,11 @@ class OutputRefusal(ValueError):
     the error text a check raised stays what it was. `field` is a claim: `run_role.
     refusal_field` keeps it only when the role's schema declares it."""
 
-    def __init__(self, rule: RefusalRule, field: str, detail: str):
+    def __init__(self, rule: RefusalRule, field: str, detail: str, *, value: object = None):
         super().__init__(detail)
         self.rule = rule
         self.field = field
         self.detail = detail
+        # What the role wrote in `field`, when the raise site has it (GH-1017): shown back to
+        # the model once, cleaned and cut by `refusal_retry.clean_value`. `None` is no value.
+        self.value = value

@@ -23,6 +23,7 @@ from agentic.core.process.domain.task import (
     add_drawing_escalation,
     add_early_split,
     add_flakes,
+    add_format_issues,
     add_full_checks_reads,
     add_merge_ci,
     add_restorations,
@@ -420,6 +421,11 @@ def value_for(key: str, branch: str, n: int):
         # row that differed by branch would depend on which branch landed first.
         target = "comment" if n % 2 else "label"
         return [{"target": target, "cls": "transient", "at": f"{target}-at"}]
+    if reducer is add_format_issues:
+        # One record per rule, `url` and `at` a function of the rule alone: the first record seen
+        # wins, so a record that differed by branch would depend on which branch landed first.
+        rule = ("unmapped", "output_missing")[n % 2]
+        return [{"rule": rule, "url": f"https://x/{rule}", "at": f"{rule}-at"}]
     if reducer is add_tracker_actions:
         # One record per hash, a function of the hash alone: the first record seen wins, so a
         # record that differed by branch would depend on which branch landed first.
@@ -544,6 +550,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_drawing_escalation,
             add_early_split,
             add_flakes,
+            add_format_issues,
             add_full_checks_reads,
             add_merge_ci,
             add_restorations,
