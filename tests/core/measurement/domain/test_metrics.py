@@ -733,3 +733,17 @@ def test_task_size_value_never_reads_a_missing_or_foreign_size_as_small():
 def test_task_promoted_is_true_only_when_a_promotion_was_recorded():
     assert metrics.task_promoted({"promotion": {"kind": "owner", "text": "x"}}) is True
     assert metrics.task_promoted({}) is False
+
+
+def test_refusals_by_rule_counts_the_repairs_a_failed_attempt_made():
+    failures = [
+        _refusal("check", "part_over_budget", "parts")
+        | {"repairs": [{"rule": "depends_on_reason_too_long", "field": "parts"}]},
+        _refusal("check", "part_over_budget", "parts"),  # no repairs key
+    ]
+    runs = [run("Tech Lead", 1, 0.1) | {"repairs": [{"rule": "parts_when_fits", "field": "parts"}]}]
+    assert metrics.refusals_by_rule(failures, runs) == {
+        "part_over_budget": {"refused": 2, "repaired": 0},
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "parts_when_fits": {"refused": 0, "repaired": 1},
+    }

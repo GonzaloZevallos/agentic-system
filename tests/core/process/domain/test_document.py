@@ -2652,3 +2652,27 @@ def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
 def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
     """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
     assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []
+
+
+def test_failure_repairs_survive_the_document_round_trip_and_are_counted():
+    from agentic.core.measurement.domain import metrics
+
+    repairs = [{"rule": "depends_on_reason_too_long", "field": "parts[1].depends_on_reasons[0]"}]
+    failure = {
+        "role": "Tech Lead",
+        "attempt": 1,
+        "error": "structured output invalid: too big",
+        "cost_usd": 0.5,
+        "session_id": "s",
+        "reason": "check",
+        "rule": "part_over_budget",
+        "field": "parts",
+        "repairs": repairs,
+    }
+    loaded = document.parse(document.render(golden_state(failures=[failure])))
+
+    assert loaded["failures"][0]["repairs"] == repairs
+    assert metrics.refusals_by_rule(loaded["failures"], loaded.get("runs", [])) == {
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "part_over_budget": {"refused": 1, "repaired": 0},
+    }
