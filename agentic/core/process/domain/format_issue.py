@@ -89,9 +89,9 @@ def value_len(output: object, field: str) -> int | None:
     `bool` first, an `int`, a `float`, `None`) give `None`. The value is never dumped or
     reprinted: it is measured in place.
 
-    Nothing calls it yet. The refusal raise sites built in #1030 call it on the raw
-    structured output and write `Failure.value_len` only under the `refused` gate that
-    writes `rule`, leaving the key absent when the result is `None`."""
+    `run_role._refused` calls it on the raw structured output, before `clean_value` cuts the
+    value, and `run_role.run_with_retry` writes `Failure.value_len` only under the `refused` gate
+    that writes `rule`, leaving the key absent when the result is `None`."""
     if not isinstance(output, Mapping) or not field or field not in output:
         return None
     value = output[field]

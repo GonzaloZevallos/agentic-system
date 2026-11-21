@@ -23,7 +23,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Literal, get_args
+from typing import Any, Final, Literal, get_args
 
 import yaml
 
@@ -210,6 +210,15 @@ KEEP_MIN_TASKS = 2
 # A lesson in the prompt that no task of its role backed or cited in this many of the
 # role's tasks leaves the prompt for `archived.yaml`: `archive_due` is the only comparison.
 ARCHIVE_AFTER = 20
+# A lesson starts at `SCORE_START`; each exclusive task that ran with it and returned nothing
+# in its category adds one helpful (at most `HELPFUL_CAP`), each exclusive return adds one
+# harmful. `score` is the only place the two counters are combined.
+SCORE_START = 2
+HELPFUL_CAP = 3
+# Why an item left the prompt: the only texts an `Archived.reason` is written with here.
+ARCHIVE_STALE: Final = "stale"
+ARCHIVE_SCORE: Final = "score"
+ArchiveCause = Literal["stale", "score"]
 
 Confidence = Literal["low", "medium", "high"]
 CONFIDENCES: tuple[str, ...] = get_args(Confidence)
@@ -229,8 +238,16 @@ class Item:
     # backed or cited it, and the day the item reached a prompt, from the merge of the
     # candidate PR that carried it (`playbook_candidates.in_prompt_since`), never from
     # `added_at`. An item with no `in_prompt_since` has not been in a prompt, so it never ages.
+    # `touched` is the only writer of `last_applied` on an existing item: on an item with both
+    # empty (a legacy one) it also sets `in_prompt_since` to `added_at`, so a first bump
+    # cannot make a lesson that is already in prompts look never landed.
     last_applied: str = ""
     in_prompt_since: str = ""
+    # Counters of the tasks that ran with it (see `score_task`), and the `_mark` of the last
+    # task that was scored, so a task counts once. All three are omitted at their default.
+    helpful: int = 0
+    harmful: int = 0
+    scored_until: str = ""
 
     @property
     def seen(self) -> int:
@@ -293,12 +310,28 @@ def keep(
     return confidence == KEEP_CONFIDENCE or seen >= KEEP_MIN_TASKS
 
 
-def archive_due(item: Item, role_tasks_since: int, backed: bool) -> bool:
-    """Whether `item` leaves the prompt: it has been in one (`in_prompt_since`), the role
-    ran `ARCHIVE_AFTER` tasks since, and none of them backed or cited it (`backed`)."""
-    if not item.in_prompt_since or backed:
-        return False
-    return role_tasks_since >= ARCHIVE_AFTER
+def score(item: Item) -> int:
+    """The lesson's score: `SCORE_START` plus what helped minus what harmed."""
+    return SCORE_START + item.helpful - item.harmful
+
+
+def day(text: str) -> str:
+    """The calendar day of a date or an instant: the only way the two are compared."""
+    return text[:10]
+
+
+def archive_due(item: Item, role_tasks_since: int | None) -> ArchiveCause | None:
+    """Why `item` leaves the prompt, or `None`. `score`: its score is 0 or less, whether or
+    not it ever reached a prompt. `stale`: it has been in one (`in_prompt_since`), the role
+    ran `ARCHIVE_AFTER` tasks since (`role_tasks_since`, `None` when unknown), and no merge or
+    bump moved `last_applied` past the day it entered."""
+    if score(item) <= 0:
+        return ARCHIVE_SCORE
+    if role_tasks_since is None or not item.in_prompt_since:
+        return None
+    if role_tasks_since >= ARCHIVE_AFTER and not day(item.last_applied) > day(item.in_prompt_since):
+        return ARCHIVE_STALE
+    return None
 
 
 def _number(item_id: str) -> tuple[int, str]:
@@ -325,13 +358,31 @@ def over_cap(playbook: Playbook) -> bool:
     return len(playbook.items) > PLAYBOOK_MAX_ITEMS or len(section(playbook)) > PLAYBOOK_MAX_CHARS
 
 
-def in_grace(item: Item, role_tasks_since: Mapping[str, int]) -> bool:
-    """Whether `item` is too new to demote: it never reached a prompt (`in_prompt_since`
-    empty), its id is not in `role_tasks_since`, or its role ran fewer than `GRACE_TASKS`
-    tasks since. The only place `GRACE_TASKS` is compared."""
-    if not item.in_prompt_since or item.id not in role_tasks_since:
-        return True
+def in_grace(item: Item, role_tasks_since: Mapping[str, int], *, rewording: bool = False) -> bool:
+    """Whether `item` is too young for the caller to act on, from one count of `GRACE_TASKS`
+    (the only place it is compared): its role ran fewer than that many tasks since it
+    reached a prompt (`in_prompt_since`).
+
+    The default reading is for demotion: an item that never reached a prompt, or whose id is
+    not in `role_tasks_since`, is young and never demoted. With `rewording=True` it is the
+    reading of a merge, which may reword only a young lesson: a never-landed item
+    (`last_applied` set, no `in_prompt_since`) is young, but a legacy item (both empty) and a
+    landed one with no count are frozen. Known limit: an item that reached a prompt after
+    ADR-0056 without a recorded `in_prompt_since` reads as never landed."""
+    if not item.in_prompt_since:
+        return bool(item.last_applied) if rewording else True
+    if item.id not in role_tasks_since:
+        return not rewording
     return role_tasks_since[item.id] < GRACE_TASKS
+
+
+def touched(item: Item, now: str) -> Item:
+    """`item` as a task backed or cited it today: the only way `last_applied` is written
+    on an existing item. A legacy item (both dates empty) also gets `in_prompt_since` =
+    `added_at`, so it starts aging from this touch and stays out of grace."""
+    if not item.last_applied and not item.in_prompt_since:
+        return replace(item, last_applied=now, in_prompt_since=item.added_at)
+    return replace(item, last_applied=now)
 
 
 def demotion_pick(
@@ -368,7 +419,8 @@ def demote(item: Item, slug: str) -> Pending:
 
 
 _ITEM_KEYS = ("id", "lesson", "category", "since", "seen_in", "added_at")
-_ITEM_OPTIONAL = ("last_applied", "in_prompt_since")
+_ITEM_OPTIONAL = ("last_applied", "in_prompt_since", "helpful", "harmful", "scored_until")
+_ITEM_COUNTERS = ("helpful", "harmful")
 
 
 def item_data(item: Item) -> dict[str, Any]:
@@ -386,6 +438,12 @@ def item_data(item: Item) -> dict[str, Any]:
         data["last_applied"] = item.last_applied
     if item.in_prompt_since:
         data["in_prompt_since"] = item.in_prompt_since
+    if item.helpful:
+        data["helpful"] = item.helpful
+    if item.harmful:
+        data["harmful"] = item.harmful
+    if item.scored_until:
+        data["scored_until"] = item.scored_until
     return data
 
 
@@ -439,8 +497,16 @@ def parse_item(entry: Any, slug: str) -> Item:
     if missing:
         raise ValueError(f"playbook {slug}: item {label} is missing {missing[0]}")
     for key in (*_ITEM_KEYS, *(k for k in _ITEM_OPTIONAL if k in entry)):
-        if key != "seen_in" and not isinstance(entry[key], str):
+        if key in _ITEM_COUNTERS:
+            count = entry[key]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError(
+                    f"playbook {slug}: item {label}: {key} is not a whole number of 0 or more"
+                )
+        elif key != "seen_in" and not isinstance(entry[key], str):
             raise ValueError(f"playbook {slug}: item {label}: {key} is not text")
+    if entry.get("scored_until") and "|" not in entry["scored_until"]:
+        raise ValueError(f"playbook {slug}: item {label}: scored_until is not ended|task_id")
     seen = entry["seen_in"]
     if not isinstance(seen, list) or not all(isinstance(t, str) for t in seen):
         raise ValueError(f"playbook {slug}: item {label}: seen_in is not a list of task ids")
@@ -457,6 +523,9 @@ def parse_item(entry: Any, slug: str) -> Item:
         added_at=entry["added_at"],
         last_applied=entry.get("last_applied", ""),
         in_prompt_since=entry.get("in_prompt_since", ""),
+        helpful=entry.get("helpful", 0),
+        harmful=entry.get("harmful", 0),
+        scored_until=entry.get("scored_until", ""),
     )
 
 
@@ -465,13 +534,15 @@ def parse_item(entry: Any, slug: str) -> Item:
 
 @dataclass(frozen=True)
 class Delta:
-    """One change the reflector proposes. `lesson` is for add and merge, `item_id` for
-    merge, bump and retire, `tasks` the task ids it cites. `confidence` is the model's
+    """One change the reflector proposes. `lesson` is for add and merge (a merge with no
+    wording only adds tasks), `item_id` for every op but add, `tasks` the task ids it
+    cites; `noop` and `contradicts` record that a closed task confirmed or contradicted the
+    item and change no state. `confidence` is the model's
     own rating that the lesson is general (a delta that states none is read as it was
     before ADR-0056: kept), `scope` where it goes (`system` becomes an issue, never a
     playbook line), `decision` the `Decision N` a human-decision lesson cites."""
 
-    op: Literal["add", "merge", "bump", "retire"]
+    op: Literal["add", "merge", "bump", "retire", "noop", "contradicts"]
     slug: str
     category: str = ""
     lesson: str = ""
@@ -480,6 +551,51 @@ class Delta:
     confidence: Confidence = "high"
     scope: Literal["product", "system"] = "product"
     decision: int = 0
+
+
+def merge_into(
+    item_id: str, task: str, *, slug: str, category: str = "", wording: str | None = None
+) -> Delta:
+    """A merge of `task` into the item `item_id`, with new `wording` only if given."""
+    return Delta(
+        op="merge",
+        slug=slug,
+        category=category,
+        lesson=wording or "",
+        item_id=item_id,
+        tasks=(task,),
+    )
+
+
+def noop(item_id: str, task: str, *, slug: str) -> Delta:
+    """`task` closed and left the item `item_id` as it was: nothing changes."""
+    return Delta(op="noop", slug=slug, item_id=item_id, tasks=(task,))
+
+
+def contradicts(item_id: str, task: str, *, slug: str) -> Delta:
+    """`task` closed against the item `item_id`: recorded, nothing changes."""
+    return Delta(op="contradicts", slug=slug, item_id=item_id, tasks=(task,))
+
+
+@dataclass(frozen=True)
+class CitationFacts:
+    """The task store as `citation_missing` reads it: whether it was `readable`, the ids of
+    the `tasks` it holds and of the closed `escalations`. Within one `apply` call, the
+    tasks that `evidence` marks closed are present too."""
+
+    readable: bool
+    tasks: frozenset[str]
+    escalations: frozenset[str]
+
+
+def citation_missing(item: Item | Pending, facts: CitationFacts | None) -> bool:
+    """Whether the evidence of `item` is gone: the store was readable and none of the
+    tasks it cites is a task or a closed escalation in it. `None` or an unreadable store
+    drops nothing, and neither does an item that cites nothing."""
+    if facts is None or not facts.readable or not item.seen_in:
+        return False
+    present = facts.tasks | facts.escalations
+    return not any(t in present for t in item.seen_in)
 
 
 @dataclass(frozen=True)
@@ -570,13 +686,20 @@ def apply(
     archived: Sequence[Archived] = (),
     role_tasks_since: Mapping[str, int] = _NO_COUNTS,
     score: Callable[[Item], int] | None = None,
+    facts: CitationFacts | None = None,
 ) -> Applied:
     """Fold `deltas` into `playbook`, one at a time, each against the playbook the
     earlier ones left. Never mutates, never touches an item a delta does not name.
     `section_hash` is what a new item records as `since`; `now` is stored as `added_at`
     and `last_applied`. An add `keep` does not pass goes to `candidates`. An add that
     would pass the cap demotes lessons out of grace (`role_tasks_since`, `score`) until it
-    fits; when it cannot fit it waits in `candidates` and the playbook stays as it was."""
+    fits; when it cannot fit it waits in `candidates` and the playbook stays as it was.
+    `role_tasks_since` also decides whether a merge may reword (`in_grace`; an id it lacks is
+    out of grace for a merge); `facts` is what `citation_missing` reads, `None` when the task
+    store was not read."""
+    if facts is not None:
+        closed = frozenset(t for t, e in evidence.items() if e.closed)
+        facts = replace(facts, tasks=facts.tasks | closed)
     high_water = _highest(i.id for i in (*playbook.items, *(a.item for a in archived)))
     current = _Shelves(playbook, tuple(candidates), tuple(archived), high_water)
     applied: list[Delta] = []
@@ -584,7 +707,7 @@ def apply(
     held: list[Delta] = []
     for delta in deltas:
         outcome = _apply_one(
-            current, delta, evidence, rejected, section_hash, now, role_tasks_since, score
+            current, delta, evidence, rejected, section_hash, now, role_tasks_since, score, facts
         )
         if isinstance(outcome, str):
             refused.append(Refusal(delta, outcome))
@@ -617,23 +740,37 @@ def _apply_one(
     now: str,
     role_tasks_since: Mapping[str, int],
     score: Callable[[Item], int] | None,
+    facts: CitationFacts | None,
 ) -> str | tuple[_Shelves, Delta, bool]:
     playbook = shelves.playbook
     if delta.slug != playbook.slug:
         return f"the delta is for slug {delta.slug}, this is {playbook.slug}"
     if delta.op == "add":
-        return _add(shelves, delta, evidence, rejected, section_hash, now, role_tasks_since, score)
+        return _add(
+            shelves, delta, evidence, rejected, section_hash, now, role_tasks_since, score, facts
+        )
     target = next((i for i in playbook.items if i.id == delta.item_id), None)
     if target is None:
         return f"there is no item {delta.item_id!r}"
     if delta.op == "retire":
         return replace(shelves, playbook=_replace_items(playbook, target, None)), delta, False
+    if delta.op in ("noop", "contradicts"):
+        why = _closed_refusal(delta.tasks, evidence)
+        return why if why else (shelves, delta, False)
     if delta.category and delta.category != target.category:
         return f"the delta's category is not the item's ({target.category})"
     new_ids = tuple(t for t in dict.fromkeys(delta.tasks) if t not in target.seen_in)
     lesson = target.lesson
+    effective = delta
     if delta.op == "merge":
-        lesson = delta.lesson.strip()
+        # The only place a delta writes `lesson`: wording applies inside the grace period
+        # only; out of it the merge adds tasks and the wording is dropped.
+        wording = delta.lesson.strip()
+        if wording and (why := lesson_refusal(delta.lesson)):
+            return why
+        if wording and in_grace(target, role_tasks_since, rewording=True):
+            lesson = wording
+        effective = replace(delta, lesson=lesson if lesson != target.lesson else "")
     if new_ids:
         checked = _evidence_check(
             delta.slug, target.category, new_ids, evidence, lesson, delta.decision
@@ -641,29 +778,41 @@ def _apply_one(
         if checked.why:
             return checked.why
     if delta.op == "merge":
-        if why := lesson_refusal(delta.lesson):
-            return why
-        if _is_rejected(rejected, delta.slug, target.category, lesson):
-            return "the lesson was rejected before"
-        twin = next(
-            (
-                i
-                for i in playbook.items
-                if i.id != target.id and normalise(i.lesson) == normalise(lesson)
-            ),
-            None,
-        )
-        if twin:
-            return f"the lesson duplicates {twin.id}"
+        if lesson != target.lesson:
+            if _is_rejected(rejected, delta.slug, target.category, lesson):
+                return "the lesson was rejected before"
+            twin = next(
+                (
+                    i
+                    for i in playbook.items
+                    if i.id != target.id and normalise(i.lesson) == normalise(lesson)
+                ),
+                None,
+            )
+            if twin:
+                return f"the lesson duplicates {twin.id}"
+        elif not new_ids:
+            return "nothing to merge: no wording and every cited task is already counted"
     elif not new_ids:
         return "nothing to bump: every cited task is already counted"
-    merged = replace(
-        target,
-        lesson=lesson,
-        seen_in=target.seen_in + new_ids,
-        last_applied=now if new_ids else target.last_applied,
-    )
-    return replace(shelves, playbook=_replace_items(playbook, target, merged)), delta, False
+    merged = replace(target, lesson=lesson, seen_in=target.seen_in + new_ids)
+    if new_ids:
+        merged = touched(merged, now)
+    return replace(shelves, playbook=_replace_items(playbook, target, merged)), effective, False
+
+
+def _closed_refusal(tasks: Sequence[str], evidence: Mapping[str, Evidence]) -> str | None:
+    """Why `tasks` cannot be witnessed by a `noop` or `contradicts`: none cited, or one
+    unknown or not closed."""
+    if not tasks:
+        return "the delta cites no task"
+    for task in tasks:
+        known = evidence.get(task)
+        if known is None:
+            return f"task {task} has no evidence"
+        if not known.closed:
+            return f"task {task} is not closed"
+    return None
 
 
 def _add(
@@ -675,6 +824,7 @@ def _add(
     now: str,
     role_tasks_since: Mapping[str, int],
     score: Callable[[Item], int] | None,
+    facts: CitationFacts | None,
 ) -> str | tuple[_Shelves, Delta, bool]:
     playbook = shelves.playbook
     if delta.category not in LESSON_CATEGORIES:
@@ -697,10 +847,10 @@ def _add(
         new_ids = tuple(t for t in tasks if t not in same.seen_in)
         if not new_ids:
             return f"nothing to bump on {same.id}: every cited task is already counted"
-        bumped = replace(same, seen_in=same.seen_in + new_ids, last_applied=now)
+        bumped = touched(replace(same, seen_in=same.seen_in + new_ids), now)
         effective = replace(delta, op="bump", item_id=same.id)
         return replace(shelves, playbook=_replace_items(playbook, same, bumped)), effective, False
-    waiting = next(
+    found = next(
         (
             p
             for p in shelves.candidates
@@ -708,21 +858,14 @@ def _add(
         ),
         None,
     )
+    # A waiting candidate whose evidence is gone starts over with only the new evidence, as a
+    # plain candidate: the demotion mark counted tasks that no longer exist.
+    waiting = found
+    if found is not None and citation_missing(found, facts):
+        waiting = replace(found, seen_in=(), sources=(), demoted_at_seen=None)
     if waiting is not None and all(t in waiting.seen_in for t in tasks):
         return "nothing to add: the candidate already counts every cited task"
-    waiting_seen = waiting.seen_in if waiting else ()
-    seen_in = tuple(dict.fromkeys((*waiting_seen, *tasks)))
-    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
-    confidence = _top(delta.confidence, waiting.confidence if waiting else "low")
-    others = tuple(p for p in shelves.candidates if p is not waiting)
-    if waiting is None:
-        pending = Pending(delta.slug, delta.category, lesson, confidence, seen_in, all_sources, now)
-        waits = (*shelves.candidates, pending)
-    else:
-        grown = replace(waiting, confidence=confidence, seen_in=seen_in, sources=all_sources)
-        waits = tuple(grown if p is waiting else p for p in shelves.candidates)
-    held = replace(shelves, candidates=waits)
-    capped = replace(held, capped=(*held.capped, delta))
+    # A record whose evidence is gone stays archived but is not restored.
     shelf = next(
         (
             a
@@ -730,16 +873,38 @@ def _add(
             if normalise(a.item.lesson) == text
             and a.item.category == delta.category
             and a.item.id.rpartition("-")[0] == delta.slug
+            and not citation_missing(a.item, facts)
         ),
         None,
     )
-    if shelf is not None:
-        # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites.
+    # Back after a score archive only on evidence it did not have: a task already in its
+    # `seen_in` is not new, and the waiting candidate's tasks are filtered alike.
+    scored_out = shelf is not None and shelf.reason == ARCHIVE_SCORE
+    known = shelf.item.seen_in if shelf is not None and scored_out else ()
+    tasks = tuple(t for t in tasks if t not in known)
+    if scored_out and shelf is not None and not tasks:
+        return f"nothing to add on {shelf.item.id}: every cited task is already counted"
+    waiting_seen = tuple(t for t in (waiting.seen_in if waiting else ()) if t not in known)
+    seen_in = tuple(dict.fromkeys((*waiting_seen, *tasks)))
+    all_sources = tuple(sorted({*(waiting.sources if waiting else ()), *sources}))
+    confidence = _top(delta.confidence, waiting.confidence if waiting else "low")
+    demoted_at_seen = waiting.demoted_at_seen if waiting else None
+    others = tuple(p for p in shelves.candidates if p is not found)
+    if waiting is None:
+        pending = Pending(delta.slug, delta.category, lesson, confidence, seen_in, all_sources, now)
+        waits = (*shelves.candidates, pending)
+    else:
+        grown = replace(waiting, confidence=confidence, seen_in=seen_in, sources=all_sources)
+        waits = tuple(grown if p is found else p for p in shelves.candidates)
+    held = replace(shelves, candidates=waits)
+    capped = replace(held, capped=(*held.capped, delta))
+    passes = keep(confidence, len(seen_in), all_sources, demoted_at_seen=demoted_at_seen)
+    if shelf is not None and (passes or not scored_out):
+        # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites;
+        # whatever its cause, it starts counting again from nothing.
+        carried = replace(shelf.item, seen_in=tuple(dict.fromkeys((*shelf.item.seen_in, *seen_in))))
         restored = replace(
-            shelf.item,
-            seen_in=tuple(dict.fromkeys((*shelf.item.seen_in, *seen_in))),
-            last_applied=now,
-            in_prompt_since="",
+            touched(carried, now), in_prompt_since="", helpful=0, harmful=0, scored_until=""
         )
         off_shelf = replace(
             shelves,
@@ -748,8 +913,7 @@ def _add(
         )
         placed = _place(off_shelf, restored, delta, role_tasks_since, score)
         return (placed, delta, False) if placed else (capped, delta, True)
-    demoted_at_seen = waiting.demoted_at_seen if waiting else None
-    if not keep(confidence, len(seen_in), all_sources, demoted_at_seen=demoted_at_seen):
+    if not passes:
         return held, delta, True
     on_shelves = _highest(i.id for i in (*playbook.items, *(a.item for a in shelves.archived)))
     item = Item(
@@ -830,19 +994,95 @@ def _top(first: Confidence, second: Confidence) -> Confidence:
 def archive_stale(
     playbook: Playbook,
     archived: Sequence[Archived],
-    aging: Mapping[str, tuple[int, bool]],
+    aging: Mapping[str, int],
     *,
     now: str,
 ) -> tuple[Playbook, tuple[Archived, ...]]:
     """Move every item `archive_due` says is due out of the playbook, into the archive
-    with the reason `stale`; nothing is deleted. `aging` maps an item id to
-    `(role_tasks_since, backed)`; an item it does not name does not age."""
-    due = [i for i in playbook.items if i.id in aging and archive_due(i, *aging[i.id])]
+    with its cause as the reason; nothing is deleted. `aging` maps an item id to the role's
+    tasks since it entered a prompt; an item it does not name has no count, so only the
+    `score` cause can reach it."""
+    due = [(i, cause) for i in playbook.items if (cause := archive_due(i, aging.get(i.id)))]
     if not due:
         return playbook, tuple(archived)
-    gone = {i.id for i in due}
+    gone = {i.id for i, _ in due}
     kept = Playbook(playbook.slug, tuple(i for i in playbook.items if i.id not in gone))
-    return kept, (*archived, *(Archived(i, "stale", now) for i in due))
+    return kept, (*archived, *(Archived(i, cause, now) for i, cause in due))
+
+
+def returned_categories(
+    entries: Sequence[Mapping[str, Any]], task_type: str, slug: str
+) -> frozenset[str]:
+    """The categories of the task's returns that `return_backing` attributes to `slug`:
+    every pair counts, not only the Tech Lead's review (`accountable`)."""
+    backings = (return_backing(entry, task_type) for entry in entries)
+    return frozenset(b.category for b in backings if b is not None and b.slug == slug)
+
+
+@dataclass(frozen=True)
+class ScoredTask:
+    """The facts of one closed task of the role that `score_task` reads, built by the caller:
+    `ended` is its last run's end (empty while unreadable), `first_run_at` the start of its
+    first run of the role, `playbook_changed` whether the task changed the role's playbook,
+    `returned` the lesson categories its returns are attributable to."""
+
+    task_id: str
+    ended: str
+    first_run_at: str
+    playbook_changed: bool
+    returned: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Scored:
+    """The playbook after the task, and whether a lesson the task covers was shared by 2 or
+    more lessons of the role, so no counter could move (the caller prints it)."""
+
+    playbook: Playbook
+    unattributed: bool
+
+
+def _mark(ended: str, task_id: str) -> str:
+    return f"{ended}|{task_id}"
+
+
+def _after_mark(item: Item, ended: str, task_id: str) -> bool:
+    """Whether the task is later than the last one `item` was scored on, by `(ended, id)`."""
+    if not item.scored_until:
+        return True
+    mark_ended, _, mark_id = item.scored_until.partition("|")
+    return (ended, task_id) > (mark_ended, mark_id)
+
+
+def score_task(playbook: Playbook, task: ScoredTask) -> Scored:
+    """Move the counters for one closed task. A lesson counts the task when it was in the
+    prompt the task ran with and the task did not change the playbook; it moves only when no
+    other lesson of the role has its category: a return in it is `harmful`, none is `helpful`
+    (up to `HELPFUL_CAP`). A lesson sharing its category moves nothing."""
+    if not task.ended:
+        return Scored(playbook, False)
+    mark = _mark(task.ended, task.task_id)
+    unattributed = False
+    items: list[Item] = []
+    for item in playbook.items:
+        eligible = bool(
+            item.in_prompt_since
+            and task.first_run_at > item.in_prompt_since
+            and not task.playbook_changed
+            and _after_mark(item, task.ended, task.task_id)
+        )
+        if not eligible:
+            items.append(item)
+            continue
+        if sum(1 for other in playbook.items if other.category == item.category) > 1:
+            unattributed = True
+            items.append(replace(item, scored_until=mark))
+        elif item.category in task.returned:
+            items.append(replace(item, harmful=item.harmful + 1, scored_until=mark))
+        else:
+            helpful = min(item.helpful + 1, HELPFUL_CAP)
+            items.append(replace(item, helpful=helpful, scored_until=mark))
+    return Scored(Playbook(playbook.slug, tuple(items)), unattributed)
 
 
 def screen_system(

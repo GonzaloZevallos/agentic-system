@@ -31,6 +31,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
 
 ```mermaid
 classDiagram
+    class playbook__ScoredTask["ScoredTask"]
     class playbook_candidates__Add["Add"]
     class playbook_candidates__Candidate["Candidate"]
     class playbook_candidates__Entry["Entry"]

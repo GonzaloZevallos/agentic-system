@@ -203,6 +203,7 @@ class AttemptFailed(Exception):
         value: str | None = None,
         detail: str = "",
         repairs: Sequence[RefusalRepair] = (),
+        value_len: int | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -262,6 +263,10 @@ class AttemptFailed(Exception):
         # The refusals this attempt repaired before the one that failed it (GH-1016): its own
         # record, never another attempt's; empty at every other site.
         self.repairs = list(repairs)
+        # The size of the refused value, measured by `run_role._refused` on the raw structured
+        # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
+        # at every other site and when the size is unknown.
+        self.value_len = value_len
 
 
 class Presubmit(Protocol):
