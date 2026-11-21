@@ -2251,3 +2251,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-21T08:56:05.723+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, module or public boundary, update the hand-written architecture docs (port and component tables) in the same change; regenerated diagrams alone do not cover them.
+  confidence: medium
+  seen_in:
+  - GH-1030
+  sources:
+  - finding
+  added_at: '2026-11-21T11:59:28.800+00:00'
