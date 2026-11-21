@@ -205,3 +205,38 @@ dueños de una tarea** pueden pedir reintentos.
   `ValueError` sin política) y el de agotamiento terminan en ` (HTTP nnn)`, y la excepción lo
   trae en `status` (`TrackerRefused` y todo `TrackerCallFailed`; `None` por defecto). Nada
   más de lo que imprimió `gh` se agrega.
+
+## Adenda (GH-989): una espera de límite de tasa agotada pausa la tarea en vez de fallar
+
+El mecanismo es el de la adenda de GH-381 del ADR-0039 (una pausa externa que el poller retoma
+sola, sin `needs-human`), reutilizado para el límite de tasa de GitHub: cuando un nodo recibe
+`TrackerRateLimited` tras agotar la espera, la tarea queda pausada con el motivo
+`github_rate_limit` (`rate_limit.rate_limit_pause_patch`, que arma
+`run_role.rate_limit_paused`) en lugar de escalar. `GH_RATE_WAIT_MAX_S` no cambia: sigue siendo
+la cota de una espera dentro de una llamada; la de 12 h (`rate_limit.RATE_LIMIT_WAIT_MAX`) es la
+de la pausa entera y es de otra capa.
+
+Nodos que convierten `TrackerRateLimited` en esa pausa (la columna «antes» sale de
+`git show 454fd9d2`):
+
+| Nodo | Antes | Después |
+|---|---|---|
+| `deliver._undelivered` | escalado de clase `system_delivery` con causa `delivery_transient` (`rules.escalation`, pues `deliver._transient` lee `TrackerCallFailed`) | `run_role.rate_limit_paused`: pausa `github_rate_limit`, sin `needs-human` ni comentario (`rate_limit.tracker_silent`) |
+| `run_role`, armado del prompt (`except (ValueError, OSError)`) | fallo de rol: `escalation(PromptFailure(...))`, por ser `TrackerRateLimited` un `ValueError` | `run_role.rate_limit_paused` |
+| `run_role`, `_attempt` (validación del esquema y `check`) | fallo de rol por validación, también por ser un `ValueError` | se relanza (`except TrackerRateLimited: raise`) y lo toma el manejador de abajo |
+| `run_role`, nodos de corrida (tras `except Escalating`) | sin manejador: la excepción salía de `run_role` | `run_role.rate_limit_paused` |
+
+Otros nodos que GH-989 tocó sin convertir esa excepción:
+
+- `escalate`: guarda solo el documento cuando `rate_limit.tracker_silent` es verdadero.
+- `resume`: con `by_poller`, `rules.resumed` conserva `rate_limit_paused_at` y
+  `rate_limit_noticed_at`; sin él los borra.
+- `deliver` al cerrar: `rate_limit.cleared_on_close` borra ambos instantes si la invocación no
+  terminó en una pausa de este tipo.
+
+| Nodo | Sin cambio: fin de ronda |
+|---|---|
+| `poll`, `split_sweep.ROUND_STOPPERS`, el adaptador del tablero (`board`) e `issue_listing` | `TrackerRateLimited` sigue terminando la ronda, no la tarea |
+
+La tabla de nodos puede envejecer si otro nodo empieza a convertir `TrackerRateLimited`: se
+completa en la misma tarea que lo haga.
