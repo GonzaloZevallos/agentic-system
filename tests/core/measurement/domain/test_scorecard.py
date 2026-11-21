@@ -123,6 +123,7 @@ def test_external_reasons_exclude_account_limit_upstream_network_and_disk_full()
         "upstream",
         "network",
         "disk_full",
+        "github_rate_limit",
     }
 
 

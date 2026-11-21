@@ -3677,10 +3677,13 @@ def resumed(
     *,
     at: str,
     drawing_plan: bool = False,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
     `drawing_plan` (GH-766) owes the plan again: only `drawing_answer.resume_patch` passes it.
+    `by_poller` (GH-989) is the poller's own retake: it keeps the GitHub rate limit's two
+    instants, so the wait counts across retakes; any other resume clears them.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
     from the merges it just did, and only that one knows what conflicted. Returns a
@@ -3698,6 +3701,12 @@ def resumed(
         # counts toward what the poller may retry on its own next time.
         "pause_log": [resumed_entry(at=at)],
     }
+    if not by_poller:
+        # Cleared as `None`, which `apply` writes over the plain field and `document.render`
+        # leaves out: the saved document has no such key, never a null. Written only when set.
+        for key in ("rate_limit_paused_at", "rate_limit_noticed_at"):
+            if state.get(key):
+                patch[key] = None
     if state.get("spec"):
         patch["spec_cause"] = None
     if state.get("spec_refusal"):
@@ -4239,12 +4248,19 @@ def increment_patch(state: TaskState) -> dict[str, Any]:
 # and every fact it decides over arrive as arguments (README.md, 14), never a port, a
 # `subprocess` or a `Path`.
 
-# The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
-# issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
-# provider's own server, the network down, or the disk full. `rules.auto_resumable` reads this
+# The `FailureReason`s a pause never needed a human for (ADR-0029, extended by
+# issue #137's own `network`, GH-391's `disk_full` and GH-989's `github_rate_limit`): the
+# account's own quota, the provider's own server, the network down, the disk full, or GitHub's
+# rate limit. `rules.auto_resumable` reads this
 # tuple, and so does the measurement (`core.measurement.domain.scorecard`, for its own failures),
 # which imports it rather than keeping a copy; `rules.pause_kind` is the one classifier of a pause.
-EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
+EXTERNAL_REASONS: tuple[FailureReason, ...] = (
+    "account_limit",
+    "upstream",
+    "network",
+    "disk_full",
+    "github_rate_limit",
+)
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
@@ -4443,15 +4459,20 @@ def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
     return "human" if _resume_key(entries) is None else "external"
 
 
+# The failure reasons whose entry may carry a stated `resets_at`.
+_RESET_STATING_REASONS: tuple[FailureReason, ...] = ("account_limit", "github_rate_limit")
+
+
 def stated_reset(state: TaskState) -> datetime | None:
-    """The latest `resets_at` among the current epoch's `account_limit` failure entries
-    (ADR-0039, addendum GH-381), the latest by time whatever order they were logged in;
+    """The latest `resets_at` among the current epoch's `account_limit` and `github_rate_limit`
+    failure entries (ADR-0039, addendum GH-381; GH-989), the latest by time whatever order they
+    were logged in;
     entries without one, or with one that is not ISO-8601 with an offset, are ignored.
     `None` when none states a reset: the pause then follows its calendar as ever."""
     stated = [
         _instant(entry.get("resets_at"))
         for entry in _current_epoch(state)
-        if entry["kind"] == "failure" and entry["value"] == "account_limit"
+        if entry["kind"] == "failure" and entry["value"] in _RESET_STATING_REASONS
     ]
     return max((t for t in stated if t is not None), default=None)
 
@@ -4480,7 +4501,10 @@ def schedule_for(reason: ResumeKey, chase_prior: int = 0) -> tuple[int, ...]:
     `RETAKE_SCHEDULE`, bounded by `MECHANICAL_RETAKE_MAX`): the flat `ACCOUNT_LIMIT_SCHEDULE` for
     a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
     reached `ACCOUNT_LIMIT_CHASE_MAX`, the growing `RETAKE_SCHEDULE` for everything
-    else. The only place a reason maps to a calendar; no other reason is ever hourly."""
+    else, and the minutely `GITHUB_RATE_LIMIT_SCHEDULE` for GitHub's rate limit (GH-989). The
+    only place a reason maps to a calendar; no other reason is ever hourly."""
+    if reason == "github_rate_limit":
+        return GITHUB_RATE_LIMIT_SCHEDULE
     if reason != "account_limit":
         return RETAKE_SCHEDULE
     return (
@@ -4525,9 +4549,12 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     interview's own section (`failed_interviews`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
-    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593)."""
+    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593); GitHub's rate
+    limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s."""
     if reason in MECHANICAL_CAUSES:
         return MECHANICAL_RETAKE_MAX
+    if reason == "github_rate_limit":
+        return len(GITHUB_RATE_LIMIT_SCHEDULE)
     if reason == "account_limit":
         return len(ACCOUNT_LIMIT_SCHEDULE)
     return 1 if failed_interviews(state) else len(RETAKE_SCHEDULE)
@@ -5215,9 +5242,10 @@ def account_limit_due(
 
 def _governing_reset(r: ResumeCandidate) -> datetime | None:
     """The stated reset that decides `r`'s due time, `None` when none does: only an
-    `account_limit` pause that is not yet retaken and has not spent the persisted week
-    (`account_limit_persisted` escalates it, whatever the hint says)."""
-    if r.reason != "account_limit" or r.retaken or account_limit_persisted(r):
+    `account_limit` or `github_rate_limit` pause that is not yet retaken and, for the account's,
+    has not spent the persisted week (`account_limit_persisted` escalates it, whatever the hint
+    says)."""
+    if r.reason not in _RESET_STATING_REASONS or r.retaken or account_limit_persisted(r):
         return None
     return r.resets_at
 
@@ -5299,10 +5327,11 @@ def needs_a_human(state: TaskState) -> bool:
     `account_limit`) and that has not spent the hourly week (`ACCOUNT_LIMIT_PERSISTED`,
     the escalation that is left to the human). Everything else keeps the label: an
     `upstream` or `network` pause, a mixed set of external and own failures, an
-    escalation that is not a failure."""
-    if state.get("escalated") == ACCOUNT_LIMIT_PERSISTED:
+    escalation that is not a failure. GitHub's rate limit (`github_rate_limit`, GH-989) is the
+    same, until it outlasts its wait and escalates as `RATE_LIMIT_PERSISTED`."""
+    if state.get("escalated") in (ACCOUNT_LIMIT_PERSISTED, RATE_LIMIT_PERSISTED):
         return True
-    return auto_resumable(state) != "account_limit"
+    return auto_resumable(state) not in ("account_limit", "github_rate_limit")
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from agentic.core.process.domain import document, rate_limit, rules
+from agentic.core.process.domain import document, rate_limit, rules, task
 from agentic.core.process.domain.rate_limit import (
     RATE_LIMIT_PERSISTED,
     RATE_LIMIT_WAIT_MAX,
@@ -215,3 +215,204 @@ def test_the_import_checker_finds_every_form_of_importing_rate_limit():
 def test_rules_never_imports_rate_limit():
     source = Path(rules.__file__).read_text(encoding="utf-8")
     assert not _imports_rate_limit(source)
+
+
+# --- GH-1032: the rules and the two policies the nodes call ------------------------------------
+
+_LATER = (AT + timedelta(hours=2)).isoformat()
+
+
+def _paused(**extra: Any) -> Any:
+    """A state paused by the GitHub limit: the pause patch applied over an empty one."""
+    state: Any = {"pause_log": [], **extra}
+    return task.apply(state, rate_limit_pause_patch(state, resets_at=None, at=AT_S))
+
+
+def test_a_github_rate_limit_epoch_is_an_external_pause():
+    assert rules.pause_kind([_fail("github_rate_limit"), _esc()]) == "external"
+    assert "github_rate_limit" in rules.EXTERNAL_REASONS
+
+
+def test_a_paused_task_is_auto_resumable_as_the_github_key_and_needs_no_human():
+    state = _paused()
+    assert rules.auto_resumable(state) == "github_rate_limit"
+    assert rules.needs_a_human(state) is False
+
+
+def test_the_persisted_escalation_needs_a_human_even_though_the_key_reads_github():
+    persisted = task.apply(_paused(), rate_limit_persisted_patch(at=_LATER))
+    assert persisted["escalated"] == RATE_LIMIT_PERSISTED
+    assert rules.needs_a_human(persisted) is True
+    # Rejected input: the pause itself, written under the persisted text, is a human's.
+    forged: Any = {**_paused(), "escalated": RATE_LIMIT_PERSISTED}
+    assert rules.needs_a_human(forged) is True
+
+
+def test_a_github_failure_mixed_with_an_own_failure_still_needs_a_human():
+    state: Any = {
+        "pause_log": [_fail("github_rate_limit"), _fail("sdk"), _esc()],
+        "escalated": "x",
+    }
+    assert rules.auto_resumable(state) is None
+    assert rules.needs_a_human(state) is True
+
+
+def test_the_stated_reset_reads_a_github_failure_and_ignores_other_reasons():
+    reset = AT + timedelta(minutes=30)
+    github: Any = {
+        "pause_log": [
+            {**_fail("github_rate_limit"), "resets_at": reset.isoformat()},
+            _esc(),
+        ]
+    }
+    assert rules.stated_reset(github) == reset
+    upstream: Any = {"pause_log": [{**_fail("upstream"), "resets_at": reset.isoformat()}, _esc()]}
+    assert rules.stated_reset(upstream) is None
+    account: Any = {
+        "pause_log": [{**_fail("account_limit"), "resets_at": reset.isoformat()}, _esc()]
+    }
+    assert rules.stated_reset(account) == reset
+
+
+def test_the_github_key_follows_its_own_minutely_calendar_of_twelve():
+    assert rules.schedule_for("github_rate_limit") == rules.GITHUB_RATE_LIMIT_SCHEDULE
+    assert rules.schedule_for("github_rate_limit", chase_prior=10_000) == (
+        rules.GITHUB_RATE_LIMIT_SCHEDULE
+    )
+    assert rules.retake_calendar("github_rate_limit", 3, 0, 12) == (
+        rules.GITHUB_RATE_LIMIT_SCHEDULE,
+        3,
+        12,
+    )
+    assert rules.auto_resume_limit({}, "github_rate_limit") == 12
+    assert rules.auto_resume_limit({}, "github_rate_limit") != rules.MECHANICAL_RETAKE_MAX
+
+
+def _candidate(**over: Any) -> rules.ResumeCandidate:
+    fields: dict[str, Any] = {
+        "issue": 1,
+        "reason": "github_rate_limit",
+        "since": AT,
+        "prior": 0,
+        "limit": 12,
+        "chase_prior": 0,
+        "retaken": False,
+        "resets_at": AT + timedelta(minutes=30),
+    }
+    fields.update(over)
+    return rules.ResumeCandidate(**fields)
+
+
+def test_a_stated_github_reset_governs_the_first_retake_and_not_a_later_one():
+    c = _candidate()
+    assert rules.retake_due(c, AT + timedelta(minutes=29)) is None
+    assert rules.retake_due(c, AT + timedelta(minutes=30)) == AT + timedelta(minutes=30)
+    assert rules.resume_exhausted(c) is False
+    later = _candidate(retaken=True, prior=1)
+    assert rules.retake_due(later, AT) is None
+
+
+def _resume(state: Any, *, by_poller: bool) -> Any:
+    patch = rules.resumed(state, None, at=_LATER, by_poller=by_poller)
+    return task.apply(state, patch)
+
+
+def test_three_poller_resumes_keep_the_pause_field_and_the_retake_budget():
+    state = _paused(rate_limit_noticed_at=AT_S, changes_requested={"a": 2})
+    budget = state.get("changes_requested")
+    for _ in range(3):
+        state = _resume(state, by_poller=True)
+        assert state["rate_limit_paused_at"] == AT_S
+        assert state["rate_limit_noticed_at"] == AT_S
+        assert state.get("changes_requested") == budget or state.get("changes_requested") == {}
+        state = _paused_again(state)
+        assert state["rate_limit_paused_at"] == AT_S
+    assert len([e for e in state["pause_log"] if e["kind"] == "resumed"]) == 3
+    assert "retakes" not in state
+
+
+def _paused_again(state: Any) -> Any:
+    return task.apply(state, rate_limit_pause_patch(state, resets_at=None, at=_LATER))
+
+
+def test_a_manual_resume_removes_both_fields_from_the_saved_document():
+    base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
+    state = {**base, **_paused(rate_limit_noticed_at=AT_S)}
+    state = _resume(state, by_poller=False)
+    saved = document.render(state)
+    assert "rate_limit_paused_at" not in saved and "rate_limit_noticed_at" not in saved
+    reloaded = document.parse(saved)
+    assert "rate_limit_paused_at" not in reloaded and "rate_limit_noticed_at" not in reloaded
+    assert rate_limit_exhausted(state, AT + timedelta(days=2)) is False
+
+
+def test_a_resume_that_is_not_the_polls_is_manual_by_default():
+    state = _paused(rate_limit_noticed_at=AT_S)
+    patch = rules.resumed(state, None, at=_LATER)
+    assert "rate_limit_paused_at" in patch and "rate_limit_noticed_at" in patch
+    assert not patch["rate_limit_paused_at"] and not patch["rate_limit_noticed_at"]
+    kept = rules.resumed(state, None, at=_LATER, by_poller=True)
+    assert "rate_limit_paused_at" not in kept and "rate_limit_noticed_at" not in kept
+    # A task the limit never paused gets no new key on a manual resume.
+    assert "rate_limit_paused_at" not in rules.resumed({"pause_log": []}, None, at=_LATER)
+
+
+def test_tracker_silent_for_a_fresh_pause_and_for_the_persisted_escalation():
+    assert rate_limit.tracker_silent(_paused()) is True
+    persisted = task.apply(_paused(), rate_limit_persisted_patch(at=_LATER))
+    assert rate_limit.tracker_silent(persisted) is True
+
+
+def test_tracker_silent_is_false_for_an_account_limit_and_for_a_returns_or_questions_pause():
+    account: Any = {
+        "pause_log": [_fail("account_limit"), _esc()],
+        "escalated": "limit",
+    }
+    assert rate_limit.tracker_silent(account) is False
+    for cls in ("returns", "questions"):
+        other: Any = {
+            "pause_log": [_fail("github_rate_limit"), {"kind": "escalation", "value": cls}],
+            "escalated": "needs you",
+        }
+        assert rate_limit.tracker_silent(other) is False, cls
+    assert rate_limit.tracker_silent({"pause_log": []}) is False
+
+
+def _closing_state(**extra: Any) -> Any:
+    """What a node holds when it closes: the poller already retook the pause."""
+    return _resume(_paused(**extra), by_poller=True)
+
+
+def test_cleared_on_close_removes_both_fields_for_a_closing_patch_that_is_no_limit_pause():
+    state = _closing_state(rate_limit_noticed_at=AT_S)
+    patch = rate_limit.cleared_on_close(state, {"status": "ready_for_review"})
+    assert patch["status"] == "ready_for_review"
+    assert patch["rate_limit_paused_at"] is None and patch["rate_limit_noticed_at"] is None
+
+
+def test_cleared_on_close_keeps_the_fields_for_a_new_limit_pause_and_the_persisted_one():
+    state = _closing_state()
+    again = rate_limit_pause_patch(state, resets_at=None, at=_LATER)
+    assert rate_limit.cleared_on_close(state, again) == again
+    persisted = rate_limit_persisted_patch(at=_LATER)
+    assert rate_limit.cleared_on_close(state, persisted) == persisted
+    # Rejected input: another class of escalation is no limit pause, so it clears.
+    other = {**rules.escalation("returns", "needs you"), "pause_log": [_esc_of("returns")]}
+    cleared = rate_limit.cleared_on_close(state, other)
+    assert cleared["rate_limit_paused_at"] is None
+    assert task.apply(state, cleared).get("rate_limit_paused_at") is None
+
+
+def _esc_of(cls: str) -> Any:
+    return {"kind": "escalation", "value": cls}
+
+
+def test_cleared_on_close_is_a_no_op_without_the_field_and_never_writes_a_null_to_the_document():
+    patch = {"status": "ready_for_review"}
+    assert rate_limit.cleared_on_close({"pause_log": []}, patch) == patch
+    base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
+    state = {**base, **_closing_state(rate_limit_noticed_at=AT_S)}
+    closed = rate_limit.cleared_on_close(state, {"status": "ready_for_review"})
+    saved = document.render(task.apply(state, closed))
+    assert "rate_limit_paused_at" not in saved and "rate_limit_noticed_at" not in saved
+    assert not any(name.startswith("rate_limit") for name in document.parse(saved))

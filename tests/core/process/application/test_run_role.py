@@ -14,7 +14,12 @@ from pydantic import field_validator
 from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application.format_issue import FormatFiling
-from agentic.core.process.application.ports import AttemptFailed, RawResult, SystemRepo
+from agentic.core.process.application.ports import (
+    AttemptFailed,
+    RawResult,
+    SystemRepo,
+    TrackerRateLimited,
+)
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
@@ -3209,6 +3214,34 @@ async def test_the_first_format_failure_of_a_stale_session_is_not_retried_with_a
     assert runner.calls[1]["prompt"] == "cold" and runner.calls[1]["resume"] is None
 
 
+# --- GH-989: a gh call a run node made outlasts the rate limit's wait ------------------------
+
+
+def _rate_limited(_data):
+    raise TrackerRateLimited("gh api rate_limit: wait over the cap")
+
+
+@pytest.mark.parametrize("through", ["check", "runner"])
+async def test_a_rate_limit_a_run_node_hits_pauses_the_task_and_fails_no_role(tmp_path, through):
+    runner = ScriptedRunner(pjm=[TrackerRateLimited("gh") if through == "runner" else OK])
+    ports = memory_ports(runner)
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        _rate_limited if through == "check" else None,
+        product="x",
+    )
+
+    assert output is None
+    assert patch["escalation_class"] == "failure"
+    assert patch["status"] == "waiting_on_human"
+    assert "failures" not in patch  # no role failure: the pause log carries the System entry
+    assert rules.auto_resumable({"id": "T-1", **patch}) == "github_rate_limit"
+    assert len(runner.calls) == 1  # no retry of the role
+
+
 # GH-1030: a refusal's issue in the system's repo is written next to the escalation, never in
 # place of it. The seam is `run_role` with a real `FormatFiling` over a fake `SystemRepo`.
 
@@ -3603,3 +3636,22 @@ async def test_a_schema_refusal_with_a_registered_rule_is_repaired_from_validate
         repair={"parts_when_fits": lambda raw, ctx: {k: v for k, v in raw.items() if k != "parts"}},
     )
     assert output.repairs == [{"rule": "parts_when_fits", "field": "parts"}]
+
+
+async def test_a_rate_limit_a_check_hits_is_not_a_refusal_the_repairs_try_to_fix(tmp_path):
+    """GH-989 with GH-1016: `_verdict` lets the exception through, so the repair chain never
+    sees it as a refusal and the task pauses as it does without repairs."""
+    ports = memory_ports(ScriptedRunner(pjm=[OK]))
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        _rate_limited,
+        repair=REPAIRS,
+        product="x",
+    )
+
+    assert output is None
+    assert "failures" not in patch
+    assert rules.auto_resumable({"id": "T-1", **patch}) == "github_rate_limit"

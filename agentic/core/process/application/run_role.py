@@ -76,6 +76,7 @@ from ..domain import (
     format_issue,
     plan_view,
     playbook,
+    rate_limit,
     refusal_retry,
     rules,
     schemas,
@@ -127,6 +128,7 @@ from .ports import (
     RawResult,
     RoleRunner,
     SchemaGuard,
+    TrackerRateLimited,
 )
 from .schema_guard import RoleSchemaGuard
 
@@ -964,6 +966,8 @@ def _verdict(
     first refusal with its rule, field and value (`_validation_rule`, `refusal_field`)."""
     try:
         data = schemas.validate(role.schema, raw, vocabulary)
+    except TrackerRateLimited:
+        raise
     except ValueError as exc:
         rule, field_, value = _validation_rule(role.schema, exc, raw)
         return _Refusal("schema", rule, field_, value, rules.exception_motive(exc), exc)
@@ -971,6 +975,8 @@ def _verdict(
         return data
     try:
         check(data)
+    except TrackerRateLimited:
+        raise
     except ValueError as exc:
         rule = "unmapped"
         field_ = ""
@@ -1174,6 +1180,15 @@ def escalation(exc: Escalating, *, at: str) -> TaskState:
     return rules.logged(patch, exc.failures, at=at)
 
 
+def rate_limit_paused(state: TaskState, exc: TrackerRateLimited, *, at: str) -> TaskState:
+    """The patch of a node whose `gh` call outlasted its rate-limit wait (GH-989): the pause
+    `rate_limit.rate_limit_pause_patch` writes, never a role failure or a needs-human
+    escalation. Only the pause, even when the wait is already exhausted: the persisted patch is
+    the poller's to write. `exc.resets_at` is the reset `gh` stated, if any."""
+    pause = rate_limit.rate_limit_pause_patch(state, resets_at=exc.resets_at, at=at)
+    return {"status": WAITING_ON_HUMAN, **pause}
+
+
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
     return {
         "role": role.name,
@@ -1357,6 +1372,11 @@ async def run_role(
         if spec and prompt is None and (block := spec_brief.block_for(role.slug)) is not None:
             raw_block = ports.prompts.spec_block(block)
             block_text = filled_block(raw_block, raw, rendered.source, role, state, ports)
+    except TrackerRateLimited as limited:
+        return None, {
+            "current_role": role.name,
+            **rate_limit_paused(state, limited, at=ports.now()),
+        }
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
         # kept (`raw()` re-raises it), and the spec data refusal. The playbook, the flags and
@@ -1435,6 +1455,9 @@ async def run_role(
         at = ports.now()
         extra = await _format_filing(exc, state, role, ports)
         return None, {**patch, **escalation(exc, at=at), **extra}
+    except TrackerRateLimited as limited:
+        # A gh call a run node made outlasted its wait: the pause, not a failed role.
+        return None, {**patch, **rate_limit_paused(state, limited, at=ports.now())}
 
     patch |= {
         "sections": rules.sections_for(state, section, _section_text(role, output)),

@@ -313,10 +313,12 @@ def resume_patch(
     *,
     at: str,
     plan_recheck: bool = False,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task given the rows the owner `answered` (none for any
     other pause): `rules.resumed`, plus the answered rows when there are some. The only
-    composition of that patch and the only caller of `plan_resume`.
+    composition of that patch and the only caller of `plan_resume`. `by_poller` (GH-989) goes
+    through to `rules.resumed`: the poller's own retake keeps the GitHub rate limit's instants.
 
     When `plan_stands` (the owner accepted every departure the plan declared and `plan_recheck`
     says the plan passes its check again) the held plan is restored: `rules.resumed` is called
@@ -328,11 +330,18 @@ def resume_patch(
     held = state.get("plan_held")
     if held is not None and plan_stands(state, answered, decision, plan_recheck):
         restored = _restored(held)
-        patch = rules.resumed(_with_subtasks(state, restored), decision, estimate, at=at)
+        patch = rules.resumed(
+            _with_subtasks(state, restored), decision, estimate, at=at, by_poller=by_poller
+        )
         patch.update(subtasks=restored, plan_due=False, plan_held=None)
     else:
         patch = rules.resumed(
-            state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
+            state,
+            decision,
+            estimate,
+            at=at,
+            drawing_plan=plan_resume(state, answered),
+            by_poller=by_poller,
         )
         if held is not None:
             patch["plan_held"] = None
