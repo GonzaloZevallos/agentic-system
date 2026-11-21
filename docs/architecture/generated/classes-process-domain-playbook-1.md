@@ -34,6 +34,7 @@ classDiagram
     class playbook__Applied["Applied"]
     class playbook__Archived["Archived"]
     class playbook__Backing["Backing"]
+    class playbook__CitationFacts["CitationFacts"]
     class playbook__Delta["Delta"]
     class playbook__Demotion["Demotion"]
     class playbook__Evidence["Evidence"]
