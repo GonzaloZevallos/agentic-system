@@ -43,9 +43,9 @@ classDiagram
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
+    class task__FormatHold["FormatHold"]
     class task__FormatIssueRecord["FormatIssueRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
-    class task__FullChecksJob["FullChecksJob"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
@@ -55,7 +55,6 @@ classDiagram
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
-  - `task.FullChecksJob` hereda de `task.CiLogRecord`
 - [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.PlanHeld` se asocia con `task.EstimateRecord`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
