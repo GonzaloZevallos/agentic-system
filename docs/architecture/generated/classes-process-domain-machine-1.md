@@ -36,6 +36,7 @@ classDiagram
     class exempt_queue__ExemptFacts["ExemptFacts"]
     class exempt_queue__ExemptRank["ExemptRank"]
     class exempt_queue__ExemptWait["ExemptWait"]
+    class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
@@ -44,5 +45,4 @@ classDiagram
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]
     class scratch__Orphans["Orphans"]
-    class scratch__Owner["Owner"]
 ```

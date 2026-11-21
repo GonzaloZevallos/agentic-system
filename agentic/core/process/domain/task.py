@@ -1183,6 +1183,11 @@ class Failure(TypedDict):
     # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
     # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
     detail: NotRequired[str]
+    # The refusals this attempt repaired before the one that failed it, `{rule, field}` each
+    # (GH-1016): its own record, written only when it has some. Never in the delivered
+    # section: no output came of this attempt. Absent on a failure recorded before this
+    # field existed, which reads as none.
+    repairs: NotRequired[list[RefusalRepair]]
 
 
 class CheckRun(TypedDict):
@@ -1337,9 +1342,9 @@ class RoleRun(TypedDict):
     # every recorded `Failure.turn_notice_firings` (`run_role._run_notice_firings`).
     # Absent on a run recorded before this field existed, which reads as `0`.
     turn_notice_firings: NotRequired[int]
-    # The refusals this run repaired before it delivered, `{rule, field}` each (GH-1011);
-    # empty until the repair part fills it. Absent on a run recorded before this field
-    # existed, which reads as none.
+    # The refusals this run repaired on the attempt that delivered, `{rule, field}` each
+    # (GH-1011, GH-1016); a failed attempt's own stay on its `Failure`. Absent on a run
+    # recorded before this field existed, or with none, which reads as none.
     repairs: NotRequired[list[RefusalRepair]]
     # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
     # entrega), off `RawResult.deliveries`. The run's total, for the section note

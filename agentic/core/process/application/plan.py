@@ -40,6 +40,7 @@ from ..domain import (
     tracker_items,
 )
 from ..domain.design import Design
+from ..domain.output_repair import REPAIRS, Repair
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -54,6 +55,7 @@ from ..domain.task import (
     WAITING_ON_HUMAN,
     PlanHeld,
     PlanRoute,
+    RefusalRule,
     Subtask,
     TaskState,
     apply,
@@ -293,6 +295,7 @@ async def _interview_and_plan(
         cfg,
         ports,
         check=estimate_check(cfg, interviewed, history, part_of, ports, design),
+        repair=plan_repair(),
         cwd=cwd,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
@@ -429,6 +432,15 @@ def estimate_check(
         spec_path=state["spec"]["path"] if state.get("spec") else None,
         rejected=drawing_answer.rejected_keys(state) if design is not None else {},
     )
+
+
+def plan_repair() -> Mapping[RefusalRule, Repair]:
+    """The repairs of a plan's raw output (`output_repair.REPAIRS`, GH-1016), for every role call
+    that passes `estimate_check`: the draft after the interview and the cold draft. The fit
+    and the size budget stay in the check, which names the rule; a repair applies that rule
+    alone and never recomputes them. The carve-out's remainder check never gets it: the remainder
+    is composed by the system, not a role's raw output (`plan_carve_out`)."""
+    return REPAIRS
 
 
 def _spec_gate(state: TaskState, output: Output | None, role: str, at: str) -> TaskState | None:
@@ -716,6 +728,7 @@ async def _cold_draft(
         cfg,
         ports,
         check=estimate_check(cfg, state, history, part_of, ports, design),
+        repair=plan_repair(),
         cwd=cwd,
         resume=resume,
         extra_input=extra_input,
