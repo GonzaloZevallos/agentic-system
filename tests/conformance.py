@@ -27,6 +27,7 @@ from agentic.core.process.application.ports import (
     Commands,
     ExperimentFile,
     FlagVocabulary,
+    FormatFiler,
     FreeSpace,
     Inbox,
     LabelTimeline,
@@ -58,6 +59,7 @@ from tests.fakes import (
     FakeCheckScheduler,
     FakeCiLogs,
     FakeExperimentFile,
+    FakeFormatFiler,
     FakeFreeSpace,
     FakeLabelTimeline,
     FakeLauncher,
@@ -114,6 +116,7 @@ _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
+_format_filer: FormatFiler = FakeFormatFiler()
 
 
 def ports_of_doubles() -> Ports:
@@ -171,6 +174,7 @@ COVERED: dict[str, type] = {
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
     "LabelTimeline": FakeLabelTimeline,
+    "FormatFiler": FakeFormatFiler,
 }
 
 

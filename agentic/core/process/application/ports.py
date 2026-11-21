@@ -55,8 +55,10 @@ from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
     DependencyState,
+    Failure,
     FailureReason,
     FlakeRecord,
+    FormatIssueRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
@@ -64,6 +66,8 @@ from ..domain.task import (
     TaskInput,
     TaskState,
     TrackerFailure,
+    TrackerFailureClass,
+    TrackerFailureRecord,
 )
 from .limits import RunLimits
 
@@ -1931,6 +1935,52 @@ class Tracker(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class SystemRepo:
+    """The system's own repo as two reads and one write the verb needs: the `tracker` that
+    opens the issue and the `inbox` that lists the open ones. Built by the composition
+    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
+
+    tracker: Tracker
+    inbox: Inbox
+
+
+def tracker_failure_class(error: ValueError) -> TrackerFailureClass | None:
+    """The closed class of a `gh` failure by the type of the error, never by its text;
+    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
+    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
+    does not absorb."""
+    if isinstance(error, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(error, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(error, TrackerTransient):
+        return "transient"
+    if isinstance(error, TrackerRateLimited):
+        return "rate_limited"
+    if isinstance(error, TrackerRefused):
+        return "refused"
+    return None
+
+
+class FormatFiler(Protocol):
+    """Files, or comments on, the system's issue of a format refusal (GH-1011): the shape
+    `run_role` calls, declared here so `ports.py` never imports the class that implements it.
+    Never raises. Returns the record to keep (`None` when nothing was written) and the
+    `tracker_failures` rows of a write that did not land."""
+
+    def file(
+        self,
+        *,
+        task_id: str,
+        issue_number: int,
+        product: str,
+        role: str,
+        failures: Sequence[Failure],
+        existing: Sequence[FormatIssueRecord],
+    ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]: ...
+
+
 class LabelTimeline(Protocol):
     """When a label was last added to an issue (GH-599). Narrow on purpose and apart from
     `Tracker`: only the close and the system merge read it, to record a task's lead time."""
@@ -2653,6 +2703,9 @@ class Ports:
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now
+    # Files or comments the issue of a format refusal in the system's repo (GH-1011). `None`
+    # files nothing, which is how every run went before it existed (dry-run, evaluation).
+    format_filing: FormatFiler | None = None
 
 
 class Stage0Store(Protocol):

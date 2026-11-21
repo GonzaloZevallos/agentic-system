@@ -24,11 +24,8 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     TrackerCallFailed,
-    TrackerRateLimited,
-    TrackerRefused,
-    TrackerTimedOut,
-    TrackerTransient,
     TrackerUnreachable,
+    tracker_failure_class,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.hold import HELD_LIMIT, HOLD_LABEL
@@ -37,7 +34,6 @@ from ...domain.task import (
     PullRequest,
     PullRequestCommit,
     TrackerFailure,
-    TrackerFailureClass,
     TrackerTarget,
 )
 from ...domain.tracker_refs import issue_number, pull_request_number
@@ -455,24 +451,6 @@ def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _failure_class(error: ValueError) -> TrackerFailureClass | None:
-    """The closed class of a `gh` failure by the type of the error, never by its text;
-    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
-    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
-    does not absorb."""
-    if isinstance(error, TrackerTimedOut):
-        return "timed_out"
-    if isinstance(error, TrackerUnreachable):
-        return "unreachable"
-    if isinstance(error, TrackerTransient):
-        return "transient"
-    if isinstance(error, TrackerRateLimited):
-        return "rate_limited"
-    if isinstance(error, TrackerRefused):
-        return "refused"
-    return None
-
-
 def _label_names(raw: object) -> tuple[str, ...] | None:
     """The label names of `gh issue view --json labels`; `None` when the field is absent or
     any entry is not a named label, so an unreadable set is never taken for an empty one."""
@@ -642,7 +620,7 @@ class GhTracker:
         try:
             write()
         except ValueError as exc:
-            cls = _failure_class(exc)
+            cls = tracker_failure_class(exc)
             if cls is None:
                 raise
             self._log(f"agentic: {name} could not write the {target} ({cls}); the run goes on")
