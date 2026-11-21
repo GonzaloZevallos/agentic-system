@@ -154,6 +154,9 @@ class FormatFiling:
                 except Exception:
                     return None, []
                 return None, [row]
+            # The write landed: the pair is marked before the clock is read, so a clock that
+            # raises here never lets a retry open a second issue.
             self._filed.add(pair)
             self._say(label, outcome)
+            at = self._now()
             return {"rule": _RULES[rule], "url": url, "at": at}, []
