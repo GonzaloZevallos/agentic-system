@@ -317,9 +317,10 @@ def claims(
     unpaired (`hold_unknown`, read by `hold_record.read`, last, so a document that gave another
     cause before still gives it).
 
-    The ranks: 1 a human pause, 2 an account-limit or GitHub rate-limit pause (`ACCOUNT_LIMIT_REASONS`), 3 the other closed pauses (CI ones to
-    `checks`, the rest to `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to
-    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
+    The ranks: 1 a human pause, 2 an account-limit or GitHub rate-limit pause
+    (`ACCOUNT_LIMIT_REASONS`), 3 the other closed pauses (CI ones to `checks`, the rest to
+    `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to `landing`, 5 CI waits, 6 runs
+    and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
 
     `parallel_factor.clip` drops the empty claims silently. The inputs that would invert a range
     are caught first by the validation above, so no claim is ever inverted. The later sweep must
