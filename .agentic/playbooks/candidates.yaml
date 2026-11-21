@@ -2115,3 +2115,167 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-17T03:04:06.173+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you write a reducer or merge, check each stated invariant (commutativity, normalisation, identity) on every branch, including an empty side, and test both argument orders.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change behaviour that a hand-written flow doc describes, grep the docs for the old behaviour and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan says reads go through a shared memo or cache, route every new read through it, keyed at the granularity the invariant names, and add a test with doubles that counts the calls.
+  confidence: medium
+  seen_in:
+  - GH-898
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T18:33:25.133+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change adds or alters a persisted key, a read or write, or a flow that a doc under docs/architecture describes, update that doc in the same change and grep every function name it cites.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you write a new key into a persisted record, declare it in that record's typed definition and in the helper that copies the record, so a later rewrite does not drop it and readers need no untyped access.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: On the integrated head, run the full test directories of every package the subtasks touched, and update test fakes or stubs of any shared seam that one subtask now calls and the other subtask's tests fake.
+  confidence: medium
+  seen_in:
+  - GH-647
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T04:27:03.824+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test enforces a rule by inspecting source, put the check in a helper and add a case that feeds it a violating input and shows it rejects; make the match exact, not a prefix.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test comment or name claims to check all calls of a kind, assert the full list of those calls, not just a count of one; remove helpers you wrote and left unused.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant, enumerate every branch or refusal it covers, check each one against the invariant's exact wording, and assert that wording in a test per branch before you claim it in the coverage map.
+  confidence: medium
+  seen_in:
+  - GH-983
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-19T21:55:06.914+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a field or change a shared structure, grep the tests for suites that pin it (expected sets, schemas, snapshots) and run those whole test files before you deliver, not only the new tests.
+  confidence: medium
+  seen_in:
+  - GH-1008
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T02:40:16.605+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add an entry to a registry, cluster map or other ordered table, keep it in its sorted place and run the tests that cover that table, such as the docs tests, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Keep every tracker item's text at most 240 characters; put longer detail in the task document and link it, so the TechPlan output validates.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - human_decision
+  added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you write a helper, look for an existing one with the same logic and call or reuse it, even if it is private to another module, rather than copying its body where the two can drift.
+  confidence: low
+  seen_in:
+  - GH-1009
+  sources:
+  - finding
+  added_at: '2026-11-21T07:19:34.113+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: When a plan adds a repair or fallback branch, trace the real validation path to confirm an earlier guard does not make it unreachable, and require a test that reaches it through that path.
+  confidence: medium
+  seen_in:
+  - GH-1016
+  sources:
+  - finding
+  added_at: '2026-11-21T08:56:05.723+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, module or public boundary, update the hand-written architecture docs (port and component tables) in the same change; regenerated diagrams alone do not cover them.
+  confidence: medium
+  seen_in:
+  - GH-1030
+  sources:
+  - finding
+  added_at: '2026-11-21T11:59:28.800+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow's behaviour, update the architecture docs that describe it in the same change, then run the docs generator so the docs check stays green.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T15:37:38.600+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you add a parameter or flag, grep every call site on the path to the entry point and pass it through each one. Do not stop at the function that consumes it.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  added_at: '2026-11-21T15:37:38.600+00:00'

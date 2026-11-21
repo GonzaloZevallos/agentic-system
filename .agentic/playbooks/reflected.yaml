@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 27
-summarised: 272
+summaries: 32
+summarised: 322
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -1293,3 +1293,277 @@ tasks:
       tasks:
       - GH-860
     decisions: 1
+  GH-863@review:
+    cost_usd: 0.0636
+    decisions: 1
+  GH-876@review:
+    cost_usd: 0.0226
+  GH-765@review:
+    cost_usd: 0.0518
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-765
+    decisions: 1
+  GH-862@review:
+    cost_usd: 0.0514
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-862
+    decisions: 1
+  GH-819@review:
+    cost_usd: 0.1189
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-819
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-819
+    decisions: 3
+  GH-894@review:
+    cost_usd: 0.0381
+  GH-646@review:
+    cost_usd: 0.0383
+  GH-895@review:
+    cost_usd: 0.0382
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-895
+  GH-897@review:
+    cost_usd: 0.0395
+  GH-898@review:
+    cost_usd: 0.0481
+  GH-893@review:
+    cost_usd: 0.0827
+  GH-868@review:
+    cost_usd: 0.0615
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-868
+    decisions: 1
+  GH-647@review:
+    cost_usd: 0.067
+  GH-914@review:
+    cost_usd: 0.0433
+  GH-899@review:
+    cost_usd: 0.0737
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-899
+  GH-839@decision:
+    cost_usd: 0.0243
+    decisions: 1
+  GH-917@review:
+    cost_usd: 0.0388
+  GH-648@review:
+    cost_usd: 0.0237
+  GH-874@decision:
+    cost_usd: 0.0258
+    decisions: 1
+  GH-856@review:
+    cost_usd: 0.0373
+  GH-942@review:
+    cost_usd: 0.0239
+  GH-908@review:
+    cost_usd: 0.0468
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-908
+  GH-960@review:
+    cost_usd: 0.0
+  GH-964@review:
+    cost_usd: 0.0469
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-964
+  GH-962@review:
+    cost_usd: 0.0379
+  GH-864@review:
+    cost_usd: 0.03
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-864
+  GH-887@review:
+    cost_usd: 0.0367
+  GH-980@review:
+    cost_usd: 0.0284
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-980
+  GH-943@review:
+    cost_usd: 0.0755
+    decisions: 1
+  GH-944@review:
+    cost_usd: 0.0448
+  GH-983@review:
+    cost_usd: 0.0491
+  GH-998@review:
+    cost_usd: 0.0252
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-998
+  GH-975@review:
+    cost_usd: 0.0383
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-975
+  GH-1002@review:
+    cost_usd: 0.041
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-1002
+  GH-1014@review:
+    cost_usd: 0.0397
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1014
+  GH-1026@review:
+    cost_usd: 0.0382
+  GH-1017@review:
+    cost_usd: 0.0469
+  GH-1001@review:
+    cost_usd: 0.0
+  GH-1031@review:
+    cost_usd: 0.0
+    failed: 'Reflector failed 1 times: You''ve hit your session limit · resets 6:50pm (America/Argentina/Buenos_Aires) (terminal reason: api_error, HTTP 429, exit code 1)'
+    decisions: 1
+    attempts: 3
+  GH-1029@review:
+    cost_usd: 0.0604
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1029
+    decisions: 1
+  GH-1022@review:
+    cost_usd: 0.0
+  GH-1008@review:
+    cost_usd: 0.0461
+  GH-1015@review:
+    cost_usd: 0.0393
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1015
+  GH-935@review:
+    cost_usd: 0.0662
+    decisions: 1
+  GH-1009@review:
+    cost_usd: 0.0339
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1009
+  GH-1016@review:
+    cost_usd: 0.0396
+  GH-1030@review:
+    cost_usd: 0.0685
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1030
+    decisions: 1
+  GH-1032@review:
+    cost_usd: 0.0673
+    decisions: 1
+  GH-1039@review:
+    cost_usd: 0.0387
+  GH-915@review:
+    cost_usd: 0.0255
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-915
