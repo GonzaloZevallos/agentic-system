@@ -2813,7 +2813,11 @@ async def test_a_refusal_sequence_differs_from_todays_failures_only_by_its_refus
     ]
     stripped = unstamped(
         [
-            {k: v for k, v in f.items() if k not in ("rule", "field", "value", "detail")}
+            {
+                k: v
+                for k, v in f.items()
+                if k not in ("rule", "field", "value", "detail", "value_len")
+            }
             for f in out.failures
         ]
     )
@@ -3081,6 +3085,82 @@ async def test_a_failure_that_is_not_a_refusal_records_no_value_or_detail():
     with pytest.raises(RoleFailure) as caught:
         await run_pjm(ScriptedRunner(pjm=[cut, OK]), floor_bytes=FLOOR_BYTES)
     assert "value" not in caught.value.failures[0]
+
+
+# --- GH-1039: a refusal row carries the size of the value the role wrote ---------------------
+
+
+class _Listed(RoleOutput):
+    """A tiny schema with a list field the validator refuses by item type."""
+
+    tags: list[int] = []
+
+
+async def test_a_refusal_row_carries_the_length_of_the_whole_value_not_the_cut_one():
+    raw_value = "x" * (refusal_retry.VALUE_MAX_CHARS + 50)
+    exc = await _refusals([_bad(type=raw_value)])
+    [row] = exc.failures
+    assert row["rule"] == "schema_invalid"
+    assert row["value_len"] == len(raw_value)
+    assert row["value_len"] > len(row["value"])
+
+
+async def test_a_refused_list_value_carries_its_item_count():
+    role = dataclasses.replace(PJM, schema=_Listed)
+    raw = RawResult({"markdown": "x", "tags": [1, 2, "no", 4, 5]}, 0.01)
+    exc = await _refusals([raw], role=role)
+    [row] = exc.failures
+    assert (row["rule"], row["field"]) == ("schema_invalid", "tags")
+    assert row["value_len"] == 5
+
+
+async def test_an_output_refusal_from_a_check_carries_value_len():
+    def check(data):
+        raise OutputRefusal("parts_when_fits", "confidence", "do not split")
+
+    exc = await _refusals([OK], check=check)
+    [row] = exc.failures
+    assert row["reason"] == "check"
+    assert row["value_len"] == len(OK.structured_output["confidence"])
+
+
+async def test_an_output_missing_row_has_no_value_len():
+    exc = await _refusals([RawResult(None, 0.01)])
+    assert "value_len" not in exc.failures[0]
+
+
+async def test_an_empty_markdown_row_carries_the_raw_markdown_length():
+    blank = RawResult({"markdown": "   ", "type": "bug", "confidence": "high", "reason": "r"}, 0.01)
+    exc = await _refusals([blank])
+    [row] = exc.failures
+    assert row["field"] == "markdown"
+    assert row["value_len"] == 3
+
+
+async def test_a_refusal_with_no_field_has_no_value_len():
+    exc = await _refusals(
+        [RawResult({"markdown": "x", "flags": {"nope": True}}, 0.01)],
+        role=dataclasses.replace(PJM, schema=schemas.PRD),
+    )
+    assert exc.failures[0]["rule"] == "unmapped"
+    assert "value_len" not in exc.failures[0]
+
+
+async def test_a_refusal_narrowed_to_disk_full_has_no_value_len():
+    cut = AttemptFailed(
+        "no", 0.0, reason="schema", rule="schema_invalid", field="type", value_len=7, space=LOW
+    )
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(ScriptedRunner(pjm=[cut, OK]), floor_bytes=FLOOR_BYTES)
+    [failure] = caught.value.failures
+    assert failure["reason"] == "disk_full"
+    assert "value_len" not in failure
+
+
+async def test_a_failure_that_is_not_a_refusal_has_no_value_len():
+    stalled = AttemptFailed("boom", 0.05, reason="stall", value_len=5)
+    out = await run_pjm(ScriptedRunner(pjm=[stalled, OK]))
+    assert all("value_len" not in f for f in out.failures)
 
 
 async def test_a_value_never_reaches_the_failure_error_or_the_role_failure_text():
