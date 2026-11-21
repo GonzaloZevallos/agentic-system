@@ -478,6 +478,23 @@ def add_tracker_failures(
     return list(joined.values())[:TRACKER_FAILURES_MAX]
 
 
+HoldCause = Literal["rule_spent", "task_spent"]
+"""Why a task is held on its format retakes (GH-1019): `rule_spent` a rule used its retakes,
+`task_spent` the task used its backstop."""
+
+
+class FormatHold(TypedDict):
+    """The hold a spent format-retake budget leaves (GH-1019): the `rule` it holds on, the
+    `cause` and when (`at`, ISO UTC). `issue_url` is the refusal issue the hold waits on and
+    `noted_at` when the human was told, each present only when known."""
+
+    rule: RefusalRule
+    cause: HoldCause
+    at: str
+    issue_url: NotRequired[str]
+    noted_at: NotRequired[str]
+
+
 class FormatIssueRecord(TypedDict):
     """The issue filed for one refusal rule (GH-1011): the rule, the issue's URL and when
     (ISO UTC). One per rule in `TaskState.format_issue`, read only through `format_issue_for`."""
@@ -1654,6 +1671,9 @@ class FailurePauseEntry(TypedDict):
     # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
     # entry written before this field existed (`rules.auto_resumable` never requires it).
     resets_at: NotRequired[str]
+    # The failure's `rule`, copied by `rules.logged` only when it has one (GH-1019); read only
+    # by `format_retakes` and the document codec.
+    rule: NotRequired[RefusalRule]
 
 
 class LapsePauseEntry(TypedDict):
@@ -2440,6 +2460,11 @@ class TaskState(TaskInput, total=False):
     # overrides them, which is what `last` would do.
     rate_limit_paused_at: str
     rate_limit_noticed_at: str
+    # The format retakes (GH-1019): the retakes already made per refusal rule, and the hold a
+    # spent budget leaves. Plain fields like the two above, written only by the composers of
+    # `format_retakes` and cleared (as `None`) by `rules.resumed`; absent reads as none.
+    format_retakes: NotRequired[dict[RefusalRule, int]]
+    format_hold: NotRequired[FormatHold]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records

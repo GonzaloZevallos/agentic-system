@@ -24,6 +24,7 @@ from . import (
     drawing,
     escalation_prompts,
     exempt_queue,
+    format_retakes,
     hold,
     launch_order,
     merge_ci,
@@ -3707,6 +3708,8 @@ def resumed(
         for key in ("rate_limit_paused_at", "rate_limit_noticed_at"):
             if state.get(key):
                 patch[key] = None
+        # The format retakes (GH-1019) clear the same way: a human's decision starts them over.
+        patch |= format_retakes.release_patch(state)
     if state.get("spec"):
         patch["spec_cause"] = None
     if state.get("spec_refusal"):
@@ -4343,13 +4346,15 @@ def escalation_entry(
 
 
 def _failure_entry(failure: Failure, at: str | None = None) -> FailurePauseEntry:
-    """The `pause_log` entry of one failed attempt; `resets_at` is copied only when the
-    failure has one, so an entry without a stated reset has no such key, and `at` likewise."""
+    """The `pause_log` entry of one failed attempt; `resets_at` and `rule` (GH-1019) are copied
+    only when the failure has one, so an entry without them has no such key, and `at` likewise."""
     entry = FailurePauseEntry(
         kind="failure", value=failure.get("reason", "other"), section=failure.get("section", "")
     )
     if "resets_at" in failure:
         entry["resets_at"] = failure["resets_at"]
+    if "rule" in failure:
+        entry["rule"] = failure["rule"]
     if at is not None:
         entry["at"] = at
     return entry
