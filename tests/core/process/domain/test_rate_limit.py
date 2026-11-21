@@ -510,3 +510,9 @@ def test_notice_posted_matches_the_heading_strictly_after_the_pause_only():
 def test_the_new_decisions_never_read_the_clock_tolerance():
     source = Path(rate_limit.__file__).read_text()
     assert "CLOCK_TOLERANCE" not in source
+
+
+def test_governing_reset_adds_the_products_offset_once_and_needs_a_stated_reset():
+    reset = _at(minutes=20)
+    assert rate_limit.governing_reset(reset, "p") == reset + reset_offset("p")
+    assert rate_limit.governing_reset(None, "p") is None

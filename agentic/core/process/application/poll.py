@@ -1802,8 +1802,7 @@ def _rate_limit_candidate(
     if rate_limit.rate_limit_exhausted(raw, now):
         return None
     prior = rate_limit.poller_retakes(stamped, at, RESUMED_BY_POLLER)
-    stated = rules.stated_reset(raw)
-    resets_at = stated + rate_limit.reset_offset(ports.stack.product()) if stated else None
+    resets_at = rate_limit.governing_reset(rules.stated_reset(raw), ports.stack.product())
     return rules.ResumeCandidate(
         number,
         reason,
@@ -2670,7 +2669,7 @@ def _spawn_resume(
     launcher: Launcher,
     argv0: str,
     product_dir: str,
-    comment: str,
+    comment: str | None,
     register_timeout_s: float,
     sleep: Callable[[float], None],
     crash: CrashRetake | None = None,
@@ -2684,7 +2683,9 @@ def _spawn_resume(
     to register. A retake that never registered says so, with which of its tries it was:
     it is the only case where the wait ends with the registry flock held for nothing.
     Neither kind records a launch attempt: that calendar belongs to `launch` alone. A crash
-    retake (`crash`, counted once by `gather_retakes`) names its own count and cap there."""
+    retake (`crash`, counted once by `gather_retakes`) names its own count and cap there. A
+    `comment` of `None` posts nothing: a GitHub rate-limit pause spends no retake budget, so
+    its only comment is the `Resumed by the poller:` the resume itself posts (GH-989)."""
     number = action.issue
     task_id = ports.inbox.task_id(number)
     if crash is not None:
@@ -2709,7 +2710,8 @@ def _spawn_resume(
         return [f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"]
     lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
     try:
-        ports.tracker.comment(task_id, comment)
+        if comment is not None:
+            ports.tracker.comment(task_id, comment)
     except TrackerCallFailed as exc:  # the child runs on: only the comment is lost
         what = "timed out" if isinstance(exc, TrackerTimedOut) else f"failed: {exc}"
         lines.append(f"agentic: poll: {action.kind} #{number} -> comment {what}")
@@ -2858,7 +2860,9 @@ def execute(
                 launcher,
                 argv0,
                 product_dir,
-                f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
+                None
+                if reason == "github_rate_limit"
+                else f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
                 register_timeout_s,
                 sleep,
             )

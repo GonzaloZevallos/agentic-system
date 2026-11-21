@@ -180,17 +180,62 @@ def test_a_person_before_the_last_system_comment_does_not_stop_the_retakes(tmp_p
     assert _resumed(launcher) == ["7"]
 
 
-def test_three_poller_resumes_keep_the_retake_budget_and_post_no_budget_comment():
-    base = [("Escalated: x", AT)]
-    three = [(f"{RESUMED_BY_POLLER}n{i}", AT + timedelta(minutes=i + 1)) for i in range(3)]
-    from agentic.core.process.application.resume import RESUMED, SYSTEM_COMMENTS
-
-    assert retakes.budget(base + three, SYSTEM_COMMENTS, RESUMED) == retakes.budget(
-        base, SYSTEM_COMMENTS, RESUMED
+def _second_limit(ports, task_id: str, at: datetime, resumed_at: datetime) -> None:
+    """The run the poller resumed hits the limit again: a `resumed` entry, then a new pause."""
+    state = ports.documents.load(task_id) or {}
+    patch = rate_limit.rate_limit_pause_patch(state, resets_at=None, at=at.isoformat())
+    resumed = {"kind": "resumed", "at": _stamp(resumed_at)}
+    ports.documents.save(
+        {
+            **state,
+            **{k: v for k, v in patch.items() if k != "pause_log"},
+            "pause_log": [*state["pause_log"], resumed, *patch["pause_log"]],
+        }
     )
-    assert not any(prefix == RESUMED_BY_POLLER for prefix in retakes.RETAKE_PREFIXES)
-    # The pause has its own calendar, never the mechanical cap.
-    assert rules.auto_resume_limit({}, "github_rate_limit") == len(rules.GITHUB_RATE_LIMIT_SCHEDULE)
+
+
+def test_a_pause_resumed_three_times_by_the_poller_posts_no_retake_comment_and_keeps_its_budget(
+    tmp_path,
+):
+    ports = _ports()
+    task_id = _pause(ports)
+    paused = AT
+    for _ in range(4):  # one more than RETAKE_MAX and MECHANICAL_RETAKE_MAX allow
+        _, launcher = _go(tmp_path, ports, paused + timedelta(minutes=60))
+        assert _resumed(launcher) == ["7"] and "--by-poller" in launcher.spawned[0]
+        # What `resume --by-poller` itself posts; the poller posts nothing of its own.
+        _say(ports, task_id, f"{RESUMED_BY_POLLER}retake", paused + timedelta(minutes=61))
+        paused += timedelta(minutes=70)
+        _second_limit(ports, task_id, paused, paused - timedelta(minutes=9))
+    comments = ports.tracker.comments
+    assert comments == [] and ports.tracker.labels == []
+    assert not any(
+        text.startswith((poll.AUTO_RESUMED, *retakes.RETAKE_PREFIXES)) for _, text in comments
+    )
+    assert poll._retake_budget(ports.tracker.timestamped_comments(task_id)).used == 0
+    state = ports.documents.load(task_id) or {}
+    assert (retakes.RETAKE_MAX, rules.MECHANICAL_RETAKE_MAX) == (3, 3)
+    assert rules.auto_resume_limit(state, "github_rate_limit") == len(
+        rules.GITHUB_RATE_LIMIT_SCHEDULE
+    )
+
+
+def test_other_pauses_still_post_their_auto_resumed_comment(tmp_path):
+    ports = _ports()
+    ports.documents.save(
+        {
+            "id": "GH-9",
+            "escalated": "Developer failed: API Error: 429",
+            "pause_log": [
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        }
+    )
+    _say(ports, "GH-9", "Escalated: Developer failed: API Error: 429", AT)
+    _, launcher = _go(tmp_path, ports, AT + timedelta(minutes=16))
+    assert _resumed(launcher) == ["9"]
+    assert ports.tracker.comments == [("GH-9", "Auto-resumed: account limit")]
 
 
 # -- the 12 h notice -------------------------------------------------------------------------

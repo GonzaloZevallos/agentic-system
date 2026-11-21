@@ -35,6 +35,7 @@ __all__ = [
     "reset_offset",
     "retake_due_at",
     "cleared_on_close",
+    "governing_reset",
     "tracker_silent",
 ]
 
@@ -218,6 +219,14 @@ def poller_retakes(comments: Sequence[tuple[str, datetime]], at: datetime, prefi
     return sum(1 for body, created in comments if body.startswith(prefix) and created > at)
 
 
+def governing_reset(resets_at: datetime | None, product: str) -> datetime | None:
+    """The instant a stated reset lets the pause be retaken: `resets_at` plus the product's
+    offset (`reset_offset`), `None` without a stated reset. The one place the offset is added;
+    `retake_due_at` and the poller's candidate (`rules.retake_due` reads it as `resets_at`) both
+    take it from here."""
+    return resets_at + reset_offset(product) if resets_at is not None else None
+
+
 def retake_due_at(
     resets_at: datetime | None, at: datetime, prior: int, product: str, now: datetime
 ) -> datetime | None:
@@ -227,7 +236,7 @@ def retake_due_at(
     `prior` after `at`, `None` once its 12 slots are spent. The same decision
     `rules.retake_due` takes over a `ResumeCandidate` built from these facts; pure, `now` is an
     argument."""
-    governing = resets_at + reset_offset(product) if resets_at is not None else None
+    governing = governing_reset(resets_at, product)
     return rules.account_limit_due(
         at,
         prior,
