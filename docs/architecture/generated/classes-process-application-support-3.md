@@ -19,6 +19,8 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__FreeSpace["FreeSpace"]
+    class ports__GitError["GitError"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
@@ -31,17 +33,18 @@ classDiagram
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
     class ports__ListMayBeCut["ListMayBeCut"]
-    class ports__ListedPullRequest["ListedPullRequest"]
-    class ports__LoadReader["LoadReader"]
 ```
 
 ## Relaciones con otras páginas
 
-- [application: checks](classes-process-application-checks.md)
-  - `presubmit.Readiness` se asocia con `ports.LoadReader`
-- [application: reflection](classes-process-application-reflection.md)
-  - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
+- [application: support (parte 1)](classes-process-application-support-1.md)
+  - `ci_push.PushFailed` hereda de `ports.GitError`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `ports.Inbox`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.SystemRepo` se asocia con `ports.Inbox`
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
+  - `ports.UnstageablePath` hereda de `ports.GitError`
