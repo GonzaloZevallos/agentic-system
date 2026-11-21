@@ -1370,6 +1370,13 @@ async def run_role(
     return output, patch
 
 
+def _product_or_unknown(ports: Ports) -> str:
+    try:
+        return ports.stack.product()
+    except Exception:
+        return "unknown"
+
+
 async def _format_filing(exc: Escalating, state: TaskState, role: Role, ports: Ports) -> TaskState:
     """What the system's issue of a format refusal adds to the escalation patch (GH-1011): the
     `format_issue` record, or the `tracker_failures` row of a write that did not land. Empty
@@ -1379,13 +1386,15 @@ async def _format_filing(exc: Escalating, state: TaskState, role: Role, ports: P
     filing = ports.format_filing
     if filing is None or not isinstance(exc, RoleFailure) or not format_issue.due(exc.failures):
         return {}
-    number = ports.inbox.issue_of(state["id"])
+    try:
+        number = ports.inbox.issue_of(state["id"])
+        # The name is a label here, never worth the escalation (invariant 2): any stack that
+        # cannot be read, a malformed `stack.yaml` included, files under `unknown`.
+        product = _product_or_unknown(ports)
+    except Exception:
+        return {}
     if number is None:
         return {}
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError):
-        product = "unknown"
     record, rows = await asyncio.to_thread(
         filing.file,
         task_id=state["id"],

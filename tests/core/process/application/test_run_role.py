@@ -3298,6 +3298,37 @@ async def test_a_failed_write_adds_its_tracker_failures_row_and_nothing_else():
     assert _escalation_part(patch) == plain
 
 
+async def test_a_failure_with_an_unknown_rule_on_the_last_attempt_escalates_as_without_a_filing():
+    # Only the retry builds a message from a rule: an unknown one on the last attempt reaches
+    # the filer, which must say `unknown`, write nothing and leave the escalation alone.
+    attempts = [*_refused()[:2], *_refused(rule="not_a_rule")[:1]]
+    plain, *_ = await _escalate(filing=False, attempts=attempts)
+    patch, inbox, tracker, lines = await _escalate(attempts=attempts)
+    assert _escalation_part(patch) == plain
+    assert "format_issue" not in patch
+    assert tracker.writes == []
+    assert lines and all(line.startswith("agentic: format issue: unknown: ") for line in lines)
+    assert all("not_a_rule" not in line for line in lines)
+
+
+async def test_a_stack_that_cannot_be_parsed_never_costs_the_escalation_and_files_as_unknown():
+    class Broken(MemoryStack):
+        def product(self, revision: str = "HEAD") -> str:
+            raise yaml.YAMLError(FILING_SECRET)
+
+    inbox, tracker = _FilingInbox(), _FilingTracker()
+    ports = memory_ports(
+        ScriptedRunner(pjm=_refused()),
+        stack=Broken(),
+        format_filing=FormatFiling(SystemRepo(tracker, inbox), lambda _l: None, lambda: FILING_NOW),
+    )
+    state = {"id": "GH-7", "title": "t", "description": "d"}
+    _, patch = await run_role(state, PJM, Configuration(product_dir=Path("/p")), ports, product="x")
+    assert patch["escalation_class"] == "failure"
+    [(_, body, _)] = tracker.writes
+    assert "unknown" in body and FILING_SECRET not in body
+
+
 class _SpyFiling:
     def __init__(self) -> None:
         self.calls = 0
