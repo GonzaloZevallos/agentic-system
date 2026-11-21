@@ -42,8 +42,10 @@ classDiagram
     class playbook__Playbook["Playbook"]
     class playbook__Refusal["Refusal"]
     class playbook__Rejected["Rejected"]
+    class playbook__Scored["Scored"]
     playbook__Applied --> playbook__Playbook
     playbook__Archived --> playbook__Item
     playbook__Demotion --> playbook__Delta
     playbook__Refusal --> playbook__Delta
+    playbook__Scored --> playbook__Playbook
 ```

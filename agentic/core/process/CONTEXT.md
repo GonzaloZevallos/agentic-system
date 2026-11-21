@@ -97,7 +97,7 @@ _Avoid_: slot, permiso, cuota
 _Campo_: semáforo contando entre procesos (Dijkstra) con prioridades y envejecimiento; la reserva es la de un scheduler de lotes (Slurm, `reserved cores`)
 
 **Playbook**:
-Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse. Con un playbook vacío el prompt y su hash son los de siempre.
+Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse, con su causa: `stale` (pasaron `ARCHIVE_AFTER` tareas del rol sin un MERGE o suma de cita) o `score` (puntaje 0 o menos). El puntaje (`score`) es 2 más `helpful` menos `harmful`: `helpful` sube (hasta un tope) por cada tarea del rol que corrió con la lección sin devolución en su categoría, `harmful` por cada devolución en ella, y solo cuando ninguna otra lección del rol comparte la categoría. Con un playbook vacío el prompt y su hash son los de siempre.
 _Avoid_: memoria, guía de estilo, contexto aprendido
 _Campo_: playbook — ACE (Zhang et al., 2025), donde son bullets con contadores de ayuda y daño que un curador mantiene con deltas incrementales
 
