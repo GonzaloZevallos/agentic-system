@@ -534,6 +534,7 @@ def prepare(
     estimate: float | None = None,
     increment: Increment | None = None,
     drawing_flags: Sequence[str] = (),
+    by_poller: bool = False,
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
@@ -544,6 +545,9 @@ def prepare(
     task paused at the cap of its estimate. It is itself the human's decision (the poller
     never passes one); on any other pause it is a usage error. `--task-budget` stays the
     flat cap's, read below, whatever the estimate in force.
+
+    `by_poller` (GH-989) is the poller's own retake, which keeps the GitHub rate limit's two
+    instants (`rules.resumed`); a manual resume leaves it false and clears them.
 
     `drawing_flags` are the `--drawing <n>=accept|reject` of a pause on drawing departures
     (GH-766): any misuse is a `ValueError`, and on such a pause the answers are read by
@@ -601,7 +605,10 @@ def prepare(
             at = ports.now()
             settled = apply(
                 paused,
-                {**rules.resumed(paused, decision, estimate, at=at), "owner_decision_unbuilt": at},
+                {
+                    **rules.resumed(paused, decision, estimate, at=at, by_poller=by_poller),
+                    "owner_decision_unbuilt": at,
+                },
             )
             return Resumption(
                 task_id,
@@ -634,7 +641,9 @@ def prepare(
             )
         owed = _owed_publication(task_id, paused, source, cfg, ports)
         paused = apply(paused, {"publish_owed": owed})
-        patch = drawing_answer.resume_patch(paused, decision, estimate, answered, at=ports.now())
+        patch = drawing_answer.resume_patch(
+            paused, decision, estimate, answered, at=ports.now(), by_poller=by_poller
+        )
         resumed = apply(paused, patch)
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))

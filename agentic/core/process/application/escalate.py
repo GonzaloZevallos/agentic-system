@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, drawing_answer, escalation_prompts, rules, tracker_items
+from ..domain import document, drawing_answer, escalation_prompts, rate_limit, rules, tracker_items
 from ..domain.task import EscalationClass, TaskState
 from .ports import Ports
+from .run_role import finish
 
 NEEDS_HUMAN = "needs-human"
 # How the system's own comments start: a resume looks past them for the human's answer.
@@ -30,11 +31,16 @@ async def escalate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     reason = state.get("escalated")
     if not reason:
         return {}
-    ports.documents.save(state)
-    if rules.needs_a_human(state):
-        ports.tracker.label(state["id"], NEEDS_HUMAN)
-    ports.tracker.comment(state["id"], comment(state, cfg, ports))
-    return {}
+    # The escalation of any class but a GitHub rate-limit pause ends the invocation: the next
+    # limit is a new wait, so the clock is cleared in what is saved and returned (GH-989).
+    closed = rate_limit.cleared_on_close(state, {})
+    finish(state, closed, ports)
+    # The pause the poller retakes writes nothing to the tracker: the document is all there is.
+    if not rate_limit.tracker_silent(state):
+        if rules.needs_a_human(state):
+            ports.tracker.label(state["id"], NEEDS_HUMAN)
+        ports.tracker.comment(state["id"], comment(state, cfg, ports))
+    return closed
 
 
 def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:

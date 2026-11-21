@@ -14,7 +14,7 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, landing, presubmit, rules, stacking, tracker_items
+from ..domain import document, landing, presubmit, rate_limit, rules, stacking, tracker_items
 from ..domain.pull_request import (
     BoundedBody,
     bounded_body,
@@ -26,10 +26,10 @@ from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState, add_stack_restacks
 from . import api_break
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
+from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed, TrackerRateLimited
 from .preflight import over_cap
 from .release import release_task
-from .run_role import finish
+from .run_role import finish, rate_limit_paused
 from .tracker_items import run_system_items
 from .tracker_only import post_tracker_checklist
 
@@ -268,7 +268,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         patch["reaped_at_cleanup"] = list(reaped)
     if lapses:
         patch = _with_lapses(patch, lapses, at=ports.now())
-    done = _ended(state, patch, ports)
+    done = _ended(state, rate_limit.cleared_on_close(state, patch), ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
@@ -482,6 +482,10 @@ def _transient(failed: Exception | str) -> bool:
 def _undelivered(
     step: str, failed: Exception | str, state: TaskState, replaced: str | None, *, at: str
 ) -> TaskState:
+    if isinstance(failed, TrackerRateLimited):
+        # GH-989: the rate limit is a pause of its own, never `delivery_transient`: the poller
+        # retakes it and no human is told before the wait is spent.
+        return {"current_role": PJM.name, **rate_limit_paused(state, failed, at=at)}
     reason = f"{step}: {failed}; the branch is integrated, resume to deliver again"
     if replaced:
         reason += f". {rules.replaced_note(replaced, [], rules.task_branch(state['id']))}"

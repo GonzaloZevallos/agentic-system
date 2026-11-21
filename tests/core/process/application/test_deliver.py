@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.deliver import READY, deliver
+from agentic.core.process.application.escalate import escalate
 from agentic.core.process.application.ports import (
     BranchPullRequest,
     GitError,
@@ -18,7 +19,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.application.tracker_only import TRACKER_WORK
-from agentic.core.process.domain import document, pull_request, rules
+from agentic.core.process.domain import document, pull_request, rate_limit, rules
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
@@ -180,7 +181,7 @@ async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
 
 
 @pytest.mark.parametrize(
-    "error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient, TrackerRateLimited]
+    "error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient]
 )
 async def test_a_transient_pull_request_failure_escalates_as_a_mechanical_delivery_cause(
     cfg, error
@@ -1450,3 +1451,46 @@ async def test_the_document_deliver_leaves_with_an_item_is_refused_as_not_ready_
         current_master=None,
     )
     assert rules.auto_merge_decision(facts) == rules.MergeDecision("refuse", "not_ready")
+
+
+# --- GH-989: the GitHub rate limit is a pause of its own, never a delivery escalation ----------
+
+PAUSED_AT = "2026-11-19T00:00:00+00:00"
+
+
+async def test_a_rate_limited_delivery_pauses_with_no_delivery_transient_and_escalate_is_silent(
+    cfg,
+):
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    ports.tracker.open_error_type = TrackerRateLimited
+    state = _big_state()
+    patch = await deliver(state, cfg, ports)
+
+    assert patch["escalation_cause"] is None
+    assert rules.auto_resumable({**state, **patch}) == "github_rate_limit"
+
+    paused = {**state, **patch}
+    await escalate(paused, cfg, ports)
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert ports.documents.last["escalated"] == patch["escalated"]
+
+
+async def test_an_exhausted_wait_still_writes_the_pause_never_the_persisted_patch(cfg):
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    ports.tracker.open_error_type = TrackerRateLimited
+    old = {**_big_state(), "rate_limit_paused_at": "2026-01-01T00:00:00+00:00"}
+    patch = await deliver(old, cfg, ports)
+
+    assert patch["escalated"] != rate_limit.RATE_LIMIT_PERSISTED
+    assert rules.auto_resumable({**old, **patch}) == "github_rate_limit"
+
+
+async def test_a_ready_for_review_delivery_removes_the_rate_limit_clock(cfg):
+    ports = memory_ports()
+    patch = await deliver({**TASK, "rate_limit_paused_at": PAUSED_AT}, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert patch["rate_limit_paused_at"] is None
+    assert not ports.documents.last.get("rate_limit_paused_at")

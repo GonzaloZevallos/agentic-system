@@ -234,13 +234,19 @@ def resume_patch(
     answered: Sequence[task.DepartureRecord],
     *,
     at: str,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task given the rows the owner `answered` (none for any
     other pause): `rules.resumed`, told by `plan_resume` whether the plan is owed, plus the
     answered rows when there are some. The only composition of that patch and the only caller
     of `plan_resume`, so the only source of `rules.resumed`'s `drawing_plan`."""
     patch = rules.resumed(
-        state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
+        state,
+        decision,
+        estimate,
+        at=at,
+        drawing_plan=plan_resume(state, answered),
+        by_poller=by_poller,
     )
     if answered:
         patch["drawing_departures"] = list(answered)
