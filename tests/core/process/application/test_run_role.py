@@ -1,6 +1,7 @@
 """Retry semantics and delivery of one role, against a scripted runner."""
 
 import dataclasses
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast, get_args
@@ -12,7 +13,8 @@ from pydantic import field_validator
 
 from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
-from agentic.core.process.application.ports import AttemptFailed, RawResult
+from agentic.core.process.application.format_issue import FormatFiling
+from agentic.core.process.application.ports import AttemptFailed, RawResult, SystemRepo
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
@@ -34,6 +36,7 @@ from agentic.core.process.domain import refusal_retry, rules, schemas, spec_brie
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.drawing import DRAWING_RULE
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.output_repair import REPAIRS, repair_note
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
@@ -72,8 +75,10 @@ from agentic.core.process.domain.task import FailureReason, OutputRefusal, apply
 from agentic.core.process.domain.task_path import TEXT_MAX
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    MemoryInbox,
     MemoryPrompts,
     MemoryStack,
+    MemoryTracker,
     ScriptedRunner,
     classified,
     delivered,
@@ -3202,6 +3207,203 @@ async def test_the_first_format_failure_of_a_stale_session_is_not_retried_with_a
     runner = ScriptedRunner(pjm=[refused, OK])
     await run_pjm(runner, resume="old", cold_prompt="cold")
     assert runner.calls[1]["prompt"] == "cold" and runner.calls[1]["resume"] is None
+
+
+# GH-1030: a refusal's issue in the system's repo is written next to the escalation, never in
+# place of it. The seam is `run_role` with a real `FormatFiling` over a fake `SystemRepo`.
+
+FILING_NOW = "2026-11-20T10:00:00Z"
+FILING_SECRET = "SEEDED-EXCEPTION-MESSAGE"
+FILING_VALUE = "SEEDED-REFUSED-VALUE"
+
+
+class _FilingInbox(MemoryInbox):
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.error = error
+        self.reads = 0
+
+    def open_issue_refs(self) -> list[IssueRef]:
+        self.reads += 1
+        if self.error is not None:
+            raise self.error
+        return []
+
+
+class _FilingTracker(MemoryTracker):
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.error = error
+        self.writes: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def open_issue(
+        self, title: str, body: str, *, label: str | None = None, labels: Sequence[str] = ()
+    ) -> str:
+        if self.error is not None:
+            raise self.error
+        self.writes.append((title, body, tuple(labels)))
+        return "https://github.com/o/agentic-system/issues/41"
+
+
+def _refused(reason: str = "schema", rule: str = "parts_when_fits") -> list[AttemptFailed]:
+    refusal = AttemptFailed(
+        "bad", 0.01, reason=reason, rule=rule, field="parts", value=FILING_VALUE, detail="d"
+    )
+    return [refusal, refusal, refusal]
+
+
+async def _escalate(
+    *,
+    attempts: list[AttemptFailed] | None = None,
+    read_error: Exception | None = None,
+    write_error: Exception | None = None,
+    filing: bool = True,
+    task_id: str = "GH-7",
+    pjm_role: Role = PJM,
+) -> tuple[dict[str, Any], _FilingInbox, _FilingTracker, list[str]]:
+    inbox, tracker, lines = _FilingInbox(read_error), _FilingTracker(write_error), []
+    ports = memory_ports(
+        ScriptedRunner(pjm=attempts or _refused()),
+        stack=MemoryStack(product="gym-saas"),
+        format_filing=(
+            FormatFiling(SystemRepo(tracker, inbox), lines.append, lambda: FILING_NOW)
+            if filing
+            else None
+        ),
+        now=lambda: FILING_NOW,
+    )
+    output, patch = await run_role(
+        {"id": task_id, "title": "t", "description": "d"},
+        pjm_role,
+        Configuration(product_dir=Path("/p")),
+        ports,
+        product="x",
+    )
+    assert output is None
+    return patch, inbox, tracker, lines
+
+
+def _escalation_part(patch: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in patch.items() if k not in ("format_issue", "tracker_failures")}
+
+
+async def test_a_refusal_escalation_carries_the_record_of_the_issue_it_opened():
+    plain, *_ = await _escalate(filing=False)
+    patch, inbox, tracker, lines = await _escalate()
+    assert patch["format_issue"] == [
+        {
+            "rule": "parts_when_fits",
+            "url": "https://github.com/o/agentic-system/issues/41",
+            "at": FILING_NOW,
+        }
+    ]
+    assert "tracker_failures" not in patch
+    assert _escalation_part(patch) == plain
+    [(title, body, labels)] = tracker.writes
+    assert labels == ("needs-triage",)
+    assert "gym-saas" in body and "#7" in body
+    assert FILING_VALUE not in title + body
+    assert lines == ["agentic: format issue: parts_when_fits: opened"]
+
+
+@pytest.mark.parametrize(
+    "read_error, write_error",
+    [
+        (OSError(FILING_SECRET), OSError(FILING_SECRET)),
+        (KeyError(FILING_SECRET), None),
+        (None, ValueError(FILING_SECRET)),
+    ],
+    ids=["both raise", "read raises KeyError", "write raises"],
+)
+async def test_a_filing_that_fails_leaves_the_escalation_keys_and_values_unchanged(
+    read_error, write_error
+):
+    plain, *_ = await _escalate(filing=False)
+    patch, _, _, lines = await _escalate(read_error=read_error, write_error=write_error)
+    assert _escalation_part(patch) == plain
+    assert "format_issue" not in patch
+    assert FILING_SECRET not in " ".join(lines)
+
+
+async def test_a_failed_write_adds_its_tracker_failures_row_and_nothing_else():
+    plain, *_ = await _escalate(filing=False)
+    patch, *_ = await _escalate(write_error=ValueError(FILING_SECRET))
+    assert patch["tracker_failures"] == [{"target": "issue", "cls": "refused", "at": FILING_NOW}]
+    assert "format_issue" not in patch
+    assert _escalation_part(patch) == plain
+
+
+async def test_a_failure_with_an_unknown_rule_on_the_last_attempt_escalates_as_without_a_filing():
+    # Only the retry builds a message from a rule: an unknown one on the last attempt reaches
+    # the filer, which must say `unknown`, write nothing and leave the escalation alone.
+    attempts = [*_refused()[:2], *_refused(rule="not_a_rule")[:1]]
+    plain, *_ = await _escalate(filing=False, attempts=attempts)
+    patch, inbox, tracker, lines = await _escalate(attempts=attempts)
+    assert _escalation_part(patch) == plain
+    assert "format_issue" not in patch
+    assert tracker.writes == []
+    assert lines and all(line.startswith("agentic: format issue: unknown: ") for line in lines)
+    assert all("not_a_rule" not in line for line in lines)
+
+
+async def test_a_stack_that_cannot_be_parsed_never_costs_the_escalation_and_files_as_unknown():
+    class Broken(MemoryStack):
+        def product(self, revision: str = "HEAD") -> str:
+            raise yaml.YAMLError(FILING_SECRET)
+
+    inbox, tracker = _FilingInbox(), _FilingTracker()
+    ports = memory_ports(
+        ScriptedRunner(pjm=_refused()),
+        stack=Broken(),
+        format_filing=FormatFiling(SystemRepo(tracker, inbox), lambda _l: None, lambda: FILING_NOW),
+    )
+    state = {"id": "GH-7", "title": "t", "description": "d"}
+    _, patch = await run_role(state, PJM, Configuration(product_dir=Path("/p")), ports, product="x")
+    assert patch["escalation_class"] == "failure"
+    [(_, body, _)] = tracker.writes
+    assert "unknown" in body and FILING_SECRET not in body
+
+
+class _SpyFiling:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def file(self, **_: object) -> tuple[None, list]:
+        self.calls += 1
+        return None, []
+
+
+async def test_only_a_refusal_the_domain_finds_due_reaches_the_filer():
+    spy = _SpyFiling()
+    ports = memory_ports(
+        ScriptedRunner(pjm=[AttemptFailed("cut", 0.0, reason="max_turns")] * 3), format_filing=spy
+    )
+    state = {"id": "GH-7", "title": "t", "description": "d"}
+    cfg = Configuration(product_dir=Path("/p"))
+    await run_role(state, PJM, cfg, ports, product="x")
+    assert spy.calls == 0
+    ports = memory_ports(ScriptedRunner(pjm=_refused()), format_filing=spy)
+    await run_role(state, PJM, cfg, ports, product="x")
+    assert spy.calls == 1
+
+
+async def test_an_escalation_that_is_not_a_role_failure_never_reaches_the_filer():
+    spy = _SpyFiling()
+    # The cap stops the role after a paid refusal: the last failure is one `due` would accept.
+    ports = memory_ports(ScriptedRunner(pjm=_refused()), format_filing=spy)
+    cfg = Configuration(product_dir=Path("/p"), task_max_budget_usd=0.005)
+    state = {"id": "GH-7", "title": "t", "description": "d"}
+    _, patch = await run_role(state, PJM, cfg, ports, product="x")
+    assert patch["escalation_class"] == "cap"
+    assert spy.calls == 0
+
+
+async def test_a_task_without_an_issue_number_files_nothing():
+    spy = _SpyFiling()
+    ports = memory_ports(ScriptedRunner(pjm=_refused()), format_filing=spy)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    await run_role(state, PJM, Configuration(product_dir=Path("/p")), ports, product="x")
+    assert spy.calls == 0
 
 
 # --- GH-1016: a mechanical refusal is repaired on the raw output inside the attempt -------

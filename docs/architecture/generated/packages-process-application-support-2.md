@@ -22,6 +22,7 @@ graph TD
     g_application__support__1["support parte 1 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_application__ports["application.ports"]
     m_application__preflight["application.preflight"]
     m_application__refusal_note["application.refusal_note"]
     m_application__release["application.release"]
@@ -29,28 +30,33 @@ graph TD
     m_application__spec_guard["application.spec_guard"]
     m_application__stack_facts["application.stack_facts"]
     m_application__stack_hold["application.stack_hold"]
+    m_application__ports --> g_application__support__1
+    m_application__ports --> g_pkg__domain
     m_application__preflight --> g_application__support__1
     m_application__preflight --> g_pkg__agentic__shared
     m_application__preflight --> g_pkg__domain
+    m_application__preflight --> m_application__ports
     m_application__preflight --> m_application__run_role
-    m_application__refusal_note --> g_application__support__1
     m_application__refusal_note --> g_pkg__domain
-    m_application__release --> g_application__support__1
+    m_application__refusal_note --> m_application__ports
     m_application__release --> g_pkg__domain
+    m_application__release --> m_application__ports
     m_application__run_role --> g_application__checks
     m_application__run_role --> g_application__landing
     m_application__run_role --> g_application__support__1
     m_application__run_role --> g_pkg__agentic__shared
     m_application__run_role --> g_pkg__domain
+    m_application__run_role --> m_application__ports
     m_application__spec_guard --> g_application__support__1
     m_application__spec_guard --> g_pkg__domain
+    m_application__spec_guard --> m_application__ports
     m_application__stack_facts --> g_application__build
     m_application__stack_facts --> g_application__landing
-    m_application__stack_facts --> g_application__support__1
     m_application__stack_facts --> g_pkg__agentic__shared
     m_application__stack_facts --> g_pkg__domain
-    m_application__stack_hold --> g_application__support__1
+    m_application__stack_facts --> m_application__ports
     m_application__stack_hold --> g_pkg__agentic__shared
     m_application__stack_hold --> g_pkg__domain
+    m_application__stack_hold --> m_application__ports
     m_application__stack_hold --> m_application__stack_facts
 ```

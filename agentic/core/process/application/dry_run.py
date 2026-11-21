@@ -201,8 +201,9 @@ UNREACHED = {
     "Scratch": _names("ensure_kept open"),
 }
 
-# Ports that are not ports: `Ports` carries the run's limits and its clock beside them.
-_NOT_PORTS = frozenset({"limits", "now"})
+# Ports that are not ports: `Ports` carries the run's limits and its clock beside them. The
+# filing of format refusals (GH-1030) is dropped, not wrapped: a dry round files nothing.
+_NOT_PORTS = frozenset({"limits", "now", "format_filing"})
 _LABELS = {
     "documents": "TaskDocuments",
     "stack": "ProductStack",
@@ -239,7 +240,8 @@ def read_only_ports(
         if f.name not in _NOT_PORTS and getattr(ports, f.name) is not None
     }
     return (
-        _replace(ports, **wrapped),
+        # GH-1030: a dry round files no issue of a format refusal, whatever the ports carry.
+        _replace(ports, **wrapped, format_filing=None),
         _wrap(registry, "RunRegistry", log),
         _wrap(lock, "RunLock", log),
         _wrap(launcher, "Launcher", log),

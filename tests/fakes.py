@@ -36,6 +36,7 @@ from agentic.core.process.application.ports import (
     ExperimentFile,
     FastForwardView,
     FlagVocabulary,
+    FormatFiler,
     FreeSpace,
     GitError,
     Grant,
@@ -114,13 +115,16 @@ from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
+    Failure,
     FlakeRecord,
+    FormatIssueRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
     TrackerFailure,
+    TrackerFailureRecord,
 )
 from agentic.shared.configuration import Configuration
 
@@ -2384,6 +2388,38 @@ class FakeStopFlag:
         self.marked = True
 
 
+class FakeFormatFiler:
+    """GH-1030: the format-refusal filing, recording each call and answering `answer`."""
+
+    def __init__(
+        self, answer: tuple[FormatIssueRecord | None, list[TrackerFailureRecord]] = (None, [])
+    ) -> None:
+        self.answer = answer
+        self.calls: list[dict[str, object]] = []
+
+    def file(
+        self,
+        *,
+        task_id: str,
+        issue_number: int,
+        product: str,
+        role: str,
+        failures: Sequence[Failure],
+        existing: Sequence[FormatIssueRecord],
+    ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]:
+        self.calls.append(
+            {
+                "task_id": task_id,
+                "issue_number": issue_number,
+                "product": product,
+                "role": role,
+                "failures": list(failures),
+                "existing": list(existing),
+            }
+        )
+        return self.answer
+
+
 class FakePerfLock:
     """GH-318: `acquire` answers `available` and counts; `release` counts. With a `stop` flag
     that is set, `acquire` raises `RunStopped` and takes nothing (GH-385)."""
@@ -2901,6 +2937,7 @@ def memory_ports(
     spec_reader: SpecReader | None = None,
     spec_validator: SpecValidator | None = None,
     now: Callable[[], str] | None = None,
+    format_filing: FormatFiler | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2916,7 +2953,7 @@ def memory_ports(
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
         check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
-        **({} if limits is None else {"limits": limits}),
+        limits=limits if limits is not None else RunLimits(),
         now=now if now is not None else stepping_now(),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
@@ -2930,6 +2967,7 @@ def memory_ports(
         experiment=experiment,
         spec_reader=spec_reader,
         spec_validator=spec_validator,
+        format_filing=format_filing,
     )
 
 

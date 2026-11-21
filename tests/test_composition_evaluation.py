@@ -9,6 +9,7 @@ from agentic.core.process.adapters.evaluation import (
     EvaluationWorkspace,
 )
 from agentic.core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input_path
+from agentic.core.process.application.format_issue import FormatFiling
 from agentic.shared.configuration import Configuration
 
 
@@ -22,6 +23,8 @@ def test_an_ordinary_root_keeps_the_real_ports(tmp_path):
     assert not isinstance(ports.tracker, EvaluationTracker)
     assert not isinstance(ports.workspace, EvaluationWorkspace)
     assert not isinstance(ports.stack, EvaluationStack)
+    # GH-1030: one filing of a format refusal per run, built by the root.
+    assert isinstance(ports.format_filing, FormatFiling)
 
 
 def test_an_evaluation_root_wraps_the_ports_and_reads_its_frozen_entry(tmp_path):
@@ -39,6 +42,8 @@ def test_an_evaluation_root_wraps_the_ports_and_reads_its_frozen_entry(tmp_path)
     assert isinstance(ports.stack, EvaluationStack)
     assert isinstance(ports.inbox, FileInbox)
     assert (ports.board, ports.board_sent) == (None, None)
+    # An evaluation files no issue in the system's repo.
+    assert ports.format_filing is None
 
 
 def test_an_evaluation_root_without_its_frozen_entry_reads_no_task_from_anywhere(tmp_path):

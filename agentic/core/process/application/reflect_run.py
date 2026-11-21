@@ -25,7 +25,10 @@ from ..domain import rules
 from ..domain import system_lessons as sl
 from ..domain.reaping import ReapedProcess
 from .closed import closed_documents as closed_documents  # re-exported: plan.py reads it here
-from .ports import GitError, Inbox, ListedPullRequest, Ports, Tracker
+from .ports import GitError, ListedPullRequest, Ports
+from .ports import (
+    SystemRepo as SystemRepo,
+)  # re-exported: cli.py and the reflect tests read it here
 from .reflect import Reflected, backings, reflect_task
 from .release import release_task, summary
 
@@ -61,16 +64,6 @@ class Known:
         """The branch exists and every pull request it ever had is closed or merged."""
         mine = [pr for pr in self.listed if pr.branch == BRANCH]
         return bool(mine) and not any(pr.state == "OPEN" for pr in mine)
-
-
-@dataclass(frozen=True)
-class SystemRepo:
-    """The system's own repo as two reads and one write the verb needs: the `tracker` that
-    opens the issue and the `inbox` that lists the open ones. Built by the composition
-    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
-
-    tracker: Tracker
-    inbox: Inbox
 
 
 @dataclass(frozen=True)
