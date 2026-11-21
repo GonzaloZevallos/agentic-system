@@ -32,7 +32,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 ```mermaid
 classDiagram
     class task__OutOfBoundsLine["OutOfBoundsLine"]
-    class task__OutputRefusal["OutputRefusal"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PathRevision["PathRevision"]
@@ -46,6 +45,7 @@ classDiagram
     class task__RefusalRepair["RefusalRepair"]
     class task__ReleasePatch["ReleasePatch"]
     class task__RestartPending["RestartPending"]
+    class task__RestartSettledRow["RestartSettledRow"]
 ```
 
 ## Relaciones con otras páginas

@@ -2738,6 +2738,17 @@ def test_refusal_field_keeps_only_a_declared_field_or_markdown():
     assert refusal_field(schemas.Classification, None) == ""
 
 
+def test_refusal_field_keeps_a_well_formed_path_into_a_declared_root():
+    schema = TECH_LEAD.schema
+    assert (
+        refusal_field(schema, "parts[1].depends_on_reasons[0]") == "parts[1].depends_on_reasons[0]"
+    )
+    assert refusal_field(schema, "nope[0]") == ""
+    assert refusal_field(schema, "parts[x") == ""
+    assert refusal_field(schema, "parts[1]x") == ""
+    assert refusal_field(schema, "parts..a") == ""
+
+
 def test_an_output_refusal_reads_as_its_detail():
     exc = OutputRefusal("unmapped", "markdown", "the detail")
     assert (str(exc), exc.rule, exc.field, exc.detail) == (
@@ -2833,6 +2844,28 @@ async def test_two_refusals_escalate_and_the_patch_carries_both_entries():
         ("output_missing", None),
         ("output_missing", None),
     ]
+
+
+async def test_a_plan_reason_over_the_limit_reaches_the_failure_with_its_rule_and_path():
+    from agentic.core.process.domain import cost_history
+    from tests.fakes import planned_parts
+
+    long = "x" * 241
+    plan = planned_parts(
+        {"title": "One", "body": "First slice.", "depends_on": []},
+        {"title": "Two", "body": "Second.", "depends_on": [1], "depends_on_reasons": [long]},
+    )
+    check = schemas.plan_check_for(cost_history.build([]), 0.0)
+    exc = await _refusals([plan], role=TECH_LEAD, check=check)
+    (failure,) = exc.failures
+    assert failure["error"] == (
+        "structured output invalid: part 2 depends_on_reasons[0] has 241 characters, over 240: "
+        "one plain line naming what the other part creates"
+    )
+    assert (failure["rule"], failure["field"]) == (
+        "depends_on_reason_too_long",
+        "parts[1].depends_on_reasons[0]",
+    )
 
 
 # --- GH-1017: a refusal is retried with its rule, field, value, detail and fix ------------

@@ -55,6 +55,7 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -833,13 +834,18 @@ def _retry_input(
     return f"{prompt}\n\n{error}", resume
 
 
+_FIELD_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
 def refusal_field(schema: type[BaseModel], candidate: object) -> str:
     """The field a refusal names, kept only when `schema` declares it (or it is `markdown`,
     which every role's output has): a claim from a validator or a check is never trusted
-    as a label, so what is not a declared field becomes `""` (GH-1011)."""
-    if isinstance(candidate, str) and (candidate in schema.model_fields or candidate == "markdown"):
-        return candidate
-    return ""
+    as a label, so what is not a declared field becomes `""` (GH-1011). A path into a field
+    (`parts[1].depends_on_reasons[0]`) is kept when it is well formed and its root is declared."""
+    if not isinstance(candidate, str) or not _FIELD_PATH.fullmatch(candidate):
+        return ""
+    root = re.split(r"[.\[]", candidate, maxsplit=1)[0]
+    return candidate if root in schema.model_fields or root == "markdown" else ""
 
 
 def _value_of(output: object, field: str) -> object:

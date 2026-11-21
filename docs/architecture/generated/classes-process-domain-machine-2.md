@@ -44,6 +44,7 @@ classDiagram
     class stage0_rotation__Green["Green"]
     class stage0_rotation__Heartbeat["Heartbeat"]
     class stage0_rotation__Keep["Keep"]
+    class stage0_rotation__Prepared["Prepared"]
 ```
 
 ## Relaciones con otras páginas
