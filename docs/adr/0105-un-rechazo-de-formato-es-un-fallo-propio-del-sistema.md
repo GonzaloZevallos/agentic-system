@@ -47,7 +47,7 @@ la tarea, `value_len`, los intentos y las reglas anteriores. Nunca lee `value`, 
 
 **5. Retoma y retención.** Decidido, y hoy el sistema no lo hace: cuando una regla ya tiene su
 issue abierto, las tareas que chocan con ella no se escalan al dueño sino que esperan retenidas,
-y se retoman cuando el issue se cierra y el arreglo corrió. se construye en: parte 6 (GH-1018).
+y se retoman cuando el issue se cierra y el arreglo corrió (se construye en: parte 6 (GH-1018)).
 Hasta entonces, un rechazo que agotó sus intentos escala como siempre, y el issue que abre el
 sistema no retiene nada.
 
