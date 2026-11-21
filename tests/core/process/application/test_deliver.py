@@ -180,9 +180,7 @@ async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
     assert ports.documents.last["escalated"] == patch["escalated"]
 
 
-@pytest.mark.parametrize(
-    "error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient]
-)
+@pytest.mark.parametrize("error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient])
 async def test_a_transient_pull_request_failure_escalates_as_a_mechanical_delivery_cause(
     cfg, error
 ):

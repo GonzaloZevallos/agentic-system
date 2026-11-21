@@ -12,7 +12,7 @@ from pydantic import field_validator
 
 from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
-from agentic.core.process.application.ports import AttemptFailed, RawResult
+from agentic.core.process.application.ports import AttemptFailed, RawResult, TrackerRateLimited
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
@@ -3167,3 +3167,31 @@ async def test_the_first_format_failure_of_a_stale_session_is_not_retried_with_a
     runner = ScriptedRunner(pjm=[refused, OK])
     await run_pjm(runner, resume="old", cold_prompt="cold")
     assert runner.calls[1]["prompt"] == "cold" and runner.calls[1]["resume"] is None
+
+
+# --- GH-989: a gh call a run node made outlasts the rate limit's wait ------------------------
+
+
+def _rate_limited(_data):
+    raise TrackerRateLimited("gh api rate_limit: wait over the cap")
+
+
+@pytest.mark.parametrize("through", ["check", "runner"])
+async def test_a_rate_limit_a_run_node_hits_pauses_the_task_and_fails_no_role(tmp_path, through):
+    runner = ScriptedRunner(pjm=[TrackerRateLimited("gh") if through == "runner" else OK])
+    ports = memory_ports(runner)
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        _rate_limited if through == "check" else None,
+        product="x",
+    )
+
+    assert output is None
+    assert patch["escalation_class"] == "failure"
+    assert patch["status"] == "waiting_on_human"
+    assert "failures" not in patch  # no role failure: the pause log carries the System entry
+    assert rules.auto_resumable({"id": "T-1", **patch}) == "github_rate_limit"
+    assert len(runner.calls) == 1  # no retry of the role
