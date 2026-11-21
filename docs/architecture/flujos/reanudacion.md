@@ -15,7 +15,7 @@ sequenceDiagram
     participant Poller
     participant Resume as agentic resume
     Graph->>Escalate: a role, a pair or the cap cannot go on
-    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment
+    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment (nothing for an unpersisted github_rate_limit pause)
     Escalate->>Pause: the same state
     Pause->>Pause: interrupt, checkpoint saved
     Note over Graph,Pause: the run ends, nothing is spent while it waits
@@ -42,7 +42,14 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:needs_a_human` lo dice, y comenta el issue con el
    prefijo `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`). Una pausa
    causada solo por el límite de la cuenta, que el poller retoma sola, no lleva la etiqueta
-   (glosario de `agentic/core/process/CONTEXT.md`).
+   (glosario de `agentic/core/process/CONTEXT.md`). Una pausa `github_rate_limit` que no está
+   persistida va más lejos: `agentic/core/process/domain/rate_limit.py:tracker_silent` vale
+   verdadero y `escalate` solo guarda el documento, sin etiqueta y sin comentario `Escalated: `
+   (lo mismo para el escalado `RATE_LIMIT_PERSISTED`, cuyo único escritor es el poller). El parche
+   que `escalate` guarda y devuelve pasa por
+   `agentic/core/process/domain/rate_limit.py:cleared_on_close`: un escalado de cualquier otra
+   clase borra `rate_limit_paused_at` y `rate_limit_noticed_at` del documento, porque el próximo
+   límite es una espera nueva; la pausa `github_rate_limit` los conserva.
 2. **La pausa.** El nodo `pause` va después de `escalate` y no tiene efectos
    (`agentic/core/process/adapters/langgraph/graph.py:pause`). Ahí vive el `interrupt()`:
    LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso volvería a
