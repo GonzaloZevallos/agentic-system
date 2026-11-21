@@ -1825,6 +1825,11 @@ class Tracker(Protocol):
         """`unlabel`, best effort: returns the failure instead of raising, as `note`."""
         ...
 
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        """`label`, best effort: returns the failure (target `label`) instead of raising, as
+        `drop_label` does for `unlabel`. `None` when it landed or the task has no issue."""
+        ...
+
     def ensure_label(self, name: str) -> None:
         """Makes sure the repository has a label called `name` (GH-294), so `open_issue`
         can pass it. Creates it when missing and never touches an existing one, its color

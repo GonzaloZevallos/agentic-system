@@ -40,6 +40,7 @@ from ..domain import (
     merge_ci,
     merge_conflict,
     presubmit,
+    rate_limit,
     rules,
     stacking,
 )
@@ -50,7 +51,7 @@ from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import IssueRef, LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
-from ..domain.retakes import RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
+from ..domain.retakes import RESUMED_BY_POLLER, RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
 from ..domain.task import (
     INTEGRATION,
     HeadYield,
@@ -1775,6 +1776,47 @@ def gather_merges(
     return found
 
 
+def _rate_limit_candidate(
+    ports: Ports,
+    raw: TaskState,
+    number: int,
+    reason: rules.ResumeKey,
+    comments: Sequence[IssueComment],
+    now: datetime,
+) -> rules.ResumeCandidate | None:
+    """The candidate of a GitHub rate-limit pause (GH-989), from the facts alone: `since` is the
+    pause's own `at` (`rate_limit.pause_at`; it carries no `Escalated:` comment), `prior` and
+    `chase_prior` the poller's retakes after it, `retaken` whether there was one and the stated
+    reset carries the product's offset, so `rules.retake_due` lands on `rate_limit.retake_due_at`.
+    `None` (the task is left out) when the pause has no readable `at`, when a person commented
+    after it (`rate_limit.person_spoke`: the automatic retakes stop) or when its 12 h are spent
+    (`rate_limit.rate_limit_exhausted`: `rate_limit_escalations` persists it)."""
+    from .resume import SYSTEM_COMMENTS
+
+    at = rate_limit.pause_at(raw)
+    if at is None:
+        return None
+    stamped = [(c.body, _parse_timestamp(c.created_at)) for c in comments]
+    if rate_limit.person_spoke(stamped, at, SYSTEM_COMMENTS):
+        return None
+    if rate_limit.rate_limit_exhausted(raw, now):
+        return None
+    prior = rate_limit.poller_retakes(stamped, at, RESUMED_BY_POLLER)
+    stated = rules.stated_reset(raw)
+    resets_at = stated + rate_limit.reset_offset(ports.stack.product()) if stated else None
+    return rules.ResumeCandidate(
+        number,
+        reason,
+        at,
+        prior,
+        rules.auto_resume_limit(raw, reason),
+        prior,
+        False,
+        resets_at,
+        prior > 0,
+    )
+
+
 def gather_resumes(
     ports: Ports, now: datetime, *, skip: frozenset[int] = frozenset()
 ) -> list[rules.ResumeCandidate]:
@@ -1800,6 +1842,11 @@ def gather_resumes(
         comments = ports.tracker.timestamped_comments(task_id)
         if landing_plan.stranded(raw, comments):
             continue  # `land` owns it (GH-257): `resume` would refuse a task that is not paused
+        if reason == "github_rate_limit":
+            candidate = _rate_limit_candidate(ports, raw, number, reason, comments, now)
+            if candidate is not None:
+                resumes.append(candidate)
+            continue
         since = _since_last_escalated(comments)
         if since is None:
             continue
@@ -1850,7 +1897,8 @@ def escalate_persisted_limits(
     """The week of hourly retakes is spent (`rules.account_limit_persisted`): the task
     escalates as a failure, once -- the patch leaves a failure entry that `rules.
     auto_resumable` no longer retakes, so the next round does not find it again. The one
-    place the poller writes a task document, and only for this escalation."""
+    place the poller writes a task document for an account limit; `rate_limit_escalations` writes
+    the GitHub limit's own (GH-989)."""
     lines: list[str] = []
     for r in resumes:
         if not rules.account_limit_persisted(r):
@@ -1868,6 +1916,69 @@ def escalate_persisted_limits(
             f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"
         )
     return lines
+
+
+def rate_limit_escalations(
+    cfg: Configuration,
+    ports: Ports,
+    now: datetime,
+    at_work: Callable[[str], bool],
+    out: list[str],
+) -> None:
+    """GitHub's rate-limit pause after 12 h (GH-989), read from the documents alone: a round
+    with nothing owed makes no tracker call. For each task not at work: when
+    `rate_limit.persist_due` holds the document is loaded fresh and saved with
+    `rate_limit_persisted_patch`; then, when `rate_limit.rate_limit_notice_owed` holds, the
+    comments are read once, `needs-human` is put and the `Escalated:` comment noted (unless
+    `rate_limit.notice_posted` finds it already there). Both writes go through the best-effort
+    verbs: a failure is recorded in `tracker_failures` and the round goes on, and
+    `rate_limit_noticed_at` is stamped only when both landed, so a failed one is retried by the
+    next round and a comment that landed is never posted twice."""
+    for task_id in ports.documents.ids():
+        if ports.inbox.issue_of(task_id) is None or at_work(task_id):
+            continue
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("closed_at") or not raw.get("escalated"):
+            continue
+        if rate_limit.persist_due(raw, now):
+            fresh = ports.documents.load(task_id)
+            if fresh is None:
+                continue
+            raw = apply(fresh, rate_limit.rate_limit_persisted_patch(at=ports.now()))
+            ports.documents.save(raw)
+            out.append(
+                f"agentic: poll: #{ports.inbox.issue_of(task_id)} github rate limit persisted "
+                "-> left to the human"
+            )
+        if rate_limit.rate_limit_notice_owed(raw):
+            _send_rate_limit_notice(cfg, ports, task_id, raw, out)
+
+
+def _send_rate_limit_notice(
+    cfg: Configuration, ports: Ports, task_id: str, raw: TaskState, out: list[str]
+) -> None:
+    """The label and the comment of one owed notice, then the stamp (see
+    `rate_limit_escalations`). A read of the comments that failed writes nothing: the next round
+    tries again."""
+    at = rate_limit.pause_at(raw)
+    if at is None:
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        out.append(f"agentic: poll: #{ports.inbox.issue_of(task_id)} rate limit notice unread")
+        return
+    stamped = [(c.body, _parse_timestamp(c.created_at)) for c in comments]
+    text = escalate_module.comment(raw, cfg, ports)
+    failures = [ports.tracker.put_label(task_id, escalate_module.NEEDS_HUMAN)]
+    if not rate_limit.notice_posted(stamped, at, text):
+        failures.append(ports.tracker.note(task_id, text))
+    landed = [failure.record() for failure in failures if failure is not None]
+    if landed:
+        stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+        rows = add_tracker_failures(stored if isinstance(stored, list) else [], landed)
+        ports.documents.record_closure(task_id, {"tracker_failures": rows})
+        return
+    ports.documents.record_closure(task_id, {"rate_limit_noticed_at": ports.now()})
 
 
 @dataclass(frozen=True)
@@ -3234,6 +3345,17 @@ def run_once(
         skip=stack_held,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
+    if not starts_nothing and not dry_run:
+        # GH-989: the GitHub limit's 12 h persist and notice, from the documents alone; a task
+        # with a live run or a lock is not written.
+        working = {r.task_id for r in registry.live()}
+        rate_limit_escalations(
+            cfg,
+            ports,
+            now,
+            lambda task_id: task_id in working or lock.refusal(task_id) is not None,
+            human_lines,
+        )
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)

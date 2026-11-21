@@ -111,6 +111,9 @@ class EvaluationTracker:
     def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
         return None
 
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        return None
+
     def open_issue(
         self,
         title: str,

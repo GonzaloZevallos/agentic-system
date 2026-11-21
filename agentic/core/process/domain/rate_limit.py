@@ -11,6 +11,7 @@ has lasted (`rate_limit_exhausted`) and the one definition of the per-product of
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -22,11 +23,17 @@ __all__ = [
     "GITHUB_RATE_LIMIT_SCHEDULE",
     "RATE_LIMIT_PERSISTED",
     "RATE_LIMIT_WAIT_MAX",
+    "notice_posted",
+    "pause_at",
+    "person_spoke",
+    "persist_due",
+    "poller_retakes",
     "rate_limit_exhausted",
     "rate_limit_notice_owed",
     "rate_limit_pause_patch",
     "rate_limit_persisted_patch",
     "reset_offset",
+    "retake_due_at",
     "cleared_on_close",
     "tracker_silent",
 ]
@@ -173,3 +180,79 @@ def cleared_on_close(state: TaskState, patch: dict[str, Any]) -> dict[str, Any]:
         if state.get(key) or patch.get(key)
     ]
     return {**patch, **dict.fromkeys(fields)}
+
+
+def pause_at(state: TaskState) -> datetime | None:
+    """The `at` of the current epoch's last `escalation` entry: the instant the pause the poller
+    now measures its retakes from was written (the pause carries no `Escalated:` comment to
+    measure from). Everything after the last `resumed` entry is the epoch. `None` when the epoch
+    has no escalation entry, its `at` is absent, unparsable or naive."""
+    log = state.get("pause_log", [])
+    last_resumed = max((i for i, entry in enumerate(log) if entry["kind"] == "resumed"), default=-1)
+    escalations = [entry for entry in log[last_resumed + 1 :] if entry["kind"] == "escalation"]
+    if not escalations:
+        return None
+    return _instant(escalations[-1].get("at"))
+
+
+def person_spoke(
+    comments: Sequence[tuple[str, datetime]], at: datetime, system_prefixes: tuple[str, ...]
+) -> bool:
+    """Whether a person commented after the pause: a comment with none of `system_prefixes` whose
+    time is strictly later than both `at` and the last system comment's. `comments` are
+    `(body, created_at)` pairs. A person's comment stops the automatic retakes, never the
+    escalation at 12 h (`persist_due` reads no comment)."""
+    last_system = max(
+        (created for body, created in comments if body.startswith(system_prefixes)), default=at
+    )
+    cutoff = max(at, last_system)
+    return any(
+        created > cutoff for body, created in comments if not body.startswith(system_prefixes)
+    )
+
+
+def poller_retakes(comments: Sequence[tuple[str, datetime]], at: datetime, prefix: str) -> int:
+    """How many comments start with `prefix` (the poller's own resume comment) and are strictly
+    later than `at`: the retakes this pause already had. The pause spends no retake budget, so
+    this count is the only memory of them; `prior > 0` is also whether one was made."""
+    return sum(1 for body, created in comments if body.startswith(prefix) and created > at)
+
+
+def retake_due_at(
+    resets_at: datetime | None, at: datetime, prior: int, product: str, now: datetime
+) -> datetime | None:
+    """The instant of the pause's next retake, only once it is due (`None` before). With a stated
+    reset and no retake yet (`prior == 0`) it is `resets_at + reset_offset(product)`; otherwise
+    (no stated reset, or one retake already made) the hourly `GITHUB_RATE_LIMIT_SCHEDULE` slot
+    `prior` after `at`, `None` once its 12 slots are spent. The same decision
+    `rules.retake_due` takes over a `ResumeCandidate` built from these facts; pure, `now` is an
+    argument."""
+    governing = resets_at + reset_offset(product) if resets_at is not None else None
+    return rules.account_limit_due(
+        at,
+        prior,
+        len(GITHUB_RATE_LIMIT_SCHEDULE),
+        now,
+        schedule=GITHUB_RATE_LIMIT_SCHEDULE,
+        resets_at=governing,
+        retaken=prior > 0,
+    )
+
+
+def persist_due(state: TaskState, now: datetime) -> bool:
+    """Whether the sweep writes the persisted escalation: the task is escalated as a GitHub
+    rate-limit pause (`rules.auto_resumable`) and has waited `RATE_LIMIT_WAIT_MAX`. Decided from
+    the document alone: no comment is read, so a person's comment never stops it."""
+    return (
+        bool(state.get("escalated"))
+        and rules.auto_resumable(state) == "github_rate_limit"
+        and rate_limit_exhausted(state, now)
+    )
+
+
+def notice_posted(comments: Sequence[tuple[str, datetime]], at: datetime, text: str) -> bool:
+    """Whether the persisted notice already landed: some comment whose first line is that of
+    `text` (`Escalated: ` + `RATE_LIMIT_PERSISTED`, the heading `escalate.comment` writes) and
+    whose time is strictly later than `at`. A comment of an earlier pause does not count."""
+    heading = text.split("\n", 1)[0]
+    return any(body.split("\n", 1)[0] == heading and created > at for body, created in comments)
