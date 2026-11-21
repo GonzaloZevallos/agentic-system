@@ -732,6 +732,13 @@ async def run_with_retry(
                     **({"field": exc.field} if refused and exc.field else {}),
                     **({"value": exc.value} if refused and exc.value is not None else {}),
                     **({"detail": exc.detail} if refused and exc.detail else {}),
+                    # Measured at the raise site on the raw output, never here: `exc.value`
+                    # is already cleaned and cut.
+                    **(
+                        {"value_len": exc.value_len}
+                        if refused and exc.value_len is not None
+                        else {}
+                    ),
                     **({"repairs": exc.repairs} if exc.repairs else {}),
                     **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
                     **(
@@ -915,6 +922,7 @@ def _refused(
     reason: FailureReason,
     rule: RefusalRule,
     field: str,
+    output: object,
     value: object = None,
     detail: str = "",
     repairs: Sequence[RefusalRepair] = (),
@@ -922,7 +930,9 @@ def _refused(
     """The `AttemptFailed` of one refusal of the role's output: what the runner measured
     on the attempt, plus the reason, the rule and the field its raise site decided, the value
     the role wrote there (cleaned here, the one place, by `refusal_retry.clean_value`) and the
-    motive that goes to the retry's `detail` line."""
+    motive that goes to the retry's `detail` line. `output` is the raw structured output that
+    was refused: the size of the value is measured on it (`format_issue.value_len`) before
+    the value is cleaned and cut."""
     return AttemptFailed(
         message,
         cost,
@@ -941,6 +951,7 @@ def _refused(
         value=None if value is None else refusal_retry.clean_value(value),
         detail=refusal_retry.clean_detail(detail) if detail else "",
         repairs=repairs,
+        value_len=format_issue.value_len(output, field),
     )
 
 
@@ -1017,6 +1028,7 @@ def _judged(
                 reason=verdict.reason,
                 rule=verdict.rule,
                 field=verdict.field,
+                output=raw,
                 value=verdict.value,
                 detail=verdict.motive,
                 repairs=made,
@@ -1075,6 +1087,7 @@ async def _attempt(
             reason="schema",
             rule="output_missing",
             field="",
+            output=None,
         )
     data, repairs = _judged(role, result, vocabulary, check, repair)
     text = data.pop("markdown").strip()
@@ -1087,6 +1100,9 @@ async def _attempt(
             reason="schema",
             rule="schema_invalid",
             field="markdown",
+            # No entry of `REPAIRS` touches `markdown`, so the unrepaired output is the one
+            # that was judged.
+            output=result.structured_output,
             detail="`markdown` is empty; the Markdown section is required",
         )
     return Output(
