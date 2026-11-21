@@ -31,6 +31,7 @@ from agentic.core.process.application.ports import (
     FreeSpace,
     Inbox,
     LabelTimeline,
+    LandRecord,
     Launcher,
     LoadReader,
     PerfLock,
@@ -62,6 +63,7 @@ from tests.fakes import (
     FakeFormatFiler,
     FakeFreeSpace,
     FakeLabelTimeline,
+    FakeLandRecord,
     FakeLauncher,
     FakeLoadReader,
     FakePerfLock,
@@ -115,6 +117,7 @@ _domain_spec_validator: SpecValidator = DomainSpecValidator()
 _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
+_land_record: LandRecord = FakeLandRecord()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
 _format_filer: FormatFiler = FakeFormatFiler()
 
@@ -173,6 +176,7 @@ COVERED: dict[str, type] = {
     "StopFlag": FakeStopFlag,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
+    "LandRecord": FakeLandRecord,
     "LabelTimeline": FakeLabelTimeline,
     "FormatFiler": FakeFormatFiler,
 }

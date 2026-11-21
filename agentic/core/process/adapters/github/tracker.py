@@ -46,6 +46,12 @@ _MERGE_METHODS = (
     ("rebase", "rebaseMergeAllowed"),
 )
 
+
+def _bool_or_none(value: object) -> bool | None:
+    """A real JSON boolean as it is; anything else (missing, null, a string) is unknown."""
+    return value if isinstance(value, bool) else None
+
+
 # `pull_requests_on` asks for one page of this size; a full page may be a truncated one.
 _BRANCH_PAGE = 50
 _PR_STATES = ("OPEN", "CLOSED", "MERGED")
@@ -660,7 +666,7 @@ class GhTracker:
             "--state",
             "all",
             "--json",
-            "number,url,state,body,mergeCommit,headRefName",
+            "number,url,state,body,mergeCommit,headRefName,isCrossRepository",
             "--limit",
             "500",
         )
@@ -672,6 +678,7 @@ class GhTracker:
                 body=item.get("body") or "",
                 merge_commit=(item.get("mergeCommit") or {}).get("oid") or "",
                 branch=item.get("headRefName") or "",
+                cross_repository=_bool_or_none(item.get("isCrossRepository")),
             )
             for item in json.loads(raw)
         ]
@@ -1069,8 +1076,12 @@ class GhTracker:
         answer = self._read_json("api", "graphql", "-f", f"query={query}", *fields)
         return answer if isinstance(answer, dict | CiUnreadable) else CiUnreadable("gh_unreadable")
 
-    def merge(self, reference: str, head_sha: str) -> str:
-        """Raises `MergeCallFailed`, its class chosen at the step that failed: never by
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
+        """With `method="merge"` only a merge commit will do: a repository that does not
+        allow one raises `MergeCallFailed("no_merge_method")` and nothing is merged.
+        Raises `MergeCallFailed`, its class chosen at the step that failed: never by
         reading `gh`'s stderr (ADR-0029), or `TrackerUnreachable` from the `repo view` read,
         before anything could change. The reference is parsed first, so an
         unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare number and
@@ -1099,19 +1110,20 @@ class GhTracker:
             raise MergeCallFailed(
                 "gh_unreadable", "gh repo view answered something else than an object"
             )
-        method = next((name for name, key in _MERGE_METHODS if allowed.get(key)), None)
-        if method is None:
+        wanted = _MERGE_METHODS if method is None else _MERGE_METHODS[:1]
+        chosen = next((name for name, key in wanted if allowed.get(key)), None)
+        if chosen is None:
             raise MergeCallFailed("no_merge_method", "no_merge_method")
         # The head sha pins the merge to what the decision saw (GH-178); no `--auto` and no
         # `--delete-branch`: the poller's own `close` owns what happens after.
         try:
-            self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
+            self._gh("pr", "merge", str(number), f"--{chosen}", "--match-head-commit", head_sha)
         except ValueError as exc:
             missing = isinstance(exc.__cause__, FileNotFoundError)
             if isinstance(exc, TrackerCallFailed):  # the merge may or may not have happened
                 raise MergeCallFailed("gh_unreadable", str(exc)) from exc
             raise MergeCallFailed("gh_unavailable" if missing else "gh_rejected", str(exc)) from exc
-        return method
+        return chosen
 
     def _gh(self, *args: str) -> str:
         """No retry, whatever the policy: open_issue, open_pull_request, merge, close_* and

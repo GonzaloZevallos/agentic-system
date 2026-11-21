@@ -37,6 +37,7 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.drawing import DRAWING_RULE
 from agentic.core.process.domain.landing import IssueRef
+from agentic.core.process.domain.output_repair import REPAIRS, repair_note
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
@@ -71,6 +72,7 @@ from agentic.core.process.domain.schemas import (
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.spec_brief import fenced_section, protected_line
 from agentic.core.process.domain.task import FailureReason, OutputRefusal, apply, delta
+from agentic.core.process.domain.task_path import TEXT_MAX
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryInbox,
@@ -2743,6 +2745,17 @@ def test_refusal_field_keeps_only_a_declared_field_or_markdown():
     assert refusal_field(schemas.Classification, None) == ""
 
 
+def test_refusal_field_keeps_a_well_formed_path_into_a_declared_root():
+    schema = TECH_LEAD.schema
+    assert (
+        refusal_field(schema, "parts[1].depends_on_reasons[0]") == "parts[1].depends_on_reasons[0]"
+    )
+    assert refusal_field(schema, "nope[0]") == ""
+    assert refusal_field(schema, "parts[x") == ""
+    assert refusal_field(schema, "parts[1]x") == ""
+    assert refusal_field(schema, "parts..a") == ""
+
+
 def test_an_output_refusal_reads_as_its_detail():
     exc = OutputRefusal("unmapped", "markdown", "the detail")
     assert (str(exc), exc.rule, exc.field, exc.detail) == (
@@ -2838,6 +2851,28 @@ async def test_two_refusals_escalate_and_the_patch_carries_both_entries():
         ("output_missing", None),
         ("output_missing", None),
     ]
+
+
+async def test_a_plan_reason_over_the_limit_reaches_the_failure_with_its_rule_and_path():
+    from agentic.core.process.domain import cost_history
+    from tests.fakes import planned_parts
+
+    long = "x" * 241
+    plan = planned_parts(
+        {"title": "One", "body": "First slice.", "depends_on": []},
+        {"title": "Two", "body": "Second.", "depends_on": [1], "depends_on_reasons": [long]},
+    )
+    check = schemas.plan_check_for(cost_history.build([]), 0.0)
+    exc = await _refusals([plan], role=TECH_LEAD, check=check)
+    (failure,) = exc.failures
+    assert failure["error"] == (
+        "structured output invalid: part 2 depends_on_reasons[0] has 241 characters, over 240: "
+        "one plain line naming what the other part creates"
+    )
+    assert (failure["rule"], failure["field"]) == (
+        "depends_on_reason_too_long",
+        "parts[1].depends_on_reasons[0]",
+    )
 
 
 # --- GH-1017: a refusal is retried with its rule, field, value, detail and fix ------------
@@ -3369,3 +3404,202 @@ async def test_a_task_without_an_issue_number_files_nothing():
     state = {"id": "T-1", "title": "t", "description": "d"}
     await run_role(state, PJM, Configuration(product_dir=Path("/p")), ports, product="x")
     assert spy.calls == 0
+
+
+# --- GH-1016: a mechanical refusal is repaired on the raw output inside the attempt -------
+
+
+class _Shaped(RoleOutput):
+    """A schema with the two fields the registry's repairs act on."""
+
+    subtasks: list[str] = []
+    parts: list[dict[str, Any]] = []
+
+
+SHAPED = dataclasses.replace(PJM, schema=_Shaped)
+LONG = " ".join(f"word{i:03d}" for i in range(60))
+
+
+def _part(reason: str) -> dict[str, Any]:
+    return {"depends_on": [1], "depends_on_reasons": [reason]}
+
+
+def _shaped(*, parts=(), subtasks=(), cost=0.02, **more) -> RawResult:
+    raw = {"markdown": "Plan.", "subtasks": list(subtasks), "parts": list(parts)}
+    return RawResult(raw, cost, **more)
+
+
+def _long_reason_check(data):
+    for i, part in enumerate(data["parts"]):
+        for j, reason in enumerate(part["depends_on_reasons"]):
+            if len(reason) > TEXT_MAX:
+                raise OutputRefusal(
+                    "depends_on_reason_too_long", f"parts[{i}].depends_on_reasons[{j}]", "too long"
+                )
+
+
+def _parts_fit_check(data):
+    if data["parts"]:
+        raise OutputRefusal("parts_when_fits", "parts", "it fits")
+
+
+def _chained(*checks):
+    def check(data):
+        for each in checks:
+            each(data)
+
+    return check
+
+
+def _over_budget_check(data):
+    if len(data["parts"]) > 1:
+        raise OutputRefusal("part_over_budget", "parts", "too big")
+
+
+async def _shaped_run(raws, check, repair=REPAIRS, retries=0):
+    return await run_with_retry(
+        SHAPED,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=retries,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=ScriptedRunner(pjm=raws),
+        owner_task="GH-1",
+        check=check,
+        repair=repair,
+    )
+
+
+async def _shaped_role(raws, check, tmp_path):
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    return await run_role(
+        cast(Any, state),
+        SHAPED,
+        Configuration(product_dir=tmp_path),
+        memory_ports(ScriptedRunner(pjm=raws)),
+        check=check,
+        repair=REPAIRS,
+        product="x",
+    )
+
+
+async def test_a_long_reason_is_repaired_and_the_attempt_delivers_with_its_line(tmp_path):
+    raws = [_shaped(parts=[_part(LONG)], denials=2)]
+    output, patch = await _shaped_role(raws, _long_reason_check, tmp_path)
+
+    assert output is not None and patch["failures"] == []
+    repair = {"rule": "depends_on_reason_too_long", "field": "parts[0].depends_on_reasons[0]"}
+    assert patch["runs"][0]["repairs"] == [repair]
+    assert len(output.data["parts"][0]["depends_on_reasons"][0]) <= TEXT_MAX
+    note = repair_note("depends_on_reason_too_long", "parts[0].depends_on_reasons[0]")
+    # After the other notes, before the role's own text.
+    assert patch["sections"]["PjM"] == f"{rules.denial_note(SHAPED, 2)}\n\n{note}\n\n{output.text}"
+
+
+async def test_parts_over_a_plan_that_fits_are_dropped_and_the_attempt_delivers(tmp_path):
+    raws = [_shaped(parts=[_part("r")], subtasks=["a"])]
+    output, patch = await _shaped_role(raws, _parts_fit_check, tmp_path)
+
+    assert output is not None and output.data["parts"] == []
+    assert patch["runs"][0]["repairs"] == [{"rule": "parts_when_fits", "field": "parts"}]
+    assert patch["sections"]["PjM"] == f"System repair: parts_when_fits on parts\n\n{output.text}"
+
+
+async def test_the_recorded_field_is_the_one_the_refusal_named_for_the_second_part():
+    raws = [_shaped(parts=[_part("fine"), _part(LONG)])]
+    output = await _shaped_run(raws, _long_reason_check)
+    assert output.repairs == [
+        {"rule": "depends_on_reason_too_long", "field": "parts[1].depends_on_reasons[0]"}
+    ]
+
+
+async def test_a_rule_repaired_then_another_refused_fails_the_attempt_and_counts_both(tmp_path):
+    from agentic.core.measurement.domain import metrics
+
+    two = _shaped(parts=[_part(LONG), _part("fine")], cost=0.05)
+    clean = _shaped(parts=[_part("fine")])
+    check = _chained(_long_reason_check, _over_budget_check)
+    output, patch = await _shaped_role([two, clean], check, tmp_path)
+
+    assert output is not None
+    (failure,) = patch["failures"]
+    assert failure["rule"] == "part_over_budget"
+    assert failure["repairs"] == [
+        {"rule": "depends_on_reason_too_long", "field": "parts[0].depends_on_reasons[0]"}
+    ]
+    # The repair belongs to the attempt that failed: neither the run nor the section has it.
+    assert "repairs" not in patch["runs"][0]
+    assert "System repair" not in patch["sections"]["PjM"]
+    assert metrics.refusals_by_rule(patch["failures"], patch["runs"]) == {
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "part_over_budget": {"refused": 1, "repaired": 0},
+    }
+
+
+async def test_a_rule_that_refuses_again_after_its_repair_fails_the_attempt():
+    def always(data):
+        raise OutputRefusal("depends_on_reason_too_long", "parts", "still too long")
+
+    exc = await _refusals_with_repair([_shaped(parts=[_part(LONG)])], always)
+    (failure,) = exc.failures
+    assert failure["rule"] == "depends_on_reason_too_long"
+    assert failure["repairs"] == [{"rule": "depends_on_reason_too_long", "field": "parts"}]
+
+
+async def _refusals_with_repair(raws, check):
+    with pytest.raises(RoleFailure) as caught:
+        await _shaped_run(raws, check)
+    return caught.value
+
+
+async def test_without_a_repair_argument_the_refusal_fails_as_it_always_did():
+    with pytest.raises(RoleFailure) as caught:
+        await _shaped_run([_shaped(parts=[_part(LONG)])], _long_reason_check, repair=None)
+    (failure,) = caught.value.failures
+    assert failure["rule"] == "depends_on_reason_too_long"
+    assert "repairs" not in failure
+
+
+async def test_parts_when_fits_with_no_subtasks_stays_refused():
+    exc = await _refusals_with_repair([_shaped(parts=[_part("r")])], _parts_fit_check)
+    assert [f["rule"] for f in exc.failures] == ["parts_when_fits"]
+    assert "repairs" not in exc.failures[0]
+
+
+async def test_a_plain_value_error_is_not_repaired():
+    def waived(data):
+        raise ValueError("a human waived the fit of this task")
+
+    exc = await _refusals_with_repair([_shaped(parts=[_part(LONG)], subtasks=["a"])], waived)
+    assert [f["rule"] for f in exc.failures] == ["unmapped"]
+    assert "repairs" not in exc.failures[0]
+
+
+async def test_a_schema_refusal_with_a_registered_rule_is_repaired_from_validate():
+    class Gated(RoleOutput):
+        parts: list[dict[str, Any]] = []
+
+        @field_validator("parts")
+        @classmethod
+        def _fits(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if value:
+                raise OutputRefusal("parts_when_fits", "parts", "it fits")
+            return value
+
+    role = dataclasses.replace(PJM, schema=Gated)
+    runner = ScriptedRunner(pjm=[RawResult({"markdown": "Plan.", "parts": [{"x": 1}]}, 0.02)])
+    output = await run_with_retry(
+        role,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=0,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+        owner_task="GH-1",
+        repair={"parts_when_fits": lambda raw, ctx: {k: v for k, v in raw.items() if k != "parts"}},
+    )
+    assert output.repairs == [{"rule": "parts_when_fits", "field": "parts"}]

@@ -45,6 +45,7 @@ graph TD
     m_domain__spec_assumptions --> m_domain__rules
     m_domain__spec_assumptions --> m_domain__task
     m_domain__spec_brief --> m_domain__spec_delivery
+    m_domain__spec_delivery --> g_domain__machine
     m_domain__spec_route --> m_domain__rules
     m_domain__spec_route --> m_domain__spec_delivery
     m_domain__spec_route --> m_domain__task

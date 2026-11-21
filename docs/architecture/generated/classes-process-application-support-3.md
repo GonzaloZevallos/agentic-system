@@ -30,9 +30,9 @@ classDiagram
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
     class ports__LabelTimeline["LabelTimeline"]
+    class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
-    class ports__ListMayBeCut["ListMayBeCut"]
 ```
 
 ## Relaciones con otras páginas

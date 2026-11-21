@@ -24,6 +24,7 @@ from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, Ex
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.playbook_land import LandAttempt
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
@@ -62,6 +63,7 @@ from ..domain.task import (
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRepair,
     RefusalRule,
     TaskInput,
     TaskState,
@@ -200,6 +202,7 @@ class AttemptFailed(Exception):
         field: str = "",
         value: str | None = None,
         detail: str = "",
+        repairs: Sequence[RefusalRepair] = (),
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -256,6 +259,9 @@ class AttemptFailed(Exception):
         # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
         self.value = value
         self.detail = detail
+        # The refusals this attempt repaired before the one that failed it (GH-1016): its own
+        # record, never another attempt's; empty at every other site.
+        self.repairs = list(repairs)
 
 
 class Presubmit(Protocol):
@@ -348,6 +354,16 @@ class RoleRunner(Protocol):
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
     ) -> RawResult: ...
+
+
+class LandRecord(Protocol):
+    """The last landing attempt of a product's playbook PR, kept outside every checkout so it
+    survives a stage0 rotation. A record that is missing, unreadable or of another version
+    loads as `None`."""
+
+    def load(self, product: str) -> LandAttempt | None: ...
+
+    def save(self, product: str, attempt: LandAttempt) -> None: ...
 
 
 class TaskDocuments(Protocol):
@@ -1680,6 +1696,9 @@ class ListedPullRequest:
     body: str
     merge_commit: str
     branch: str
+    cross_repository: bool | None = None
+    """`True` for a pull request from a fork, `False` for one from this repository, `None`
+    when the tracker did not say (or an older caller built the value without it)."""
 
 
 @dataclass(frozen=True)
@@ -1925,13 +1944,18 @@ class Tracker(Protocol):
         cannot answer raises `ValueError` (`TrackerTimedOut` included), as every read."""
         ...
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         """Merges the pull request at `reference`, the URL `deliver` stored (the same key
         `pull_request` takes), only if its head is still `head_sha` (GH-178: the sha the
         automatic-merge decision was taken on, never "whatever is there now"), and returns
         the method used. Raises `MergeCallFailed` (a `ValueError`) when the tracker refuses
         -- the head moved, a check or a rule blocks it, the pull request is not open, the
-        reference is unreadable -- carrying the class of the step that failed."""
+        reference is unreadable -- carrying the class of the step that failed. `method`
+        `None` takes the first method the repository allows, as always; `"merge"` takes a
+        merge commit or nothing: a repository without them raises
+        `MergeCallFailed("no_merge_method")` and merges nothing."""
         ...
 
 

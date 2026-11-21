@@ -40,6 +40,8 @@ from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .refusal import OutputRefusal as OutputRefusal
+from .refusal import RefusalRule as RefusalRule
 from .size_budget import ActualSize, PlanSize
 from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
 from .task_path import Path as TaskPath
@@ -150,40 +152,6 @@ FailureReason = Literal[
     "render",
     "other",
 ]
-# The closed set of ids a refusal of a role's structured output carries (GH-1011): decided
-# only at the raise site in `run_role._attempt`, never read back from an error's text.
-# `output_missing` the role delivered no structured output, `schema_invalid` the schema's
-# own validation refused it, `unmapped` a `ValueError` no rule claims yet; the rest are the
-# plan and drawing refusals a check raises as an `OutputRefusal`.
-RefusalRule = Literal[
-    "preview_slice_missing",
-    "visible_without_drawing_check",
-    "drawing_path_undeclared",
-    "parts_when_fits",
-    "estimate_does_not_fit",
-    "part_over_budget",
-    "depends_on_reason_too_long",
-    "estimated_files_empty",
-    "estimate_below_spent_floor",
-    "output_missing",
-    "schema_invalid",
-    "unmapped",
-]
-
-
-class OutputRefusal(ValueError):
-    """A refusal of a role's delivery that names its own rule. `str(exc)` is `detail`, so
-    the error text a check raised stays what it was. `field` is a claim: `run_role.
-    refusal_field` keeps it only when the role's schema declares it."""
-
-    def __init__(self, rule: RefusalRule, field: str, detail: str, *, value: object = None):
-        super().__init__(detail)
-        self.rule = rule
-        self.field = field
-        self.detail = detail
-        # What the role wrote in `field`, when the raise site has it (GH-1017): shown back to
-        # the model once, cleaned and cut by `refusal_retry.clean_value`. `None` is no value.
-        self.value = value
 
 
 class RefusalRepair(TypedDict):
@@ -1215,6 +1183,11 @@ class Failure(TypedDict):
     # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
     # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
     detail: NotRequired[str]
+    # The refusals this attempt repaired before the one that failed it, `{rule, field}` each
+    # (GH-1016): its own record, written only when it has some. Never in the delivered
+    # section: no output came of this attempt. Absent on a failure recorded before this
+    # field existed, which reads as none.
+    repairs: NotRequired[list[RefusalRepair]]
 
 
 class CheckRun(TypedDict):
@@ -1369,9 +1342,9 @@ class RoleRun(TypedDict):
     # every recorded `Failure.turn_notice_firings` (`run_role._run_notice_firings`).
     # Absent on a run recorded before this field existed, which reads as `0`.
     turn_notice_firings: NotRequired[int]
-    # The refusals this run repaired before it delivered, `{rule, field}` each (GH-1011);
-    # empty until the repair part fills it. Absent on a run recorded before this field
-    # existed, which reads as none.
+    # The refusals this run repaired on the attempt that delivered, `{rule, field}` each
+    # (GH-1011, GH-1016); a failed attempt's own stay on its `Failure`. Absent on a run
+    # recorded before this field existed, or with none, which reads as none.
     repairs: NotRequired[list[RefusalRepair]]
     # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
     # entrega), off `RawResult.deliveries`. The run's total, for the section note
@@ -1904,6 +1877,21 @@ class EstimateRecord(TypedDict):
     files: int
     # The Tech Lead's own figure, written only when the system raised `cost_usd` above it.
     declared_usd: NotRequired[float]
+
+
+class PlanHeld(TypedDict):
+    """The plan the plan node dropped when it escalated on drawing departures the owner has not
+    answered (GH-1004), kept whole so the answer's re-plan can start from it.
+
+    `estimate` is the one figure that counts: exactly the estimate the same patch stored, after
+    the floor and the lift. `plan["estimated_cost_usd"]` is kept only because the plan dict is
+    stored whole. Part 2 restores `estimate` from this record, never runs `_floored` again on
+    the stored plan, and clears the record; this part never clears it."""
+
+    plan: dict[str, Any]
+    departures: list[dict[str, Any]]
+    round: int
+    estimate: EstimateRecord
 
 
 class EstimateRevision(TypedDict):
@@ -2766,6 +2754,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The plan held while the owner answers the plan's own drawing departures (GH-1004,
+    # `PlanHeld`). Written only by the plan node's escalation of open plan-stage departures; no
+    # route reads it yet. `document.render` writes it explicitly, after `drawing_escalation`.
+    plan_held: Annotated[PlanHeld | None, last]
     # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.

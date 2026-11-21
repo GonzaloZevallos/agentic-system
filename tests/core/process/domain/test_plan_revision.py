@@ -154,3 +154,28 @@ def test_a_pending_integration_stays_out_of_the_patch_when_a_dependency_changed(
 def test_several_subtasks_without_an_integration_have_no_final_unit():
     old = {"a": _old("a"), "b": _old("b")}
     assert plan_revision.revise(old, [_item("a"), _item("b")], approved_work=True) == {}
+
+
+def test_a_first_plan_writes_every_subtask_as_pending_builds_it():
+    raw = [_item("a"), _item("b", depends_on=["a"], screens=["home"])]
+    assert plan_revision.written_subtasks(None, raw) == {
+        s["id"]: plan_revision.pending(s) for s in raw
+    }
+
+
+def test_a_promoted_revision_with_approved_work_is_what_revise_gives_with_it():
+    old = {"a": _old("a")}
+    raw = [_item("a")]
+    written = plan_revision.written_subtasks(old, raw)
+    assert written == plan_revision.revise(old, raw, approved_work=True)
+    # The flag changes the outcome here: an approved sole unit goes back for a PRD recheck.
+    assert written["a"]["status"] == "delivered"
+    assert written != plan_revision.revise(old, raw, approved_work=False)
+
+
+def test_a_promoted_revision_with_no_approved_work_is_what_revise_gives_without_it():
+    old = {"a": _old("a", status="pending"), "b": _old("b", status="pending")}
+    raw = [_item("a", brief="new"), _item("b"), _item("c")]
+    written = plan_revision.written_subtasks(old, raw)
+    assert written == plan_revision.revise(old, raw, approved_work=False)
+    assert set(written) == {"a", "c"}

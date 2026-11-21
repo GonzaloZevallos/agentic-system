@@ -20,6 +20,7 @@ graph TD
     g_application__definition["definition (grupo)"]
     g_application__landing["landing (grupo)"]
     g_application__lifecycle__1["lifecycle parte 1 (grupo)"]
+    g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
@@ -41,6 +42,7 @@ graph TD
     m_application__resume --> g_application__definition
     m_application__resume --> g_application__landing
     m_application__resume --> g_application__lifecycle__1
+    m_application__resume --> g_application__reflection
     m_application__resume --> g_application__support
     m_application__resume --> g_pkg__agentic__shared
     m_application__resume --> g_pkg__domain
