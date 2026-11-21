@@ -6,8 +6,9 @@ and worded; `prompt_cause` the only reading of which drawing cause a pause carri
 `section_lines` the only rendering of the rows a role reads; `classify` the only rule that
 crosses a `departs` check with `departures` and with `drawing_departures`; `plan_split` the only
 reading of the owner's verdict on a departure the plan declares; `plan_resume` and `resume_patch`
-the only composition of the patch that resumes a pause the owner answered. Imports only the
-domain's `task`, `rules`, `drawing`, `escalation_prompts` and `schemas`."""
+the only composition of the patch that resumes a pause the owner answered, and `plan_stands_pre`
+the only decision that the plan the node held is restored (GH-1004). Imports only the domain's
+`task`, `rules`, `drawing`, `escalation_prompts`, `plan_revision`, `tracker_items` and `schemas`."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal
 
-from . import drawing, escalation_prompts, rules, task
+from . import drawing, escalation_prompts, plan_revision, rules, task, tracker_items
 from .schemas import DrawingCheck, DrawingDeparture
 
 Cause = Literal["drawing_departure", "drawing_cap"]
@@ -90,7 +91,10 @@ def _history(due: Exhausted, rows: Sequence[task.DepartureRecord]) -> str:
 
 
 def _reason(
-    due: Due | Exhausted, rows: Sequence[task.DepartureRecord], contradicted: frozenset[int]
+    due: Due | Exhausted,
+    rows: Sequence[task.DepartureRecord],
+    contradicted: frozenset[int],
+    asks: Sequence[drawing.UnverifiedAsk],
 ) -> str:
     lines = [_history(due, rows)] if isinstance(due, Exhausted) else []
     for row in sorted(rows, key=lambda r: r["number"]):
@@ -100,6 +104,7 @@ def _reason(
         lines.append(drawing.departure_question(_departure(row), n))
         if n in contradicted:
             lines.append(f"Drawing {n} got both accept and reject in one comment; answer it once.")
+    lines.extend(ask.line for ask in asks)
     return "\n".join(lines)
 
 
@@ -119,16 +124,23 @@ def escalation_patch(
     departures: Sequence[drawing.Departure],
     at: str,
     *,
+    unverified: Sequence[drawing.UnverifiedAsk] = (),
     contradicted: frozenset[int] = frozenset(),
     stage: Literal["plan", "delivery"] = "delivery",
-) -> dict[str, object]:
-    """The patch that escalates `departures` (and every row still open) to the owner: the new
-    rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
-    escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
-    comment). Raises `ValueError` when no number remains unanswered.
+) -> task.DrawingEscalationPatch:
+    """The patch that escalates `departures` (and every row still open) and the `unverified`
+    asks to the owner: the new rows recorded (also when the cap is reached, never dropped), the
+    round, and a `questions` escalation worded here (the commands are `prompt_lines`, shown by
+    the one that renders the comment). The only builder of every drawing pause. Raises
+    `ValueError` when no number remains unanswered and there is no ask, and when `stage` is
+    `plan` with asks only: a plan pause needs an open departure.
 
     `stage` says which gate asked: `plan` is written to the record, `delivery` (the default) is
-    what an absent one reads as.
+    what an absent one reads as. The ask lines come after the departure questions in the reason;
+    with asks the record carries their paths and `unverified_at` is `at`, and the patch carries
+    `questions_for_human`, only those lines (the key is absent without asks): the caller appends
+    them to the ones its own patch already has. `at` must be the value the caller passes to
+    `rules.logged`, so the `pause_log` entry and the record share one instant (`prompt_cause`).
 
     Called only from the system's serialized turn, never from a branch node: it reads the
     round the whole task has reached."""
@@ -136,18 +148,27 @@ def escalation_patch(
     new_rows = task.departure_records(state.get("drawing_departures"), departures, at)
     rows = task.add_drawing_departures(state.get("drawing_departures"), new_rows)
     numbers = sorted(r["number"] for r in rows if r["answer"] is None)
-    if not numbers:
+    if not numbers and not unverified:
         raise ValueError("no departure is left unanswered: there is nothing to escalate")
+    if stage == "plan" and not numbers:
+        raise ValueError("an unverified-only drawing pause cannot be a plan pause")
     escalation = rules.escalation(
         "questions",
-        _reason(due, rows, contradicted),
+        _reason(due, rows, contradicted, unverified),
         spec=state.get("spec"),
         spec_cause="drawing" if rules.spec_delivery(state) else None,
     )
     record = task.DrawingEscalation(round=due.round, numbers=numbers, cause=due.cause)
     if stage == "plan":
         record["stage"] = "plan"
-    return {**escalation, "drawing_departures": new_rows, "drawing_escalation": record}
+    patch = task.DrawingEscalationPatch(
+        **escalation, drawing_departures=new_rows, drawing_escalation=record
+    )
+    if unverified:
+        record["unverified"] = list(dict.fromkeys(ask.path for ask in unverified))
+        record["unverified_at"] = at
+        patch["questions_for_human"] = [ask.line for ask in unverified]
+    return patch
 
 
 @dataclass(frozen=True)
@@ -197,7 +218,8 @@ def plan_split(state: task.TaskState, departures: Sequence[drawing.Departure]) -
 def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> bool:
     """Whether the owner's answer reopens the plan: the pause is a live drawing one
     (`prompt_cause`), the resumption answered at least one row, and the gate that asked was the
-    plan's. A stale `plan` record under another pause never does."""
+    plan's. A stale `plan` record under another pause never does. That the plan is owed does not
+    say it is planned again: `plan_stands` can restore the held one (`resume_patch`)."""
     record = state.get("drawing_escalation")
     return (
         prompt_cause(state) is not None
@@ -207,6 +229,82 @@ def plan_resume(state: task.TaskState, answered: Sequence[task.DepartureRecord])
     )
 
 
+def plan_stands_pre(
+    state: task.TaskState, answered: Sequence[task.DepartureRecord], decision: str | None
+) -> bool:
+    """Whether the plan held when the plan node escalated stands without a re-plan (GH-1004),
+    before the recheck of its estimate: the owner's answer reopens the plan (`plan_resume`), the
+    held plan is the one of this round and this estimate, the owner accepted every departure it
+    declared (read through `plan_split` on `state` with `answered` folded by the field's own
+    reducer, only from `held["departures"]`), said nothing but verdicts (`only_verdicts`), and the
+    plan is plain: no `human` tracker item, no `promote`, no `parts`, a task with no `promotion`
+    nor `fit_question`, and the restored subtasks need no promotion for a light path. Pure."""
+    held = state.get("plan_held")
+    record = state.get("drawing_escalation")
+    if held is None or record is None or not plan_resume(state, answered):
+        return False
+    if held["round"] != record["round"] or held["estimate"] != state.get("estimate"):
+        return False
+    if "promotion" in state or state.get("fit_question") or not drawing.only_verdicts(decision):
+        return False
+    plan = held["plan"]
+    if (
+        tracker_items.human_items(plan.get("tracker_items") or [])
+        or plan.get("promote")
+        or plan.get("parts")
+    ):
+        return False
+    folded = _with_rows(state, answered)
+    split = plan_split(folded, [drawing.Departure(**d) for d in held["departures"]])
+    if split.rejected or split.open:
+        return False
+    restored = _with_subtasks(state, _restored(held))
+    return rules.plan_over_cap_request(restored) is None
+
+
+def _with_rows(state: task.TaskState, answered: Sequence[task.DepartureRecord]) -> task.TaskState:
+    """`state` with `answered` folded in by `apply`, so the field's own reducer
+    (`add_drawing_departures`) runs. The patch repeats the three identity keys, which `apply`
+    overwrites with the same values."""
+    return task.apply(
+        state,
+        task.TaskState(
+            id=state["id"],
+            title=state["title"],
+            description=state["description"],
+            drawing_departures=list(answered),
+        ),
+    )
+
+
+def _with_subtasks(state: task.TaskState, restored: dict[str, task.Subtask]) -> task.TaskState:
+    """`state` with `restored` merged in by `apply` (the reducer of `subtasks`)."""
+    return task.apply(
+        state,
+        task.TaskState(
+            id=state["id"],
+            title=state["title"],
+            description=state["description"],
+            subtasks=restored,
+        ),
+    )
+
+
+def _restored(held: task.PlanHeld) -> dict[str, task.Subtask]:
+    return plan_revision.written_subtasks(None, held["plan"]["subtasks"])
+
+
+def plan_stands(
+    state: task.TaskState,
+    answered: Sequence[task.DepartureRecord],
+    decision: str | None,
+    recheck: bool,
+) -> bool:
+    """`plan_stands_pre` and the plan check passed again (`recheck`): the one decision that the
+    held plan is restored instead of planned again."""
+    return plan_stands_pre(state, answered, decision) and recheck
+
+
 def resume_patch(
     state: task.TaskState,
     decision: str | None,
@@ -214,14 +312,39 @@ def resume_patch(
     answered: Sequence[task.DepartureRecord],
     *,
     at: str,
+    plan_recheck: bool = False,
+    by_poller: bool = False,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task given the rows the owner `answered` (none for any
-    other pause): `rules.resumed`, told by `plan_resume` whether the plan is owed, plus the
-    answered rows when there are some. The only composition of that patch and the only caller
-    of `plan_resume`, so the only source of `rules.resumed`'s `drawing_plan`."""
-    patch = rules.resumed(
-        state, decision, estimate, at=at, drawing_plan=plan_resume(state, answered)
-    )
+    other pause): `rules.resumed`, plus the answered rows when there are some. The only
+    composition of that patch and the only caller of `plan_resume`. `by_poller` (GH-989) goes
+    through to `rules.resumed`: the poller's own retake keeps the GitHub rate limit's instants.
+
+    When `plan_stands` (the owner accepted every departure the plan declared and `plan_recheck`
+    says the plan passes its check again) the held plan is restored: `rules.resumed` is called
+    once on the state with the subtasks written, so the status is `planned` and no re-plan is
+    owed, and the patch writes the subtasks, `plan_due` False (explicit: a `last` reducer ignores
+    a missing key) and `plan_held` None. Otherwise `rules.resumed` is told by `plan_resume`
+    whether the plan is owed (the only source of its `drawing_plan`), and `plan_held` is cleared
+    only when the state held one."""
+    held = state.get("plan_held")
+    if held is not None and plan_stands(state, answered, decision, plan_recheck):
+        restored = _restored(held)
+        patch = rules.resumed(
+            _with_subtasks(state, restored), decision, estimate, at=at, by_poller=by_poller
+        )
+        patch.update(subtasks=restored, plan_due=False, plan_held=None)
+    else:
+        patch = rules.resumed(
+            state,
+            decision,
+            estimate,
+            at=at,
+            drawing_plan=plan_resume(state, answered),
+            by_poller=by_poller,
+        )
+        if held is not None:
+            patch["plan_held"] = None
     if answered:
         patch["drawing_departures"] = list(answered)
     return patch
@@ -229,17 +352,29 @@ def resume_patch(
 
 def prompt_cause(state: task.TaskState) -> Cause | None:
     """The cause the prompt of a pause carries: the recorded one, only while the pause is a
-    `questions` one that is not on tracker items and some open row was asked. The landing's
-    `api_break_missing` passes its own cause and wins."""
+    `questions` one that is not on tracker items and either some open row was asked or the
+    record's `unverified_at` is the instant of the last `escalation` entry of `pause_log` (an
+    unverified-only pause, which asks no row). The landing's `api_break_missing` passes its own
+    cause and wins."""
     record = state.get("drawing_escalation")
     if (
         record
         and state.get("escalation_class") == "questions"
         and not rules.tracker_item_pause(state)
-        and set(unanswered(state)) & set(record["numbers"])
+        and (set(unanswered(state)) & set(record["numbers"]) or _asked_unverified(state, record))
     ):
         return record["cause"]
     return None
+
+
+def _asked_unverified(state: task.TaskState, record: task.DrawingEscalation) -> bool:
+    at = record.get("unverified_at")
+    if not at:
+        return False
+    last = next(
+        (e for e in reversed(state.get("pause_log", [])) if e["kind"] == "escalation"), None
+    )
+    return last is not None and last.get("at") == at
 
 
 def _flat(text: str) -> str:
@@ -282,16 +417,25 @@ def rejected_keys(state: task.TaskState) -> Mapping[str, int]:
     }
 
 
+def fix_owed(row: task.DepartureRecord) -> bool:
+    """Whether `row` is a fix still owed: the owner rejected it and it has had no fix pass yet.
+    A rejected row with no fix pass is never settled. The only place that condition is written."""
+    answer = row["answer"]
+    return answer is not None and answer["verdict"] == "reject" and row["fix_passes"] == 0
+
+
+def with_fix_pass(row: task.DepartureRecord) -> task.DepartureRecord:
+    """`row` with `fix_passes` at least 1 (never lowered). The only place a fix pass is counted."""
+    return task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+
+
 def must_match(state: task.TaskState, seat_slug: str) -> Mapping[str, int]:
     """Each key the owner rejected on a departure `seat_slug` raised and that has had no fix
     pass yet, with its number: the seat's next answer must carry a `matches` check for it."""
     return {
         r["key"]: r["number"]
         for r in state.get("drawing_departures", [])
-        if r["answer"] is not None
-        and r["answer"]["verdict"] == "reject"
-        and r["raised_by"] == seat_slug
-        and r["fix_passes"] == 0
+        if fix_owed(r) and r["raised_by"] == seat_slug
     }
 
 
@@ -344,7 +488,7 @@ def _outcome(row: task.DepartureRecord) -> Outcome:
         return "raise"
     if answer["verdict"] == "accept":
         return "settled_accept"
-    return "fix_due" if row["fix_passes"] == 0 else "return_due"
+    return "fix_due" if fix_owed(row) else "return_due"
 
 
 def classify(
@@ -418,7 +562,32 @@ def fix_pass_rows(
     """The rows of the `fix_due` outcomes with `fix_passes` at least 1: the return that asks for
     the fix is its first pass, so the next rejected pass of the row is `return_due`."""
     return [
-        task.DepartureRecord(**{**row, "fix_passes": max(row["fix_passes"], 1)})
+        with_fix_pass(row)
         for row in state.get("drawing_departures", [])
         if outcomes.get(row["key"]) == "fix_due"
     ]
+
+
+def fold_raised(state: task.TaskState, merged: task.TaskState, at: str) -> task.TaskState:
+    """`merged` (the patch a verifier set returns, on the snapshot `state`) without the
+    transient `drawing_raised` the final leads left: the escalation of those departures built by
+    `escalation_patch`, applied on top of `merged` so a sibling's deltas survive (ADR-0084).
+
+    Decided by whether the key is present, never by whether the list is empty: a raise with no
+    new departure still escalates the row left open. Without the key `merged` is returned as it
+    is. When a sibling already escalated, this pass's departures are dropped: they are found
+    again on the head the resume verifies, never remembered. A raise always leaves an open
+    number, so the `ValueError` of `escalation_patch` is unreachable here and is not caught."""
+    if "drawing_raised" not in merged:
+        return merged
+    folded = merged.copy()
+    raised = folded.pop("drawing_raised")
+    held = task.apply(state, folded)
+    if held.get("escalated"):
+        return folded
+    escalation = escalation_patch(held, raised, at)
+    pause_log = rules.logged(dict(escalation), at=at)["pause_log"]
+    pause = task.DrawingEscalationPatch(
+        **escalation, pause_log=pause_log, status=task.WAITING_ON_HUMAN
+    )
+    return task.apply(folded, pause)

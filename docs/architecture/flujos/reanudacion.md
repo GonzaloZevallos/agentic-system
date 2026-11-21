@@ -15,7 +15,7 @@ sequenceDiagram
     participant Poller
     participant Resume as agentic resume
     Graph->>Escalate: a role, a pair or the cap cannot go on
-    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment
+    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment (nothing for an unpersisted github_rate_limit pause)
     Escalate->>Pause: the same state
     Pause->>Pause: interrupt, checkpoint saved
     Note over Graph,Pause: the run ends, nothing is spent while it waits
@@ -42,7 +42,14 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:needs_a_human` lo dice, y comenta el issue con el
    prefijo `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`). Una pausa
    causada solo por el límite de la cuenta, que el poller retoma sola, no lleva la etiqueta
-   (glosario de `agentic/core/process/CONTEXT.md`).
+   (glosario de `agentic/core/process/CONTEXT.md`). Una pausa `github_rate_limit` que no está
+   persistida va más lejos: `agentic/core/process/domain/rate_limit.py:tracker_silent` vale
+   verdadero y `escalate` solo guarda el documento, sin etiqueta y sin comentario `Escalated: `
+   (lo mismo para el escalado `RATE_LIMIT_PERSISTED`, cuyo único escritor es el poller). El parche
+   que `escalate` guarda y devuelve pasa por
+   `agentic/core/process/domain/rate_limit.py:cleared_on_close`: un escalado de cualquier otra
+   clase borra `rate_limit_paused_at` y `rate_limit_noticed_at` del documento, porque el próximo
+   límite es una espera nueva; la pausa `github_rate_limit` los conserva.
 2. **La pausa.** El nodo `pause` va después de `escalate` y no tiene efectos
    (`agentic/core/process/adapters/langgraph/graph.py:pause`). Ahí vive el `interrupt()`:
    LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso volvería a
@@ -97,6 +104,11 @@ sequenceDiagram
    (`drawing_escalation`) tiene `stage: plan` y la reanudación responde al menos una fila:
    `agentic/core/process/domain/drawing_answer.py:plan_resume` lo decide y `resume_patch` pasa
    `drawing_plan` a `rules.resumed`, que deja `plan_due`. Sin `stage`, o con `delivery`, no.
+   Excepción (GH-1004): si el dueño aceptó todas las desviaciones que declaró el plan retenido
+   (`plan_held`), con una decisión de solo veredictos y sin promoción, y el chequeo de
+   estimación que `resume.prepare` corre otra vez pasa, `resume_patch` restaura las subtareas
+   del plan retenido: `plan_due` en falso, estado `planned`, y la tarea sigue a `integrate`
+   sin planificar de nuevo (`drawing_answer.plan_stands_pre`).
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
@@ -141,3 +153,16 @@ sequenceDiagram
    hay) y `agentic/core/process/adapters/langgraph/graph.py:_pause_node` las pliega con el
    reducer en el mismo patch, que arma `agentic/core/process/domain/drawing_answer.py:resume_patch`
    sobre `rules.resumed`; el cli nunca las siembra.
+
+   Esta pausa también nace en el plan, antes de construir nada. Con un `design` declarado en el
+   commit base, `agentic/core/process/application/plan.py:_finished` mira, antes de la promoción
+   y de `agentic/core/process/application/plan.py:_asked`, el plan que queda en pie: si trae
+   `subtasks` (sin `parts` y no solo de tracker) y
+   `agentic/core/process/domain/drawing_answer.py:plan_split` deja desviaciones abiertas, devuelve
+   el patch sin `subtasks`, sin `plan_promote_request` y sin `plan_due`, más
+   `agentic/core/process/domain/drawing_answer.py:escalation_patch` con `stage: plan`, que escribe
+   `drawing_escalation`, el texto (`agentic/core/process/domain/drawing.py:departure_question`) y,
+   en una tarea con spec, `spec_cause: drawing`. Nada se despacha ni se promueve; la respuesta
+   del dueño vuelve a `plan` por la regla de 5. Sin `design` esta puerta no corre. La
+   reanudación de una excepción de tracker (carve-out) llama a `_finished` sin `design`, así
+   que esa ruta no pasa por esta puerta.

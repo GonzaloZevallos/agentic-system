@@ -1,7 +1,8 @@
 """The draft Spec the definition chain ends with (GH-594 part 5a): PM returns the body, the system
 writes the file, validates it, commits it on the task branch and records what became of it.
 
-The one writer of the `spec_draft` record (outcomes `written`, `invalid`, `unvalidated`, `absent`).
+The one writer of the `spec_draft` record (outcomes `written`, `invalid`, `unvalidated`, `absent`
+and `split_proposed`, the last when the approved preview had more than one slice: nothing written).
 Only the system writes the file, always with `status: draft` (`spec_delivery.draft_text`); PM's
 text is a body and a body that opens its own front matter is refused, so a draft is never on disk
 as approved. A task that comes back to the definition writes to the draft it already has and never
@@ -16,18 +17,25 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
+from ..domain import spec_approval
 from ..domain.spec_delivery import (
+    DRAFT_PREVIEW_PATH,
     SPEC_DIR,
+    DraftReading,
     SpecDraftRecord,
+    approval_instant,
     body_sha256,
+    draft_body_refusal,
+    draft_outcome,
     draft_path,
+    draft_reading,
     draft_text,
-    draft_valid,
+    instant_ok,
+    login_ok,
     spec_path_ok,
-    split_front_matter,
 )
 from ..domain.task import TaskState
-from .ports import Checkout, Ports
+from .ports import Checkout, Ports, SpecValidator
 
 
 def deliver(
@@ -41,24 +49,46 @@ def deliver(
     validator = ports.spec_validator
     if validator is None:
         return {"outcome": "unvalidated"}
-    if split_front_matter(body) is not None:
+    if draft_body_refusal(body) is not None:
         return {"outcome": "invalid"}
     path = _path(state, task, ports)
     text = draft_text(body)
-    try:
-        sha256 = body_sha256(text)
-    except UnicodeError:
-        return {"outcome": "invalid"}
+    sha256 = body_sha256(text)
     target = task.path / path
     if sha256 is None or target.is_symlink():
         return {"outcome": "invalid"}
-    verdict = validator.validate(text, path, task.base, None, cfg.owner_login or None)
-    if not draft_valid(verdict):
+    outcome = draft_outcome(draft_cause(text, validator, task.base, cfg.owner_login, ports.now()))
+    if outcome == "split_proposed":
+        return {"outcome": "split_proposed", "sha256": sha256}
+    if outcome == "invalid":
         return {"outcome": "invalid"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8", newline="")
     ports.workspace.commit_all(task.path, f"{state['id']}: draft Spec")
-    return {"outcome": "written", "path": path, "sha256": sha256}
+    # The commit is recorded only when it holds exactly what was written, as a full sha (`head` is
+    # short): `commit_all` may have had nothing to commit, and the head is then whatever was there.
+    head = ports.workspace.full_head(task.path)
+    if ports.workspace.show(head, path) != text:
+        return {"outcome": "invalid"}
+    return {"outcome": "written", "path": path, "sha256": sha256, "commit": head}
+
+
+def draft_cause(
+    text: str, validator: SpecValidator, base: str, owner_login: str | None, now: str
+) -> DraftReading:
+    """The one place a draft is validated and previewed as approved: the draft is read by the
+    validator and, only with a well-formed `owner_login` and a clock that reads as an instant, its
+    approved preview is read too (`spec_delivery.draft_reading`). Without either the preview is
+    skipped, never an error. The login and the instant are decided here and nowhere else; the
+    validator never sees a raw login. Nothing is read from the checkout and nothing is written."""
+    login = owner_login if login_ok(owner_login) else None
+    draft = validator.validate(text, DRAFT_PREVIEW_PATH, base, None, login)
+    preview = None
+    instant = approval_instant(now)
+    if login is not None and instant_ok(instant):
+        approved = spec_approval.approve(text, login, instant)
+        preview = validator.validate(approved, DRAFT_PREVIEW_PATH, base, None, login)
+    return draft_reading(draft, preview)
 
 
 def _path(state: TaskState, task: Checkout, ports: Ports) -> str:

@@ -126,7 +126,8 @@ sequenceDiagram
    llamar a `landing_order.py:order`; lo que sale va en `LandingRound.lane` y `lane_reasons`
    (el predicado y las razones son de `landing_order.py:lane_ready` y `lane_reason`). A lo sumo
    un miembro, `lane`, entra en `found` junto a la Cabeza con la línea
-   `fast lane behind busy #H` y sigue el camino normal de merge; un miembro limpio sin carril
+   `fast lane behind busy #H (<hijo de la Cabeza>, <decisión admitida>)` (la decisión es una de
+   `landing_order.py:LANE_DECISIONS`) y sigue el camino normal de merge; un miembro limpio sin carril
    dice la razón en su línea: `waiting (clean, <texto>) behind #H`. Fuera de las decisiones,
    en una ronda no retenida `agentic/core/process/application/landing_lane.py` deja un registro
    informativo que ninguna decisión lee (ADR-0090, adenda GH-681, parte 2): `admit` escribe

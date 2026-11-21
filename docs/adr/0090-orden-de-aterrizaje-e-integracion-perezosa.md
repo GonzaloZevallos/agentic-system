@@ -97,6 +97,33 @@ Riesgos conocidos:
 - `role` cuenta como integrando de más, igual que los pases de `land_model` que no sincronizan (`re_review`, `fix`, `diagnose`); cada uno cuesta como mucho una sincronización.
 - Uso esperado bajo: casi toda tarea toca `CONTEXT.md` o `docs/adr/`, así que `paths overlap` será frecuente. Se mide en las líneas del poller, comparando `paths overlap` con `fast lane`.
 
+## Adenda GH-975: el Carril rápido admite saltos que piden evidencia fresca
+
+Con la integración perezosa (GH-588), un pull request que espera no contiene el master actual, así que `rules.auto_merge_decision` le da `ci_run` (con `ci:`) o `run_checks` (sin `ci:`), nunca `merge`, y el carril de GH-681 no lo veía: el 18-nov la Cabeza en re-integración retuvo hasta seis pull requests limpios y aprobados durante horas. El carril admite ahora `landing_order.LANE_DECISIONS`, un conjunto cerrado de pares `(kind, reason)`: `("merge", None)`, `("ci_run", None)` y `("run_checks", None)`. Ningún `refuse` (tampoco `ci_untrusted_no_dispatch`, `ci_stale_exhausted` ni `ci_no_verdict`) y ningún `wait` entra; `lane_decision_of` es el único que admite.
+
+- **Qué se reemplaza.** «Un merge por movimiento de master, sin cadena» pasa a **un merge por ronda, con la evidencia del verbo de merge sobre el par (head, master actual)**. El predicado deja de exigir que la rama contenga el master (`holds_master` queda como hecho informativo): exige `clean is True` contra el master actual de la ronda, y la seguridad no cambia, porque el hijo `merge` corre la misma puerta de siempre (ADR-0045, adenda GH-463): `merge_ci` fresco sobre el par con `ci:`, los chequeos locales sobre el par sin él. A lo sumo hay un merge por ronda (la corrida exenta es una sola) y el siguiente se juzga contra el master nuevo en la ronda siguiente.
+- **Quién decide.** Todo vive en `domain/landing_order.py` (`LANE_DECISIONS`, `lane_ready`, `lane_reason`, `_lane`). `Member.merge_now` pasa a `Member.lane_decision` (`merge`, `ci_run`, `run_checks` o `None`: no admitido) y un `Member.not_candidate` (`not_merge_ready`, `backed_off`) dice por qué un miembro limpio no es candidato; las dos son razones nuevas de `LaneReason` y salen de hechos que la ronda ya calculó, sin lecturas de git. `holds_master_unknown` y `lacks_master` quedan en el tipo para no romper datos ya escritos, pero ningún miembro las tiene ya como obstáculo.
+- **Se mantienen** `paths_overlap`, `stack_held` (un hijo apilado nunca salta a su padre, GH-838), `waits_on_human`, `INTEGRATING_KINDS`, `LANE_SYNCS_MIN` = 2 sobre `LANDING_SYNCS_MAX` = 6 y el presupuesto de la Cabeza. La cadena de saltos la corta sola `head_sync_budget`: cada salto le cuesta una `sync_master`, y el carril se cierra cuando le quedan menos de 2.
+- **La Cabeza conserva su lugar.** Ocupada no cede (`over_budget`). Al entregar, su hijo integrador termina y el carril se cierra en esa ronda (`head_not_integrating`); la Cabeza es la siguiente en mergear y espera, como mucho, el único salto que ya estaba vivo. Ningún salto produce una cesión (`head_yields`).
+
+Qué hijos de la Cabeza abren carril:
+
+| Hijo de la Cabeza | ¿Abre carril? |
+|---|---|
+| `land_model`: `sync_master`, `fix`, `re_review`, `diagnose`, `apply_adr_decision` | sí (integra) |
+| `role` tras un conflicto | sí (integra) |
+| `merge` | nunca: juzga un par fijo |
+| `land_checks`, `rerun`, `fix_pr_body` | nunca |
+| una Cabeza que solo espera CI | nunca: sin hijo vivo no mantiene el turno |
+
+Costo de la Cabeza: a lo sumo un salto vivo al entregar, una sola vez por entrega. Las lecturas locales de git (`is_ancestor`, `touched_paths`) crecen linealmente con los candidatos: una o dos por candidato y ronda.
+
+Riesgos conocidos:
+
+- `paths_overlap` puede seguir dominando: casi toda tarea toca `CONTEXT.md` o `docs/adr/`. Una regla de «misma ruta, pero git une limpio» sería otra tarea con otro ADR.
+- Un salto le cuesta a la Cabeza una `sync_master`, que puede chocar con su resolución en curso.
+- La evidencia del 18-nov no traía razones: no se pudo confirmar retroactivamente qué condición dominó.
+
 ## Adenda GH-885/GH-895: la nota de rechazo del poller
 
 Un pull request de una persona nunca es Cabeza y el verbo de merge no lo toca mientras espera, de modo que una negativa que solo una persona puede resolver quedaba muda. En el bloque `refuse` de `gather_merges` (`poll.py`), el poller comenta ahora las cuatro razones de `refusal_note.POLLER_NOTED` (`perf_unverified`, `criteria_unreadable`, `criteria_over_cap`, `stack_base_orphaned`), una vez por par (head, razón), para la Cabeza y para un pull request que espera y es de una persona.

@@ -25,12 +25,26 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
+from .refusal import OutputRefusal
+
 SPEC_FENCE = "=== spec data ==="
 SPEC_MAX_BYTES = 65536
 
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
 # What the system did with the draft Spec PM returned (GH-594 part 5a): closed.
-SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent"]
+SpecDraftOutcome = Literal["written", "invalid", "unvalidated", "absent", "split_proposed"]
+# Why a draft Spec body is refused (GH-594 part 5c-1), by stage: the body alone, the draft read by
+# the validator, and the approved preview of it. Closed; `DRAFT_REFUSAL_REASONS` has one each.
+DraftCause = Literal[
+    "draft_empty",
+    "draft_front_matter",
+    "draft_unhashable",
+    "draft_invalid",
+    "draft_not_draft",
+    "preview_slice_missing",
+    "preview_invalid",
+    "preview_unapproved",
+]
 SpecReadRefusal = Literal["path", "commit", "missing", "not_blob", "oversize", "encoding", "git"]
 SpecReadCause = Literal["spec_unreadable"]
 # Every cause a spec refusal can escalate with (GH-594): the validator's four, the read's one and
@@ -141,6 +155,15 @@ def body_sha256(text: str) -> str | None:
     return None if split is None else hashlib.sha256(split[1].encode("utf-8")).hexdigest()
 
 
+def owner_matches(author: str, owner_login: str | None) -> bool:
+    """True only when `author` is the owner: the one login comparison for specs (invariant 1),
+    used by the approval reader and by the validator. A missing, empty or blank `owner_login`
+    matches nobody; otherwise the logins are compared with `casefold`."""
+    if not owner_login or not owner_login.strip():
+        return False
+    return author.casefold() == owner_login.casefold()
+
+
 def derive_flags(screens: Sequence[Screen]) -> tuple[bool, bool]:
     """(touches_ui, touches_copy): any screen at all; any screen with a non-blank copy string."""
     return bool(screens), any(c.strip() for s in screens for c in s["copy"])
@@ -179,11 +202,15 @@ class _SpecDraftOutcome(TypedDict):
 
 class SpecDraftRecord(_SpecDraftOutcome, total=False):
     """The `spec_draft` key of a task (GH-594 part 5a): what became of the draft Spec PM
-    returned. `path` and `sha256` (the body hash) are there only for `written`. Distinct from
+    returned. `path`, `sha256` (the body hash) and `commit` are there only for `written`; `commit`
+    is a full sha at which `path` holds exactly the text whose body hash is `sha256` (a record
+    from before it existed has none). `split_proposed` carries `outcome` and `sha256` only: the
+    approved preview had more than one slice, so no file is written. Distinct from
     `state["spec"]`: a draft is never a spec delivery's contract."""
 
     path: str
     sha256: str
+    commit: str
 
 
 class SpecStatePatch(TypedDict):
@@ -319,11 +346,123 @@ def spec_carry_ok(holds: bool, intact: bool) -> bool:
     return holds and intact
 
 
-def draft_valid(result: SpecContract | SpecCause) -> bool:
-    """True only when the validator found a well-formed spec that is not approved yet
-    (`spec_unapproved`): what a draft is. The one place that answer counts as valid; every
-    other cause, and a contract (an approved spec), is not a draft."""
-    return result == "spec_unapproved"
+@dataclass(frozen=True)
+class DraftReading:
+    """What a draft Spec reading came to: `ok`, or refused with a `DraftCause`."""
+
+    ok: bool
+    cause: DraftCause | None = None
+
+
+def draft_body_refusal(body: object) -> DraftCause | None:
+    """Why PM's draft body is refused before any validator sees it, or `None`: not a string or
+    blank, a body that opens its own front matter, or one whose hash cannot be computed."""
+    if not isinstance(body, str) or not body.strip():
+        return "draft_empty"
+    if split_front_matter(body) is not None:
+        return "draft_front_matter"
+    try:
+        sha256 = body_sha256(draft_text(body))
+    except UnicodeError:
+        return "draft_unhashable"
+    return "draft_unhashable" if sha256 is None else None
+
+
+def draft_reading(
+    draft_result: SpecContract | SpecCause, preview_result: SpecContract | SpecCause | None
+) -> DraftReading:
+    """The one reading of the validator on a draft Spec (the only place its answer counts as a
+    draft): the draft must be `spec_unapproved`; then the approved preview, when given, must be a
+    contract read with `slice_id=None`, so a draft with more than one slice is `slice_missing`.
+    The draft is judged before the preview. A validator verdict never depends on the path."""
+    if draft_result == "spec_invalid":
+        return DraftReading(False, "draft_invalid")
+    if draft_result != "spec_unapproved":
+        return DraftReading(False, "draft_not_draft")
+    if preview_result is None or not isinstance(preview_result, str):
+        return DraftReading(True)
+    if preview_result == "slice_missing":
+        return DraftReading(False, "preview_slice_missing")
+    if preview_result == "spec_unapproved":
+        return DraftReading(False, "preview_unapproved")
+    return DraftReading(False, "preview_invalid")
+
+
+def approved_contract(result: SpecContract | SpecCause) -> SpecContract | SpecCause:
+    """The contract of an approved spec, or the cause the validator refused it with."""
+    return result
+
+
+DRAFT_PREVIEW_PATH = f"{SPEC_DIR}draft.md"
+
+# What PM is told when its draft is refused, one fixed sentence per cause: never validator detail,
+# a path or a section list (those belong to Knowledge; the draft prompt block names them).
+DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
+    "draft_empty": "the draft Spec body is empty; return the body as text, without front matter.",
+    "draft_front_matter": "the draft Spec body must not open front matter; the system adds it.",
+    "draft_unhashable": "the draft Spec body cannot be encoded as text; return plain UTF-8 text.",
+    "draft_invalid": (
+        "the draft Spec body lacks the structure required by the draft Spec section of your "
+        "prompt (pm_draft); return every section that block names, in order, with no front matter."
+    ),
+    "draft_not_draft": "the draft Spec body must read as an unapproved draft; return the body.",
+    "preview_slice_missing": (
+        "the draft Spec must have exactly one slice; fold the work into one slice, or return it "
+        "again with several and the system records a split proposal instead of a Spec file."
+    ),
+    "preview_invalid": "the draft Spec body must still validate once it is approved.",
+    "preview_unapproved": "the draft Spec could not be previewed as approved; try again.",
+}
+
+
+def draft_refusal_message(cause: DraftCause) -> str:
+    return f"draft Spec refused: {cause}: {DRAFT_REFUSAL_REASONS[cause]}"
+
+
+def draft_refusal(cause: DraftCause) -> OutputRefusal:
+    """The refusal of a draft Spec as the check raises it: its text is `draft_refusal_message`.
+    The one cause the table names, `preview_slice_missing`, carries its rule and the field the
+    body is in (`spec_draft`); every other cause is `unmapped` with no field."""
+    detail = draft_refusal_message(cause)
+    if cause == "preview_slice_missing":
+        return OutputRefusal("preview_slice_missing", "spec_draft", detail)
+    return OutputRefusal("unmapped", "", detail)
+
+
+def draft_retry(cause: DraftCause, calls_before: int) -> Literal["refuse", "propose_split"]:
+    """What the draft check does with a refused draft: `propose_split` only for a draft whose
+    approved preview has more than one slice (`preview_slice_missing`) on a call that has a call
+    before it, `refuse` otherwise. `calls_before` counts every earlier call of the check, whatever
+    its cause. Known hole: an attempt that failed before reaching the check (schema, turn cut,
+    stall) is not a call, so a multi-slice draft on PM's second attempt can still be refused."""
+    if cause == "preview_slice_missing" and calls_before >= 1:
+        return "propose_split"
+    return "refuse"
+
+
+def draft_outcome(reading: DraftReading) -> Literal["written", "split_proposed", "invalid"]:
+    """The outcome of a draft Spec reading: `written` when ok, `split_proposed` when the approved
+    preview had more than one slice, `invalid` for every other cause. With no valid login or
+    readable instant the preview is skipped, so the reading is ok and the draft is `written`."""
+    if reading.ok:
+        return "written"
+    return "split_proposed" if reading.cause == "preview_slice_missing" else "invalid"
+
+
+def login_ok(login: str | None) -> bool:
+    """True only for a non-empty string in the form of a GitHub login."""
+    return isinstance(login, str) and _LOGIN.fullmatch(login) is not None
+
+
+def approval_instant(now: str) -> str:
+    """The clock's instant in the form approval writes: the clock (`Ports.now`) ends in `+00:00`,
+    the approved front matter in `Z`. Anything else is returned as is, for `instant_ok` to judge."""
+    return f"{now.removesuffix('+00:00')}Z" if now.endswith("+00:00") else now
+
+
+def instant_ok(at: str) -> bool:
+    """True only for an ISO-8601 UTC instant ending in `Z`, the form approval writes."""
+    return isinstance(at, str) and _AT.fullmatch(at) is not None
 
 
 def _slug(title: str) -> str:

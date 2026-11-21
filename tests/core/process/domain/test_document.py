@@ -1,4 +1,5 @@
 import ast
+import json
 from pathlib import Path
 from typing import get_args, get_type_hints
 
@@ -18,6 +19,7 @@ from agentic.core.process.domain import (
 )
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing_order import YieldReason
+from agentic.core.process.domain.task import DrawingEscalation
 from tests.gh150_stranded import GH150_STRANDED
 
 
@@ -236,6 +238,31 @@ def test_assignment_is_the_only_difference_a_document_gains():
     added = [line for line in assigned if line not in plain]
     assert added[0] == "assignment:"
     assert [line for line in plain if line not in assigned] == []
+
+
+EARLY_SPLIT_ROWS = [
+    {"verdict": "go", "cause": "sizer_failed", "at": "2026-11-19T10:00:00Z"},
+    {
+        "verdict": "split",
+        "cause": "over",
+        "at": "2026-11-19T10:05:00Z",
+        "hand_files": 34,
+        "hand_lines": 900,
+        "test_lines": 1300,
+        "estimated_cost_usd": 41.5,
+    },
+]
+
+
+def test_early_split_rows_round_trip_through_the_frontmatter():
+    rendered = document.render(golden_state(early_split=EARLY_SPLIT_ROWS))
+    assert document.parse(rendered)["early_split"] == EARLY_SPLIT_ROWS
+
+
+def test_a_document_without_early_split_reads_no_key_and_renders_as_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(early_split=[])) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert "early_split" not in document.parse(document.render(golden_state()))
 
 
 EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
@@ -2293,6 +2320,64 @@ def test_an_invalid_escalation_record_is_dropped_on_load_and_never_written(bad):
     assert "drawing_escalation" not in document.parse(stored)
 
 
+_UNVERIFIED_AT = "2026-11-18T10:00:00.001+00:00"
+_FULL_ESCALATION = {
+    "round": 2,
+    "numbers": [1, 3],
+    "cause": "drawing_cap",
+    "stage": "plan",
+    "unverified": ["pantallas/Home.png", ""],
+    "unverified_at": _UNVERIFIED_AT,
+}
+
+
+def test_an_escalation_with_unverified_asks_round_trips_intact():
+    text = document.render(_escalation_state(**_FULL_ESCALATION))
+    parsed = document.parse(text)
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+def test_every_key_of_the_escalation_record_has_a_sample_that_round_trips():
+    assert set(_FULL_ESCALATION) == set(DrawingEscalation.__annotations__)
+    parsed = document.parse(document.render(_escalation_state(**_FULL_ESCALATION)))
+    assert parsed["drawing_escalation"] == _FULL_ESCALATION
+
+
+@pytest.mark.parametrize(
+    ("bad", "dropped"),
+    [
+        ({"unverified": "x"}, "unverified"),
+        ({"unverified": [1]}, "unverified"),
+        ({"unverified": ["a.png", 2]}, "unverified"),
+        ({"unverified_at": 3}, "unverified_at"),
+        ({"unverified_at": ["x"]}, "unverified_at"),
+    ],
+)
+def test_a_malformed_unverified_field_is_dropped_and_the_record_survives(bad, dropped):
+    base = {"round": 1, "numbers": [1], "cause": "drawing_departure"}
+    assert document.parse(document.render(_escalation_state(**base, **bad)))[
+        "drawing_escalation"
+    ] == (base)
+    stored = document.render(_escalation_state(**base)).replace(
+        "\n---\n", "\ndrawing_escalation: " + json.dumps({**base, **bad}) + "\n---\n", 1
+    )
+    assert dropped in stored
+    assert document.parse(stored)["drawing_escalation"] == base
+
+
+@pytest.mark.parametrize("stage", [None, "plan"])
+def test_a_record_without_the_new_fields_rewrites_identically_with_no_such_keys(stage):
+    record = {"round": 2, "numbers": [1], "cause": "drawing_departure"}
+    if stage:
+        record["stage"] = stage
+    text = document.render(_escalation_state(**record))
+    assert "unverified" not in text
+    parsed = document.parse(text)["drawing_escalation"]
+    assert parsed == record
+    assert document.render({**_departure_base(), "drawing_escalation": parsed}) == text
+
+
 SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
 
 
@@ -2430,9 +2515,164 @@ def test_the_spec_draft_record_round_trips_and_is_distinct_from_the_spec():
     plain = document.render(_base_state())
     assert document.render(_base_state(spec_draft=None)) == plain
     assert "spec_draft" not in plain
-    for record in (_WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
+    with_commit = {**_WRITTEN_DRAFT, "commit": "d" * 40}
+    for record in (with_commit, _WRITTEN_DRAFT, {"outcome": "invalid"}, {"outcome": "absent"}):
         text = document.render(_base_state(spec_draft=record))
         loaded = document.parse(text)
         assert loaded["spec_draft"] == record
         assert "spec" not in loaded and "spec_delivery" not in text
         assert document.render(_base_state(**loaded)) == text
+
+
+# --- owner-decision groundwork (GH-960) -------------------------------------------------
+
+
+def _round_trip(state):
+    return document.parse(document.render(state))
+
+
+def test_the_owner_decision_fields_round_trip_and_are_omitted_when_absent():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    with_fields = {
+        **base,
+        "owner_decision_seen": "2026-11-18T10:00:00Z",
+        "owner_decision_route": "pm",
+    }
+    back = _round_trip(with_fields)
+    assert back["owner_decision_seen"] == "2026-11-18T10:00:00Z"
+    assert back["owner_decision_route"] == "pm"
+    plain = document.render(base)
+    assert "owner_decision_seen" not in plain and "owner_decision_route" not in plain
+
+
+def test_an_absent_task_head_and_empty_subtasks_come_back_as_the_state_without_them():
+    base = {"id": "T-1", "title": "t", "description": "d", "type": "feature"}
+    assert _round_trip({**base, "task_head": None, "subtasks": {}}) == _round_trip(base)
+    assert "task_head" not in document.render({**base, "task_head": None})
+
+
+def test_a_hand_written_null_task_head_reads_falsy():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "type": "feature"})
+    raw = raw.replace("---\n", "---\ntask_head: null\n", 1)
+    assert not document.parse(raw).get("task_head")
+
+
+def test_an_owner_decision_restart_settled_row_round_trips():
+    row = {
+        "subtask": "integration",
+        "version": 3,
+        "outcome": "discarded",
+        "reason": "owner_decision",
+    }
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "type": "feature",
+        "restart_settled": [row],
+    }
+    assert _round_trip(state)["restart_settled"] == [row]
+
+
+def _held() -> dict[str, object]:
+    # Two equal rows, never one object twice: yaml would write the second as an anchor.
+    return {
+        "plan": {
+            "estimated_cost_usd": 12.5,
+            "summary": "Plan ñandú",
+            "drawing_departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        },
+        "departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        "round": 2,
+        "estimate": {"cost_usd": 12.5, "files": 3, "declared_usd": 8.25},
+    }
+
+
+def test_a_held_plan_renders_after_the_escalation_and_round_trips():
+    state = {
+        **_departure_base(),
+        "drawing_escalation": {"round": 2, "numbers": [1], "cause": "drawing_departure"},
+        "plan_held": _held(),
+    }
+    text = document.render(state)
+    assert text.split("drawing_escalation:\n", 1)[1].split("subtasks: {}", 1)[0] == (
+        "  round: 2\n  numbers:\n  - 1\n  cause: drawing_departure\n"
+        "plan_held:\n"
+        "  plan:\n"
+        "    estimated_cost_usd: 12.5\n"
+        "    summary: Plan ñandú\n"
+        "    drawing_departures:\n"
+        "    - key: hero\n"
+        "      reason: añadí un héroe\n"
+        "  departures:\n"
+        "  - key: hero\n"
+        "    reason: añadí un héroe\n"
+        "  round: 2\n"
+        "  estimate:\n"
+        "    cost_usd: 12.5\n"
+        "    files: 3\n"
+        "    declared_usd: 8.25\n"
+    )
+    parsed = document.parse(text)
+    assert parsed["plan_held"] == _held()
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+@pytest.mark.parametrize("extra", [{}, {"plan_held": None}])
+def test_a_state_without_a_held_plan_writes_the_frontmatter_it_always_did(extra):
+    text = document.render({**_departure_base(), **extra})
+    assert text == document.render(_departure_base())
+    assert "plan_held" not in text
+    assert "plan_held" not in document.parse(text)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "text",
+        {**_held(), "plan": "x"},
+        {**_held(), "departures": "x"},
+        {**_held(), "departures": ["x"]},
+        {**_held(), "round": "2"},
+        {**_held(), "round": True},
+        {**_held(), "estimate": {"files": 3}},
+        {**_held(), "estimate": {"cost_usd": "9", "files": 3}},
+        {**_held(), "estimate": 9},
+    ],
+)
+def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\nplan_held: " + json.dumps(bad) + "\n---\n", 1
+    )
+    assert "plan_held" in stored
+    assert "plan_held" not in document.parse(stored)
+
+
+@pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
+def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
+    """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
+    assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []
+
+
+def test_failure_repairs_survive_the_document_round_trip_and_are_counted():
+    from agentic.core.measurement.domain import metrics
+
+    repairs = [{"rule": "depends_on_reason_too_long", "field": "parts[1].depends_on_reasons[0]"}]
+    failure = {
+        "role": "Tech Lead",
+        "attempt": 1,
+        "error": "structured output invalid: too big",
+        "cost_usd": 0.5,
+        "session_id": "s",
+        "reason": "check",
+        "rule": "part_over_budget",
+        "field": "parts",
+        "repairs": repairs,
+    }
+    loaded = document.parse(document.render(golden_state(failures=[failure])))
+
+    assert loaded["failures"][0]["repairs"] == repairs
+    assert metrics.refusals_by_rule(loaded["failures"], loaded.get("runs", [])) == {
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "part_over_budget": {"refused": 1, "repaired": 0},
+    }

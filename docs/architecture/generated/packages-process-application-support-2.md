@@ -29,6 +29,7 @@ graph TD
     m_application__run_role["application.run_role"]
     m_application__spec_guard["application.spec_guard"]
     m_application__stack_facts["application.stack_facts"]
+    m_application__stack_hold["application.stack_hold"]
     m_application__ports --> g_application__support__1
     m_application__ports --> g_pkg__domain
     m_application__preflight --> g_application__support__1
@@ -54,4 +55,8 @@ graph TD
     m_application__stack_facts --> g_pkg__agentic__shared
     m_application__stack_facts --> g_pkg__domain
     m_application__stack_facts --> m_application__ports
+    m_application__stack_hold --> g_pkg__agentic__shared
+    m_application__stack_hold --> g_pkg__domain
+    m_application__stack_hold --> m_application__ports
+    m_application__stack_hold --> m_application__stack_facts
 ```

@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import MISSING, dataclass, fields, replace
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, get_args
 
 Turn = Literal["head", "waiting"]
 """Whether a pull request is the head of its product's order (`head`: it is integrated, checked
@@ -62,6 +62,15 @@ INTEGRATING_KINDS = frozenset({"land_model", "role"})
 and the head's landing then syncs master, paid from its sync budget. `merge` and `land_checks`
 judge a fixed (head, master) pair and change neither."""
 
+LaneDecision = Literal["merge", "ci_run", "run_checks"]
+"""The merge decisions a member may hold when it merges beside the head: `merge` (the merge verb
+lands it), `ci_run` and `run_checks` (the verb's own child produces the evidence on the pair
+(head, current master) first, ADR-0045 addendum GH-463)."""
+
+LANE_DECISIONS = frozenset({("merge", None), ("ci_run", None), ("run_checks", None)})
+"""The `(kind, reason)` pairs of `rules.auto_merge_decision` that may merge beside the head: the
+only place that says which. No `refuse` and no `wait` is in it."""
+
 LaneReason = Literal[
     "head_not_integrating",
     "head_paths_unknown",
@@ -70,8 +79,13 @@ LaneReason = Literal[
     "lacks_master",
     "paths_overlap",
     "member_paths_unknown",
+    "stack_parent_unmerged",
+    "not_merge_ready",
+    "backed_off",
 ]
-"""Why a member that is `merge_now` and clean has no lane beside the head."""
+"""Why a member that is clean has no lane beside the head. `holds_master_unknown` and
+`lacks_master` are no longer obstacles of a member (the merge verb brings the evidence on the pair
+itself) and stay here so a value already written still reads."""
 
 
 @dataclass(frozen=True)
@@ -99,9 +113,13 @@ class Member:
     Only `observed`, `left_head` and `yielded` write `charged_s`, `seen_at`, `turn_at`,
     `yielded_at`, `yields` and `steps_on_head`; no other code builds such a state by hand.
 
-    The fast-lane facts (GH-681), all defaulted and all read by the caller: `merge_now` that the
-    decision is `merge` and there is no backoff, `clean` that the pull request is clean,
-    `holds_master` that its branch already holds master, `integrating` that a live child of an
+    The fast-lane facts (GH-681), all defaulted and all read by the caller: `lane_decision` the
+    merge decision the member holds when it is a candidate (`LANE_DECISIONS`, through
+    `lane_decision_of`) and `None` when it is not admitted, `not_candidate` why a clean member that
+    is not a candidate is not (`not_merge_ready`: its decision is outside `LANE_DECISIONS`;
+    `backed_off`: its merge is in backoff), `clean` that the pull request is clean,
+    `holds_master` that its branch already holds master (informative: the lane no longer asks
+    for it), `integrating` that a live child of an
     integrating kind (`integrates`) runs on it, `paths` the files its diff touches and
     `head_syncs_left` the syncs its head budget still allows. `paths`, `clean` and `holds_master`
     are `None` when the read failed or was not attempted, never `frozenset()` or `False` as a
@@ -109,7 +127,12 @@ class Member:
     `frozenset()` is a read, an empty diff. `paths` is a snapshot taken when the caller read it.
     The lane's safety rests on the head's own `sync_master` seeing any overlap, which is why
     `head_syncs_left` is a required fact. A semantic interaction between files that do not
-    overlap is not detected."""
+    overlap is not detected.
+
+    `stack_held` (GH-838) is that the task is a stacked child whose parent has not reached the
+    upstream (`stacking.held`, which the caller applies: this module never reads a stack record).
+    Like `waits_on_human` it drops the member from the Cabeza choice, and it never gets the lane.
+    It is not a state of the head budget: `advance` neither charges nor yields a held member."""
 
     issue: int
     queued_at: datetime | None
@@ -125,12 +148,14 @@ class Member:
     merge_due: bool = False
     waits_on_ci: bool = False
     account_paused: bool = False
-    merge_now: bool = False
+    lane_decision: LaneDecision | None = None
+    not_candidate: Literal["not_merge_ready", "backed_off"] | None = None
     clean: bool | None = None
     holds_master: bool | None = None
     integrating: bool = False
     paths: frozenset[str] | None = None
     head_syncs_left: int | None = None
+    stack_held: bool = False
 
 
 @dataclass(frozen=True)
@@ -274,15 +299,32 @@ def integrates(kind: str) -> bool:
     return kind in INTEGRATING_KINDS
 
 
+def lane_decision_of(kind: str, reason: str | None) -> LaneDecision | None:
+    """The decision of `rules.auto_merge_decision` (`kind`, `reason`) when it is in
+    `LANE_DECISIONS`, `None` for any other: the one place that admits a decision."""
+    if (kind, reason) not in LANE_DECISIONS:
+        return None
+    return next((d for d in get_args(LaneDecision) if d == kind), None)
+
+
+def admitted_decision(value: object) -> LaneDecision | None:
+    """`value`, as stored in a `lane_admitted` or `lane_merges` entry, as the `LaneDecision` it is,
+    `None` for an entry written before the decision was kept or for anything else: it reads as
+    unknown and is never guessed. Informative: no decision of the system reads it."""
+    return next((d for d in get_args(LaneDecision) if d == value), None)
+
+
 def lane_ready(m: Member) -> bool:
-    """Whether `m` has every fact of its own for the lane: `merge_now`, clean, holding master, its
-    paths read, and nothing that keeps it from advancing. It does not check that `m` is eligible
-    in `order`, nor `yielded_at`; the head conditions are `lane_reason`'s."""
+    """Whether `m` has every fact of its own for the lane: an admitted `lane_decision`, clean
+    against the current master, its paths read, and nothing that keeps it from advancing. Holding
+    master is not asked: the merge verb runs its evidence on the pair (head, current master). It
+    does not check that `m` is eligible in `order`, nor `yielded_at`; the head conditions are
+    `lane_reason`'s."""
     return (
-        m.merge_now
+        m.lane_decision is not None
         and m.clean is True
-        and m.holds_master is True
         and m.paths is not None
+        and not m.stack_held
         and not (m.waits_on_human or m.busy or m.live_pass or m.waits_on_ci or m.account_paused)
     )
 
@@ -301,19 +343,21 @@ def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozense
 
 
 def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
-    """Why `member`, `merge_now` and clean, has no lane beside `head_`: the head's conditions
-    first, then the member's own. `None` for a member that is not `merge_now` and clean (it gets no
-    reason) and for one with no obstacle of its own: it never means "has the lane", which is
-    `Order.lane`."""
-    if not member.merge_now or member.clean is not True:
+    """Why `member`, clean, has no lane beside `head_`: a stacked child whose parent is unmerged
+    first (the head's obstacles are no news to a member that could not have it anyway); then, for
+    a member with no admitted `lane_decision`, its `not_candidate`; then the head's conditions and
+    the member's own. `None` for a member that is not clean (it gets no reason), for one that is
+    not admitted and has no `not_candidate`, and for one with no obstacle of its own: it never
+    means "has the lane", which is `Order.lane`."""
+    if member.clean is not True:
         return None
+    if member.stack_held:
+        return "stack_parent_unmerged"
+    if member.lane_decision is None:
+        return member.not_candidate
     taken = _head_obstacle(head_, now)
     if isinstance(taken, str):
         return taken
-    if member.holds_master is None:
-        return "holds_master_unknown"
-    if not member.holds_master:
-        return "lacks_master"
     if member.paths is None:
         return "member_paths_unknown"
     if member.paths & taken:
@@ -348,11 +392,11 @@ def _choose(eligible: list[Member], now: datetime) -> Member | None:
 
 
 def order(members: Iterable[Member], now: datetime) -> Order:
-    """The order of `members` at `now`. Eligible: not `waits_on_human`, and not `waits_on_ci` or
-    `account_paused` unless busy. The head is the first by the tiers in the module docstring; if
-    it is over budget and another member is eligible it yields (`Yield`, at most once per member
-    per call, so several over-budget members in front may yield in one call) and the head is
-    chosen again. A lone eligible member never yields.
+    """The order of `members` at `now`. Eligible: not `waits_on_human` or `stack_held`, and not
+    `waits_on_ci` or `account_paused` unless busy. The head is the first by the tiers in the
+    module docstring; if it is over budget and another member is eligible it yields (`Yield`, at
+    most once per member per call, so several over-budget members in front may yield in one
+    call) and the head is chosen again. A lone eligible member never yields.
 
     It chooses a head; it does not prevent a second live child (the poller's job). `Order.yielded`
     is the report: the state to persist is what `advance` returns. A yielded member with
@@ -360,7 +404,8 @@ def order(members: Iterable[Member], now: datetime) -> Order:
     eligible = [
         m
         for m in members
-        if not m.waits_on_human and (m.busy or not (m.waits_on_ci or m.account_paused))
+        if not (m.waits_on_human or m.stack_held)
+        and (m.busy or not (m.waits_on_ci or m.account_paused))
     ]
     done: list[Yield] = []
     chosen = _choose(eligible, now)

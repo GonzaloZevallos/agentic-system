@@ -54,6 +54,7 @@ from agentic.core.process.domain.spec_delivery import (
     SpecContract,
     body_sha256,
     derive_flags,
+    owner_matches,
     split_front_matter,
 )
 
@@ -116,9 +117,7 @@ def validate(
 
 
 def _approved(text: str, front: dict[str, str], owner_login: str | None) -> bool:
-    if front["status"] != "approved" or not owner_login or not owner_login.strip():
-        return False
-    if front["approved_by"].casefold() != owner_login.casefold():
+    if front["status"] != "approved" or not owner_matches(front["approved_by"], owner_login):
         return False
     if not SHA256.fullmatch(front["approved_sha256"]):
         return False

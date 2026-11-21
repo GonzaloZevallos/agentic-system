@@ -90,6 +90,7 @@ from .core.process.adapters.shell import (
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.adapters.shell.stage0_candidate import ShellStage0Candidate
+from .core.process.application.format_issue import FormatFiling
 from .core.process.application.ports import (
     FailurePolicy,
     Heartbeats,
@@ -100,6 +101,7 @@ from .core.process.application.ports import (
     Stage0Store,
     Stage0Users,
     StopFlag,
+    utc_now,
 )
 from .core.process.application.ports import (
     Stage0Escalation as Stage0EscalationPort,
@@ -354,6 +356,7 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         inbox=inbox,
         board=None,
         board_sent=None,
+        format_filing=None,
     )
 
 
@@ -499,6 +502,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         # the product's own repo, the validator is the pure Knowledge one; `honoured` needs both.
         spec_reader=GitSpecReader(cfg.product_dir),
         spec_validator=DomainSpecValidator(),
+        # GH-1030: one filing per run, so its locks and filed pairs are the run's; it writes to
+        # the system's own repo (`system_repo`), never the product's.
+        format_filing=FormatFiling(system_repo(), print, utc_now),
     )
 
 

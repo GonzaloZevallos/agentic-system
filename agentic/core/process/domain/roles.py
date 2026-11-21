@@ -30,6 +30,7 @@ from .schemas import (
     Consultation,
     CopyDraft,
     CopyReview,
+    DefinitionSize,
     DefinitionTurn,
     Delivery,
     DesignDraft,
@@ -143,6 +144,14 @@ def reads_by_index(role: Role) -> bool:
 def render(raw: str, source: Path, **placeholders: object) -> Prompt:
     """Fill `{{name}}` placeholders; the hash is of the raw text, before filling."""
     values = {"date": date.today().isoformat(), **placeholders}
+    return Prompt(text=fill_placeholders(raw, source, values), hash=prompt_hash(raw), source=source)
+
+
+def fill_placeholders(text: str, source: Path, values: Mapping[str, object]) -> str:
+    """`text` with every `{{name}}` filled from `values`; a `LINE_PLACEHOLDERS` name alone on
+    its line with an empty value takes the line and its break with it. The one fill `render`
+    applies to a prompt and the system applies to a Spec block: a name with no value raises
+    `ValueError` naming `source`."""
 
     def fill(match: re.Match[str]) -> str:
         key = match.group(1)
@@ -150,11 +159,10 @@ def render(raw: str, source: Path, **placeholders: object) -> Prompt:
             raise ValueError(f"{source}: no value for placeholder {{{{{key}}}}}")
         return str(values[key])
 
-    text = raw
     for name in sorted(LINE_PLACEHOLDERS):
         if name in values and str(values[name]) == "":
             text = _line_pattern(name).sub("", text)
-    return Prompt(text=_PLACEHOLDER.sub(fill, text), hash=prompt_hash(raw), source=source)
+    return _PLACEHOLDER.sub(fill, text)
 
 
 def _line_pattern(name: str) -> re.Pattern[str]:
@@ -645,6 +653,19 @@ PLAN_SIZER = Role(
     max_turns=2,
 )
 
+# The early size check's sizer (GH-999): after PM approves a PRD it reads the request and the PM
+# section, and returns parts only when the task is clearly over the size budget. It has no tools
+# and belongs to the definition, not to the plan: no planning figure counts it.
+DEFINITION_SIZER = Role(
+    name="Definition sizer",
+    slug="definition_sizer",
+    kind="actor",
+    schema=DefinitionSize,
+    reads=(ORIGINAL, PM.name),
+    effort="low",
+    max_turns=2,
+)
+
 TECH_LEAD_CRITIC = Role(
     name="Plan critic",
     slug="tech_lead_critic",
@@ -878,6 +899,7 @@ ROLES = (
     TECH_LEAD_REVIEWER,
     TECH_LEAD_REVIEWER_LIGHT,
     PLAN_SIZER,
+    DEFINITION_SIZER,
     TECH_LEAD_CRITIC,
     TECH_LEAD_CRITIC_PLATFORM,
     TECH_LEAD_CARVE_OUT,

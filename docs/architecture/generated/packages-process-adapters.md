@@ -16,9 +16,11 @@ graph TD
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_adapters__evaluation["adapters.evaluation"]
+    m_adapters__playbook_land_record["adapters.playbook_land_record"]
     m_adapters__plugins["adapters.plugins"]
     m_adapters__telemetry["adapters.telemetry"]
     m_adapters__evaluation --> g_pkg__application
     m_adapters__evaluation --> g_pkg__domain
+    m_adapters__playbook_land_record --> g_pkg__domain
     m_adapters__telemetry --> g_pkg__domain
 ```

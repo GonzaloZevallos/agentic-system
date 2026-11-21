@@ -204,3 +204,11 @@ def test_every_inbox_member_is_a_read_the_frozen_inbox_and_the_closed_one_both_h
     assert get_protocol_members(Inbox) == reads
     for implementation in (FileInbox, ClosedInbox):
         assert not reads - set(dir(implementation))
+
+
+def test_held_issues_is_empty_and_never_reaches_the_inner_tracker():
+    inner = MemoryTracker()
+    inner.held = {4}
+    inner.held_issues_error = ValueError("the live tracker must not be read")
+
+    assert EvaluationTracker(inner).held_issues() == frozenset()

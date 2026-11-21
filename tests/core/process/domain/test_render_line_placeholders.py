@@ -92,3 +92,15 @@ def test_every_real_prompt_renders_as_the_old_fill_did():
         empty = {name: "" for name in names - {"date"}}
         assert new_fill(raw, drawing_rule="", **empty) == old_fill(bare, **empty), slug
         assert raw.count("{{drawing_rule}}") <= 1, slug
+
+
+@pytest.mark.parametrize(("rule", "text"), [("", "a\nb\n"), ("RULE", "a\nRULE\nb\n")])
+def test_a_spec_block_is_filled_by_the_same_line_fill(rule, text):
+    assert (
+        roles.fill_placeholders("a\n{{drawing_rule}}\nb\n", SOURCE, {"drawing_rule": rule}) == text
+    )
+
+
+def test_the_block_fill_raises_for_a_placeholder_nobody_fills():
+    with pytest.raises(ValueError, match="no value for placeholder {{x}}"):
+        roles.fill_placeholders("a\n{{x}}\n", SOURCE, {"drawing_rule": ""})

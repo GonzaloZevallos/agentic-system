@@ -1,4 +1,4 @@
-"""`spec_delivery.draft_valid`, `draft_path` and `draft_text` (GH-594 part 5a): the pure rules of
+"""`spec_delivery.draft_reading`, `draft_path` and `draft_text` (GH-594 part 5a): the pure rules of
 the draft Spec the system writes."""
 
 import pytest
@@ -8,8 +8,8 @@ from agentic.core.process.domain.spec_delivery import (
     SpecContract,
     body_sha256,
     draft_path,
+    draft_reading,
     draft_text,
-    draft_valid,
     spec_path_ok,
 )
 
@@ -37,7 +37,7 @@ CONTRACT: SpecContract = {
     ],
 )
 def test_only_unapproved_counts_as_a_valid_draft(result, valid):
-    assert draft_valid(result) is valid
+    assert draft_reading(result, None).ok is valid
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ Esta página muestra las clases públicas de los módulos del grupo `reflection`
   - [application: support (parte 5)](classes-process-application-support-5.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
+  - [application: support (parte 8)](classes-process-application-support-8.md)
 
 ```mermaid
 classDiagram
@@ -22,15 +23,7 @@ classDiagram
     class reflect__Reflected["Reflected"]
     class reflect_run__Known["Known"]
     class reflect_run__Outcome["Outcome"]
-    class reflect_run__SystemRepo["SystemRepo"]
     class stack_review__StackReview["StackReview"]
     class stage0_escalation__Stage0Escalation["Stage0Escalation"]
     class stage0_failure__SmokeFailurePolicy["SmokeFailurePolicy"]
 ```
-
-## Relaciones con otras páginas
-
-- [application: support (parte 3)](classes-process-application-support-3.md)
-  - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `reflect_run.SystemRepo` se asocia con `ports.Tracker`

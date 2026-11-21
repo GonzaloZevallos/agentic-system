@@ -30,6 +30,7 @@ graph TD
     m_application__ci_push["application.ci_push"]
     m_application__ci_trust["application.ci_trust"]
     m_application__docs_settlement["application.docs_settlement"]
+    m_application__format_issue["application.format_issue"]
     m_application__landing_body["application.landing_body"]
     m_application__limits["application.limits"]
     m_application__checkouts --> g_application__support__2
@@ -48,6 +49,8 @@ graph TD
     m_application__ci_trust --> g_domain__state
     m_application__docs_settlement --> g_application__support__2
     m_application__docs_settlement --> g_domain__roles
+    m_application__format_issue --> g_application__support__2
+    m_application__format_issue --> g_domain__state
     m_application__landing_body --> g_application__checks
     m_application__landing_body --> g_application__landing
     m_application__landing_body --> g_application__lifecycle
