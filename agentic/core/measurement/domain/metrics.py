@@ -224,10 +224,13 @@ def refusals_by_rule(
     """The refusals of structured outputs, by rule: `refused` counts the failures that
     carry a `rule` and whose recorded reason is `schema` or `check` (`run_with_retry` writes
     it only then; any other entry is skipped), `repaired` counts the entries of every run's
-    `repairs`. A rule appears only when one of its two numbers is above zero. The rule is
-    read from the entry, never mapped from its error text (GH-1011)."""
+    `repairs` and of every failure's own (a repair made on an attempt that then failed
+    still happened, GH-1016). A rule appears only when one of its two numbers is above zero.
+    The rule is read from the entry, never mapped from its error text (GH-1011)."""
     counts: dict[RefusalRule, RefusalCounts] = {}
     for failure in failures:
+        for repair in failure.get("repairs", []):
+            counts.setdefault(repair["rule"], {"refused": 0, "repaired": 0})["repaired"] += 1
         rule = failure.get("rule")
         if rule is None or failure.get("reason") not in ("schema", "check"):
             continue
