@@ -55,6 +55,7 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -72,6 +73,7 @@ from ..domain import (
     cost_history,
     document,
     drawing,
+    format_issue,
     plan_view,
     playbook,
     rate_limit,
@@ -1450,7 +1452,9 @@ async def run_role(
         # `pause_log`'s own reducer expects appended -- `patch` itself never has one
         # at this point, but the guard that checks this is structural and does not
         # know that, by design (`tests/core/process/application/test_pause_log_guard.py`).
-        return None, {**patch, **escalation(exc, at=ports.now())}
+        at = ports.now()
+        extra = await _format_filing(exc, state, role, ports)
+        return None, {**patch, **escalation(exc, at=at), **extra}
     except TrackerRateLimited as limited:
         # A gh call a run node made outlasted its wait: the pause, not a failed role.
         return None, {**patch, **rate_limit_paused(state, limited, at=ports.now())}
@@ -1464,6 +1468,48 @@ async def run_role(
     if rows := spec_assumptions.assumption_rows(role.name, output.data, has_spec):
         patch["assumptions"] = rows
     return output, patch
+
+
+def _product_or_unknown(ports: Ports) -> str:
+    try:
+        return ports.stack.product()
+    except Exception:
+        return "unknown"
+
+
+async def _format_filing(exc: Escalating, state: TaskState, role: Role, ports: Ports) -> TaskState:
+    """What the system's issue of a format refusal adds to the escalation patch (GH-1011): the
+    `format_issue` record, or the `tracker_failures` row of a write that did not land. Empty
+    for anything but a `RoleFailure` the domain finds due, with no filing wired, or a task with
+    no issue number. Best effort: `FormatFiling.file` never raises, and it runs off the event
+    loop because its two `gh` calls block."""
+    filing = ports.format_filing
+    if filing is None or not isinstance(exc, RoleFailure) or not format_issue.due(exc.failures):
+        return {}
+    try:
+        number = ports.inbox.issue_of(state["id"])
+        # The name is a label here, never worth the escalation (invariant 2): any stack that
+        # cannot be read, a malformed `stack.yaml` included, files under `unknown`.
+        product = _product_or_unknown(ports)
+    except Exception:
+        return {}
+    if number is None:
+        return {}
+    record, rows = await asyncio.to_thread(
+        filing.file,
+        task_id=state["id"],
+        issue_number=number,
+        product=product,
+        role=role.name,
+        failures=exc.failures,
+        existing=state.get("format_issue", []),
+    )
+    extra: TaskState = {}
+    if record is not None:
+        extra["format_issue"] = [record]
+    if rows:
+        extra["tracker_failures"] = rows
+    return extra
 
 
 def finish(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:

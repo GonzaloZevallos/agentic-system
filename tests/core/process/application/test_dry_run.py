@@ -260,3 +260,13 @@ def test_the_audits_reject_what_they_should(tmp_path):
     with registry.exclusive():
         pass
     assert _tree(tmp_path) != before
+
+
+def test_a_dry_round_never_carries_a_filing_of_format_refusals():
+    # GH-1030: the filing writes to the system's repo; a dry round must file nothing.
+    class Filing:
+        def file(self, **_: object) -> tuple[None, list]:
+            raise AssertionError("a dry round must not file")
+
+    world, *_ = read_only_ports(memory_ports(format_filing=Filing()), Raises(), Raises(), None)
+    assert world.format_filing is None
