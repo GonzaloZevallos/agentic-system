@@ -651,3 +651,8 @@ La cota de desborde de un `Send` pasa a ser N ramas × tres intentos × el tope 
 el fallo es un rechazo de la salida estructurada (`schema` o `check`): ese reintento lleva la
 regla, el campo y el valor rechazados, y la sesión que lo escribió sigue ahí para corregirlo.
 Cualquier otro motivo conserva `reintentos + 1`. La cota la decide solo `rules.attempts_for`.
+
+## Adenda (2026-11-21): un rechazo de formato no es una pregunta para el dueño
+
+Un rechazo de formato es un fallo propio del sistema, nunca una pregunta para el dueño; ver
+ADR-0105. La adenda de reintentos anterior sigue vigente: este párrafo no la reemplaza.
