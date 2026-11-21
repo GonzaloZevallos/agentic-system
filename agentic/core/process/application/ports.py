@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
-from ..domain.design import Design, NotReady
+from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
@@ -60,6 +60,7 @@ from ..domain.task import (
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRule,
     TaskInput,
     TaskState,
     TrackerFailure,
@@ -191,6 +192,10 @@ class AttemptFailed(Exception):
         space: SpaceReading | None = None,
         enospc: bool = False,
         check_runs: CheckRuns | None = None,
+        rule: RefusalRule | None = None,
+        field: str = "",
+        value: str | None = None,
+        detail: str = "",
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -239,6 +244,14 @@ class AttemptFailed(Exception):
         # The Developer's own check runs before this attempt broke (`RawResult.check_runs`);
         # empty at every raise site but the runner's own and `run_role._attempt`'s.
         self.check_runs = check_runs if check_runs is not None else CheckRuns()
+        # The refusal rule and the schema field it names (GH-1011), decided at the raise
+        # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
+        self.rule = rule
+        self.field = field
+        # What the role wrote in `field` and the refusal's own motive, both already cleaned by
+        # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
+        self.value = value
+        self.detail = detail
 
 
 class Presubmit(Protocol):
@@ -673,6 +686,12 @@ class ProductStack(Protocol):
         product that has not handed the human a prototype yet -- never an error."""
         ...
 
+    def prototype_files(self, revision: str, design: Design) -> PrototypeListing:
+        """The files under `design.prototype` as the commit `revision` holds them, sorted.
+        Never raises: a whole-repo prototype, one over the cap or one git cannot read comes
+        back as a closed `cause` of the listing, never as git's text."""
+        ...
+
     def docs(self, revision: str) -> Docs | None:
         """The optional `docs` block (`core.knowledge`): the
         command that regenerates every generated doc artifact and the paths it owns, as the
@@ -901,7 +920,15 @@ class TrackerTransient(TrackerCallFailed):
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
-    bound, never stderr."""
+    bound, never stderr.
+
+    `resets_at` is the aware UTC instant `gh api rate_limit` stated (GH-1031): set when the
+    reset was over the cap or the attempts ran out after a reset was read, `None` when no
+    reset was read or the wait was stopped."""
+
+    def __init__(self, *args: object, status: int | None = None, resets_at: datetime | None = None):
+        super().__init__(*args, status=status)
+        self.resets_at = resets_at
 
 
 class TrackerRefused(ValueError):

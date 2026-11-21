@@ -116,7 +116,7 @@ async def test_a_rejected_departure_that_reappears_is_refused_inside_the_turn(tm
 
 async def test_a_rejected_departure_that_keeps_reappearing_fails_the_plan(tmp_path):
     held = {**TASK, "drawing_departures": [answered("reject")]}
-    runner, cfg = arm_of("cold", tmp_path, departing(RAW), departing(RAW))
+    runner, cfg = arm_of("cold", tmp_path, departing(RAW), departing(RAW), departing(RAW))
     patch = await plan(held, cfg, designed(runner))
 
     assert patch["escalation_class"] == "failure"

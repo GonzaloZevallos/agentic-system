@@ -9,7 +9,7 @@ from agentic.core.process.application import validate_prd as module
 from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import spec_approval
-from agentic.core.process.domain.spec_delivery import DRAFT_PREVIEW_PATH
+from agentic.core.process.domain.spec_delivery import DRAFT_PREVIEW_PATH, body_sha256, draft_text
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
@@ -113,10 +113,10 @@ async def test_a_draft_the_validator_refuses_is_retried_with_a_fixed_sentence(
     root, tmp_path, delivered
 ):
     validator = FakeDraftSpecValidator(draft="spec_invalid")
-    ports = ports_for(returned(BODY), returned(BODY), validator=validator)
+    ports = ports_for(returned(BODY), returned(BODY), returned(BODY), validator=validator)
     patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
     assert delivered == []
-    assert len(ports.runner.calls) == 2  # PM was retried once, then the task failed
+    assert len(ports.runner.calls) == 3  # PM was retried twice, then the task failed
     assert "draft Spec refused: draft_invalid:" in ports.runner.prompts("pm")[1]
     assert "spec_draft" not in patch and patch.get("status") != "definition_ready"
 
@@ -150,12 +150,62 @@ async def test_a_valid_login_previews_the_approved_draft(root, tmp_path, deliver
     assert all(c[3] is None for c in check_calls)
 
 
-async def test_a_multi_slice_draft_is_refused_as_preview_slice_missing(root, tmp_path, delivered):
+async def test_a_first_multi_slice_draft_is_refused_with_the_fold_or_split_instruction(
+    root, tmp_path, delivered
+):
     validator = FakeDraftSpecValidator(preview="slice_missing")
     ports = ports_for(returned(BODY), returned(BODY), validator=validator)
     await validate_prd(STATE, cfg_for(tmp_path), ports)
-    assert delivered == []
-    assert "draft Spec refused: preview_slice_missing:" in ports.runner.prompts("pm")[1]
+    retry = ports.runner.prompts("pm")[1]
+    assert "draft Spec refused: preview_slice_missing:" in retry
+    assert "fold the work into one slice" in retry
+
+
+async def test_a_second_multi_slice_draft_ends_in_a_split_proposal_not_needs_human(
+    root, tmp_path, delivered
+):
+    validator = FakeDraftSpecValidator(preview="slice_missing")
+    ports = ports_for(returned(BODY), returned(BODY), validator=validator)
+    patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
+    assert len(ports.runner.calls) == 2
+    assert patch["status"] == "definition_ready"
+    assert patch["spec_draft"] == {
+        "outcome": "split_proposed",
+        "sha256": body_sha256(draft_text(BODY)),
+    }
+    assert "escalation" not in patch and patch["status"] != "needs-human"
+    assert not (root / "docs").exists()  # nothing written
+    assert ports.workspace.commits == [(root, "T-1: product definition")]
+
+
+async def test_a_multi_slice_draft_after_another_refusal_is_a_split_proposal(
+    root, tmp_path, delivered
+):
+    validator = FakeDraftSpecValidator(preview="slice_missing")
+    ports = ports_for(returned(""), returned(BODY), validator=validator)
+    patch = await validate_prd(STATE, cfg_for(tmp_path), ports)
+    assert "draft Spec refused: draft_empty:" in ports.runner.prompts("pm")[1]
+    assert patch["spec_draft"]["outcome"] == "split_proposed"
+    assert patch["status"] == "definition_ready"
+
+
+async def test_a_multi_slice_draft_without_a_valid_login_is_written_without_the_sentence(
+    root, tmp_path, delivered
+):
+    validator = FakeDraftSpecValidator(preview="slice_missing")  # would refuse, if asked
+    ports = ports_for(returned(BODY), validator=validator)
+    patch = await validate_prd(STATE, cfg_for(tmp_path, "a b"), ports)
+    assert len(ports.runner.calls) == 1
+    assert patch["spec_draft"]["outcome"] == "written" and patch["status"] == "definition_ready"
+    assert "fold the work into one slice" not in ports.runner.prompts("pm")[0]
+
+
+async def test_when_no_draft_is_due_the_prompt_does_not_ask_for_one_slice(
+    root, tmp_path, delivered
+):
+    ports = ports_for(returned(BODY), validator=FakeDraftSpecValidator())
+    await validate_prd({**STATE, "path": "light"}, cfg_for(tmp_path), ports)
+    assert "exactly one slice" not in ports.runner.prompts("pm")[0]
 
 
 async def test_a_clock_that_does_not_read_as_an_instant_skips_the_preview(

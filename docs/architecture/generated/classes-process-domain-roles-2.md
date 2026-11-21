@@ -31,6 +31,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class roles__Prompt["Prompt"]
+    class roles__Role["Role"]
     class schemas__Answers["Answers"]
     class schemas__CapabilityFile["CapabilityFile"]
     class schemas__CarveOutOutput["CarveOutOutput"]
@@ -42,14 +44,16 @@ classDiagram
     class schemas__CopyFinding["CopyFinding"]
     class schemas__CopyReview["CopyReview"]
     class schemas__CritiqueFinding["CritiqueFinding"]
+    class schemas__DefinitionSize["DefinitionSize"]
     class schemas__DefinitionTurn["DefinitionTurn"]
-    class schemas__Delivery["Delivery"]
-    class schemas__DesignDraft["DesignDraft"]
     schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
+  - `roles.Interview` se asocia con `roles.Role`
+  - `roles.Pair` se asocia con `roles.Role`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
@@ -60,5 +64,4 @@ classDiagram
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
-  - `schemas.Delivery` hereda de `schemas.RoleOutput`
-  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
+  - `schemas.DefinitionSize` hereda de `schemas.PlanSize`

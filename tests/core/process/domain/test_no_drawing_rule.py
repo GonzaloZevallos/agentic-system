@@ -21,6 +21,7 @@ GRAMMAR = re.compile(
 NEVER_DECIDES = {
     "pjm",
     "plan_sizer",
+    "definition_sizer",
     "landing_diagnoser",
     "reflector",
     "qa_performance",

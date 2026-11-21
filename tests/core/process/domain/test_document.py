@@ -240,6 +240,31 @@ def test_assignment_is_the_only_difference_a_document_gains():
     assert [line for line in plain if line not in assigned] == []
 
 
+EARLY_SPLIT_ROWS = [
+    {"verdict": "go", "cause": "sizer_failed", "at": "2026-11-19T10:00:00Z"},
+    {
+        "verdict": "split",
+        "cause": "over",
+        "at": "2026-11-19T10:05:00Z",
+        "hand_files": 34,
+        "hand_lines": 900,
+        "test_lines": 1300,
+        "estimated_cost_usd": 41.5,
+    },
+]
+
+
+def test_early_split_rows_round_trip_through_the_frontmatter():
+    rendered = document.render(golden_state(early_split=EARLY_SPLIT_ROWS))
+    assert document.parse(rendered)["early_split"] == EARLY_SPLIT_ROWS
+
+
+def test_a_document_without_early_split_reads_no_key_and_renders_as_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(early_split=[])) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert "early_split" not in document.parse(document.render(golden_state()))
+
+
 EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
 
 
@@ -2621,3 +2646,9 @@ def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
     )
     assert "plan_held" in stored
     assert "plan_held" not in document.parse(stored)
+
+
+@pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
+def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
+    """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
+    assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []

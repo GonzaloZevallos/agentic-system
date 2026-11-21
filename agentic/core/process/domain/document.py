@@ -24,7 +24,7 @@ from typing import Any, cast, get_args
 import yaml
 
 from . import size_budget, spec_delivery, tracker_items
-from .landing_order import LANE_MERGES_MAX, YieldReason, instant
+from .landing_order import LANE_MERGES_MAX, YieldReason, admitted_decision, instant
 from .legacy_names import rename_legacy_roles
 from .task import (
     HEAD_YIELDS_MAX,
@@ -34,6 +34,8 @@ from .task import (
     CarveOutcome,
     CarveRecord,
     DepartureRecord,
+    FormatIssueRecord,
+    RefusalRule,
     RoleRun,
     assumption_text,
 )
@@ -104,7 +106,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
 # one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
 # `stack_pauses` (GH-899) is the list of waits of a stacked child, which the poller's hold replaces
-# whole with `add_stack_pauses`' result.
+# whole with `add_stack_pauses`' result. `format_issue` (GH-1011) is the issue filed per refusal
+# rule, replaced whole with `add_format_issues`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -120,6 +123,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flake_comments",
         "flakes",
         "tracker_failures",
+        "format_issue",
         "lead_time",
         "head_yields",
         "lane_admitted",
@@ -141,6 +145,7 @@ _FLOW_KEYS = (
     "merge_refusal",
     "flakes",
     "tracker_failures",
+    "format_issue",
     "lead_time",
     "head_yields",
     "lane_admitted",
@@ -197,7 +202,8 @@ _LANE_KEYS = ("lane_admitted", "lane_recorded", "lane_merges")
 
 def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
     """`entry` as `{key: value}` for `keys` (an `int` `issue` or `head_issue`, `str` shas, an
-    aware instant), `None` when it is not whole; a `bool` is not an issue."""
+    aware instant), `None` when it is not whole; a `bool` is not an issue. A `decision` that is a
+    `LaneDecision` is kept, any other value is dropped: an older entry has none."""
     if not isinstance(entry, Mapping):
         return None
     out: dict[str, Any] = {}
@@ -212,6 +218,9 @@ def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
         if not ok:
             return None
         out[key] = value
+    decision = admitted_decision(entry.get("decision"))
+    if decision is not None:
+        out["decision"] = decision
     return out
 
 
@@ -219,6 +228,7 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     """The fast lane's keys (GH-681, informative) of `source` as the document keeps them, the only
     place they are validated, called by `render` and by `from_frontmatter`. `lane_admitted` is
     kept when it holds an `int` `head_issue`, `str` `pr_head` and `master` and an aware `at`;
+    its `decision`, when a `LaneDecision`, is kept with it;
     `lane_recorded` when it is an aware instant or `not_lane`; `lane_merges` as its whole entries
     only, the last `LANE_MERGES_MAX`, and omitted when none is left. `None` and anything malformed
     read as absent. Never raises."""
@@ -342,6 +352,20 @@ def _plan_held_record(raw: object) -> dict[str, Any] | None:
     return dict(raw)
 
 
+def _format_issue_rows(raw: object) -> list[FormatIssueRecord]:
+    """The records of a stored `format_issue` list that are whole: a `rule` of `RefusalRule` and a
+    non-empty `str` `url` and `at`. Any other record is dropped, and a value that is not a list
+    reads as none: a hand-edited document never fails to load for it."""
+    rules = get_args(RefusalRule)
+    return [
+        {"rule": item["rule"], "url": item["url"], "at": item["at"]}
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and item.get("rule") in rules
+        and all(isinstance(item.get(k), str) and item[k] for k in ("url", "at"))
+    ]
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -426,6 +450,10 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    # The document codec is the one place that reads the stored list itself: it sanitises it on
+    # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
+    if "format_issue" in state:
+        state["format_issue"] = _format_issue_rows(state["format_issue"])
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     if "drawing_escalation" in state:
@@ -562,6 +590,8 @@ def render(
         # The best-effort tracker writes that failed (GH-389): closed class, target and time,
         # written only when there is one, as one flow line so `record_closure` replaces it.
         **({"tracker_failures": _LANDING_PLACEHOLDER} if state.get("tracker_failures") else {}),
+        # The issue filed per refusal rule (GH-1011): one flow line, written only when there is one.
+        **({"format_issue": _LANDING_PLACEHOLDER} if state.get("format_issue") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
@@ -580,6 +610,10 @@ def render(
         # before; parsed back under the same names, nothing reads them to decide.
         **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
+        # The verdicts of the early size check: written only when there is a row, so every
+        # document written before it is byte-identical; parsed back under the same name, and
+        # read only by `rules.early_measured`.
+        **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
         **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
@@ -719,6 +753,10 @@ def render(
         # A re-plan owed after the owner's decision (GH-798): written only when true, so a
         # document without it is byte-identical to one written before; absent reads false.
         **({"plan_due": True} if state.get("plan_due") else {}),
+        # The GitHub rate-limit pause's instants (GH-989), written only when set, so a
+        # document the limit never paused is byte-identical to one written before them.
+        **({"rate_limit_paused_at": e} if (e := state.get("rate_limit_paused_at")) else {}),
+        **({"rate_limit_noticed_at": e} if (e := state.get("rate_limit_noticed_at")) else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

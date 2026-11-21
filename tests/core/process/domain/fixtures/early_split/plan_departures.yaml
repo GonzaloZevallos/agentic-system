@@ -1,0 +1,23 @@
+id: GH-1003
+title: Export the monthly report
+type: feature
+status: waiting_on_human
+current_role: Tech Lead
+path: full
+plan_due: true
+escalated: The plan departs from the approved drawing
+escalation_class: questions
+drawing_escalation:
+  round: 1
+  numbers:
+  - 1
+  cause: drawing_departure
+  stage: plan
+runs:
+- role: PM
+  section: PM
+  version: 1
+  session_id: s-pm
+  model: m
+  cost_usd: 0.4
+  turns: 6

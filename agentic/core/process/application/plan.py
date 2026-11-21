@@ -358,7 +358,7 @@ def _route_record(
 
 def _soft(patch: TaskState) -> tuple[TaskState, bool]:
     """A role's patch when it delivered nothing, as `(what to keep, whether the node stops)`.
-    A role that failed twice is an optional step failing: its failed attempts were paid, so
+    A role that failed its attempts is an optional step failing: its failed attempts were paid, so
     their cost and records are kept and the escalation is not. A cap, or anything that is not
     a plain failure, stops the node and the patch is the escalation itself."""
     if patch.get("escalation_class") != "failure":
