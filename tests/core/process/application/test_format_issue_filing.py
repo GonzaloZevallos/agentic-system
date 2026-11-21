@@ -320,3 +320,16 @@ def test_tracker_failure_class_maps_each_tracker_class_by_type():
     assert tracker_failure_class(TrackerRefused("x")) == "refused"
     assert tracker_failure_class(ValueError("timed out")) is None
     assert tracker_failure_class(ListMayBeCut("x")) is None
+
+
+def test_a_raising_clock_writes_nothing_and_never_raises():
+    b = Built()
+
+    def boom() -> str:
+        raise RuntimeError(SECRET)
+
+    b.filing = FormatFiling(SystemRepo(b.tracker, b.inbox), b.lines.append, boom)
+    assert b.file() == (None, [])
+    assert b.tracker.opened == [] and b.tracker.commented == []
+    assert b.lines == ["agentic: format issue: parts_when_fits: write failed"]
+    assert SECRET not in "".join(b.lines)

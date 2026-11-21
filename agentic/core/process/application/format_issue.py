@@ -118,6 +118,7 @@ class FormatFiling:
                 self._say(label, "read failed")
                 return None, []
             try:
+                at = self._now()
                 title, body = fi.evidence(
                     rule,
                     last.get("field", ""),
@@ -129,7 +130,7 @@ class FormatFiling:
                     fi.earlier_rules(failures),
                 )
             except Exception:
-                # Not a failed tracker write: no row, the escalation is all there is to see.
+                # Nothing written yet (clock or evidence): no row, only the escalation shows.
                 self._say(label, "write failed")
                 return None, []
             target: TrackerTarget = "issue"
@@ -142,7 +143,6 @@ class FormatFiling:
                 else:
                     url = self._system.tracker.open_issue(title, body, labels=_LABELS)
                     outcome = "opened"
-                at = self._now()
             except Exception as exc:
                 self._say(label, "write failed")
                 try:
