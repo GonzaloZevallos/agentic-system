@@ -150,6 +150,9 @@ _FLOW_KEYS = (
     "head_yields",
     "lane_admitted",
     "lane_merges",
+    "stack_unfetchable",
+    "worktree_release_lapse",
+    "closed_by_slices",
 )
 
 
@@ -593,6 +596,27 @@ def render(
         # The issue filed per refusal rule (GH-1011): one flow line, written only when there is one.
         **({"format_issue": _LANDING_PLACEHOLDER} if state.get("format_issue") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
+        # The wait on an unfetchable stacked head (GH-885), the worktree removal a merge could not
+        # make (GH-820) and the pull requests of the slices that closed the task (GH-334): each
+        # written only when truthy, as one flow line, so `record_closure` replaces it in place.
+        **({"stack_unfetchable": _LANDING_PLACEHOLDER} if state.get("stack_unfetchable") else {}),
+        **(
+            {"worktree_release_lapse": _LANDING_PLACEHOLDER}
+            if state.get("worktree_release_lapse")
+            else {}
+        ),
+        **({"closed_by_slices": _LANDING_PLACEHOLDER} if state.get("closed_by_slices") else {}),
+        # The parent a stacked task was started on (GH-855), raw: `None` is no record, any other
+        # value (even a malformed `{}`) is the record as written, so `stacking.parse_stack_parent`
+        # judges the same record after a reload as before it.
+        **({"stack_parent": p} if (p := state.get("stack_parent")) is not None else {}),
+        # The split sweep's own record (GH-619), ISO UTC strings, each written only when set.
+        **({"split_repointed_at": s} if (s := state.get("split_repointed_at")) else {}),
+        **({"split_closed_at": s} if (s := state.get("split_closed_at")) else {}),
+        **({"split_abandoned_at": s} if (s := state.get("split_abandoned_at")) else {}),
+        # The spec a delivery is built against (GH-594), whole: every `SpecContract` field,
+        # including the `commit` the spec guard moves. `{}`, the graph's default, writes nothing.
+        **({"spec": s} if (s := state.get("spec")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),

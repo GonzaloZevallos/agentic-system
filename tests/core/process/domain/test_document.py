@@ -2480,7 +2480,9 @@ def test_a_document_with_a_spec_records_the_spec_delivery_and_without_one_does_n
 
 
 def test_the_spec_delivery_record_survives_a_rebuild_without_the_spec():
-    text = document.render(_SPEC_STATE)
+    # A state that holds the mark and no spec: the spec itself now round-trips
+    # (`test_document_state_keys`), so the record is shown alone.
+    text = document.render({**_base_state(), "spec_delivery": True})
     rebuilt = resume.state_from(document.parse(text))
     assert rebuilt["spec_delivery"] is True
     assert "spec" not in rebuilt
