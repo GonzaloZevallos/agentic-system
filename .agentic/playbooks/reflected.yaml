@@ -1552,3 +1552,6 @@ tasks:
       tasks:
       - GH-1030
     decisions: 1
+  GH-1032@review:
+    cost_usd: 0.0673
+    decisions: 1

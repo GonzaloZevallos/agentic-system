@@ -2260,3 +2260,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-21T11:59:28.800+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow's behaviour, update the architecture docs that describe it in the same change, then run the docs generator so the docs check stays green.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T15:37:38.600+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you add a parameter or flag, grep every call site on the path to the entry point and pass it through each one. Do not stop at the function that consumes it.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  added_at: '2026-11-21T15:37:38.600+00:00'
