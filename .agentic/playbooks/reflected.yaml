@@ -1587,3 +1587,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1038
+  GH-878@review:
+    cost_usd: 0.0417

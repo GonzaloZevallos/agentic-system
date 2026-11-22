@@ -2298,3 +2298,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-21T22:50:00.511+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before a brief demands that an existing test pass unchanged, check that test against the new spec; if the spec makes it false, name the test and the allowed edit in the brief.
+  confidence: medium
+  seen_in:
+  - GH-878
+  sources:
+  - finding
+  added_at: '2026-11-22T00:50:47.366+00:00'
