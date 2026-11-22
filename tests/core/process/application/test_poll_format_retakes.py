@@ -602,3 +602,28 @@ def test_a_failed_note_keeps_the_label_and_a_later_round_posts_then_drops_it(tmp
     _held_round(tmp_path, ports, days=3)
     assert len(_notes(ports)) == 1 and ports.tracker.unlabeled == [("GH-19", "needs-human")]
     assert "noted_at" in ports.documents.load("GH-19")["format_hold"]
+
+
+def _resumption(paused):
+    return resume.Resumption(
+        task_id="GH-19",
+        source="checkpoint",
+        paused=paused,
+        resumed={},
+        decision=None,
+        target="S0",
+        cap_usd=1.0,
+    )
+
+
+def test_resuming_a_format_pause_drops_the_safety_net_label_but_not_a_noted_hold_s():
+    ports = memory_ports()
+    _pause(ports, counts={RULE: 1})  # a retake is left: needs_a_human is False, a human commented
+    paused = ports.documents.load("GH-19")
+    assert rules.needs_a_human(paused) is False
+    resume.announce(_resumption(paused), ports)
+    assert ports.tracker.unlabeled == [("GH-19", "needs-human")]
+    ports.tracker.unlabeled.clear()
+    _pause(ports, counts={RULE: 2}, hold=HOLD)  # announced: the label was dropped with the Nota
+    resume.announce(_resumption(ports.documents.load("GH-19")), ports)
+    assert ports.tracker.unlabeled == []

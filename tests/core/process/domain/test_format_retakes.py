@@ -148,13 +148,13 @@ def test_logged_copies_the_rule_onto_the_failure_entry_only_when_present():
     assert "rule" not in without_rule
 
 
-def test_a_schema_or_check_epoch_that_carries_a_rule_is_still_the_humans():
+def test_a_schema_or_check_epoch_that_carries_a_rule_is_keyed_by_its_reason_and_is_external():
     for reason in fr.FORMAT_REASONS:
         entries = epoch(failure("schema_invalid", reason))
         state: Any = {"pause_log": entries}
         assert fr.is_format_epoch(entries)
-        assert rules.auto_resumable(state) is None
-        assert rules.pause_kind(entries) == "human"
+        assert rules.auto_resumable(state) == reason  # GH-1019 part 2: the poller retakes it
+        assert rules.pause_kind(entries) == "external"
 
 
 STATE: Any = {
