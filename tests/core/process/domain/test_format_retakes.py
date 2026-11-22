@@ -251,6 +251,11 @@ def test_noted_patch_is_empty_without_a_hold_and_keeps_every_field_with_one():
     }
 
 
+def test_noted_patch_replaces_an_earlier_noted_at_instead_of_failing():
+    hold: Any = {"rule": "schema_invalid", "cause": "rule_spent", "at": "a", "noted_at": "earlier"}
+    assert fr.noted_patch({"format_hold": hold}, AT) == {"format_hold": {**hold, "noted_at": AT}}
+
+
 def test_release_patch_clears_only_the_keys_the_state_carries():
     assert fr.release_patch({}) == {}
     assert fr.release_patch({"format_retakes": {"unmapped": 1}}) == {"format_retakes": None}

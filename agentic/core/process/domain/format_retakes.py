@@ -127,7 +127,8 @@ def noted_patch(state: TaskState, at: str) -> dict[str, Any]:
     hold = state.get("format_hold")
     if not hold:
         return {}
-    return {"format_hold": FormatHold(**hold, noted_at=at)}
+    noted: FormatHold = {**hold, "noted_at": at}
+    return {"format_hold": noted}
 
 
 def release_patch(state: TaskState) -> dict[str, Any]:

@@ -169,6 +169,14 @@ FIXTURES: dict[str, object] = {
     "owner_decision_route": "developer",
     "rate_limit_paused_at": NOW,
     "rate_limit_noticed_at": "2026-11-18T11:00:00Z",
+    "format_retakes": {"schema_invalid": 2, "part_over_budget": 1},
+    "format_hold": {
+        "rule": "schema_invalid",
+        "cause": "rule_spent",
+        "at": NOW,
+        "issue_url": PR,
+        "noted_at": "2026-11-18T11:00:00Z",
+    },
     "format_issue": [
         {"rule": "parts_when_fits", "url": "https://github.com/acme/shop/issues/9", "at": NOW}
     ],
