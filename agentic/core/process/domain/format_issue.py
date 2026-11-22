@@ -17,13 +17,14 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Protocol, get_args
 
+from .format_retakes import FORMAT_REASONS
 from .task import Failure, RefusalRule
 
 _RULES: tuple[str, ...] = get_args(RefusalRule)
 _MARKER_FORMAT = "<!-- agentic-refusal: {rule} -->"
 _MARKER_LINE = re.compile(r"<!-- agentic-refusal: ([a-z_]+) -->")
 # The reasons a refusal can be recorded with (`Failure.reason`): only these two carry a rule.
-_DUE_REASONS = ("schema", "check")
+_DUE_REASONS = FORMAT_REASONS
 
 
 class _Ref(Protocol):

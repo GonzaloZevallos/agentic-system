@@ -53,4 +53,5 @@ classDiagram
 
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`

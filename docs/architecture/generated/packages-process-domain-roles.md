@@ -21,6 +21,7 @@ graph TD
     m_domain__design["domain.design"]
     m_domain__docs["domain.docs"]
     m_domain__drawing["domain.drawing"]
+    m_domain__format_retakes["domain.format_retakes"]
     m_domain__roles["domain.roles"]
     m_domain__schema_guard["domain.schema_guard"]
     m_domain__schemas["domain.schemas"]
@@ -33,6 +34,7 @@ graph TD
     m_domain__denials --> m_domain__roles
     m_domain__drawing --> g_domain__machine
     m_domain__drawing --> m_domain__design
+    m_domain__format_retakes --> g_domain__state
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state
     m_domain__roles --> g_pkg__agentic__shared

@@ -182,6 +182,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.experiment": "state",
     "domain.finding_location": "state",
     "domain.format_issue": "state",
+    "domain.format_retakes": "roles",
     "domain.gate_priority": "landing",
     "domain.hold": "landing",
     "domain.hold_record": "state",

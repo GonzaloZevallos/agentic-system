@@ -2678,3 +2678,133 @@ def test_failure_repairs_survive_the_document_round_trip_and_are_counted():
         "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
         "part_over_budget": {"refused": 1, "repaired": 0},
     }
+
+
+HOLD = {
+    "rule": "schema_invalid",
+    "cause": "rule_spent",
+    "at": "2026-11-21T10:00:00Z",
+    "issue_url": "https://example.test/issues/9",
+    "noted_at": "2026-11-21T11:00:00Z",
+}
+
+
+def _stored(**extra):
+    """The state a document of `golden_state` reads back as, with `extra` written raw."""
+    text = document.render(golden_state())
+    head, _, rest = text.partition("\n---\n")
+    frontmatter = yaml.safe_load(head.removeprefix("---\n"))
+    frontmatter.update(extra)
+    return document.parse(f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n{rest}")
+
+
+def test_format_retakes_and_the_hold_round_trip_through_the_frontmatter():
+    state = golden_state(
+        format_retakes={"schema_invalid": 2, "part_over_budget": 1}, format_hold=HOLD
+    )
+    parsed = document.parse(document.render(state))
+    assert parsed["format_retakes"] == {"schema_invalid": 2, "part_over_budget": 1}
+    assert parsed["format_hold"] == HOLD
+
+
+def test_format_retakes_render_in_the_declaration_order_of_the_rules():
+    state = golden_state(
+        format_retakes={"unmapped": 1, "part_over_budget": 2, "parts_when_fits": 1}
+    )
+    rendered = document.render(state)
+    assert rendered.index("  parts_when_fits") < rendered.index("  part_over_budget")
+    assert rendered.index("  part_over_budget") < rendered.index("  unmapped")
+
+
+def test_an_absent_or_none_key_renders_nothing_and_a_legacy_document_is_unchanged():
+    legacy = document.render(golden_state())
+    assert document.render(golden_state(format_retakes=None, format_hold=None)) == legacy
+    assert document.render(golden_state(format_retakes={})) == legacy
+    assert "format_" not in legacy
+    parsed = document.parse(legacy)
+    assert "format_retakes" not in parsed
+    assert "format_hold" not in parsed
+    assert document.render(parsed | {"id": "GH-9"}) == legacy
+
+
+LEGACY_FAILURE = [
+    {"kind": "failure", "value": "schema", "section": "Developer", "at": "2026-11-21T10:00:00Z"},
+    {"kind": "escalation", "value": "failure", "at": "2026-11-21T10:00:00Z"},
+]
+
+
+def test_a_legacy_schema_failure_with_no_rule_round_trips_byte_for_byte():
+    rendered = document.render(golden_state(pause_log=LEGACY_FAILURE))
+    assert "rule" not in rendered
+    parsed = document.parse(rendered)
+    assert parsed["pause_log"] == LEGACY_FAILURE
+    assert document.render(parsed) == rendered
+
+
+def test_a_rule_on_a_failure_pause_entry_round_trips():
+    log = [{**LEGACY_FAILURE[0], "rule": "part_over_budget"}, LEGACY_FAILURE[1]]
+    parsed = document.parse(document.render(golden_state(pause_log=log)))
+    assert parsed["pause_log"] == log
+
+
+def test_a_bad_rule_on_a_pause_entry_is_dropped_from_that_entry_only():
+    good = {**LEGACY_FAILURE[0], "rule": "unmapped"}
+    for bad_rule in ("not_a_rule", 7, None, ["unmapped"]):
+        stored = _stored(
+            pause_log=[{**LEGACY_FAILURE[0], "rule": bad_rule}, good, LEGACY_FAILURE[1]]
+        )
+        assert stored["pause_log"] == [LEGACY_FAILURE[0], good, LEGACY_FAILURE[1]]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"not_a_rule": 1},
+        {"unmapped": True},
+        {"unmapped": "1"},
+        {"unmapped": 1.5},
+        {"unmapped": -1},
+        {},
+        ["unmapped"],
+        "unmapped",
+        None,
+    ],
+)
+def test_a_malformed_retake_count_is_dropped_and_an_empty_map_reads_as_absent(stored):
+    assert "format_retakes" not in _stored(format_retakes=stored)
+
+
+def test_a_retake_map_keeps_its_good_counts_when_one_is_bad():
+    stored = _stored(format_retakes={"unmapped": 1, "bogus": 2, "part_over_budget": -3, "x": True})
+    assert stored["format_retakes"] == {"unmapped": 1}
+    assert _stored(format_retakes={"unmapped": 0})["format_retakes"] == {"unmapped": 0}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "held",
+        ["rule"],
+        None,
+        {},
+        {**HOLD, "rule": "not_a_rule"},
+        {**HOLD, "rule": None},
+        {**HOLD, "cause": "other"},
+        {k: v for k, v in HOLD.items() if k != "cause"},
+        {k: v for k, v in HOLD.items() if k != "at"},
+        {**HOLD, "at": ""},
+        {**HOLD, "at": 5},
+    ],
+)
+def test_a_malformed_hold_reads_as_absent(bad):
+    assert "format_hold" not in _stored(format_hold=bad)
+
+
+def test_a_hold_keeps_its_optional_fields_only_when_they_are_non_empty_strings():
+    base = {k: HOLD[k] for k in ("rule", "cause", "at")}
+    assert _stored(format_hold={**base, "noted_at": HOLD["noted_at"]})["format_hold"] == {
+        **base,
+        "noted_at": HOLD["noted_at"],
+    }
+    assert _stored(format_hold={**base, "issue_url": "", "noted_at": 3})["format_hold"] == base
+    assert _stored(format_hold={**base, "extra": "x"})["format_hold"] == base

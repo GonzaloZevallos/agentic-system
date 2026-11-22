@@ -34,7 +34,9 @@ from .task import (
     CarveOutcome,
     CarveRecord,
     DepartureRecord,
+    FormatHold,
     FormatIssueRecord,
+    HoldCause,
     RefusalRule,
     RoleRun,
     assumption_text,
@@ -369,6 +371,47 @@ def _format_issue_rows(raw: object) -> list[FormatIssueRecord]:
     ]
 
 
+def _is_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _retake_counts(raw: object) -> dict[RefusalRule, int]:
+    """The stored `format_retakes` (GH-1019) without what is not whole: a key that is not a
+    `RefusalRule`, and a count that is not an int (a `bool` is not) or is negative. Anything
+    that is not a map, and an empty one, reads as no counts."""
+    rules = get_args(RefusalRule)
+    return {
+        rule: count
+        for rule, count in (raw.items() if isinstance(raw, Mapping) else [])
+        if rule in rules and _is_int(count) and count >= 0
+    }
+
+
+def _format_hold(raw: object) -> dict[str, str] | None:
+    """The stored `format_hold` (GH-1019), or `None` when it is not whole: not a map, a `rule`
+    that is not a `RefusalRule`, a `cause` that is not a `HoldCause`, or an `at` that is not a
+    non-empty string. `issue_url` and `noted_at` are each kept only as a non-empty string."""
+    if not (
+        isinstance(raw, Mapping)
+        and raw.get("rule") in get_args(RefusalRule)
+        and raw.get("cause") in get_args(HoldCause)
+        and _is_text(raw.get("at"))
+    ):
+        return None
+    optional = {k: raw[k] for k in ("issue_url", "noted_at") if _is_text(raw.get(k))}
+    return {"rule": raw["rule"], "cause": raw["cause"], "at": raw["at"], **optional}
+
+
+def _pause_entry(raw: object) -> object:
+    """A stored `pause_log` entry; a failure entry whose `rule` is not a `RefusalRule` loses
+    that key alone (GH-1019), every other entry is kept as it was."""
+    if not (isinstance(raw, Mapping) and raw.get("kind") == "failure" and "rule" in raw):
+        return raw
+    if raw["rule"] in get_args(RefusalRule):
+        return raw
+    return {k: v for k, v in raw.items() if k != "rule"}
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -457,6 +500,20 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
     # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
     if "format_issue" in state:
         state["format_issue"] = _format_issue_rows(state["format_issue"])
+    # The format retakes and their hold (GH-1019): read tolerantly, a key that is not whole
+    # reads as absent, and a pause entry loses a bad `rule` alone.
+    if "format_retakes" in state:
+        if counts := _retake_counts(state["format_retakes"]):
+            state["format_retakes"] = counts
+        else:
+            del state["format_retakes"]
+    if "format_hold" in state:
+        if (hold := _format_hold(state["format_hold"])) is None:
+            del state["format_hold"]
+        else:
+            state["format_hold"] = hold
+    if isinstance(state.get("pause_log"), list):
+        state["pause_log"] = [_pause_entry(entry) for entry in state["pause_log"]]
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     if "drawing_escalation" in state:
@@ -781,6 +838,10 @@ def render(
         # document the limit never paused is byte-identical to one written before them.
         **({"rate_limit_paused_at": e} if (e := state.get("rate_limit_paused_at")) else {}),
         **({"rate_limit_noticed_at": e} if (e := state.get("rate_limit_noticed_at")) else {}),
+        # The format retakes and their hold (GH-1019), written only when there is one: counts in
+        # the declaration order of the rules, the hold's fields in a fixed one.
+        **({"format_retakes": r} if (r := _ordered_counts(state.get("format_retakes"))) else {}),
+        **({"format_hold": h} if (h := _ordered_hold(state.get("format_hold"))) else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task
@@ -847,6 +908,24 @@ def render(
     if departures := drawing_section(state.get("drawing_departures")):
         parts.append(f"## {DRAWING_DEPARTURES}\n\n{departures}\n")
     return "\n".join(parts)
+
+
+def _ordered_counts(counts: Mapping[RefusalRule, int] | None) -> dict[str, int]:
+    """`format_retakes` with its keys in the declaration order of `RefusalRule`, so the same
+    counts always render the same text; `{}` for none."""
+    return {rule: counts[rule] for rule in get_args(RefusalRule) if counts and rule in counts}
+
+
+def _ordered_hold(hold: FormatHold | None) -> dict[str, str]:
+    """`format_hold` with its fields in a fixed order; `{}` for none."""
+    if not hold:
+        return {}
+    ordered: dict[str, str] = {"rule": hold["rule"], "cause": hold["cause"], "at": hold["at"]}
+    if url := hold.get("issue_url"):
+        ordered["issue_url"] = url
+    if noted := hold.get("noted_at"):
+        ordered["noted_at"] = noted
+    return ordered
 
 
 def _rounded_shadow(record: Mapping[str, Any]) -> dict[str, Any]:

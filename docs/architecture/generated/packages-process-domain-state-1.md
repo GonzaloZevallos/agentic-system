@@ -42,6 +42,7 @@ graph TD
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared
+    m_domain__format_issue --> g_domain__roles
     m_domain__format_issue --> g_domain__state__2
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
