@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `state` de `domain` y los imports qu
 - Hermanas:
   - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
-  - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
-  - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
+  - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
   - [domain: state (parte 1)](packages-process-domain-state-1.md)

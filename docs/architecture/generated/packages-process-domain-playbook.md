@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `playbook` de `domain` y los imports
 - Hermanas:
   - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
-  - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
-  - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
+  - [domain: machine](packages-process-domain-machine.md)
   - [domain: roles](packages-process-domain-roles.md)
   - [domain: state (parte 1)](packages-process-domain-state-1.md)
   - [domain: state (parte 2)](packages-process-domain-state-2.md)

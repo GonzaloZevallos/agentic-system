@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `roles` de `domain` y los imports qu
 - Hermanas:
   - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
-  - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
-  - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
+  - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: state (parte 1)](packages-process-domain-state-1.md)
   - [domain: state (parte 2)](packages-process-domain-state-2.md)
@@ -22,6 +21,7 @@ graph TD
     m_domain__design["domain.design"]
     m_domain__docs["domain.docs"]
     m_domain__drawing["domain.drawing"]
+    m_domain__format_retakes["domain.format_retakes"]
     m_domain__roles["domain.roles"]
     m_domain__schema_guard["domain.schema_guard"]
     m_domain__schemas["domain.schemas"]
@@ -34,6 +34,7 @@ graph TD
     m_domain__denials --> m_domain__roles
     m_domain__drawing --> g_domain__machine
     m_domain__drawing --> m_domain__design
+    m_domain__format_retakes --> g_domain__state
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state
     m_domain__roles --> g_pkg__agentic__shared

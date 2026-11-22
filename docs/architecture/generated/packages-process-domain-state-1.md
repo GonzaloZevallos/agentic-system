@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `state` de `domain` y los imports qu
 - Hermanas:
   - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
-  - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
-  - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
+  - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
   - [domain: state (parte 2)](packages-process-domain-state-2.md)
@@ -13,7 +12,6 @@ Esta página muestra los módulos del grupo `state` de `domain` y los imports qu
 ```mermaid
 graph TD
     g_domain__landing["landing (grupo)"]
-    g_domain__machine["machine (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state__2["state parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
@@ -44,7 +42,7 @@ graph TD
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared
-    m_domain__format_issue --> g_domain__machine
+    m_domain__format_issue --> g_domain__roles
     m_domain__format_issue --> g_domain__state__2
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
