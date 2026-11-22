@@ -3,8 +3,15 @@
 A format failure is a `schema` or `check` refusal that carries its `RefusalRule`. The poller
 will retake it `FORMAT_RETAKE_MAX` times per rule, within a backstop of `FORMAT_RETAKE_TASK_MAX`
 for the task, and then hold it. This module reads the epoch's terminal failures (the output of
-`rules.terminal_failures`, which the caller passes) and composes the only writes of the two
-keys it owns, `format_retakes` and `format_hold`. Inert until part 2: nothing decides on them.
+`rules.terminal_failures`, which the caller passes) and composes the only writes of the three
+keys it owns: `format_retakes`, `format_hold` and (GH-1020) `format_released`.
+
+`format_released` is a history of the holds released on their own, the whole list in every patch
+that carries it. A person's resume never clears it (`release_patch` and `_KEYS` leave it out). A
+cleared key is `None` in memory and absent on disk, and every reader here treats both the same.
+A rejection issue closed by hand releases a hold once (`released_before` compares the exact
+`(issue_url, closing_commit)` pair); a later hold of the same rule on that issue waits for a
+person.
 """
 
 from __future__ import annotations
@@ -12,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .task import FormatHold, HoldCause, PauseEntry, RefusalRule, TaskState
+from .task import FormatHold, FormatReleased, HoldCause, PauseEntry, RefusalRule, TaskState
 
 FORMAT_REASONS = ("schema", "check")
 FORMAT_RETAKE_MAX = 2
@@ -94,7 +101,7 @@ def count_patch(state: TaskState, entries: Sequence[PauseEntry]) -> dict[str, An
     rules = format_rules(entries)
     if not rules:
         return {}
-    counts = dict(state.get("format_retakes", {}))
+    counts = dict(state.get("format_retakes") or {})
     for rule in rules:
         counts[rule] = counts.get(rule, 0) + 1
     return {"format_retakes": counts}
@@ -110,7 +117,7 @@ def hold_patch(
     """The patch that holds the task: `{}` when a hold exists already (idempotent), when none is
     due or when no rule is to be named. No composer writes a partial hold: the value always
     carries `rule`, `cause` and `at`, and `issue_url` only when there is one."""
-    counts = state.get("format_retakes", {})
+    counts = state.get("format_retakes") or {}
     cause = hold_cause(counts, rules)
     rule = held_rule(counts, rules, entries)
     if state.get("format_hold") or cause is None or rule is None:
@@ -133,5 +140,37 @@ def noted_patch(state: TaskState, at: str) -> dict[str, Any]:
 
 def release_patch(state: TaskState) -> dict[str, Any]:
     """The patch that clears what a human's resume releases: `None` for each of the two keys
-    the state carries, nothing for the others."""
+    the state carries, nothing for the others. `format_released` is not one of them."""
     return {key: None for key in _KEYS if state.get(key) is not None}
+
+
+def fixed_release_patch(state: TaskState, at: str, closing_commit: str | None) -> dict[str, Any]:
+    """The patch that releases a hold whose refusal issue was fixed (or closed by hand): the hold
+    cleared, the held rule's count dropped so the retake that follows has one left, and the
+    release appended to the whole `format_released`. `{}` without a hold or without the hold's
+    `issue_url`, and it never touches `state`.
+
+    When the other counts leave the held rule no retake (`limit < 1`), `format_retakes` is
+    cleared too: a released hold must never come back due on the next read."""
+    hold = state.get("format_hold")
+    if not hold or not hold.get("issue_url"):
+        return {}
+    patch: dict[str, Any] = {"format_hold": None}
+    counts = state.get("format_retakes") or {}
+    if counts:
+        remaining = {rule: count for rule, count in counts.items() if rule != hold["rule"]}
+        patch["format_retakes"] = (
+            remaining if remaining and limit(remaining, [hold["rule"]]) >= 1 else None
+        )
+    released = FormatReleased(issue_url=hold["issue_url"], closing_commit=closing_commit, at=at)
+    patch["format_released"] = [*(state.get("format_released") or []), released]
+    return patch
+
+
+def released_before(state: TaskState, issue_url: str, closing_commit: str | None) -> bool:
+    """Whether this exact `(issue_url, closing_commit)` pair is already in `format_released`.
+    A recorded `(url, None)` does not block `(url, sha)`, but it blocks another `(url, None)`."""
+    return any(
+        entry["issue_url"] == issue_url and entry["closing_commit"] == closing_commit
+        for entry in state.get("format_released") or []
+    )

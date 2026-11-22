@@ -136,3 +136,49 @@ def test_a_poller_resume_keeps_the_counts():
     assert "format_retakes" not in patch and "format_hold" not in patch
     patch = drawing_answer.resume_patch(_held(), None, None, [], at=AT, by_poller=True)
     assert "format_retakes" not in patch
+
+
+# GH-1020: the pure decision that releases a held task from its refusal issue.
+
+
+@pytest.mark.parametrize(
+    ("closed", "commit", "contained", "released_before", "expected"),
+    [
+        (True, "abc", True, False, True),
+        (True, None, None, False, True),
+        (True, None, True, False, True),
+        (True, "abc", False, False, False),
+        (True, "abc", None, False, False),
+        (None, "abc", True, False, False),
+        (None, None, None, False, False),
+        (False, "abc", True, False, False),
+        (False, None, None, False, False),
+        (True, "abc", True, True, False),
+        (True, None, None, True, False),
+    ],
+)
+def test_format_hold_released_per_case(closed, commit, contained, released_before, expected):
+    assert (
+        rules.format_hold_released(closed, commit, contained, released_before=released_before)
+        is expected
+    )
+
+
+def test_a_hand_closed_issue_does_not_release_a_second_time():
+    assert not rules.format_hold_released(True, None, None, released_before=True)
+
+
+def test_resumed_by_a_person_leaves_format_released_alone():
+    released = [{"issue_url": "u", "closing_commit": None, "at": AT}]
+    state = _state(
+        [],
+        format_released=released,
+        format_hold=HOLD,
+        format_retakes={RULE: 2},
+        escalated="x",
+        escalation_class="failure",
+    )
+    patch = rules.resumed(state, None, at=AT, by_poller=False)
+    assert patch["format_hold"] is None
+    assert patch["format_retakes"] is None
+    assert "format_released" not in patch

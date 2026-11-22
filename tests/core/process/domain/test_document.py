@@ -10,6 +10,7 @@ from agentic.core.measurement.domain import cycle
 from agentic.core.process.application import resume
 from agentic.core.process.domain import (
     document,
+    format_retakes,
     legacy_names,
     presubmit,
     roles,
@@ -2725,6 +2726,60 @@ def test_an_absent_or_none_key_renders_nothing_and_a_legacy_document_is_unchange
     assert "format_retakes" not in parsed
     assert "format_hold" not in parsed
     assert document.render(parsed | {"id": "GH-9"}) == legacy
+
+
+RELEASED_URL = "https://github.com/acme/shop/issues/9"
+RELEASED_SHA = "c" * 40
+
+
+def _released(url: str = RELEASED_URL, commit: object = None, at: str = "2026-11-22T10:00:00Z"):
+    return {"issue_url": url, "closing_commit": commit, "at": at}
+
+
+def test_format_released_round_trips_with_a_null_closing_commit_in_order():
+    entries = [_released(), _released(commit=RELEASED_SHA, at="2026-11-22T11:00:00Z")]
+    text = document.render(golden_state(format_released=entries))
+    assert "closing_commit: null" in text
+    assert text.index("issue_url") < text.index("closing_commit") < text.index("at: ")
+    assert document.parse(text)["format_released"] == entries
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        _released(commit=5),
+        _released(commit=""),
+        _released(url=""),
+        {"issue_url": RELEASED_URL, "closing_commit": None},
+        "not a map",
+    ],
+)
+def test_a_corrupt_format_released_entry_is_dropped_between_two_valid_ones(corrupt):
+    first, last = _released(), _released(commit=RELEASED_SHA, at="2026-11-22T11:00:00Z")
+    parsed = _stored(format_released=[first, corrupt, last])
+    assert parsed["format_released"] == [first, last]
+
+
+@pytest.mark.parametrize("raw", ["x", {"issue_url": RELEASED_URL}, 3, [], ["x"]])
+def test_a_format_released_that_is_not_a_list_with_a_whole_entry_reads_as_no_key(raw):
+    assert "format_released" not in _stored(format_released=raw)
+
+
+def test_no_format_released_leaves_a_document_byte_identical():
+    legacy = document.render(golden_state())
+    assert document.render(golden_state(format_released=[])) == legacy
+    assert document.render(golden_state(format_released=None)) == legacy
+    assert "format_released" not in legacy
+
+
+def test_a_release_saved_and_reloaded_still_blocks_the_same_pair():
+    hold = {**HOLD, "issue_url": RELEASED_URL}
+    state = golden_state(format_hold=hold, format_retakes={"schema_invalid": 2})
+    patch = format_retakes.fixed_release_patch(state, "2026-11-22T10:00:00Z", RELEASED_SHA)
+    reloaded = document.parse(document.render(task.apply(state, patch)))
+    assert "format_hold" not in reloaded
+    assert format_retakes.released_before(reloaded, RELEASED_URL, RELEASED_SHA)
+    assert not format_retakes.released_before(reloaded, RELEASED_URL, None)
 
 
 LEGACY_FAILURE = [

@@ -52,7 +52,7 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [domain: state (parte 10)](classes-process-domain-state-10.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`

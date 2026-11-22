@@ -4486,6 +4486,27 @@ def format_hold_due(state: TaskState) -> bool:
     return format_retakes.hold_due(state.get("format_retakes", {}), format_epoch_rules(state))
 
 
+def format_hold_released(
+    closed: bool | None,
+    closing_commit: str | None,
+    contained: bool | None,
+    *,
+    released_before: bool,
+) -> bool:
+    """Whether a format hold's refusal issue releases it (GH-1020), from three facts the caller
+    read: whether the issue is `closed`, the `closing_commit` that closed it (`None` when a
+    person closed it by hand) and whether that commit is `contained` in the base branch.
+
+    True only for a closed issue not released before, and either a closing commit that is
+    contained, or no closing commit at all. An unread fact (`None`) keeps the hold, and so does a
+    commit that is not contained."""
+    if closed is not True or released_before:
+        return False
+    if closing_commit is None:
+        return True
+    return contained is True
+
+
 def auto_resumable(state: TaskState) -> ResumeKey | None:
     """Whether the poller may retake this pause on its own, and with which key (issue #137,
     GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,
