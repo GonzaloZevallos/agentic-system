@@ -2307,3 +2307,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-22T00:50:47.366+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When code copies, merges or patches stored records, add a test where the record already holds the key you write, so a second application updates it instead of crashing.
+  confidence: medium
+  seen_in:
+  - GH-1047
+  sources:
+  - finding
+  added_at: '2026-11-22T02:57:22.636+00:00'

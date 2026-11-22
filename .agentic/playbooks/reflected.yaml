@@ -1589,3 +1589,6 @@ tasks:
       - GH-1038
   GH-878@review:
     cost_usd: 0.0417
+  GH-1047@review:
+    cost_usd: 0.0483
+    decisions: 1
