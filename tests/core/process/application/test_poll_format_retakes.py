@@ -12,6 +12,9 @@ from agentic.core.process.application.ports import IssueComment, RunRegistration
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing import IssueRef
 from agentic.shared.configuration import Configuration
+from tests.core.process.application import test_poll_landing_order as landing_order
+from tests.core.process.application import test_poll_orphaned as orphaned
+from tests.core.process.application import test_poll_rate_limit as limited
 from tests.fakes import FakeLauncher, MemoryDocuments, MemoryRunRegistry, memory_ports
 
 RULE = "schema_invalid"
@@ -343,3 +346,57 @@ def test_a_held_task_is_chosen_by_no_gatherer_of_a_whole_round(tmp_path):
     assert launcher.spawned == [] and ports.tracker.comments == [] and ports.tracker.labels == []
     assert ports.documents.load("GH-19")["format_hold"] == HOLD
     assert poll.gather_retakes(ports, _Locks(), "boot")[0] == []
+
+
+def test_a_held_task_is_no_orphan_while_a_planned_one_beside_it_is_retaken():
+    ports = orphaned._ports(queue=(7, 19))  # GH-7 planned and dead: the control
+    _pause(ports, counts={RULE: 2}, hold=HOLD)
+    lines, launcher = orphaned._go(ports)
+    assert lines[0] == "agentic: poll: retake #7 -> pid 4242"
+    assert [argv[3] for argv in launcher.spawned] == ["7"]
+    assert [task for task, _ in ports.tracker.comments] == ["GH-7"]
+    assert not any("#19" in line for line in lines)
+
+
+def test_a_held_task_is_not_given_the_rate_limit_notice_a_paused_one_beside_it_gets(tmp_path):
+    ports = limited._ports()
+    control = limited._pause(ports)  # GH-7, the GitHub limit outlasted its 12 h
+    _pause(ports, counts={RULE: 2}, hold=HOLD, at=limited.AT)
+    out: list[str] = []
+    poll.rate_limit_escalations(
+        _cfg(tmp_path), ports, limited.AT + timedelta(hours=12), lambda task_id: False, out
+    )
+    assert out == ["agentic: poll: #7 github rate limit persisted -> left to the human"]
+    assert ports.tracker.labels == [(control, "needs-human")]
+    assert ports.documents.load("GH-19")["format_hold"] == HOLD
+    assert ports.documents.load("GH-19").get("rate_limit_noticed_at") is None
+
+
+def test_an_escalated_held_pull_request_does_not_lead_the_landing_order():
+    ports = landing_order._three()  # #7 is the oldest approval, then #5, then #6
+    ports.documents.record_closure(
+        "GH-7",
+        {
+            "escalated": "Tech Lead failed",
+            "format_retakes": {RULE: 2},
+            "format_hold": HOLD,
+            "pause_log": [
+                {"kind": "failure", "value": "schema", "section": "S", "rule": RULE},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        },
+    )
+    found, _ = landing_order._merges(ports)
+    assert found == [5]
+
+
+def test_a_pause_whose_retakes_were_spent_after_it_escalated_gets_the_label_once(tmp_path):
+    ports = memory_ports()
+    _pause(ports, counts={RULE: 2})  # escalated at count 1, then a retake left it at 2: no label
+    assert poll.gather_resumes(ports, T0 + timedelta(days=1), labels={19: ("agentic",)}) == []
+    assert ports.tracker.labels == [("GH-19", "needs-human")]
+    labelled = {19: ("agentic", "needs-human")}
+    assert poll.gather_resumes(ports, T0 + timedelta(days=2), labels=labelled) == []
+    assert ports.tracker.labels == [("GH-19", "needs-human")]  # the label is there: no second put
+    assert poll.gather_resumes(ports, T0 + timedelta(days=2)) == []  # labels unread: no write
+    assert ports.tracker.labels == [("GH-19", "needs-human")]

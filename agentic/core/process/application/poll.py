@@ -1905,7 +1905,13 @@ def gather_resumes(
             continue
         is_format = reason in rules.FORMAT_REASONS
         if is_format and rules.format_hold_due(raw):
-            continue  # no retake left: the escalation labelled it, and it is never a candidate
+            # No retake left, so never a candidate. The escalation labelled it when the budget was
+            # spent before it ran; a retake counted on this same epoch since (a child that died
+            # unregistered, a restore that failed) leaves it with no label, and no hold exists
+            # yet (GH-1019): the safety net puts the label, once, as for a person's comment.
+            if labels is not None:
+                _put_needs_human(ports, task_id, number, raw, labels, now)
+            continue
         if _human_spoke_after_the_system(comments):
             # A person is talking (Human decision, issue #137): the pause is the
             # human's from here on, whatever the calendar says -- never retaken on
