@@ -212,7 +212,7 @@ El mecanismo es el de la adenda de GH-381 del ADR-0039 (una pausa externa que el
 sola, sin `needs-human`), reutilizado para el límite de tasa de GitHub: cuando un nodo recibe
 `TrackerRateLimited` tras agotar la espera, la tarea queda pausada con el motivo
 `github_rate_limit` (`rate_limit.rate_limit_pause_patch`, que arma
-`run_role.rate_limit_paused`) en lugar de escalar. `GH_RATE_WAIT_MAX_S` no cambia: sigue siendo
+`run_role.rate_limit_paused`) en lugar de escalar. `GH_RATE_WAIT_MAX_S` (`adapters/github/run.py`, 900 s) no cambia: sigue siendo
 la cota de una espera dentro de una llamada; la de 12 h (`rate_limit.RATE_LIMIT_WAIT_MAX`) es la
 de la pausa entera y es de otra capa.
 
