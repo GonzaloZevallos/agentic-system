@@ -89,15 +89,18 @@ def test_the_limit_is_what_format_retakes_leaves_per_rule_and_per_task():
     assert rules.auto_resume_limit(_state(log, format_retakes=backstop), "schema") == 0
 
 
-def test_a_format_epoch_needs_no_label_waiting_for_a_retake_spent_or_held():
+def test_a_format_epoch_needs_a_label_only_between_its_last_retake_and_its_announced_hold():
     fresh = _state(_format(RULE))
     assert rules.needs_a_human(fresh) is False
     assert rules.needs_a_human(_state(_format(RULE), format_retakes={RULE: 1})) is False
     spent = _state(_format(RULE), format_retakes={RULE: 2})
     assert rules.format_hold_due(spent) is True
-    assert rules.needs_a_human(spent) is False
-    held = _state(_format(RULE), format_retakes={RULE: 2}, format_hold=HOLD)
-    assert rules.needs_a_human(held) is False
+    assert rules.needs_a_human(spent) is True  # spent, no hold yet: the label stands in
+    unnoted = {k: v for k, v in HOLD.items() if k != "noted_at"}
+    held_unnoted = _state(_format(RULE), format_retakes={RULE: 2}, format_hold=unnoted)
+    assert rules.needs_a_human(held_unnoted) is True  # held, Nota not landed yet
+    held = _state(_format(RULE), format_retakes={RULE: 2}, format_hold={**unnoted, "noted_at": AT})
+    assert rules.needs_a_human(held) is False  # announced: the Nota is the signal
     # a failure that is not a format epoch keeps the label even when it carries a hold key
     mixed = _state([_failure("upstream", section="A"), *_format(RULE)], format_hold=HOLD)
     assert rules.needs_a_human(mixed) is True

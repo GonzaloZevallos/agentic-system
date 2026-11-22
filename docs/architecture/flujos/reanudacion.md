@@ -99,8 +99,10 @@ sequenceDiagram
      y deja la línea `stale (not counted)`; si el lanzamiento falla, devuelve la cuenta
      (`agentic/core/process/application/poll.py:_restore_format_count`), pero un hijo lanzado que
      nunca se registró queda contado. Una tarea retenida (`rules.format_held`) o con un hijo vivo
-     del producto no es candidata. Agotadas las retomas, la tarea escala con `needs-human` hasta
-     que otra parte escriba la retención y suelte la etiqueta.
+     del producto no es candidata. Agotadas las retomas, la tarea escala con `needs-human`
+     (`rules.needs_a_human` es verdadera hasta que sale la Nota) y el paso de retención
+     (`agentic/core/process/application/poll.py:hold_format_failures`) escribe `format_hold`,
+     publica la Nota `Format hold: ` y solo entonces suelta la etiqueta.
    - La pausa `github_rate_limit` no tiene comentario `Escalated: ` desde donde medir:
      `agentic/core/process/application/poll.py:gather_resumes` la delega en
      `agentic/core/process/application/poll.py:_rate_limit_candidate`, que toma el `since` del

@@ -1866,12 +1866,18 @@ def _put_needs_human(
     ports.documents.record_closure(task_id, {"tracker_failures": rows})
 
 
+FormatCarried = tuple[str, tuple[RefusalRule, ...]]
+"""What `gather_resumes` carries for a format candidate to `execute` (GH-1019): its format key (the
+reason `auto_resumable` found) and the distinct rules of its epoch, both re-checked on the fresh
+document before the retake is counted."""
+
+
 def gather_resumes(
     ports: Ports,
     now: datetime,
     *,
     skip: frozenset[int] = frozenset(),
-    format_rules: dict[int, tuple[RefusalRule, ...]] | None = None,
+    format_rules: dict[int, FormatCarried] | None = None,
     labels: Mapping[int, tuple[str, ...] | None] | None = None,
 ) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
@@ -1921,7 +1927,7 @@ def gather_resumes(
         if is_format:
             prior, ceiling_spent = sum(raw.get("format_retakes", {}).values()), False
             if format_rules is not None:
-                format_rules[number] = rules.format_epoch_rules(raw)
+                format_rules[number] = (reason, rules.format_epoch_rules(raw))
         elif reason == "account_limit":
             prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
             resets_at = rules.stated_reset(raw)
@@ -2854,7 +2860,7 @@ def _spawn_resume(
     sleep: Callable[[float], None],
     crash: CrashRetake | None = None,
     orphan_prior: int | None = None,
-    format_carried: tuple[RefusalRule, ...] | None = None,
+    format_carried: FormatCarried | None = None,
 ) -> list[str]:
     """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
     --yes --detach` child (plus `--from-document` for an orphan retake, GH-403: `orphan_prior`
@@ -2914,19 +2920,20 @@ def _spawn_resume(
 
 
 def _count_format_retake(
-    ports: Ports, task_id: str, number: int, carried: tuple[RefusalRule, ...]
+    ports: Ports, task_id: str, number: int, carried: FormatCarried
 ) -> dict[RefusalRule, int] | str:
     """Counts one format retake before its child spawns (GH-1019), under the round's
     `registry.exclusive()`: the fresh document, its key and rules recomputed, and only when it is
-    still a format epoch of the very rules `gather_resumes` carried (and not held) is
-    `format_retakes.count_patch` saved. Returns the map as it was, for `_restore_format_count`,
-    or the `stale (not counted)` line, with nothing written, when the owner got there first."""
+    still the same format key and the very rules `gather_resumes` carried (`carried`, and not
+    held) is `format_retakes.count_patch` saved. Returns the map as it was, for
+    `_restore_format_count`, or the `stale (not counted)` line, with nothing written, when the
+    owner got there first."""
     fresh = ports.documents.load(task_id)
     if (
         fresh is None
         or rules.format_held(fresh)
-        or rules.auto_resumable(fresh) not in rules.FORMAT_REASONS
-        or rules.format_epoch_rules(fresh) != carried
+        or rules.auto_resumable(fresh) != carried[0]
+        or rules.format_epoch_rules(fresh) != carried[1]
     ):
         return f"agentic: poll: format retake #{number} -> stale (not counted)"
     entries = rules.format_epoch_entries(fresh)
@@ -3035,7 +3042,7 @@ def execute(
     reruns: frozenset[int] = frozenset(),
     orphan_retakes: Mapping[int, int] | None = None,
     spent_notices: Mapping[int, RetakesSpent] | None = None,
-    format_rules: Mapping[int, tuple[RefusalRule, ...]] | None = None,
+    format_rules: Mapping[int, FormatCarried] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -3568,7 +3575,7 @@ def run_once(
     # starts nothing, so it has no order to rank and makes no call. Read before the resumes:
     # their `needs-human` safety net (GH-1019) asks the labels it carries, never a read per task.
     open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
-    format_rules: dict[int, tuple[RefusalRule, ...]] = {}
+    format_rules: dict[int, FormatCarried] = {}
     # A task a child of this product still works on is nobody's candidate: counting a retake for
     # it (GH-1019) would spend one on a run that is not paused.
     mine = ports.stack.product()

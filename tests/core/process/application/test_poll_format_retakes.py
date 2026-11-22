@@ -116,8 +116,8 @@ def test_three_identical_format_epochs_retake_retake_then_stop_for_the_human(tmp
 
     third = T0 + timedelta(hours=3)
     _pause(ports, at=third, counts={RULE: 2})
-    ports.inbox.refs = [IssueRef(URL, "t", "b", ("agentic",))]  # the pause never got the label
-    assert rules.needs_a_human(ports.documents.load("GH-19")) is False
+    ports.inbox.refs = [IssueRef(URL, "t", "b", ("agentic",))]  # the escalation labelled it, ...
+    assert rules.needs_a_human(ports.documents.load("GH-19")) is True  # ... until its Nota lands
     assert poll.gather_resumes(ports, third + timedelta(days=2)) == []
     assert len(launcher.spawned) == 2
     lines = _round(tmp_path, ports, launcher, third + timedelta(days=2))
@@ -146,14 +146,14 @@ def test_the_count_is_per_rule_and_the_task_has_a_backstop_of_six(tmp_path):
     ports = memory_ports()
     _pause(ports, counts={OTHER: 2})  # another rule's retakes do not spend this one's
     (candidate,), carried = _candidate(ports)
-    assert (candidate.prior, candidate.limit, carried) == (2, 4, {19: (RULE,)})
+    assert (candidate.prior, candidate.limit, carried) == (2, 4, {19: ("schema", (RULE,))})
 
     _pause(ports, counts={RULE: 2})
     assert _candidate(ports) == ([], {})
 
     _pause(ports, rules_=(RULE, OTHER), counts={RULE: 1})  # the least left over the rules
     (candidate,), carried = _candidate(ports)
-    assert (candidate.prior, candidate.limit, carried) == (1, 2, {19: (RULE, OTHER)})
+    assert (candidate.prior, candidate.limit, carried) == (1, 2, {19: ("schema", (RULE, OTHER))})
 
     _pause(ports, counts={RULE: 0, "a": 2, "b": 2, "c": 2})  # six in all: the backstop
     assert _candidate(ports) == ([], {})
@@ -230,7 +230,7 @@ def test_the_launcher_sees_the_count_already_saved_and_a_child_that_never_regist
     ports = memory_ports()
     _pause(ports, counts={RULE: 1})
     launcher = _LookingLauncher(ports)
-    lines = _execute(ports, launcher, {19: (RULE,)})
+    lines = _execute(ports, launcher, {19: ("schema", (RULE,))})
     assert launcher.seen == [{RULE: 2}]
     assert lines[0] == "agentic: poll: resume #19 -> pid 4242"
     assert _counts(ports) == {RULE: 2}  # no run ever registered: still counted
@@ -239,7 +239,7 @@ def test_the_launcher_sees_the_count_already_saved_and_a_child_that_never_regist
 def test_a_spawn_that_raises_gives_the_count_back():
     ports = memory_ports()
     _pause(ports, counts={RULE: 1})
-    lines = _execute(ports, FakeLauncher(fails={0}), {19: (RULE,)})
+    lines = _execute(ports, FakeLauncher(fails={0}), {19: ("schema", (RULE,))})
     assert lines[0].startswith("agentic: poll: resume #19 -> not launched (not counted)")
     assert _counts(ports) == {RULE: 1}
 
@@ -260,7 +260,7 @@ class _DiskFullOnRestore(MemoryDocuments):
 def test_a_restore_that_fails_says_so_and_the_retake_stays_counted():
     ports = replace(memory_ports(), documents=_DiskFullOnRestore())
     _pause(ports, counts={RULE: 1})
-    lines = _execute(ports, FakeLauncher(fails={0}), {19: (RULE,)})
+    lines = _execute(ports, FakeLauncher(fails={0}), {19: ("schema", (RULE,))})
     assert "not launched (not counted)" in lines[0]
     assert lines[1] == "agentic: poll: format retake #19 -> count not restored: disk full"
     assert _counts(ports) == {RULE: 2}
@@ -288,6 +288,21 @@ def test_a_change_of_the_rules_between_gather_and_execute_is_stale_too():
     _pause(ports, counts={RULE: 1})
     (_,), carried = _candidate(ports)
     _pause(ports, rules_=(RULE, OTHER), counts={RULE: 1})
+    launcher = FakeLauncher()
+    assert _execute(ports, launcher, carried) == [
+        "agentic: poll: format retake #19 -> stale (not counted)"
+    ]
+    assert launcher.spawned == [] and _counts(ports) == {RULE: 1}
+
+
+def test_a_change_of_the_key_with_the_same_rules_is_stale_too():
+    ports = memory_ports()
+    _pause(ports, counts={RULE: 1})
+    (_,), carried = _candidate(ports)
+    state = ports.documents.load("GH-19")
+    log = [dict(e, value="check") if e["kind"] == "failure" else e for e in state["pause_log"]]
+    ports.documents.save({**state, "pause_log": log})  # `check` now: same rule, another key
+    assert rules.auto_resumable(ports.documents.load("GH-19")) == "check"
     launcher = FakeLauncher()
     assert _execute(ports, launcher, carried) == [
         "agentic: poll: format retake #19 -> stale (not counted)"
@@ -482,9 +497,11 @@ def test_a_failed_note_lands_in_tracker_failures_and_is_retried(tmp_path):
     doc = ports.documents.load("GH-19")
     assert [row["target"] for row in doc["tracker_failures"]] == ["comment"]
     assert "noted_at" not in doc["format_hold"] and _notes(ports) == []
+    assert rules.needs_a_human(doc) is True  # invariant 3: the label is owed until the Nota lands
     _held_round(tmp_path, ports, days=3)
     assert len(_notes(ports)) == 1
     assert "noted_at" in ports.documents.load("GH-19")["format_hold"]
+    assert rules.needs_a_human(ports.documents.load("GH-19")) is False
     _held_round(tmp_path, ports, days=4)
     assert len(_notes(ports)) == 1
 
