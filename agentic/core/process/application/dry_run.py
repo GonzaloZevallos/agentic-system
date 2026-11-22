@@ -140,7 +140,7 @@ READS = {
 NONE_WRITES = {
     "Tracker": _names(
         """close_issue close_pull_request comment comment_on_issue dispatch_ci drop_label
-        ensure_label label note reopen_pull_request rerun_ci_run unlabel update_issue_body
+        ensure_label label note put_label reopen_pull_request rerun_ci_run unlabel update_issue_body
         update_pull_request_body"""
     ),
     "TaskDocuments": _names("write_into"),

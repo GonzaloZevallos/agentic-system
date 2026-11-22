@@ -1787,6 +1787,34 @@ _NOTES = {
 }
 
 
+def test_put_label_makes_the_same_gh_call_as_label_and_returns_none():
+    run = Outcomes("")
+    assert GhTracker(Path("/p"), run, lambda line: None).put_label("GH-12", "needs-human") is None
+    assert run.calls == [["gh", "issue", "edit", "12", "--add-label", "needs-human"]]
+
+
+def test_put_label_that_failed_returns_the_class_on_the_label_target_never_its_text():
+    from agentic.core.process.domain.task import TrackerFailure
+
+    run = Outcomes(_failed_gh("could not resolve to an Issue " + _SECRET))
+    failure = GhTracker(Path("/p"), run, lambda line: None, retry=_quiet_policy()).put_label(
+        "GH-12", "needs-human"
+    )
+    assert isinstance(failure, TrackerFailure)
+    assert (failure.target, failure.cls) == ("label", "refused")
+    assert _SECRET not in repr(failure)
+
+
+def test_put_label_on_a_task_with_no_issue_calls_nothing_and_a_missing_gh_still_raises():
+    run = Outcomes()
+    assert GhTracker(Path("/p"), run).put_label("T-abc", "x") is None and run.calls == []
+    missing = Outcomes(FileNotFoundError("gh"))
+    with pytest.raises(ValueError, match="not installed"):
+        GhTracker(Path("/p"), missing, lambda line: None, retry=_quiet_policy()).put_label(
+            "GH-12", "x"
+        )
+
+
 @pytest.mark.parametrize("target", ["comment", "label"])
 def test_a_note_that_lands_returns_none_and_makes_the_same_gh_call_as_comment_and_unlabel(target):
     run = Outcomes("")

@@ -396,9 +396,10 @@ def test_one_refusal_does_not_stop_the_rest_of_the_batch():
 # ---- apply: merge, bump, retire ------------------------------------------------------
 
 
-def test_merge_replaces_the_lesson_and_unions_seen_in_leaving_the_rest_alone():
+def test_merge_replaces_the_lesson_of_a_never_landed_item_and_unions_seen_in():
     other = item(2, "Untouched lesson.")
-    start = Playbook(slug="developer", items=(item(), other))
+    never_landed = replace(item(), last_applied=NOW)
+    start = Playbook(slug="developer", items=(never_landed, other))
     merge = Delta(
         op="merge",
         slug="developer",
@@ -414,8 +415,18 @@ def test_merge_replaces_the_lesson_and_unions_seen_in_leaving_the_rest_alone():
     assert untouched == other
 
 
-def test_merge_rechecks_the_text_rules():
+def test_merge_into_a_legacy_item_keeps_its_wording_and_unions_seen_in():
     start = Playbook(slug="developer", items=(item(),))
+    merge = Delta(
+        op="merge", slug="developer", item_id="developer-1", lesson="Reworded.", tasks=("GH-2",)
+    )
+    merged = run([merge], start).playbook.items[0]
+    assert merged.lesson == LESSON
+    assert merged.seen_in == ("GH-1", "GH-2")
+
+
+def test_merge_rechecks_the_text_rules():
+    start = Playbook(slug="developer", items=(replace(item(), last_applied=NOW),))
     merge = Delta(op="merge", slug="developer", item_id="developer-1", lesson="a\nb")
     result = run([merge], start)
     assert result.playbook == start
@@ -424,7 +435,7 @@ def test_merge_rechecks_the_text_rules():
 
 def test_merge_into_a_rejected_text_or_another_items_text_is_refused():
     other = item(2, "Untouched lesson.")
-    start = Playbook(slug="developer", items=(item(), other))
+    start = Playbook(slug="developer", items=(replace(item(), last_applied=NOW), other))
     rejected = (Rejected("developer", "process-suite-red", normalise("Banned text.")),)
     banned = Delta(op="merge", slug="developer", item_id="developer-1", lesson="Banned text.")
     twin = Delta(op="merge", slug="developer", item_id="developer-1", lesson="untouched  lesson.")

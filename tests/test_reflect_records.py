@@ -298,3 +298,15 @@ async def test_a_retry_of_a_decision_read_asks_again_for_the_decisions_that_fail
     await run(cfg, ports)
     assert ledger_of(root).tasks["GH-1@review"].decisions == 1
     assert "Decision 1" in ports.runner.calls[-1]["prompt"]
+
+
+def test_noop_contradicts_and_a_wordless_merge_round_trip_through_the_ledger_record():
+    deltas = [
+        pb.noop("developer-1", "GH-1", slug="developer"),
+        pb.contradicts("developer-1", "GH-2", slug="developer"),
+        pb.merge_into("developer-1", "GH-3", slug="developer"),
+    ]
+    records = [reflect_run._delta_dict(d) for d in deltas]
+    assert [r["op"] for r in records] == ["noop", "contradicts", "merge"]
+    assert records[2]["lesson"] == ""
+    assert [reflect_run._delta_of(r) for r in records] == deltas

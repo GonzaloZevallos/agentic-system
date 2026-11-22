@@ -2044,6 +2044,15 @@ class MemoryTracker:
         self.unlabel(task_id, label)
         return None
 
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        """`label`, best effort: a scripted `ValueError` (`label_failures`) is a refused call,
+        returned as a failure of the `label` target."""
+        try:
+            self.label(task_id, label)
+        except ValueError:
+            return TrackerFailure(target="label", cls="refused", at="2026-10-28T00:00:00Z")
+        return None
+
     def ensure_label(self, name: str) -> None:
         if self.ensure_label_error is not None:
             raise ValueError(self.ensure_label_error)

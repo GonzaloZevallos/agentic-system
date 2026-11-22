@@ -2415,8 +2415,8 @@ class TaskState(TaskInput, total=False):
     # Why a spec was refused and what it names (GH-594): written only by
     # `spec_route.refusal_escalation`, cleared by `rules.resumed`; never by `record_closure`.
     spec_refusal: Annotated[SpecRefusalRecord | None, last]
-    # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
-    # round-trip belongs to the part that does.
+    # The spec a delivery is built against (GH-594), written whole by `document.render` when
+    # set, so a resumed delivery keeps it (`spec_guard`, `rules.spec_delivery` read it).
     spec: Annotated[SpecContract, last]
     # What the system did with the draft Spec PM returned (GH-594 part 5a): written only by
     # `application/spec_draft.py`, distinct from `spec`; nothing reads it until the approval part.

@@ -617,6 +617,9 @@ class GhTracker:
     def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
         return self._best_effort("label", "drop_label", lambda: self.unlabel(task_id, label))
 
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        return self._best_effort("label", "put_label", lambda: self.label(task_id, label))
+
     def _best_effort(
         self, target: TrackerTarget, name: str, write: Callable[[], None]
     ) -> TrackerFailure | None:
