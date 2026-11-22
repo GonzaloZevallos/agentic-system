@@ -660,7 +660,7 @@ _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro térmi
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 
 **Retoma de formato**:
-Cuenta por (tarea, regla) de las veces que el sondeo retomó un fallo de formato (`schema` o `check` con regla): 2 por regla y un respaldo de 6 en total (la suma). Agotada, la tarea queda retenida en `format_hold`, con su `HoldCause` (`rule_spent` o `task_spent`); una decisión humana pone la cuenta en cero. Inerte hasta la parte 2: nada decide con ella todavía.
+Cuenta por (tarea, regla) de las veces que el sondeo retomó un fallo de formato (`schema` o `check` con regla): 2 por regla y un respaldo de 6 en total (la suma). Agotada, la tarea queda retenida en `format_hold`, con su `HoldCause` (`rule_spent` o `task_spent`); una decisión humana pone la cuenta en cero. Ya no es inerte (GH-1019, parte 2): el sondeo retoma el fallo de formato y cuenta la retoma antes de lanzar el hijo, bajo el cierre exclusivo de la ronda; agotadas las retomas la tarea escala con `needs-human` hasta que aterrice la parte que escribe el `format_hold` y suelta la etiqueta, y una tarea retenida nunca es candidata a retoma.
 _Avoid_: reintento (es la vuelta dentro del fallo)
 
 **Intento estancado**:

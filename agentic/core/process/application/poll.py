@@ -1887,6 +1887,8 @@ def gather_resumes(
         raw = ports.documents.load(task_id) or {}
         if raw.get("closed_at") or not raw.get("escalated"):
             continue
+        if rules.format_held(raw):
+            continue  # held on its format retakes (GH-1019): only a human's resume releases it
         reason = rules.auto_resumable(raw)
         if reason is None:
             continue
@@ -3458,10 +3460,18 @@ def run_once(
     # their `needs-human` safety net (GH-1019) asks the labels it carries, never a read per task.
     open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
     format_rules: dict[int, tuple[RefusalRule, ...]] = {}
+    # A task a child of this product still works on is nobody's candidate: counting a retake for
+    # it (GH-1019) would spend one on a run that is not paused.
+    mine = ports.stack.product()
+    at_work = frozenset(
+        number
+        for r in registry.live()
+        if r.product == mine and (number := ports.inbox.issue_of(r.task_id)) is not None
+    )
     resumes = gather_resumes(
         ports,
         now,
-        skip=stack_held,
+        skip=stack_held | at_work,
         format_rules=format_rules,
         labels=None if starts_nothing or dry_run or refs_note else _labels_of(open_refs),
     )

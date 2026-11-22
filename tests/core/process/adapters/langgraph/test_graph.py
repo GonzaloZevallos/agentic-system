@@ -1121,8 +1121,9 @@ async def test_a_branch_that_escalates_does_not_lose_the_sister_that_delivered(c
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
     assert doc["status"] == WAITING_ON_HUMAN and doc["escalated"] == final["escalated"]
     assert doc["subtasks"]["api"]["status"] == "approved"
-    # Told once, however many branches came back.
-    assert fakes.tracker.labels == [("GH-1", "needs-human")]
+    # Told once, however many branches came back. The failure is a format one with its retakes
+    # left (GH-1019), which the poller retakes: no `needs-human` until they are spent.
+    assert fakes.tracker.labels == []
     assert len(fakes.tracker.comments) == 1
 
 
