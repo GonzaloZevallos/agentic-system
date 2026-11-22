@@ -919,3 +919,63 @@ def test_the_slowest_stage_ties_go_to_the_first_stage_in_family_order(doc, pr_at
     assert got["stage_h.held"].value == pytest.approx(0.5)
     assert got[f"stage_h.{expected}"].value == pytest.approx(0.5)
     assert [n for n in got if n.startswith("slowest_stage.")] == [f"slowest_stage.{expected}"]
+
+
+# --- a GitHub rate-limit pause is the account-limit stage (GH-989) ---------------------------
+
+
+def paused_by(reason):
+    """A developer run, then a failure of `reason` ending at 10:10 whose pause the poller's retake
+    closes at 12:10: a closed external pause of exactly 2 h, in a cycle of 4 h."""
+    failure = {
+        "role": "Developer",
+        "attempt": 1,
+        "error": "boom",
+        "cost_usd": 0.25,
+        "session_id": "s",
+        "reason": reason,
+        "section": "s",
+        "slug": "developer",
+        "started_at": "2026-10-01T10:00:00+00:00",
+        "ended_at": "2026-10-01T10:10:00+00:00",
+    }
+    log = rules.logged(rules.escalation("failure", "text"), [failure], at="2026-10-01T10:10:00Z")
+    log["pause_log"].append(rules.resumed_entry(at="2026-10-01T12:10:00Z"))
+    return document(
+        runs=[run(started="2026-10-01T09:30:00+00:00", ended="2026-10-01T10:00:00+00:00")],
+        failures=[failure],
+        **log,
+    )
+
+
+def paused_scores(reason):
+    return by_name(
+        scores_of(
+            paused_by(reason),
+            issue_created_at=ISSUE_AT,
+            pr_created_at="2026-10-01T12:30:00+00:00",
+            pr_merged_at="2026-10-01T13:00:00+00:00",
+        )
+    )
+
+
+def test_a_silent_github_rate_limit_pause_is_account_limit_hours_outside_the_active_cycle():
+    got = paused_scores("github_rate_limit")
+    assert got["cycle_h"].value == pytest.approx(4.0)
+    assert got["stage_h.account_limit"].value == pytest.approx(2.0)
+    assert got["cycle_active_h"].value == pytest.approx(got["cycle_h"].value - 2.0)
+    split = ts.stage_outcome(
+        paused_by("github_rate_limit"),
+        issue_created_at=ISSUE_AT,
+        pr_created_at="2026-10-01T12:30:00+00:00",
+        pr_merged_at="2026-10-01T13:00:00+00:00",
+    )
+    assert split.other_by_cause["outage_pause"] == 0.0
+    assert got["stage_h.other"].value == pytest.approx(sum(split.other_by_cause.values()) / 3600)
+
+
+def test_the_same_pause_by_an_outage_reason_stays_in_other_and_inside_the_active_cycle():
+    got = paused_scores("upstream")
+    assert got["stage_h.account_limit"].value == 0.0
+    assert got["cycle_active_h"].value == pytest.approx(got["cycle_h"].value)
+    assert got["stage_h.other"].value >= 2.0

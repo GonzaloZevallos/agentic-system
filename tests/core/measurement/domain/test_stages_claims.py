@@ -9,7 +9,7 @@ import pytest
 
 from agentic.core.measurement.domain import cycle, planning, stages
 from agentic.core.measurement.domain.stages import Claim, StageUnknown
-from agentic.core.process.domain import roles, rules
+from agentic.core.process.domain import rate_limit, roles, rules
 from agentic.core.process.domain.task import MechanicalCause
 
 ORIGIN = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
@@ -181,11 +181,11 @@ TRUTH = {
     ("disk_full", "ci_gh_unreadable"): CHECKS,
     ("disk_full", "ci_run_unfinished"): CHECKS,
     ("disk_full", "delivery_transient"): OUTAGE,
-    ("github_rate_limit", None): OUTAGE,
-    ("github_rate_limit", "ci_gh_unavailable"): CHECKS,
-    ("github_rate_limit", "ci_gh_unreadable"): CHECKS,
-    ("github_rate_limit", "ci_run_unfinished"): CHECKS,
-    ("github_rate_limit", "delivery_transient"): OUTAGE,
+    ("github_rate_limit", None): ACCOUNT,
+    ("github_rate_limit", "ci_gh_unavailable"): ACCOUNT,
+    ("github_rate_limit", "ci_gh_unreadable"): ACCOUNT,
+    ("github_rate_limit", "ci_run_unfinished"): ACCOUNT,
+    ("github_rate_limit", "delivery_transient"): ACCOUNT,
 }
 
 
@@ -262,6 +262,66 @@ def test_account_limit_then_a_human_escalation_goes_to_human_wait():
         rules.escalation("questions", "q"),
         resumed=40,
     )
+    (claim,) = pause_claims(ask(document))
+    assert (claim.rank, claim.stage) == (1, "human_wait")
+
+
+def test_github_rate_limit_then_account_limit_goes_to_account_limit():
+    failures = [
+        failure(10, 15, section="a", reason="github_rate_limit"),
+        failure(15, 20, section="b", reason="account_limit"),
+    ]
+    document = _epoch({}, failures, rules.escalation("failure", "text"), resumed=40)
+    (claim,) = pause_claims(ask(document))
+    assert (claim.rank, claim.stage, claim.cause) == (2, "account_limit", None)
+
+
+def test_github_rate_limit_then_upstream_goes_to_other_as_outage_pause():
+    failures = [
+        failure(10, 15, section="a", reason="github_rate_limit"),
+        failure(15, 20, section="b", reason="upstream"),
+    ]
+    document = _epoch({}, failures, rules.escalation("failure", "text"), resumed=40)
+    (claim,) = pause_claims(ask(document))
+    assert (claim.rank, claim.stage, claim.cause) == (3, "other", "outage_pause")
+
+
+def test_a_silent_github_pause_then_one_that_reached_the_notice_split_across_the_resume():
+    # The poller's retake closes the silent epoch; the next epoch ends with the Poller failure
+    # `rate_limit_persisted_patch` writes (reason `other`), which is a human's.
+    document = {}
+    _epoch(
+        document,
+        [failure(10, 20, reason="github_rate_limit")],
+        rules.escalation("failure", "text"),
+        resumed=40,
+    )
+    notice = rate_limit.rate_limit_persisted_patch(at=at(55))
+    document["pause_log"].extend(
+        [
+            rules.logged(
+                rules.escalation("failure", "text"),
+                [failure(45, 50, reason="github_rate_limit")],
+                at=at(50),
+            )["pause_log"][0],
+            *notice["pause_log"],
+            rules.resumed_entry(at=at(70)),
+        ]
+    )
+    document["failures"].append(failure(45, 50, reason="github_rate_limit"))
+    first, second = sorted(pause_claims(ask(document)), key=lambda c: c.start)
+    assert (first.stage, first.rank) == ("account_limit", 2)
+    assert (second.stage, second.rank) == ("human_wait", 1)
+
+
+def test_account_limit_then_the_persisted_notice_goes_to_human_wait():
+    document = {"failures": [failure(10, 20, reason="account_limit")]}
+    persisted = rules.account_limit_persisted_patch(at=at(25))
+    document["pause_log"] = [
+        *rules.logged({}, document["failures"], at=at(20))["pause_log"],
+        *persisted["pause_log"],
+        rules.resumed_entry(at=at(40)),
+    ]
     (claim,) = pause_claims(ask(document))
     assert (claim.rank, claim.stage) == (1, "human_wait")
 
