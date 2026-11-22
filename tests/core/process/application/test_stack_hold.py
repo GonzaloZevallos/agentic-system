@@ -392,6 +392,7 @@ def test_every_noted_cause_posts_exactly_pause_note_and_the_marker(cause: NotedC
 _APPLICATION = Path(__file__).resolve().parents[4] / "agentic/core/process/application"
 _NOTE_CALLERS = {
     ("merge", "_note"),
+    ("poll", "_announce_format_hold"),
     ("poll", "_announce_spent"),
     ("poll", "_send_rate_limit_notice"),
     ("refusal_note", "note_refusal"),
@@ -418,7 +419,7 @@ def _note_callers(root: Path) -> set[tuple[str, str]]:
     return found
 
 
-def test_the_tracker_note_callers_of_the_application_are_the_known_six():
+def test_the_tracker_note_callers_of_the_application_are_the_known_seven():
     found = _note_callers(_APPLICATION)
     assert found == _NOTE_CALLERS, (
         f"new Tracker.note callers: {sorted(found - _NOTE_CALLERS)}; "

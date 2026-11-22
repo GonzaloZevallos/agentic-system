@@ -84,7 +84,25 @@ sequenceDiagram
      cuyo documento quedó sin tocar 24 h), el poller pone la etiqueta `needs-human` y
      deja un único comentario `Retakes spent: `
      (`agentic/core/process/application/poll.py:_announce_spent`). Si una persona habló después
-     del sistema, la pausa ya es del humano y el poller no la toca.
+     del sistema, la pausa ya es del humano y el poller no la retoma; si es un fallo de formato
+     pone `needs-human` una sola vez, con `Tracker.put_label`, leyendo las etiquetas que la
+     ronda ya trajo (`agentic/core/process/application/poll.py:_put_needs_human`), y un fallo
+     al escribirla va a `tracker_failures` y se reintenta pasada una hora.
+   - Un fallo de formato (`schema` o `check` con su regla, GH-1019) se retoma con la clave que
+     decide `agentic/core/process/domain/rules.py:_resume_key` (la única que lo reconoce, por
+     `format_retakes.is_format_epoch`), dos veces por regla y seis por tarea
+     (`agentic/core/process/domain/rules.py:auto_resume_limit`), con el calendario de
+     `agentic/core/process/domain/rules.py:RETAKE_SCHEDULE`. `execute` cuenta la retoma antes de
+     lanzar el hijo, bajo `registry.exclusive()`
+     (`agentic/core/process/application/poll.py:_count_format_retake`): recalcula la clave y las
+     reglas sobre el documento fresco y, si el dueño llegó antes y cambiaron, no cuenta ni lanza
+     y deja la línea `stale (not counted)`; si el lanzamiento falla, devuelve la cuenta
+     (`agentic/core/process/application/poll.py:_restore_format_count`), pero un hijo lanzado que
+     nunca se registró queda contado. Una tarea retenida (`rules.format_held`) o con un hijo vivo
+     del producto no es candidata. Agotadas las retomas, la tarea escala con `needs-human`
+     (`rules.needs_a_human` es verdadera hasta que sale la Nota) y el paso de retención
+     (`agentic/core/process/application/poll.py:hold_format_failures`) escribe `format_hold`,
+     publica la Nota `Format hold: ` y solo entonces suelta la etiqueta.
    - La pausa `github_rate_limit` no tiene comentario `Escalated: ` desde donde medir:
      `agentic/core/process/application/poll.py:gather_resumes` la delega en
      `agentic/core/process/application/poll.py:_rate_limit_candidate`, que toma el `since` del

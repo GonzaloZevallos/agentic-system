@@ -101,7 +101,7 @@ class GhInbox:
                 "--state",
                 "open",
                 "--json",
-                "url,title,body",
+                "url,title,body,labels",
                 "--limit",
                 str(_OPEN_ISSUE_REFS_LIMIT),
             ),
@@ -116,4 +116,12 @@ class GhInbox:
                 f"gh issue list returned {len(issues)} issues, the limit it was asked for: "
                 "the list may be cut, so no flake issue is matched against it"
             )
-        return [IssueRef(i["url"], i.get("title") or "", i.get("body") or "") for i in issues]
+        return [
+            IssueRef(
+                i["url"],
+                i.get("title") or "",
+                i.get("body") or "",
+                tuple(label["name"] for label in i["labels"]) if "labels" in i else None,
+            )
+            for i in issues
+        ]

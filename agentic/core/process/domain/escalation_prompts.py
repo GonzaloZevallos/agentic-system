@@ -26,7 +26,11 @@ AskedCause = Literal["api_break_missing", "drawing_departure", "drawing_cap"]
 `MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer.
 `drawing_departure` and `drawing_cap` (GH-766) are answered by number: `drawing_answer.prompt_cause`
 selects their rows and `drawing_answer.prompt_lines` builds the per-number `--drawing` commands."""
-PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause
+FormatCause = Literal["format_refusal", "format_hold"]
+"""The cause of a `failure` escalation that a format failure raised (GH-1019): `format_refusal`
+while the poller retakes it or when it escalates, `format_hold` once the task is held. Picked by
+`escalate`, never stored: it is not a `MechanicalCause`."""
+PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause | FormatCause
 
 _RETRY: Final[Prompt] = (
     "Should the task try again now?",
@@ -113,6 +117,18 @@ ESCALATION_PROMPTS[("questions", "owner_decision")] = (
 )
 ESCALATION_PROMPTS[("questions", "spec_owned")] = (
     "The Spec is the owner's file: edit it and resume.",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("failure", "format_refusal")] = (
+    "A role's output was refused by a format rule and the retakes did not fix it. Resume the task "
+    "once the rule or the brief is fixed, or close it?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("failure", "format_hold")] = (
+    "The task is held: its format retakes are spent. Resume it once the refused rule is fixed, "
+    "or close it?",
     RESUME,
     (RESUME, CLOSE_UNPLANNED),
 )

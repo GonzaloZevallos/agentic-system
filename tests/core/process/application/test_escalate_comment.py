@@ -291,3 +291,45 @@ async def test_an_ordinary_escalation_still_labels_and_comments_and_clears_the_c
     assert patch == {"rate_limit_paused_at": None, "rate_limit_noticed_at": None}
     assert ports.documents.last.get("rate_limit_paused_at") is None
     assert ports.documents.last.get("rate_limit_noticed_at") is None
+
+
+def _format_state(**extra):
+    log = [
+        {"kind": "failure", "value": "schema", "section": "S", "rule": "schema_invalid"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    return state("Tech Lead failed", "failure", pause_log=log, **extra)
+
+
+def test_a_format_refusal_asks_to_fix_the_rule_not_to_try_again(cfg):
+    text = escalate.comment(_format_state(), cfg, memory_ports())
+
+    question, recommended, _ = rules.ESCALATION_PROMPTS[("failure", "format_refusal")]
+    assert f"Question: {question}" in text
+    assert f"Recommended: `{recommended.format(issue=12)}`" in text
+    assert "Should the task try again now?" not in text
+
+
+def test_a_held_format_task_asks_about_the_hold(cfg):
+    held = _format_state(format_hold={"rule": "schema_invalid", "cause": "rule_spent", "at": "x"})
+    text = escalate.comment(held, cfg, memory_ports())
+
+    question, _, _ = rules.ESCALATION_PROMPTS[("failure", "format_hold")]
+    assert f"Question: {question}" in text
+    assert "Should the task try again now?" not in text
+
+
+def test_a_failure_that_is_not_a_format_epoch_keeps_the_plain_question(cfg):
+    for log in (
+        [
+            {"kind": "failure", "value": "schema", "section": "S"},  # no rule
+            {"kind": "escalation", "value": "failure"},
+        ],
+        [
+            {"kind": "failure", "value": "schema", "section": "S", "rule": "schema_invalid"},
+            {"kind": "failure", "value": "rate_limit", "section": "T"},
+            {"kind": "escalation", "value": "failure"},
+        ],
+    ):
+        text = escalate.comment(state("x", "failure", pause_log=log), cfg, memory_ports())
+        assert "Question: Should the task try again now?" in text

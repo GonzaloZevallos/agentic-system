@@ -110,6 +110,7 @@ from .task import (
     PathRevision,
     PauseEntry,
     PullRequest,
+    RefusalRule,
     Restoration,
     ResumedPauseEntry,
     ResumeKey,
@@ -4273,6 +4274,10 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = (
 LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 RETAKE_SCHEDULE: tuple[int, ...] = retakes.RETAKE_SCHEDULE
 
+# The reasons a format failure carries (GH-1019): `format_retakes` owns them, this is the name the
+# poller asks "is this key a format key" by.
+FORMAT_REASONS = format_retakes.FORMAT_REASONS
+
 # Retakes a mechanical cause (GH-593) gets per cause, on `RETAKE_SCHEDULE`: network, CI without a
 # verdict or a transient delivery failure either clears in a few attempts or needs a human with
 # the evidence. Per cause, not per task, so alternating causes can add up; the poller's own
@@ -4428,13 +4433,20 @@ def terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
 def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
     """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
     both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
-    mechanical in one place. Every failure that ended the run (`terminal_failures`: not one the
+    mechanical in one place. A format epoch (`format_retakes.is_format_epoch` over the terminal
+    failures, GH-1019: the one test of it) is keyed by the reason of its last failure, `schema` or
+    `check`. Otherwise every failure that ended the run (`terminal_failures`: not one the
     run already retried) is in `EXTERNAL_REASONS`, and every escalation is either a `failure` one
     (a role broke, the failures say why) or carries a `MechanicalCause`; there is at least one
     failure or one cause. The key is the most recent entry's own: a failure's reason, or an
-    escalation's cause."""
+    escalation's cause. A mix of external and format failures, in either order, is a human's."""
+    terminal = terminal_failures(entries)
+    if format_retakes.is_format_epoch(terminal):
+        for entry in reversed(terminal):
+            if entry["kind"] == "failure":
+                return entry["value"]
     keyed: list[ResumeKey] = []
-    for entry in terminal_failures(entries):
+    for entry in terminal:
         if entry["kind"] == "failure":
             if entry["value"] not in EXTERNAL_REASONS:
                 return None
@@ -4445,6 +4457,33 @@ def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
             elif entry["value"] != "failure":
                 return None
     return keyed[-1] if keyed else None
+
+
+def format_epoch_entries(state: TaskState) -> list[PauseEntry]:
+    """The current epoch's terminal failures: what `format_retakes` reads (GH-1019). The one
+    composition every caller passes it."""
+    return terminal_failures(_current_epoch(state))
+
+
+def format_epoch(state: TaskState) -> bool:
+    """Whether the current epoch is a format failure and nothing else (GH-1019)."""
+    return format_retakes.is_format_epoch(format_epoch_entries(state))
+
+
+def format_epoch_rules(state: TaskState) -> tuple[RefusalRule, ...]:
+    """The distinct rules of the current epoch when it is a format epoch, `()` otherwise."""
+    return format_retakes.format_rules(format_epoch_entries(state))
+
+
+def format_held(state: TaskState) -> bool:
+    """Whether the task is held on its format retakes (GH-1019): the one question every gatherer
+    that needs to know whether a task is held asks."""
+    return bool(state.get("format_hold"))
+
+
+def format_hold_due(state: TaskState) -> bool:
+    """Whether a format epoch has no retake left: its counts and rules say the hold is due."""
+    return format_retakes.hold_due(state.get("format_retakes", {}), format_epoch_rules(state))
 
 
 def auto_resumable(state: TaskState) -> ResumeKey | None:
@@ -4555,7 +4594,10 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
     whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593); GitHub's rate
-    limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s."""
+    limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s. A format
+    key (GH-1019) gets what `format_retakes.limit` leaves, which can be `0`: the hold is due."""
+    if reason in FORMAT_REASONS:
+        return format_retakes.limit(state.get("format_retakes", {}), format_epoch_rules(state))
     if reason in MECHANICAL_CAUSES:
         return MECHANICAL_RETAKE_MAX
     if reason == "github_rate_limit":
@@ -5333,9 +5375,17 @@ def needs_a_human(state: TaskState) -> bool:
     the escalation that is left to the human). Everything else keeps the label: an
     `upstream` or `network` pause, a mixed set of external and own failures, an
     escalation that is not a failure. GitHub's rate limit (`github_rate_limit`, GH-989) is the
-    same, until it outlasts its wait and escalates as `RATE_LIMIT_PERSISTED`."""
+    same, until it outlasts its wait and escalates as `RATE_LIMIT_PERSISTED`.
+
+    A format epoch (GH-1019) is False while a retake remains (the poller retakes it) and once its
+    hold is announced (`noted_at`); in between, from the escalation that spent the last retake
+    until the hold's Nota has landed, it is True: a paused format task always carries the label or
+    has its hold announced, and the poller's noted step drops the label only after the Nota."""
     if state.get("escalated") in (ACCOUNT_LIMIT_PERSISTED, RATE_LIMIT_PERSISTED):
         return True
+    if format_epoch(state):
+        hold = state.get("format_hold")
+        return bool(hold and not hold.get("noted_at")) or (not hold and format_hold_due(state))
     return auto_resumable(state) not in ("account_limit", "github_rate_limit")
 
 

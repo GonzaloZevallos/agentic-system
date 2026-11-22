@@ -39,6 +39,7 @@ from .checkouts import task_base
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
+from .format_hold import FORMAT_HOLD
 from .plan import PART_BUILT_WHOLE
 from .poll import (
     AUTO_MERGED,
@@ -78,6 +79,7 @@ SYSTEM_COMMENTS = (
     RETAKEN_ORPHANED,
     RETAKES_SPENT,
     AUTO_MERGE_REFUSED,
+    FORMAT_HOLD,
     AUTO_MERGED,
     LANDING,
     RESTARTED_BY_LANDING,
@@ -970,7 +972,10 @@ def announce(r: Resumption, ports: Ports, *, by_poller: bool = False) -> list[Tr
     # account-limit-only pause (GH-381) is never labelled, so it is not unlabelled either.
     # GH-466: the spent-budget notice labels a run that was merely interrupted or orphaned, so
     # resuming one drops the label too.
-    if rules.needs_a_human(r.paused) or r.interrupted or r.source == "document":
+    # GH-1019: a format pause a person commented on was labelled by the poller's safety net while
+    # `needs_a_human` is False (a retake was left), so resuming it drops the label too.
+    unheld_format = rules.format_epoch(r.paused) and not rules.format_held(r.paused)
+    if rules.needs_a_human(r.paused) or unheld_format or r.interrupted or r.source == "document":
         failures.append(ports.tracker.drop_label(r.task_id, NEEDS_HUMAN))
     prefix = RESUMED_BY_POLLER if by_poller else RESUMED
     answered = " with your decision" if r.decision else ""

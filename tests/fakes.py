@@ -2122,7 +2122,7 @@ class MemoryTracker:
         posted = [
             IssueComment(body, POSTED_AT)
             for body in self.issue_comments(task_id)
-            if body.startswith(("Auto-merge refused: ", "Landing: "))
+            if body.startswith(("Auto-merge refused: ", "Landing: ", "Format hold: "))
         ]
         return [*self.timestamped.get(task_id, []), *posted]
 

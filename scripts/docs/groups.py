@@ -93,6 +93,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.escalate": "build",
     "application.evaluated": "build",
     "application.final_validation": "definition",
+    "application.format_hold": "support",
     "application.format_issue": "support",
     "application.full_checks": "checks",
     "application.integrate": "build",
