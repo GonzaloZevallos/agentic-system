@@ -89,13 +89,18 @@ def test_the_limit_is_what_format_retakes_leaves_per_rule_and_per_task():
     assert rules.auto_resume_limit(_state(log, format_retakes=backstop), "schema") == 0
 
 
-def test_a_format_epoch_needs_no_label_while_a_retake_is_left_and_does_once_spent():
+def test_a_format_epoch_needs_no_label_waiting_for_a_retake_spent_or_held():
     fresh = _state(_format(RULE))
     assert rules.needs_a_human(fresh) is False
     assert rules.needs_a_human(_state(_format(RULE), format_retakes={RULE: 1})) is False
     spent = _state(_format(RULE), format_retakes={RULE: 2})
     assert rules.format_hold_due(spent) is True
-    assert rules.needs_a_human(spent) is True  # temporary: the hold subtask makes it False
+    assert rules.needs_a_human(spent) is False
+    held = _state(_format(RULE), format_retakes={RULE: 2}, format_hold=HOLD)
+    assert rules.needs_a_human(held) is False
+    # a failure that is not a format epoch keeps the label even when it carries a hold key
+    mixed = _state([_failure("upstream", section="A"), *_format(RULE)], format_hold=HOLD)
+    assert rules.needs_a_human(mixed) is True
 
 
 def test_format_held_is_the_one_question_about_a_hold():

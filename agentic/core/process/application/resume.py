@@ -39,6 +39,7 @@ from .checkouts import task_base
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
+from .format_hold import FORMAT_HOLD
 from .plan import PART_BUILT_WHOLE
 from .poll import (
     AUTO_MERGED,
@@ -78,6 +79,7 @@ SYSTEM_COMMENTS = (
     RETAKEN_ORPHANED,
     RETAKES_SPENT,
     AUTO_MERGE_REFUSED,
+    FORMAT_HOLD,
     AUTO_MERGED,
     LANDING,
     RESTARTED_BY_LANDING,

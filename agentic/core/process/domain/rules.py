@@ -5377,14 +5377,13 @@ def needs_a_human(state: TaskState) -> bool:
     escalation that is not a failure. GitHub's rate limit (`github_rate_limit`, GH-989) is the
     same, until it outlasts its wait and escalates as `RATE_LIMIT_PERSISTED`.
 
-    A format epoch (GH-1019) is False while a retake is left. TEMPORARY: once no retake is left
-    (`format_hold_due`) it is True, so a spent budget still reaches the human with the label until
-    the `format-hold` subtask (the follow-up of GH-1048) holds the task instead and makes a format
-    epoch False whether it waits for a retake or is held."""
+    A format epoch (GH-1019) is False, whether it waits for a retake or is held: the poller holds
+    it once no retake is left (`format_hold_due`) and announces the hold with a Nota to the
+    tracker, never with the label."""
     if state.get("escalated") in (ACCOUNT_LIMIT_PERSISTED, RATE_LIMIT_PERSISTED):
         return True
     if format_epoch(state):
-        return format_hold_due(state)
+        return False
     return auto_resumable(state) not in ("account_limit", "github_rate_limit")
 
 

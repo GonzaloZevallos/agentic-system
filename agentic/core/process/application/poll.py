@@ -59,9 +59,11 @@ from ..domain.task import (
     PullRequest,
     RefusalRule,
     TaskState,
+    TrackerFailure,
     add_head_yield,
     add_tracker_failures,
     apply,
+    format_issue_for,
     refusal_noted_record,
 )
 from . import (
@@ -69,6 +71,7 @@ from . import (
     board_sync,
     ci_ref_sweep,
     close_issues,
+    format_hold,
     landing_lane,
     landing_plan,
     preflight,
@@ -1905,13 +1908,7 @@ def gather_resumes(
             continue
         is_format = reason in rules.FORMAT_REASONS
         if is_format and rules.format_hold_due(raw):
-            # No retake left, so never a candidate. The escalation labelled it when the budget was
-            # spent before it ran; a retake counted on this same epoch since (a child that died
-            # unregistered, a restore that failed) leaves it with no label, and no hold exists
-            # yet (GH-1019): the safety net puts the label, once, as for a person's comment.
-            if labels is not None:
-                _put_needs_human(ports, task_id, number, raw, labels, now)
-            continue
+            continue  # no retake left: `hold_format_failures` holds it, never a candidate (GH-1019)
         if _human_spoke_after_the_system(comments):
             # A person is talking (Human decision, issue #137): the pause is the
             # human's from here on, whatever the calendar says -- never retaken on
@@ -1986,6 +1983,112 @@ def escalate_persisted_limits(
             f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"
         )
     return lines
+
+
+def _record_tracker_failures(
+    ports: Ports, task_id: str, failures: Sequence[TrackerFailure | None]
+) -> bool:
+    """Writes the failures that landed into the task's `tracker_failures`, from a fresh load, and
+    says whether there was any."""
+    landed = [failure.record() for failure in failures if failure is not None]
+    if not landed:
+        return False
+    stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+    rows = add_tracker_failures(stored if isinstance(stored, list) else [], landed)
+    ports.documents.record_closure(task_id, {"tracker_failures": rows})
+    return True
+
+
+def _write_format_hold(ports: Ports, task_id: str, number: int, out: list[str]) -> TaskState | None:
+    """Holds the task whose format retakes are spent (GH-1019): `format_retakes.hold_patch` on a
+    fresh document, `issue_url` from `task.format_issue_for` and left out without a record, then
+    the poller's line. The fresh document decides again, so a resume that got there first, or a
+    hold that exists, writes nothing. Returns the document as it stands."""
+    fresh = ports.documents.load(task_id)
+    if fresh is None or not rules.format_epoch(fresh) or not rules.format_hold_due(fresh):
+        return fresh
+    entries = rules.format_epoch_entries(fresh)
+    format_rules = rules.format_epoch_rules(fresh)
+    counts = fresh.get("format_retakes", {})
+    rule = format_retakes.held_rule(counts, format_rules, entries)
+    record = format_issue_for(fresh.get("format_issue", []), rule) if rule else None
+    patch = format_retakes.hold_patch(
+        fresh, format_rules, record["url"] if record else None, ports.now(), entries
+    )
+    if not patch:
+        return fresh
+    state = apply(fresh, patch)
+    ports.documents.save(state)
+    out.append(f"agentic: poll: #{number} format hold ({patch['format_hold']['rule']})")
+    return state
+
+
+def _announce_format_hold(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    state: TaskState,
+    labels: Mapping[int, tuple[str, ...] | None] | None,
+    out: list[str],
+) -> None:
+    """The noted step of a hold (GH-1019), run each round while `noted_at` is absent: drop
+    `needs-human` (unless the labels the round read say it is gone), read the comments once for the
+    marker, post the Nota unless it is there, and only when both landed write `noted_patch`. A
+    failure goes to `tracker_failures` and the next round tries again; a comment read that failed
+    writes nothing."""
+    hold = state.get("format_hold")
+    if not hold or hold.get("noted_at"):
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        out.append(f"agentic: poll: #{number} format hold note unread")
+        return
+    failures: list[TrackerFailure | None] = []
+    read = labels.get(number) if labels is not None else None
+    if read is None or escalate_module.NEEDS_HUMAN in read:
+        failures.append(ports.tracker.drop_label(task_id, escalate_module.NEEDS_HUMAN))
+    if not any(format_hold.marker(hold) in c.body for c in comments):
+        failures.append(ports.tracker.note(task_id, format_hold.note(hold, number)))
+    if _record_tracker_failures(ports, task_id, failures):
+        return
+    fresh = ports.documents.load(task_id)
+    if fresh is None:
+        return
+    patch = format_retakes.noted_patch(fresh, ports.now())
+    if patch:
+        ports.documents.save(apply(fresh, patch))
+
+
+def hold_format_failures(
+    ports: Ports,
+    lock: RunLock,
+    busy: Collection[str],
+    labels: Mapping[int, tuple[str, ...] | None] | None = None,
+) -> list[str]:
+    """The hold step of the format retakes (GH-1019), a sibling of `escalate_persisted_limits`:
+    for every paused task whose format retakes are spent and has no hold, `_write_format_hold`;
+    for every held task the human was not told about, `_announce_format_hold`. It writes only
+    for a task with a free writer (`stack_hold.free_writer`: no live run, no live lock), and the
+    caller never calls it in a dry round. A task with `noted_at` costs no call."""
+    out: list[str] = []
+    for task_id in ports.documents.ids():
+        number = ports.inbox.issue_of(task_id)
+        if number is None:
+            continue
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("closed_at") or not raw.get("escalated"):
+            continue
+        owed_hold = not rules.format_held(raw) and rules.format_epoch(raw)
+        if owed_hold and not rules.format_hold_due(raw):
+            continue
+        if not owed_hold and (not rules.format_held(raw) or raw["format_hold"].get("noted_at")):
+            continue
+        if not stack_hold.free_writer(task_id, busy, lock):
+            continue
+        state = _write_format_hold(ports, task_id, number, out) if owed_hold else raw
+        if state is not None:
+            _announce_format_hold(ports, task_id, number, state, labels, out)
+    return out
 
 
 def rate_limit_escalations(
@@ -3498,6 +3601,15 @@ def run_once(
         skip=stack_held,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
+    if not dry_run:
+        # GH-1019: the task whose format retakes are spent is held, and its Nota announced; only
+        # a task with a free writer, and `needs-human` is dropped only from the round's own read.
+        human_lines += hold_format_failures(
+            ports,
+            lock,
+            {r.task_id for r in registry.live() if r.product == mine},
+            None if starts_nothing or refs_note else _labels_of(open_refs),
+        )
     if not starts_nothing and not dry_run:
         # GH-989: the GitHub limit's 12 h persist and notice, from the documents alone; a task
         # with a live run or a lock is not written.
