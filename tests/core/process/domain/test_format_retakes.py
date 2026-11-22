@@ -301,7 +301,7 @@ def test_after_a_fixed_release_the_held_rule_has_a_retake_left(held, cause, coun
     assert fr.limit(after.get("format_retakes") or {}, [held]) >= 1
     assert after["format_hold"] is None
     others = {rule: n for rule, n in counts.items() if rule != held}
-    if cause == "rule_spent" and sum(others.values()) < 5:
+    if cause == "rule_spent" and sum(others.values()) < 6:
         assert after["format_retakes"] == {r: n for r, n in others.items()}
 
 

@@ -2765,6 +2765,11 @@ def test_a_format_released_that_is_not_a_list_with_a_whole_entry_reads_as_no_key
     assert "format_released" not in _stored(format_released=raw)
 
 
+def test_a_format_released_entry_without_a_closing_commit_key_reads_as_null():
+    parsed = _stored(format_released=[{"issue_url": RELEASED_URL, "at": "2026-11-22T10:00:00Z"}])
+    assert parsed["format_released"] == [_released()]
+
+
 def test_no_format_released_leaves_a_document_byte_identical():
     legacy = document.render(golden_state())
     assert document.render(golden_state(format_released=[])) == legacy
