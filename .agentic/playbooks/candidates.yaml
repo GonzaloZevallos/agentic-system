@@ -2326,3 +2326,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-22T03:48:37.175+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant of the form 'never neither A nor B', order the steps so the fallback is released only after the replacement lands, and test the case where the replacing step fails.
+  confidence: medium
+  seen_in:
+  - GH-1048
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-22T18:42:10.817+00:00'
