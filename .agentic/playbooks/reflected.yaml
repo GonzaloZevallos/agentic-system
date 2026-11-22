@@ -1592,3 +1592,5 @@ tasks:
   GH-1047@review:
     cost_usd: 0.0483
     decisions: 1
+  GH-1033@review:
+    cost_usd: 0.0455

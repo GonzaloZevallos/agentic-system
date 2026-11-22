@@ -2316,3 +2316,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-22T02:57:22.636+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a doc sentence cites a limit, cap, threshold or notice, name the symbol that sets it with its module and give its current value from the code. Do not name only the classifier that reads it.
+  confidence: medium
+  seen_in:
+  - GH-1033
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-22T03:48:37.175+00:00'
