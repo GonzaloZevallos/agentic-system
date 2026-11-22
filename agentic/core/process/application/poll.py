@@ -2029,11 +2029,11 @@ def _announce_format_hold(
     number: int,
     state: TaskState,
     labels: Mapping[int, tuple[str, ...] | None] | None,
-    out: list[str],
 ) -> None:
-    """The noted step of a hold (GH-1019), run each round while `noted_at` is absent: drop
-    `needs-human` (unless the labels the round read say it is gone), read the comments once for the
-    marker, post the Nota unless it is there, and only when both landed write `noted_patch`. A
+    """The noted step of a hold (GH-1019), run each round while `noted_at` is absent: read the
+    comments once for the marker, post the Nota unless it is there, and only then drop
+    `needs-human` (unless the labels the round read say it is gone), so a task is never left with
+    neither the label nor the announcement. `noted_patch` is written only when both landed. A
     failure goes to `tracker_failures` and the next round tries again; a comment read that failed
     writes nothing."""
     hold = state.get("format_hold")
@@ -2041,15 +2041,15 @@ def _announce_format_hold(
         return
     comments = read_comments(ports, task_id)
     if comments is None:
-        out.append(f"agentic: poll: #{number} format hold note unread")
         return
-    failures: list[TrackerFailure | None] = []
+    if not any(format_hold.marker(hold) in c.body for c in comments) and _record_tracker_failures(
+        ports, task_id, [ports.tracker.note(task_id, format_hold.note(hold, number))]
+    ):
+        return  # the label stays until the Nota is there
     read = labels.get(number) if labels is not None else None
-    if read is None or escalate_module.NEEDS_HUMAN in read:
-        failures.append(ports.tracker.drop_label(task_id, escalate_module.NEEDS_HUMAN))
-    if not any(format_hold.marker(hold) in c.body for c in comments):
-        failures.append(ports.tracker.note(task_id, format_hold.note(hold, number)))
-    if _record_tracker_failures(ports, task_id, failures):
+    if (read is None or escalate_module.NEEDS_HUMAN in read) and _record_tracker_failures(
+        ports, task_id, [ports.tracker.drop_label(task_id, escalate_module.NEEDS_HUMAN)]
+    ):
         return
     fresh = ports.documents.load(task_id)
     if fresh is None:
@@ -2087,7 +2087,7 @@ def hold_format_failures(
             continue
         state = _write_format_hold(ports, task_id, number, out) if owed_hold else raw
         if state is not None:
-            _announce_format_hold(ports, task_id, number, state, labels, out)
+            _announce_format_hold(ports, task_id, number, state, labels)
     return out
 
 

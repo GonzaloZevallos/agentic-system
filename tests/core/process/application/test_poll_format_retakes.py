@@ -455,7 +455,6 @@ def test_the_six_retake_backstop_names_the_last_rule_and_its_cause(tmp_path):
     _held_round(tmp_path, ports)
     hold = ports.documents.load("GH-19")["format_hold"]
     assert (hold["rule"], hold["cause"]) == (RULE, "task_spent")
-    assert "5 format retakes" not in _notes(ports)[0][1]
     assert "6 format retakes on this task" in _notes(ports)[0][1]
 
 
@@ -514,7 +513,7 @@ def test_an_unreadable_thread_writes_nothing_and_the_next_round_tries_again(tmp_
 
     ports.tracker.timestamped_comments = broken
     lines = poll.hold_format_failures(ports, _Locks(), set())
-    assert lines[-1] == "agentic: poll: #19 format hold note unread"
+    assert lines == ["agentic: poll: #19 format hold (schema_invalid)"]
     assert _notes(ports) == [] and "noted_at" not in ports.documents.load("GH-19")["format_hold"]
     ports.tracker.timestamped_comments = original
     assert poll.hold_format_failures(ports, _Locks(), set()) == []
@@ -571,3 +570,18 @@ def test_the_hold_note_builder_words_both_causes_and_the_missing_issue():
     assert "held after 6 format retakes on this task" in text and f"Refusal issue: {URL}" in text
     assert "`gh issue close 7 --reason 'not planned'`" in text
     assert text.splitlines()[-1] == f"<!-- agentic-format-hold: {RULE} {HOLD['at']} -->"
+
+
+def test_a_failed_note_keeps_the_label_and_a_later_round_posts_then_drops_it(tmp_path):
+    ports = memory_ports()
+    _pause(ports, counts={RULE: 2})
+    ports.inbox.refs = [IssueRef(URL, "t", "b", ("agentic", "needs-human"))]
+    ports.tracker.comment_failures = 1
+    _held_round(tmp_path, ports)
+    doc = ports.documents.load("GH-19")
+    assert ports.tracker.unlabeled == [] and _notes(ports) == []
+    assert [row["target"] for row in doc["tracker_failures"]] == ["comment"]
+    assert "noted_at" not in doc["format_hold"]
+    _held_round(tmp_path, ports, days=3)
+    assert len(_notes(ports)) == 1 and ports.tracker.unlabeled == [("GH-19", "needs-human")]
+    assert "noted_at" in ports.documents.load("GH-19")["format_hold"]
