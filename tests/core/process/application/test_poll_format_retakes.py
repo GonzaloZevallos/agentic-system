@@ -616,7 +616,7 @@ def _resumption(paused):
     )
 
 
-def test_resuming_a_format_pause_drops_the_safety_net_label_but_not_a_noted_hold_s():
+def test_resuming_a_format_pause_drops_the_safety_net_label_but_not_a_noted_hold():
     ports = memory_ports()
     _pause(ports, counts={RULE: 1})  # a retake is left: needs_a_human is False, a human commented
     paused = ports.documents.load("GH-19")
@@ -627,3 +627,4 @@ def test_resuming_a_format_pause_drops_the_safety_net_label_but_not_a_noted_hold
     _pause(ports, counts={RULE: 2}, hold=HOLD)  # announced: the label was dropped with the Nota
     resume.announce(_resumption(ports.documents.load("GH-19")), ports)
     assert ports.tracker.unlabeled == []
+    assert ports.tracker.comments[-1][1].startswith(resume.RESUMED)  # announce did run
