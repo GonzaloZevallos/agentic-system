@@ -2795,11 +2795,14 @@ FLAKE_LOCK_WAIT_S = 10
 
 @dataclass(frozen=True)
 class IssueRef:
-    """An open tracker issue as the flake path reads it: its URL, title and body."""
+    """An open tracker issue as the flake path reads it: its URL, title and body. `labels` is the
+    names of its labels (GH-1019: the poller's `needs-human` safety net reads them off the same
+    read), `None` when the tracker did not say."""
 
     url: str
     title: str
     body: str
+    labels: tuple[str, ...] | None = None
 
 
 def flake_issue_for(issues: Sequence[IssueRef], check: str) -> IssueRef | None:

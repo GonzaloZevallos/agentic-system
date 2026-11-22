@@ -34,6 +34,7 @@ from ..domain import (
     document,
     exempt_queue,
     experiment,
+    format_retakes,
     hold,
     landing_order,
     launch_order,
@@ -56,6 +57,7 @@ from ..domain.task import (
     INTEGRATION,
     HeadYield,
     PullRequest,
+    RefusalRule,
     TaskState,
     add_head_yield,
     add_tracker_failures,
@@ -1816,8 +1818,58 @@ def _rate_limit_candidate(
     )
 
 
+# A `label` row of `tracker_failures` this recent means the `needs-human` write failed just now:
+# the safety net of a format pause waits before it tries again (GH-1019).
+LABEL_RETRY = timedelta(hours=1)
+
+
+def _label_failed_recently(raw: TaskState, now: datetime) -> bool:
+    """Whether `tracker_failures` holds a `label` row from the last `LABEL_RETRY`."""
+    for row in raw.get("tracker_failures", []):
+        if row["target"] != "label":
+            continue
+        at = _parse_timestamp(row["at"])
+        if at is not None and now - at < LABEL_RETRY:
+            return True
+    return False
+
+
+def _put_needs_human(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    labels: Mapping[int, tuple[str, ...] | None],
+    now: datetime,
+) -> None:
+    """The safety net of a format pause a person commented on (GH-1019): a retake is not coming,
+    so the task is the human's and gets `needs-human`, a Nota (`Tracker.put_label`). Skipped when
+    the labels the round already read carry it (an issue the read did not list is closed) or when
+    a label write failed in the last hour; a failure goes to `tracker_failures`, from a fresh
+    load, replacing the older `label` row so the hour counts from the last failure."""
+    if number not in labels:
+        return
+    read = labels[number]
+    if read is not None and escalate_module.NEEDS_HUMAN in read:
+        return
+    if _label_failed_recently(raw, now):
+        return
+    failure = ports.tracker.put_label(task_id, escalate_module.NEEDS_HUMAN)
+    if failure is None:
+        return
+    fresh = ports.documents.load(task_id) or {}
+    kept = [row for row in fresh.get("tracker_failures", []) if row["target"] != "label"]
+    rows = add_tracker_failures(kept, [failure.record()])
+    ports.documents.record_closure(task_id, {"tracker_failures": rows})
+
+
 def gather_resumes(
-    ports: Ports, now: datetime, *, skip: frozenset[int] = frozenset()
+    ports: Ports,
+    now: datetime,
+    *,
+    skip: frozenset[int] = frozenset(),
+    format_rules: dict[int, tuple[RefusalRule, ...]] | None = None,
+    labels: Mapping[int, tuple[str, ...] | None] | None = None,
 ) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
     `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
@@ -1849,19 +1901,30 @@ def gather_resumes(
         since = _since_last_escalated(comments)
         if since is None:
             continue
+        is_format = reason in rules.FORMAT_REASONS
+        if is_format and rules.format_hold_due(raw):
+            continue  # no retake left: the escalation labelled it, and it is never a candidate
         if _human_spoke_after_the_system(comments):
             # A person is talking (Human decision, issue #137): the pause is the
             # human's from here on, whatever the calendar says -- never retaken on
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
+            if is_format and labels is not None:
+                _put_needs_human(ports, task_id, number, raw, labels, now)
             continue
         chase = _prior_auto_resumes(comments)
         resets_at = None
-        if reason == "account_limit":
+        if is_format:
+            prior, ceiling_spent = sum(raw.get("format_retakes", {}).values()), False
+            if format_rules is not None:
+                format_rules[number] = rules.format_epoch_rules(raw)
+        elif reason == "account_limit":
             prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
             resets_at = rules.stated_reset(raw)
         else:
             prior, ceiling_spent = chase, False
         limit = rules.auto_resume_limit(raw, reason)
+        if is_format:
+            limit += prior  # `auto_resume_limit` says the retakes left; the calendar wants slots
         resumes.append(
             rules.ResumeCandidate(
                 number,
@@ -2370,6 +2433,12 @@ def _issue_number(url: str) -> int | None:
     return int(tail) if tail.isdigit() else None
 
 
+def _labels_of(refs: Sequence[IssueRef]) -> dict[int, tuple[str, ...] | None]:
+    """The labels each open issue carries, from the round's one read of them (`None`: the
+    tracker did not say)."""
+    return {n: ref.labels for ref in refs if (n := _issue_number(ref.url)) is not None}
+
+
 def read_open_refs(ports: Ports) -> tuple[list[IssueRef], str | None]:
     """The round's one read of every open issue, for the launch order (GH-836), and the line
     that says when it failed: the closed name of the error (`ListMayBeCut`, `ValueError`,
@@ -2674,6 +2743,7 @@ def _spawn_resume(
     sleep: Callable[[float], None],
     crash: CrashRetake | None = None,
     orphan_prior: int | None = None,
+    format_carried: tuple[RefusalRule, ...] | None = None,
 ) -> list[str]:
     """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
     --yes --detach` child (plus `--from-document` for an orphan retake, GH-403: `orphan_prior`
@@ -2685,9 +2755,17 @@ def _spawn_resume(
     Neither kind records a launch attempt: that calendar belongs to `launch` alone. A crash
     retake (`crash`, counted once by `gather_retakes`) names its own count and cap there. A
     `comment` of `None` posts nothing: a GitHub rate-limit pause spends no retake budget, so
-    its only comment is the `Resumed by the poller:` the resume itself posts (GH-989)."""
+    its only comment is the `Resumed by the poller:` the resume itself posts (GH-989). A format
+    retake (`format_carried`, GH-1019: the rules `gather_resumes` carried) is counted by
+    `_count_format_retake` before the spawn, or is stale and spawns nothing."""
     number = action.issue
     task_id = ports.inbox.task_id(number)
+    previous: dict[RefusalRule, int] | None = None
+    if format_carried is not None:
+        counted = _count_format_retake(ports, task_id, number, format_carried)
+        if isinstance(counted, str):
+            return [counted]
+        previous = counted
     if crash is not None:
         prior = crash.prior
     elif orphan_prior is not None:
@@ -2707,7 +2785,8 @@ def _spawn_resume(
     try:
         pid = launcher.spawn(argv)
     except OSError as exc:
-        return [f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"]
+        line = f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"
+        return [line, *_restore_format_count(ports, task_id, number, previous)]
     lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
     try:
         if comment is not None:
@@ -2721,6 +2800,45 @@ def _spawn_resume(
             f"agentic: poll: retake #{number} -> not registered (retake {prior + 1} of {cap})"
         )
     return lines
+
+
+def _count_format_retake(
+    ports: Ports, task_id: str, number: int, carried: tuple[RefusalRule, ...]
+) -> dict[RefusalRule, int] | str:
+    """Counts one format retake before its child spawns (GH-1019), under the round's
+    `registry.exclusive()`: the fresh document, its key and rules recomputed, and only when it is
+    still a format epoch of the very rules `gather_resumes` carried (and not held) is
+    `format_retakes.count_patch` saved. Returns the map as it was, for `_restore_format_count`,
+    or the `stale (not counted)` line, with nothing written, when the owner got there first."""
+    fresh = ports.documents.load(task_id)
+    if (
+        fresh is None
+        or rules.format_held(fresh)
+        or rules.auto_resumable(fresh) not in rules.FORMAT_REASONS
+        or rules.format_epoch_rules(fresh) != carried
+    ):
+        return f"agentic: poll: format retake #{number} -> stale (not counted)"
+    entries = rules.format_epoch_entries(fresh)
+    previous = dict(fresh.get("format_retakes", {}))
+    ports.documents.save(apply(fresh, format_retakes.count_patch(fresh, entries)))
+    return previous
+
+
+def _restore_format_count(
+    ports: Ports, task_id: str, number: int, previous: dict[RefusalRule, int] | None
+) -> list[str]:
+    """Puts the `format_retakes` map back to what it was before a spawn that raised, so a retake
+    that never started is not spent. A restore that fails says so; the retake stays counted."""
+    if previous is None:
+        return []
+    try:
+        fresh = ports.documents.load(task_id)
+        if fresh is None:
+            raise ValueError("no document")
+        ports.documents.save(apply(fresh, {"format_retakes": previous}))
+    except (ValueError, OSError) as exc:
+        return [f"agentic: poll: format retake #{number} -> count not restored: {exc}"]
+    return []
 
 
 _SHAPE_TEXT: Mapping[retake_rules.RetakeShape, str] = {
@@ -2806,6 +2924,7 @@ def execute(
     reruns: frozenset[int] = frozenset(),
     orphan_retakes: Mapping[int, int] | None = None,
     spent_notices: Mapping[int, RetakesSpent] | None = None,
+    format_rules: Mapping[int, tuple[RefusalRule, ...]] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -2833,7 +2952,9 @@ def execute(
     own calendar. A `retake` whose `reason` is `orphaned` (GH-403) resumes `--from-document` and
     posts `RETAKEN_ORPHANED` with `orphaned_comment`, from the count `orphan_retakes[issue]`
     that `gather_orphans` made. A `retakes_spent` action announces the spent budget of
-    `spent_notices[issue]` (`_announce_spent`), spawning nothing."""
+    `spent_notices[issue]` (`_announce_spent`), spawning nothing. A `resume` of an issue in
+    `format_rules` (GH-1019) counts its format retake before the spawn (`_count_format_retake`),
+    here and nowhere else."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -2865,6 +2986,7 @@ def execute(
                 else f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
                 register_timeout_s,
                 sleep,
+                format_carried=(format_rules or {}).get(action.issue),
             )
         elif action.kind == "retake" and action.reason == "crash":
             crash = (crash_retakes or {})[action.issue]
@@ -3331,7 +3453,18 @@ def run_once(
         ports, lock, stack_view, queued_all, now, dry_run=dry_run, space_held=bool(held)
     )
     queued = {n: raw for n, raw in queued_all.items() if n not in stack_held}
-    resumes = gather_resumes(ports, now, skip=stack_held)
+    # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
+    # starts nothing, so it has no order to rank and makes no call. Read before the resumes:
+    # their `needs-human` safety net (GH-1019) asks the labels it carries, never a read per task.
+    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
+    format_rules: dict[int, tuple[RefusalRule, ...]] = {}
+    resumes = gather_resumes(
+        ports,
+        now,
+        skip=stack_held,
+        format_rules=format_rules,
+        labels=None if starts_nothing or dry_run or refs_note else _labels_of(open_refs),
+    )
     crash_retakes: dict[int, CrashRetake] = {}
     spent_notices: dict[int, RetakesSpent] = {}
     seen: dict[int, Seen] = {}
@@ -3363,9 +3496,6 @@ def run_once(
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
-    # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
-    # starts nothing, so it has no order to rank and makes no call.
-    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
     with registry.exclusive():
         running = registry.live()
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
@@ -3617,6 +3747,7 @@ def run_once(
                 frozenset(reruns),
                 orphans,
                 spent_notices,
+                format_rules,
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.

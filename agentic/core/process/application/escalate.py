@@ -108,6 +108,14 @@ def _drawing_block(state: TaskState, cause: drawing_answer.Cause, number: int | 
     return block
 
 
+def _format_cause(state: TaskState) -> escalation_prompts.FormatCause | None:
+    """The prompt cause of a format failure (GH-1019): `format_hold` when the task is held,
+    `format_refusal` for any other format epoch, `None` for a failure of another kind."""
+    if rules.format_held(state):
+        return "format_hold"
+    return "format_refusal" if rules.format_epoch(state) else None
+
+
 def _prompt_block(
     state: TaskState,
     cls: EscalationClass,
@@ -129,9 +137,10 @@ def _prompt_block(
         refusal = state.get("spec_refusal")
         # A refused spec escalates as `classification`: its own cause picks the question.
         cause = refusal["cause"] if cls == "classification" and refusal else None
-        question, recommended, options = escalation_prompts.prompt_for(
-            cls, cause or state.get("escalation_cause")
-        )
+        asked: escalation_prompts.PromptCause | None = cause or state.get("escalation_cause")
+        if cls == "failure":
+            asked = _format_cause(state) or asked
+        question, recommended, options = escalation_prompts.prompt_for(cls, asked)
     fill = {
         "issue": "<issue>" if number is None else str(number),
         "usd": "<usd>" if usd is None else usd,
