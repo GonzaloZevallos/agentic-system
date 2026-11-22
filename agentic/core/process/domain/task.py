@@ -495,6 +495,16 @@ class FormatHold(TypedDict):
     noted_at: NotRequired[str]
 
 
+class FormatReleased(TypedDict):
+    """One release of a format hold (GH-1020): the refusal issue it waited on (`issue_url`), the
+    commit that closed it (`closing_commit`, `None` when a person closed it by hand) and when
+    (`at`, ISO UTC). One per release in `TaskState.format_released`."""
+
+    issue_url: str
+    closing_commit: str | None
+    at: str
+
+
 class FormatIssueRecord(TypedDict):
     """The issue filed for one refusal rule (GH-1011): the rule, the issue's URL and when
     (ISO UTC). One per rule in `TaskState.format_issue`, read only through `format_issue_for`."""
@@ -2465,6 +2475,10 @@ class TaskState(TaskInput, total=False):
     # `format_retakes` and cleared (as `None`) by `rules.resumed`; absent reads as none.
     format_retakes: NotRequired[dict[RefusalRule, int]]
     format_hold: NotRequired[FormatHold]
+    # The history of the holds released on their own (GH-1020): the whole list, never only the
+    # new entry, written only by `format_retakes.fixed_release_patch`. A person's resume never
+    # clears it; absent (or `None` in memory) reads as none. No reducer: `apply` overwrites it.
+    format_released: NotRequired[list[FormatReleased]]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records

@@ -1,10 +1,15 @@
 """The pure rules of the format retakes (GH-1019, part 1): readers, composers and the keys they
 write. Inert: nothing here is read by a decision until part 2."""
 
-from typing import Any
+import copy
+import itertools
+from typing import Any, get_args
+
+import pytest
 
 from agentic.core.process.domain import format_retakes as fr
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, task
+from agentic.core.process.domain.task import RefusalRule
 
 
 def failure(rule: str | None = "schema_invalid", reason: str = "schema", section: str = "") -> Any:
@@ -262,3 +267,120 @@ def test_release_patch_clears_only_the_keys_the_state_carries():
     assert fr.release_patch(STATE) == {"format_retakes": None, "format_hold": None}
     unset: Any = {"title": "t", "format_hold": None}
     assert fr.release_patch(unset) == {}
+
+
+# GH-1020: the release of a hold and the record of it.
+
+URL = "https://github.com/acme/shop/issues/9"
+SHA = "d" * 40
+AT = "2026-11-22T10:00:00Z"
+
+
+def _held(rule: RefusalRule, cause: str, counts: dict[str, int], **more: Any) -> Any:
+    hold = {"rule": rule, "cause": cause, "at": AT, "issue_url": URL}
+    return {"id": "GH-1", "format_hold": hold, "format_retakes": counts, **more}
+
+
+def _cases() -> list[tuple[RefusalRule, str, dict[str, int]]]:
+    rules_ = get_args(RefusalRule)
+    held, others = rules_[0], rules_[1:4]
+    cases: list[tuple[RefusalRule, str, dict[str, int]]] = []
+    for values in itertools.product(range(3), repeat=4):
+        counts = dict(zip((held, *others), values, strict=True))
+        if values[0] == 2:
+            cases.append((held, "rule_spent", counts))
+        elif sum(values) >= 6:
+            cases.append((held, "task_spent", counts))
+    return cases
+
+
+@pytest.mark.parametrize(("held", "cause", "counts"), _cases())
+def test_after_a_fixed_release_the_held_rule_has_a_retake_left(held, cause, counts):
+    state = _held(held, cause, counts)
+    after = task.apply(state, fr.fixed_release_patch(state, AT, SHA))
+    assert fr.limit(after.get("format_retakes") or {}, [held]) >= 1
+    assert after["format_hold"] is None
+    others = {rule: n for rule, n in counts.items() if rule != held}
+    if cause == "rule_spent" and sum(others.values()) < 6:
+        assert after["format_retakes"] == {r: n for r, n in others.items()}
+
+
+def test_the_property_covers_both_causes_and_the_emptied_case():
+    causes = {cause for _, cause, _ in _cases()}
+    assert causes == {"rule_spent", "task_spent"}
+    assert any(sum(c.values()) - c[get_args(RefusalRule)[0]] >= 5 for _, _, c in _cases())
+
+
+def test_fixed_release_patch_never_mutates_the_state():
+    state = _held("schema_invalid", "rule_spent", {"schema_invalid": 2, "unmapped": 1})
+    before = copy.deepcopy(state)
+    fr.fixed_release_patch(state, AT, SHA)
+    assert state == before
+
+
+def test_fixed_release_patch_is_empty_without_a_hold_or_an_issue_url():
+    assert fr.fixed_release_patch({"id": "GH-1"}, AT, SHA) == {}
+    assert fr.fixed_release_patch({"id": "GH-1", "format_hold": None}, AT, SHA) == {}
+    state = _held("schema_invalid", "rule_spent", {"schema_invalid": 2})
+    del state["format_hold"]["issue_url"]
+    assert fr.fixed_release_patch(state, AT, SHA) == {}
+
+
+def test_format_released_carries_the_previous_entries_plus_the_new_one():
+    earlier = {
+        "issue_url": "https://github.com/acme/shop/issues/3",
+        "closing_commit": None,
+        "at": AT,
+    }
+    state = _held("schema_invalid", "rule_spent", {"schema_invalid": 2}, format_released=[earlier])
+    patch = fr.fixed_release_patch(state, AT, None)
+    assert patch["format_released"] == [
+        earlier,
+        {"issue_url": URL, "closing_commit": None, "at": AT},
+    ]
+    assert patch["format_hold"] is None
+    assert patch["format_retakes"] is None
+
+
+def test_a_state_without_counts_leaves_format_retakes_out_of_the_patch():
+    state = _held("schema_invalid", "rule_spent", {})
+    del state["format_retakes"]
+    assert "format_retakes" not in fr.fixed_release_patch(state, AT, SHA)
+
+
+def test_released_before_compares_the_exact_pair():
+    state: Any = {"format_released": [{"issue_url": URL, "closing_commit": None, "at": AT}]}
+    assert not fr.released_before(state, URL, SHA)
+    assert fr.released_before(state, URL, None)
+    state = {"format_released": [{"issue_url": URL, "closing_commit": SHA, "at": AT}]}
+    assert fr.released_before(state, URL, SHA)
+    assert not fr.released_before(state, "https://github.com/acme/shop/issues/4", SHA)
+    assert not fr.released_before({"id": "GH-1"}, URL, SHA)
+    none_in_memory: Any = {"id": "GH-1", "format_released": None}
+    assert not fr.released_before(none_in_memory, URL, SHA)
+
+
+def test_release_patch_does_not_touch_format_released():
+    state = _held("schema_invalid", "rule_spent", {"schema_invalid": 2}, format_released=[])
+    assert "format_released" not in fr.release_patch(state)
+
+
+def test_a_count_after_a_release_does_not_raise_on_cleared_keys():
+    state = _held("schema_invalid", "rule_spent", {"schema_invalid": 2})
+    entries = [
+        {"kind": "failure", "value": "schema", "section": "S", "rule": "schema_invalid"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    cleared = task.apply(state, fr.release_patch(state))
+    counted = task.apply(cleared, fr.count_patch(cleared, entries))
+    assert counted["format_retakes"] == {"schema_invalid": 1}
+    emptied = _held(
+        "schema_invalid",
+        "task_spent",
+        {"unmapped": 2, "output_missing": 2, "part_over_budget": 2, "schema_invalid": 0},
+    )
+    after = task.apply(emptied, fr.fixed_release_patch(emptied, AT, SHA))
+    assert after["format_retakes"] is None
+    again = task.apply(after, fr.count_patch(after, entries))
+    assert fr.limit(again["format_retakes"], ["schema_invalid"]) == 1
+    assert fr.hold_patch(after, ["schema_invalid"], URL, AT, entries) == {}

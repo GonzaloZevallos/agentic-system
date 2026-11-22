@@ -177,6 +177,10 @@ FIXTURES: dict[str, object] = {
         "issue_url": PR,
         "noted_at": "2026-11-18T11:00:00Z",
     },
+    "format_released": [
+        {"issue_url": PR, "closing_commit": None, "at": NOW},
+        {"issue_url": PR, "closing_commit": SHA, "at": "2026-11-18T12:00:00Z"},
+    ],
     "format_issue": [
         {"rule": "parts_when_fits", "url": "https://github.com/acme/shop/issues/9", "at": NOW}
     ],
@@ -574,6 +578,7 @@ def test_a_spec_survives_with_the_commit_the_guard_moves():
         ("split_repointed_at", None),
         ("split_closed_at", ""),
         ("split_abandoned_at", None),
+        ("format_released", []),
     ],
 )
 def test_a_key_added_by_this_task_writes_nothing_when_unset(key: str, unset: object):

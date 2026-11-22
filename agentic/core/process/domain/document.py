@@ -36,6 +36,7 @@ from .task import (
     DepartureRecord,
     FormatHold,
     FormatIssueRecord,
+    FormatReleased,
     HoldCause,
     RefusalRule,
     RoleRun,
@@ -402,6 +403,22 @@ def _format_hold(raw: object) -> dict[str, str] | None:
     return {"rule": raw["rule"], "cause": raw["cause"], "at": raw["at"], **optional}
 
 
+def _format_released(raw: object) -> list[FormatReleased]:
+    """The stored `format_released` (GH-1020) without the entries that are not whole, in order:
+    an entry is whole when it is a map, `issue_url` and `at` are non-empty strings and
+    `closing_commit` is `None` or a non-empty string. Anything that is not a list reads as none."""
+    return [
+        FormatReleased(
+            issue_url=item["issue_url"], closing_commit=item.get("closing_commit"), at=item["at"]
+        )
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and _is_text(item.get("issue_url"))
+        and _is_text(item.get("at"))
+        and (item.get("closing_commit") is None or _is_text(item.get("closing_commit")))
+    ]
+
+
 def _pause_entry(raw: object) -> object:
     """A stored `pause_log` entry; a failure entry whose `rule` is not a `RefusalRule` loses
     that key alone (GH-1019), every other entry is kept as it was."""
@@ -512,6 +529,11 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             del state["format_hold"]
         else:
             state["format_hold"] = hold
+    if "format_released" in state:
+        if released := _format_released(state["format_released"]):
+            state["format_released"] = released
+        else:
+            del state["format_released"]
     if isinstance(state.get("pause_log"), list):
         state["pause_log"] = [_pause_entry(entry) for entry in state["pause_log"]]
     if "drawing_departures" in state:
@@ -842,6 +864,11 @@ def render(
         # the declaration order of the rules, the hold's fields in a fixed one.
         **({"format_retakes": r} if (r := _ordered_counts(state.get("format_retakes"))) else {}),
         **({"format_hold": h} if (h := _ordered_hold(state.get("format_hold"))) else {}),
+        # The holds released on their own (GH-1020), the list of what `format_hold` once was,
+        # written only when non-empty and in insertion order.
+        **(
+            {"format_released": r} if (r := _ordered_released(state.get("format_released"))) else {}
+        ),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task
@@ -926,6 +953,15 @@ def _ordered_hold(hold: FormatHold | None) -> dict[str, str]:
     if noted := hold.get("noted_at"):
         ordered["noted_at"] = noted
     return ordered
+
+
+def _ordered_released(released: list[FormatReleased] | None) -> list[dict[str, str | None]]:
+    """`format_released` with each entry's fields in a fixed order, `closing_commit` written even
+    when null, the entries in insertion order; `[]` for none."""
+    return [
+        {"issue_url": e["issue_url"], "closing_commit": e["closing_commit"], "at": e["at"]}
+        for e in released or []
+    ]
 
 
 def _rounded_shadow(record: Mapping[str, Any]) -> dict[str, Any]:
