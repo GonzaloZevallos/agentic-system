@@ -31,6 +31,8 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class stage0_rotation__Heartbeat["Heartbeat"]
+    class stage0_rotation__Keep["Keep"]
     class stage0_rotation__Prepared["Prepared"]
     class stage0_rotation__Proceed["Proceed"]
     class stage0_rotation__Red["Red"]

@@ -4396,7 +4396,7 @@ def logged(
     return {**patch, "pause_log": entries}
 
 
-def _current_epoch(state: TaskState) -> list[PauseEntry]:
+def current_epoch(state: TaskState) -> list[PauseEntry]:
     """The entries `rules.auto_resumable`/`rules.auto_resume_limit` read: everything
     after the last `"resumed"` entry (a human's decision, or the poller's own retake),
     or the whole log when the task has never been resumed."""
@@ -4406,6 +4406,28 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
         if entry["kind"] == "resumed":
             last_resumed = i
     return log[last_resumed + 1 :]
+
+
+def previous_epoch(state: TaskState) -> list[PauseEntry]:
+    """The entries strictly between the second-to-last and the last `resumed` entry: the epoch
+    the last resume closed. Empty with no `resumed`; with exactly one, everything before it."""
+    log = state.get("pause_log", [])
+    resumed = [i for i, entry in enumerate(log) if entry["kind"] == "resumed"]
+    if not resumed:
+        return []
+    start = resumed[-2] + 1 if len(resumed) > 1 else 0
+    return list(log[start : resumed[-1]])
+
+
+def escalation_at(entries: Sequence[PauseEntry]) -> datetime | None:
+    """The `at` of the last `escalation` entry of `entries`, in UTC: the instant that pause was
+    written. `None` when there is no escalation entry or its `at` is missing, unparsable or
+    carries no offset."""
+    escalations = [entry for entry in entries if entry["kind"] == "escalation"]
+    if not escalations:
+        return None
+    at = _instant(escalations[-1].get("at"))
+    return None if at is None else at.astimezone(UTC)
 
 
 def terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
@@ -4462,7 +4484,7 @@ def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
 def format_epoch_entries(state: TaskState) -> list[PauseEntry]:
     """The current epoch's terminal failures: what `format_retakes` reads (GH-1019). The one
     composition every caller passes it."""
-    return terminal_failures(_current_epoch(state))
+    return terminal_failures(current_epoch(state))
 
 
 def format_epoch(state: TaskState) -> bool:
@@ -4490,10 +4512,10 @@ def auto_resumable(state: TaskState) -> ResumeKey | None:
     """Whether the poller may retake this pause on its own, and with which key (issue #137,
     GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,
     not `escalated`'s own text, not any `failures[].error`. It reads the current epoch
-    (`_current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
+    (`current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
     escalation carries a `MechanicalCause` (with no failure at all), or a mix of both. A pair at
     its return limit, or any escalation with no cause that is not a `failure` one, is a human's."""
-    return _resume_key(_current_epoch(state))
+    return _resume_key(current_epoch(state))
 
 
 def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
@@ -4515,7 +4537,7 @@ def stated_reset(state: TaskState) -> datetime | None:
     `None` when none states a reset: the pause then follows its calendar as ever."""
     stated = [
         _instant(entry.get("resets_at"))
-        for entry in _current_epoch(state)
+        for entry in current_epoch(state)
         if entry["kind"] == "failure" and entry["value"] in _RESET_STATING_REASONS
     ]
     return max((t for t in stated if t is not None), default=None)
@@ -4534,7 +4556,7 @@ def task_account_paused(state: TaskState, now: datetime) -> bool:
     retaken pause follows its calendar there while the stated reset here has passed."""
     if not any(
         entry["kind"] == "failure" and entry["value"] == "account_limit"
-        for entry in _current_epoch(state)
+        for entry in current_epoch(state)
     ):
         return False
     return (reset := stated_reset(state)) is None or reset > now
@@ -4576,7 +4598,7 @@ def failed_interviews(state: TaskState) -> list[Interview]:
     """The interviews any `"failure"` entry of the current epoch broke inside, each
     once, in order of failure: empty when none did."""
     specs: list[Interview] = []
-    for entry in _current_epoch(state):
+    for entry in current_epoch(state):
         if entry["kind"] != "failure":
             continue
         spec = interview_for_section(entry["section"])

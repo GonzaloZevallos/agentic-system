@@ -31,6 +31,9 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class scratch__KeptFolder["KeptFolder"]
+    class scratch__Leftover["Leftover"]
+    class scratch__Orphans["Orphans"]
     class scratch__Owner["Owner"]
     class scratch__OwnerEntry["OwnerEntry"]
     class scratch__OwnerRecord["OwnerRecord"]
@@ -43,8 +46,6 @@ classDiagram
     class scratch__SweepDecision["SweepDecision"]
     class scratch__TaskFolder["TaskFolder"]
     class stage0_rotation__Green["Green"]
-    class stage0_rotation__Heartbeat["Heartbeat"]
-    class stage0_rotation__Keep["Keep"]
 ```
 
 ## Relaciones con otras páginas

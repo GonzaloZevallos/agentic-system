@@ -36,13 +36,15 @@ classDiagram
     class exempt_queue__ExemptFacts["ExemptFacts"]
     class exempt_queue__ExemptRank["ExemptRank"]
     class exempt_queue__ExemptWait["ExemptWait"]
+    class notify__DigestKey["DigestKey"]
+    class notify__EventKey["EventKey"]
+    class notify__NotifiedRecord["NotifiedRecord"]
+    class notify__WaitingEvent["WaitingEvent"]
     class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
     class refusal__OutputRefusal["OutputRefusal"]
     class retakes__Budget["Budget"]
-    class scratch__KeptFolder["KeptFolder"]
-    class scratch__Leftover["Leftover"]
-    class scratch__Orphans["Orphans"]
+    notify__WaitingEvent --> notify__EventKey
 ```
