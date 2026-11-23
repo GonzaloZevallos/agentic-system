@@ -2393,3 +2393,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-23T22:42:22.218+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, re-read the brief and check each literal requirement, such as a title, header or name, against the deliverable. Do not settle for the same content appearing elsewhere in the file.
+  confidence: medium
+  seen_in:
+  - GH-1091
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T23:50:08.237+00:00'
