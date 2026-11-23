@@ -1376,3 +1376,10 @@ def test_the_real_tree_selects_a_subset_for_a_leaf_and_nearly_all_for_the_core(r
     )
     assert isinstance(leaf, script.Selection) and set(leaf.files) < every
     assert len(leaf.files) < len(every) / 2
+
+
+def test_the_gate_names_the_two_exit_codes_this_script_gives():
+    from agentic.core.process.domain import presubmit
+
+    assert presubmit.AFFECTED_EMPTY_EXIT == script.EMPTY
+    assert presubmit.AFFECTED_REFUSED_EXIT == script.REFUSED
