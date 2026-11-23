@@ -19,7 +19,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__FormatFixReads["FormatFixReads"]
     class ports__FreeSpace["FreeSpace"]
     class ports__GitError["GitError"]
     class ports__Grant["Grant"]
@@ -33,6 +32,8 @@ classDiagram
     class ports__LabelTimeline["LabelTimeline"]
     class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
+    class ports__Launcher["Launcher"]
+    class ports__ListMayBeCut["ListMayBeCut"]
 ```
 
 ## Relaciones con otras páginas
@@ -43,7 +44,8 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
-- [application: support (parte 7)](classes-process-application-support-7.md)
+- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.SystemRepo` se asocia con `ports.Inbox`
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`

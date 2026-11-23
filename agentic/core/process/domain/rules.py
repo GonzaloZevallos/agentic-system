@@ -4507,6 +4507,17 @@ def format_hold_released(
     return contained is True
 
 
+def format_fix_facts(
+    issue_state: Literal["OPEN", "CLOSED"], closing_merge_commit: str | None
+) -> tuple[bool, str | None]:
+    """The two facts of a refusal issue that `format_hold_released` reads (GH-1020), from what
+    the tracker said of it: whether it is `closed`, and the commit that closed it. An open issue
+    names no commit, whatever `gh` carried. The one place the tracker's words become those facts,
+    so the poller compares no state itself."""
+    closed = issue_state == "CLOSED"
+    return closed, closing_merge_commit if closed else None
+
+
 def auto_resumable(state: TaskState) -> ResumeKey | None:
     """Whether the poller may retake this pause on its own, and with which key (issue #137,
     GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,

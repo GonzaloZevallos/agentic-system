@@ -33,6 +33,7 @@ classDiagram
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FormatFiler["FormatFiler"]
+    class ports__FormatFixReads["FormatFixReads"]
 ```
 
 ## Relaciones con otras páginas
@@ -45,5 +46,5 @@ classDiagram
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.RawResult` se asocia con `ports.CheckRuns`
-- [application: support (parte 8)](classes-process-application-support-8.md)
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
