@@ -38,7 +38,14 @@ from .ci_push import PushKind
 from .landing_order import LaneDecision, YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
-from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
+from .presubmit import (
+    FAILED_IDS_MAX,
+    BudgetBreach,
+    CheckResult,
+    FlakeGate,
+    GateForm,
+    RedCheck,
+)
 from .reaping import ReapedProcess
 from .refusal import OutputRefusal as OutputRefusal
 from .refusal import RefusalRule as RefusalRule
@@ -1313,6 +1320,12 @@ class RoleRun(TypedDict):
     # order (GH-361): the wait for a share apart from the run. Absent on a run recorded
     # before this field existed, and on a run that never ran a gate.
     gates: NotRequired[list[GateRecord]]
+    # The form each check of the delivery gate's last invocation ran and why (`GateForm`), the
+    # last 50 only, and how many older ones were dropped (written only when above 0). Written
+    # by the system, never by the model. Absent on a run recorded before these fields existed
+    # (ADR-0041), and on a run that never ran a gate.
+    forms: NotRequired[list[GateForm]]
+    forms_dropped: NotRequired[int]
     # Calls to the model in this run: one per `AssistantMessage` the runner saw before
     # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
     # before this field existed.

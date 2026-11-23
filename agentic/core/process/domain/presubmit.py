@@ -495,20 +495,146 @@ def affected_prefix(command: str) -> str:
     return command[: min(cuts)].rstrip()
 
 
+# The exit codes this repo's `scripts/affected_tests.py` gives for "selected nothing" and
+# "cannot decide". A convention of this repo, not a system contract: another product's affected
+# script that exits 8 or 9 reads the same here, and any other exit is `affected_red`. A test pins
+# both to the script's `EMPTY` and `REFUSED`.
+AFFECTED_EMPTY_EXIT = 8
+AFFECTED_REFUSED_EXIT = 9
+# The most characters of a changed path a `GateForm` keeps.
+FORM_PATH_MAX = 200
+# The most `GateForm`s one attempt's `RoleRun.forms` keeps; the older ones are counted.
+FORMS_MAX = 50
+
+# Why a check ran the form it ran (the closed set `RoleRun.forms` records): the first five say
+# why the plan chose it, the last three why an affected form was followed by the full one.
+ModeCause = Literal[
+    "none",
+    "fallback_glob",
+    "stack_file",
+    "paths_unknown",
+    "no_affected_form",
+    "stuck_full",
+    "script_empty",
+    "script_refused",
+    "affected_red",
+]
+
+
+class GateForm(TypedDict):
+    """The form one check of a delivery gate ran and why: written by the system from exit
+    codes, declared globs and changed paths, never from a check's output. `glob` is the declared
+    fallback glob (or `STACK_FILE`) that forced a full form and `path` the first changed path that
+    matched it, cut to `FORM_PATH_MAX`."""
+
+    check: str
+    mode: Mode
+    cause: ModeCause
+    via: Literal["gate", "tool"]
+    glob: NotRequired[str]
+    path: NotRequired[str]
+
+
+@dataclass(frozen=True)
+class PlannedForm:
+    """What `plan_form` chose for one check, before anything ran."""
+
+    mode: Mode
+    cause: ModeCause
+    glob: str | None
+    path: str | None
+
+
+# What a gate with no affected plan ran: every check full, because the product declares no
+# affected form for any of them.
+UNPLANNED = PlannedForm("full", "no_affected_form", None, None)
+
+
+def plan_form(
+    check: str,
+    changed_paths: Sequence[str] | None,
+    fallback: Sequence[str],
+    commands: Mapping[str, str],
+    stuck: frozenset[str],
+) -> PlannedForm:
+    """Which form one check runs and why, the first rule that applies: the changed paths are
+    unknown (`None`, the lookup failed) or empty; a path matches a fallback glob, or the stack
+    file; the check has no affected form; the check already failed in full on this instance.
+    Globs match the whole POSIX path, so `*` crosses `/`: that errs toward running full."""
+    if not changed_paths:
+        return PlannedForm("full", "paths_unknown", None, None)
+    for glob in fallback:
+        for path in changed_paths:
+            if fnmatchcase(path, glob):
+                return PlannedForm("full", "fallback_glob", glob, path)
+    for path in changed_paths:
+        if fnmatchcase(path, STACK_FILE):
+            return PlannedForm("full", "stack_file", STACK_FILE, path)
+    if check not in commands:
+        return PlannedForm("full", "no_affected_form", None, None)
+    if check in stuck:
+        return PlannedForm("full", "stuck_full", None, None)
+    return PlannedForm("affected-only", "none", None, None)
+
+
 def check_modes(
     names: Sequence[str], plan: AffectedPlan, changed_paths: Sequence[str] | None
 ) -> dict[str, Mode]:
-    """Which form each check runs. Everything runs full when the changed paths are unknown
-    (`None`, the lookup failed) or empty, or when any path matches a fallback glob or the
-    stack file; a check with no affected form always runs full. Globs match the whole
-    POSIX path, so `*` crosses `/`: that errs toward running full."""
-    everything_full = not changed_paths or any(
-        fnmatchcase(path, glob) for path in changed_paths for glob in (*plan.fallback, STACK_FILE)
-    )
+    """Which form each check runs: `plan_form`'s mode, with no check stuck."""
     return {
-        name: "affected-only" if name in plan.commands and not everything_full else "full"
+        name: plan_form(name, changed_paths, plan.fallback, plan.commands, frozenset()).mode
         for name in names
     }
+
+
+def settle_form(
+    planned: PlannedForm, rows: Sequence[CheckResult], via: Literal["gate", "tool"]
+) -> GateForm:
+    """The form one check ran, from its rows in run order. The affected row is the first one
+    with mode `affected-only` that is not a rerun (a reused one included): when it passed, that
+    is the form; when it did not, the full form followed it and the cause is its exit
+    (`AFFECTED_EMPTY_EXIT`, `AFFECTED_REFUSED_EXIT`, else `affected_red`; a timed-out row is
+    always `affected_red`). A rerun row never sets the cause. With no affected row the plan
+    stands. The only writer of a `ModeCause`."""
+    affected = next(
+        (r for r in rows if r.get("mode") == "affected-only" and not r.get("rerun", False)), None
+    )
+    form: GateForm = {
+        "check": rows[0]["name"] if rows else "",
+        "mode": planned.mode,
+        "cause": planned.cause,
+        "via": via,
+    }
+    if affected is None:
+        if planned.glob is not None:
+            form["glob"] = planned.glob
+        if planned.path is not None:
+            form["path"] = planned.path[:FORM_PATH_MAX]
+        return form
+    if affected["passed"]:
+        return {**form, "mode": "affected-only", "cause": "none"}
+    return {**form, "mode": "full", "cause": _affected_cause(affected)}
+
+
+def _affected_cause(affected: CheckResult) -> ModeCause:
+    if affected.get("timed_out", False):
+        return "affected_red"
+    exit_code = affected.get("exit_code")
+    if exit_code == AFFECTED_EMPTY_EXIT:
+        return "script_empty"
+    if exit_code == AFFECTED_REFUSED_EXIT:
+        return "script_refused"
+    return "affected_red"
+
+
+def cap_forms(
+    existing: Sequence[GateForm], new: Sequence[GateForm], cap: int = FORMS_MAX
+) -> tuple[list[GateForm], int]:
+    """`existing` then `new`, the last `cap` in order of arrival, and how many older ones were
+    left out."""
+    joined = [*existing, *new]
+    kept = joined[-cap:] if cap > 0 else []
+    return kept, len(joined) - len(kept)
 
 
 def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
