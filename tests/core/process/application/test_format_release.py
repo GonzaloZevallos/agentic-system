@@ -75,8 +75,13 @@ def _held(ports, number=19, hold=HOLD, **kw):
 
 def _step(ports, reads, lock=None, carry=None, busy=(), skip=frozenset()):
     ports = replace(ports, format_fixes=reads)
+    lock = lock or _Locks()
     return format_release.release_fixed_holds(
-        ports, lock or _Locks(), busy, carry or FormatReleaseCarry(), skip
+        ports,
+        lock,
+        lambda task_id: task_id not in busy and lock.refusal(task_id) is None,
+        carry or FormatReleaseCarry(),
+        skip,
     )
 
 

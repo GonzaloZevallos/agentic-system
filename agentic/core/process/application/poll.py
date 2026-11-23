@@ -3591,10 +3591,11 @@ def run_once(
         # GH-1020: a noted hold whose refusal issue is fixed is released before the resumes, so
         # the task is retaken in this same round; outside `registry.exclusive()`, and the reads
         # of the step all happen before it takes a task's lock.
+        live_tasks = {r.task_id for r in registry.live() if r.product == mine}
         release_lines = release_fixed_holds(
             ports,
             lock,
-            {r.task_id for r in registry.live() if r.product == mine},
+            lambda task_id: stack_hold.free_writer(task_id, live_tasks, lock),
             format_release_carry if format_release_carry is not None else FormatReleaseCarry(),
             skip=stack_held | at_work,
         )

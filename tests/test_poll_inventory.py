@@ -59,6 +59,11 @@ INVENTORY: list[tuple[str, str, str]] = [
         "harmless_loss",
         "the worktree sweep's memory and held line: losing it repeats a read per task and a line",
     ),
+    (
+        "_poll.release_carry",
+        "harmless_loss",
+        "the format release's memory: losing it repeats a waiting line and a read of a spent pair",
+    ),
     ("_poll.upstream", "rebuilt_each_round", "read again by every round"),
     ("_poll.notice", "rebuilt_each_round", "the lines of one round, printed in it"),
     ("_poll.line", "rebuilt_each_round", "the loop variable over one round's lines"),
@@ -79,6 +84,7 @@ INVENTORY: list[tuple[str, str, str]] = [
     ("run_once.system_version", "rebuilt_each_round", "read from git each round"),
     ("run_once.dry_run", "rebuilt_each_round", "a flag of this round"),
     ("run_once.sweep_carry", "harmless_loss", "the loop's carry, handed in by `_poll`"),
+    ("run_once.format_release_carry", "harmless_loss", "the loop's carry, handed in by `_poll`"),
     # the function-local caches of poll.py
     ("poll.read_version", "rebuilt_each_round", "functools.cache built inside one round"),
     ("poll.tray", "rebuilt_each_round", "functools.cache built inside one round"),

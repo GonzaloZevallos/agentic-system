@@ -10,19 +10,18 @@ Every port read happens before the task's lock is taken. The lock is taken only 
 document is reloaded, the hold confirmed again, saved, and the lock released. Only the step's own
 dead `format_release` lock is ever taken over; a record of any other command, alive or dead, waits
 for a person. Nothing here runs in a dry round or one that starts nothing, and with no
-`format_fixes` it makes no call. It imports only `..domain*`, `.ports` and `.stack_hold`: never
-`poll`, which calls it.
+`format_fixes` it makes no call. It imports only `..domain*` and `.ports`: never
+`poll`, which calls it, nor `stack_hold`, which only `poll` imports.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 
 from ..domain import format_retakes, rules
 from ..domain.task import apply
-from . import stack_hold
 from .ports import IssueState, LockHeld, Ports, RunLock
 
 COMMAND = "format_release"
@@ -44,15 +43,16 @@ class FormatReleaseCarry:
 def release_fixed_holds(
     ports: Ports,
     lock: RunLock,
-    busy: Collection[str],
+    free_writer: Callable[[str], bool],
     carry: FormatReleaseCarry,
     skip: Collection[int] = frozenset(),
 ) -> list[str]:
     """The lines of the holds released this round, and of the fixes that merged but do not run
     yet. Visits only a task with a hold that has `noted_at` and `issue_url`, whose issue is not
-    in `skip` and that has a free writer (`stack_hold.free_writer`, `busy` the task ids with a
-    live run), and whose pair is not spent in `carry`. The issue is read once per URL and the
-    commit once per sha in the round, never kept after it."""
+    in `skip`, that `free_writer` accepts (poll hands in `stack_hold.free_writer` closed over the
+    task ids with a live run and `lock`: only `poll` imports `stack_hold`), and whose pair is not
+    spent in `carry`. The issue is read once per URL and the commit once per sha in the round,
+    never kept after it."""
     reads = ports.format_fixes
     if reads is None:
         return []
@@ -68,7 +68,7 @@ def release_fixed_holds(
         if not hold or not hold.get("noted_at") or not hold.get("issue_url"):
             continue
         url, at = hold["issue_url"], hold["at"]
-        if (url, at) in carry.spent or not stack_hold.free_writer(task_id, busy, lock):
+        if (url, at) in carry.spent or not free_writer(task_id):
             continue
         if url not in issues:
             issues[url] = reads.closing(url)
