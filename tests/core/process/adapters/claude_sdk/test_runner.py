@@ -790,9 +790,10 @@ async def test_the_git_identity_and_the_deny_rules_reach_the_role(monkeypatch, t
     options = seen[0][1]
     # The SDK merges `env` over the inherited environment, so every `git` the role
     # runs commits as the system, whatever `user.*` the product's config carries.
-    # (the owner mark and the role's worker cap, GH-927, are the system's own additions)
-    own = {reaping.MARK_NAME, *role_workers_env()}
-    assert {k: v for k, v in options.env.items() if k not in own} == identity
+    assert {k: v for k, v in options.env.items() if k != reaping.MARK_NAME} == {
+        **identity,
+        **role_workers_env(),
+    }
     # Deny rules hold even in `bypassPermissions`.
     assert options.disallowed_tools == ["Bash(git config:*)"]
 
@@ -1447,7 +1448,7 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
         "cli_path": None,
         "settings": None,
         "add_dirs": [],
-        "env": role_workers_env(),  # no traceparent, no ambient marker: only the worker cap
+        "env": role_workers_env(),  # no traceparent, no ambient marker to add (`_child_env`)
         "extra_args": {},
         "max_buffer_size": module.MAX_BUFFER_BYTES,
         "debug_stderr": True,  # still the SDK's own default `sys.stderr`
