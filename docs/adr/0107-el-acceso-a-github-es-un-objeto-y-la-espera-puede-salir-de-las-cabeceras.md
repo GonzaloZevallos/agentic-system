@@ -3,7 +3,7 @@ status: accepted
 date: 2026-11-23
 ---
 
-# El acceso a GitHub es un objeto y la espera puede salir de las cabeceras
+# El acceso a GitHub es un objeto y la espera puede salir de las cabeceras (enmienda ADR-0050)
 
 Enmienda ADR-0050 (toda llamada a `gh` tiene un límite de tiempo y su adenda de reintentos),
 sin editarlo. GH-1071, parte 1 (GH-1090 trajo el módulo puro, GH-1091 lo conecta). Este ADR
