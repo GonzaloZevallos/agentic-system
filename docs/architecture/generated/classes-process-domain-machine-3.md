@@ -32,6 +32,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class scratch__OwnerRecord["OwnerRecord"]
     class scratch__PartitionFolder["PartitionFolder"]
     class scratch__PartitionListing["PartitionListing"]
     class scratch__RecordFact["RecordFact"]
