@@ -1,0 +1,29 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Mon, 23 Nov 2026 13:12:25 GMT
+Etag: W/"f4d9b42305cab1dbd3f503fbbc80e3b9e508d9b3267ccb5a56e1cd693c55b191"
+Referrer-Policy: origin-when-cross-origin, strict-origin-when-cross-origin
+Server: github.com
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With
+X-Accepted-Oauth-Scopes: 
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Github-Api-Version-Selected: 2022-11-28
+X-Github-Edge-Region: brazilsouth
+X-Github-Media-Type: github.v3; format=json
+X-Github-Request-Id: E5B8:36FC77:394A5B6:6344B18:6B043BB9
+X-Oauth-Client-Id: 178c6fc778ccc68e1d6a
+X-Oauth-Scopes: delete_repo, gist, project, read:org, repo, user, workflow
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4930
+X-Ratelimit-Reset: 1795440009
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 70
+X-Xss-Protection: 0
+
+["2026-03-10","2022-11-28"]
