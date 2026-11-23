@@ -31,6 +31,13 @@ from ...application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
+from ...domain.github_access import (
+    GithubAccess,
+    HttpResponse,
+    NotAnHttpResponse,
+    split_response,
+    wait_from,
+)
 
 # Declared, not measured: a healthy call takes about a second. One constant to change if a
 # real incident shows 60 s too long (no Configuration field, like FETCH_TIMEOUT_S).
@@ -302,7 +309,8 @@ def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
 def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
     """The largest `reset` (epoch seconds) among the resources `gh api rate_limit` says are
     spent; `None` when the read fails or none is. Called with no policy: a rate-limited read
-    must not wait on itself."""
+    must not wait on itself. This read decides the wait: it passes `access=None` explicitly,
+    so it is never gated, serialized, budgeted or cached, whatever the caller's access."""
     try:
         raw = run_gh(
             run,
@@ -311,6 +319,7 @@ def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
             not_installed="gh is not installed",
             failed=lambda stderr: "gh api rate_limit failed",
             log=lambda line: None,
+            access=None,
         )
         resources = json.loads(raw)["resources"]
         resets = [
@@ -323,29 +332,73 @@ def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
     return max(resets) if resets else None
 
 
+def _response_of(exc: subprocess.CalledProcessError) -> HttpResponse | None:
+    """The HTTP response `gh api -i` printed on a failed call; `None` when stdout is not text
+    or has no headers. Never raises: the one exception caught is `NotAnHttpResponse`."""
+    if not isinstance(exc.stdout, str):
+        return None
+    try:
+        return split_response(exc.stdout)
+    except NotAnHttpResponse:
+        return None
+
+
+@dataclass(frozen=True)
+class _Wait:
+    """What `_retry_wait` decided: `seconds` to sleep, or `giving_up` (the reason) instead,
+    and the `reset` (epoch seconds) `gh api rate_limit` stated on this call, `None` when none."""
+
+    seconds: float
+    giving_up: str | None
+    reset: float | None
+
+
 def _retry_wait(
-    kind: _Kind, attempt: int, retry: GhRetry, run: Run, cwd: Path, call: str
-) -> tuple[float, str | None, float | None]:
+    kind: _Kind,
+    attempt: int,
+    retry: GhRetry,
+    run: Run,
+    cwd: Path,
+    call: str,
+    response: HttpResponse | None,
+) -> _Wait:
     """Seconds to wait before the next attempt, or the reason to give up instead, and the
-    reset (epoch seconds) read on this call, `None` when none was."""
+    reset read on this call. The only place that decides to wait or to give up. `response` is
+    what the failed call printed as HTTP headers (`None` without `access` or without headers):
+    a transient error waits as `wait_from` says; a rate limit reads `gh api rate_limit` first
+    and falls to `wait_from` only when that read gave nothing, never setting a reset."""
     if attempt >= retry.attempts:
-        return 0, f"gh {call} {_PHRASES[kind]} on each of {retry.attempts} attempts", None
-    if kind != "rate_limited":
-        return retry.backoff(attempt), None, None
-    reset = _rate_limit_reset(run, cwd)
-    if reset is None:
-        return retry.backoff(attempt), None, None
-    seconds = max(reset - retry.now(), 0)
+        return _Wait(0, f"gh {call} {_PHRASES[kind]} on each of {retry.attempts} attempts", None)
+    reset: float | None = None
+    if kind in ("timed_out", "unreachable"):
+        return _Wait(retry.backoff(attempt), None, None)
+    if kind == "rate_limited":
+        reset = _rate_limit_reset(run, cwd)
+        if reset is not None:
+            seconds = max(reset - retry.now(), 0)
+            if seconds > retry.max_wait_s:
+                return _Wait(
+                    0,
+                    (
+                        f"gh {call} {_PHRASES[kind]}; its reset is {seconds:g} s away, "
+                        f"over the {retry.max_wait_s:g} s bound"
+                    ),
+                    reset,
+                )
+            return _Wait(seconds, None, reset)
+    if response is None:
+        return _Wait(retry.backoff(attempt), None, reset)
+    seconds = wait_from(response, retry.now(), retry.backoff(attempt))
     if seconds > retry.max_wait_s:
-        return (
+        return _Wait(
             0,
             (
-                f"gh {call} {_PHRASES[kind]}; its reset is {seconds:g} s away, "
+                f"gh {call} {_PHRASES[kind]}; GitHub asked to wait {seconds:g} s, "
                 f"over the {retry.max_wait_s:g} s bound"
             ),
-            reset,
+            None,
         )
-    return seconds, None, reset
+    return _Wait(seconds, None, None)
 
 
 def run_gh(
@@ -358,6 +411,7 @@ def run_gh(
     log: Callable[[str], None] = print_line,
     retry: GhRetry | None = None,
     retry_timeouts: bool = False,
+    access: GithubAccess | None = None,
 ) -> str:
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
@@ -382,7 +436,17 @@ def run_gh(
 
     When `gh` printed an HTTP status (`http_status`), the refusal and the exhaustion message
     end with ` (HTTP nnn)` and the exception carries it as `status` (GH-438); nothing else
-    `gh` printed is added."""
+    `gh` printed is added.
+
+    `access` (GH-1091, ADR-0107) is how the caller reaches GitHub; `None` is the path above,
+    unchanged. With one, a retried gateway error or rate limit also reads the HTTP headers
+    `gh api -i` left in stdout (`split_response`); a stdout with none falls to today's wait.
+    A gateway error then waits what `wait_from` says (`retry-after`, then
+    `x-ratelimit-reset`, then the backoff). A rate limit still reads `gh api rate_limit` first
+    (`resets_at` comes only from that read) and uses the headers only when it gave nothing. A
+    header wait over `retry.max_wait_s` neither sleeps nor clamps: it ends as the kind's error
+    saying GitHub asked to wait that long. A timeout always waits the backoff. The kind is
+    decided from stderr alone, so a secondary 403 or a 429 stays a refusal."""
     call = " ".join(args[:2])
     attempt = 1
     last_reset: float | None = None
@@ -395,6 +459,11 @@ def run_gh(
             stderr = exc.stderr.strip()
             status = http_status(stderr)
             kind = None if retry is None else _retryable_kind(exc.returncode, stderr)
+            response = (
+                _response_of(exc)
+                if access is not None and kind in ("transient", "rate_limited")
+                else None
+            )
             if kind is None:
                 marker = _unreachable_marker(exc.returncode, stderr)
                 if marker is not None and retry is None:
@@ -414,13 +483,15 @@ def run_gh(
                 raise TrackerTimedOut(message) from exc
             kind = "timed_out"
             status = None
+            response = None
             cause = exc
         else:
             return result.stdout.strip()
         assert retry is not None  # only a policy reaches a retryable kind
-        seconds, giving_up, reset = _retry_wait(kind, attempt, retry, run, cwd, call)
-        if reset is not None:
-            last_reset = reset
+        wait = _retry_wait(kind, attempt, retry, run, cwd, call, response)
+        seconds, giving_up = wait.seconds, wait.giving_up
+        if wait.reset is not None:
+            last_reset = wait.reset
         if giving_up is None:
             log(
                 f"agentic: gh {call} {_PHRASES[kind]}; "
