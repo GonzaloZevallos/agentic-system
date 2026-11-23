@@ -86,6 +86,12 @@ def test_an_external_epoch_gives_nothing_and_so_does_an_exhausted_format_one():
     assert _waiting(_state(*_external(), _resumed())) is None
 
 
+def test_an_external_epoch_after_a_human_one_gives_nothing_not_a_superseded():
+    state = _state(_human("2026-11-20T09:00:00+00:00"), _resumed(), *_external())
+    assert _waiting(state) is None
+    assert _waiting(state, issue_closed=True) is None
+
+
 def test_an_external_epoch_then_a_human_epoch_gives_send():
     state = _state(*_external("2026-11-20T09:00:00+00:00"), _resumed(), _human())
     assert _waiting(state) == WaitingEvent(key=_key(), action="send")

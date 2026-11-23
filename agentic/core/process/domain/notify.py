@@ -168,15 +168,14 @@ def waiting_event(
     nothing. `superseded` is final for its key within the horizon: a reopened issue without a new
     escalation sends nothing."""
     current = rules.current_epoch(state)
-    if (at := rules.escalation_at(current)) is not None and rules.pause_kind(current) == "human":
+    if (at := rules.escalation_at(current)) is not None:
+        if rules.pause_kind(current) != "human":
+            return None
         action: Literal["send", "superseded"] = "superseded" if issue_closed else "send"
         return WaitingEvent(EventKey("waiting", product, issue, at), action)
-    if not any(entry["kind"] == "escalation" for entry in current):
-        previous = rules.previous_epoch(state)
-        if (at := rules.escalation_at(previous)) is not None and (
-            rules.pause_kind(previous) == "human"
-        ):
-            return WaitingEvent(EventKey("waiting", product, issue, at), "superseded")
+    previous = rules.previous_epoch(state)
+    if (at := rules.escalation_at(previous)) is not None and rules.pause_kind(previous) == "human":
+        return WaitingEvent(EventKey("waiting", product, issue, at), "superseded")
     return None
 
 
