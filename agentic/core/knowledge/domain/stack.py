@@ -68,6 +68,13 @@ Playwright's list reporter, `test_id` captures the `file:line` of a `›` line, 
 `(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›`, with the command
 `npx playwright test {failed_ids}`.
 
+*The worker count* (GH-927): a check takes its worker count from `{workers}` or `CHECK_WORKERS`
+(`PYTEST_XDIST_AUTO_NUM_WORKERS` for pytest-xdist's `-n auto`), never from a literal such as
+`-n 8` or `--maxWorkers=8`. Under `parallel_checks` each check gets its equal slice of the gate's
+share, the same number in its env and in `{workers}`. Role sessions, whose Bash runs outside any
+gate, get `ROLE_WORKERS` through `CHECK_WORKERS`, `PYTEST_XDIST_AUTO_NUM_WORKERS` and
+`VITEST_MAX_WORKERS`. A literal count is capped by none of them.
+
 *The CI flake block* (GH-464, ADR-0085): a job named under `ci` may print, for the tests its own
 rerun found flaky, one line `agentic-flakes: {"v":1,"check":"<name>","tests":["<id>",...]}` per
 check, where `<name>` is a name under `checks`. The `full_checks` CI path and the merge gate read it

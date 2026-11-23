@@ -1082,3 +1082,18 @@ def test_a_timeout_then_a_real_failure_of_the_same_check_is_red():
     rows = [_row("tests", False, "x", timed_out=True), _row("tests", False, "FAILED a")]
 
     assert presubmit.gate_verdict(rows) == "red"
+
+
+def test_a_role_session_gets_the_three_worker_variables_at_the_role_budget():
+    # GH-927: no `AGENTIC_*` name, which `without_own_configuration` would strip.
+    env = presubmit.role_workers_env()
+    assert env == {
+        "CHECK_WORKERS": str(presubmit.ROLE_WORKERS),
+        "PYTEST_XDIST_AUTO_NUM_WORKERS": str(presubmit.ROLE_WORKERS),
+        "VITEST_MAX_WORKERS": str(presubmit.ROLE_WORKERS),
+    }
+    assert not any(key.startswith("AGENTIC_") for key in env)
+
+
+def test_the_gate_keeps_its_two_worker_variables():
+    assert set(presubmit.workers_env(6)) == {"CHECK_WORKERS", "PYTEST_XDIST_AUTO_NUM_WORKERS"}

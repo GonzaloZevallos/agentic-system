@@ -37,6 +37,7 @@ from agentic.core.process.adapters.shell import ShellReaper
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.presubmit import ROLE_WORKERS, role_workers_env
 from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
@@ -789,7 +790,9 @@ async def test_the_git_identity_and_the_deny_rules_reach_the_role(monkeypatch, t
     options = seen[0][1]
     # The SDK merges `env` over the inherited environment, so every `git` the role
     # runs commits as the system, whatever `user.*` the product's config carries.
-    assert {k: v for k, v in options.env.items() if k != reaping.MARK_NAME} == identity
+    # (the owner mark and the role's worker cap, GH-927, are the system's own additions)
+    own = {reaping.MARK_NAME, *role_workers_env()}
+    assert {k: v for k, v in options.env.items() if k not in own} == identity
     # Deny rules hold even in `bypassPermissions`.
     assert options.disallowed_tools == ["Bash(git config:*)"]
 
@@ -822,6 +825,25 @@ def test_options_for_marks_the_child_env_with_role_and_trace(tmp_path):
     assert "service." not in attrs  # never a service.* key (invariant 5)
     assert options.env["TRACEPARENT"] == traceparent  # unchanged (module docstring)
     assert options.env["GIT_AUTHOR_NAME"] == "agentic-system"  # env's own entries survive too
+
+
+def test_options_for_caps_the_workers_of_the_role_and_it_wins_over_the_inherited_count(tmp_path):
+    # GH-927: any role's Bash starts with the cap, even where `CHECK_WORKERS=16` came in.
+    options = options_for(
+        PJM,
+        system_prompt="s",
+        model="m",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        resume=None,
+        max_budget_usd=None,
+        traceparent=None,
+        partial=False,
+        env={"CHECK_WORKERS": "16", "VITEST_MAX_WORKERS": "16"},
+        resource_attributes=None,
+    )
+    for name in ("CHECK_WORKERS", "PYTEST_XDIST_AUTO_NUM_WORKERS", "VITEST_MAX_WORKERS"):
+        assert options.env[name] == str(ROLE_WORKERS)
 
 
 def test_options_for_adds_no_marker_without_a_traceparent(tmp_path):
@@ -1425,7 +1447,7 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
         "cli_path": None,
         "settings": None,
         "add_dirs": [],
-        "env": {},  # no traceparent, no ambient marker to add (`_child_env`)
+        "env": role_workers_env(),  # no traceparent, no ambient marker: only the worker cap
         "extra_args": {},
         "max_buffer_size": module.MAX_BUFFER_BYTES,
         "debug_stderr": True,  # still the SDK's own default `sys.stderr`

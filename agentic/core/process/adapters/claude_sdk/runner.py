@@ -95,6 +95,7 @@ from ...application.ports import (
 )
 from ...domain import reaping
 from ...domain.denials import denial_for
+from ...domain.presubmit import role_workers_env
 from ...domain.roles import Role
 from ...domain.rules import (
     ReportedFailure,
@@ -250,8 +251,11 @@ def _child_env(
     own ambient `os.environ` value, never `env` (the runner's `git identity` overlay,
     which does not carry it in production; composing off `env` would silently drop
     whatever the real process inherited, invariant 8). Nothing is added when there is
-    no trace to mark against, so a role run under `NoTelemetry` sees exactly the `env`
-    it was given, as before this change.
+    no trace to mark against, so a role run under `NoTelemetry` sees `env` plus nothing
+    but the worker cap below.
+
+    `role_workers_env()` (GH-927) lands last, so the role's own cap wins over a
+    `CHECK_WORKERS` that came in through `env` or the inherited environment.
 
     `owner_mark`, when given, is the value of the process-owner variable (GH-282,
     ADR-0052) and lands in this copy only: `env` is shared by every attempt, so the
@@ -264,6 +268,7 @@ def _child_env(
         child["OTEL_RESOURCE_ATTRIBUTES"] = with_resource_marker(
             resource_attributes, role_slug=role.slug, trace_id=trace_id
         )
+    child.update(role_workers_env())
     return child
 
 
