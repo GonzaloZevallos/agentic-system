@@ -97,6 +97,12 @@ def test_an_external_epoch_then_a_human_epoch_gives_send():
     assert _waiting(state) == WaitingEvent(key=_key(), action="send")
 
 
+def test_a_current_escalation_with_an_unreadable_at_looks_back_like_one_with_none():
+    # Recorded choice: only rules.escalation_at can read `at`, so a corrupt one is "no escalation".
+    state = _state(_human(), _resumed(), _human(None))
+    assert _waiting(state) == WaitingEvent(key=_key(), action="superseded")
+
+
 def test_an_empty_epoch_or_an_escalation_without_a_readable_at_gives_nothing():
     assert _waiting(_state()) is None
     assert _waiting({}) is None
