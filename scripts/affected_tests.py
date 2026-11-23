@@ -305,6 +305,19 @@ class Refusal:
     reason: str
 
 
+@dataclass(frozen=True)
+class Options:
+    """What the caller asked pytest to run with: `-n <workers>` and `--dist load`, each only
+    when it was given. Nothing else passes through to pytest."""
+
+    workers: int | None
+    dist: str | None
+
+
+RunPytest = Callable[[Sequence[str], Path, Options], int]
+WORKERS = re.compile(r"[1-9][0-9]*", re.ASCII)
+
+
 class Undecided(Exception):
     """The graph or the change set cannot be read; the script refuses."""
 
@@ -500,8 +513,10 @@ def select(
     return Selection(chosen)
 
 
-def _run_pytest(files: Sequence[str], root: Path) -> int:
-    argv = [sys.executable, "-m", "pytest", "-m", "not llm and not slow", *files]
+def _run_pytest(files: Sequence[str], root: Path, options: Options) -> int:
+    given = [] if options.workers is None else ["-n", str(options.workers)]
+    given += [] if options.dist is None else ["--dist", options.dist]
+    argv = [sys.executable, "-m", "pytest", "-m", "not llm and not slow", *given, *files]
     return subprocess.run(argv, cwd=root, check=False).returncode
 
 
@@ -509,15 +524,37 @@ def _say(kind: str, reason: str) -> None:
     sys.stderr.write(f"affected-tests: {kind}: {' '.join(reason.split())}\n")
 
 
+def parse_options(words: Sequence[str]) -> Options | None:
+    """`[-n <int >= 1>] [--dist load]`, in that form and that order, and nothing else: no
+    prefix, no `=` form, no `auto`. By hand, because argparse would accept those."""
+    rest = list(words)
+    workers: int | None = None
+    dist: str | None = None
+    if rest[:1] == ["-n"]:
+        if len(rest) < 2 or not WORKERS.fullmatch(rest[1]):
+            return None
+        workers = int(rest[1])
+        rest = rest[2:]
+    if rest[:2] == ["--dist", "load"]:
+        dist = "load"
+        rest = rest[2:]
+    return Options(workers, dist) if not rest else None
+
+
 def main(
     argv: Sequence[str],
     *,
     root: Path | None = None,
-    run_pytest: Callable[[Sequence[str], Path], int] = _run_pytest,
+    run_pytest: RunPytest = _run_pytest,
 ) -> int:
     top = root if root is not None else Path(__file__).resolve().parent.parent
-    if len(argv) != 1 or not argv[0] or argv[0].startswith("-"):
-        _say("refused", "expected one base revision that does not start with '-'")
+    options = parse_options(argv[1:])
+    if not argv or not argv[0] or argv[0].startswith("-") or options is None:
+        _say(
+            "refused",
+            "expected one base revision that does not start with '-', then optionally "
+            "-n <integer >= 1> and --dist load, in that form",
+        )
         return REFUSED
     try:
         paths = changed(argv[0], top)
@@ -535,7 +572,7 @@ def main(
     if isinstance(result, Empty):
         _say("empty", result.reason)
         return EMPTY
-    return run_pytest(result.files, top)
+    return run_pytest(result.files, top, options)
 
 
 if __name__ == "__main__":
