@@ -1,2 +1,3 @@
 docs/product/decisiones-del-dueño.md merge=union
 docs/decisiones-del-dueño.md merge=union
+tests/core/process/domain/fixtures/github_access/** -text
