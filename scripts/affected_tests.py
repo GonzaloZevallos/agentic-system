@@ -206,6 +206,11 @@ TABLE: tuple[Row, ...] = (
         "the recorded and synthetic `gh api -i` responses and their sidecars the table tests read",
     ),
     Row(
+        "tests/core/process/domain/fixtures/github_access/.gitattributes",
+        ("tests/test_owner_decisions.py",),
+        "the guard that reads every .gitattributes in the tree; this one keeps the CRLF bytes",
+    ),
+    Row(
         "tests/fixtures/presubmit/*",
         ("tests/core/process/application/test_presubmit_rerun.py",),
         "a real pytest output past the failed-ids window: the form rerun must not trust it",
