@@ -28,15 +28,14 @@ classDiagram
     class ports__MergeConflict["MergeConflict"]
     class ports__MergeFailed["MergeFailed"]
     class ports__OwnerRuleEntry["OwnerRuleEntry"]
+    class ports__PendingPaths["PendingPaths"]
     class ports__PerfLock["PerfLock"]
     class ports__PerfRunner["PerfRunner"]
     class ports__Ports["Ports"]
     class ports__Presubmit["Presubmit"]
     class ports__ProcessReaper["ProcessReaper"]
-    class ports__ProductKnowledge["ProductKnowledge"]
     ports__LockHeld o-- ports__LockRecord
     ports__Ports --> ports__ProcessReaper
-    ports__Ports --> ports__ProductKnowledge
 ```
 
 ## Relaciones con otras páginas
@@ -55,6 +54,7 @@ classDiagram
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.ProductKnowledge`
   - `ports.Ports` se asocia con `ports.ProductStack`
   - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`

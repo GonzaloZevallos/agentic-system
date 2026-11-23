@@ -37,5 +37,5 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 7)](classes-process-application-support-7.md)
+- [application: support (parte 8)](classes-process-application-support-8.md)
   - `plan_carve_out.Judged` se asocia con `run_role.Output`

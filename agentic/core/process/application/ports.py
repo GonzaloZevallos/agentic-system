@@ -1093,6 +1093,18 @@ class AddedLine:
     text: str
 
 
+class PendingPaths(Protocol):
+    """What a working tree has pending against its HEAD, read apart from `Workspace` so no
+    existing implementation or fake gains a member."""
+
+    def pending_paths(self, path: Path) -> tuple[str, ...]:
+        """The paths the working tree at `path` has pending against HEAD: staged, unstaged,
+        untracked and deleted ones, and both sides of a rename or copy; ignored files never.
+        Names are raw, in first-seen order, with no duplicates. Raises `GitError` when git
+        cannot say."""
+        ...
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
@@ -2758,6 +2770,9 @@ class Ports:
     # What the release of a format hold reads (GH-1067). `None` releases nothing and makes no
     # call, which is how every run went before it existed (dry-run, evaluation).
     format_fixes: FormatFixReads | None = None
+    # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
+    # run went before it existed; nothing reads it yet.
+    pending_paths: PendingPaths | None = None
 
 
 class Stage0Store(Protocol):
