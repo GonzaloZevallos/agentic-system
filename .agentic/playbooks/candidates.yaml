@@ -2384,3 +2384,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-23T22:12:08.252+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief states an ordering or invariant for every public function (such as which helper runs first), check each public function you write against it before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1097
+  sources:
+  - finding
+  added_at: '2026-11-23T22:42:22.218+00:00'
