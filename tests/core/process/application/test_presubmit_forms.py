@@ -7,11 +7,11 @@ import pytest
 
 from agentic.core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from agentic.core.process.application.develop import develop
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.domain import check_results as keys
 from agentic.core.process.domain.check_schedule import CheckPriority
-from agentic.core.process.domain.presubmit import AffectedPlan
+from agentic.core.process.domain.presubmit import AffectedPlan, CheckResult, PlannedForm
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_delivery_tier import building
 from tests.fakes import (
@@ -163,6 +163,65 @@ def test_a_stored_affected_pass_has_no_exit_code_and_an_entry_without_one_still_
     again = next(r for r in second.results or [] if r.get("mode") == "affected-only")
     assert again["reused"] is True and "exit_code" not in again
     assert by_check(second)["tests"]["cause"] == "none"
+
+
+# The scaffolding the tool's plan is built on: `_paths`, `form_of`, `_declared_of`.
+
+
+def test_paths_are_the_sorted_union_of_the_diff_and_the_pending_paths():
+    g = gate(paths=("src/b.py", "src/a.py"))
+    assert g._paths(PLAN, "head", ("src/c.py", "src/a.py")) == ("src/a.py", "src/b.py", "src/c.py")
+    assert g._paths(PLAN, "head") == ("src/a.py", "src/b.py")
+
+
+def test_paths_with_a_failed_pending_lookup_are_unknown():
+    assert gate()._paths(PLAN, "head", None) is None
+
+
+def test_paths_with_a_failed_diff_are_unknown(monkeypatch):
+    for error in (GitError("no such commit"), OSError("gone")):
+        g = gate()
+
+        def failing(base, head, error=error):
+            raise error
+
+        monkeypatch.setattr(g.ports.workspace, "changed_paths", failing)
+        assert g._paths(PLAN, "head", ("src/a.py",)) is None
+
+
+def test_form_of_carries_the_via_the_instance_was_built_with():
+    planned = PlannedForm("full", "no_affected_form", None, None)
+    row: CheckResult = {
+        "name": "tests",
+        "command": "pytest",
+        "passed": True,
+        "output": "",
+        "duration_s": 0.1,
+    }
+    assert gate().form_of(planned, [row])["via"] == "gate"
+    tool = gate()
+    tool.via = "tool"
+    assert tool.form_of(planned, [row]) == {
+        "check": "tests",
+        "mode": "full",
+        "cause": "no_affected_form",
+        "via": "tool",
+    }
+
+
+def test_declared_of_gives_the_declared_command_of_an_executed_row_and_the_row_otherwise():
+    g = gate()
+    g._declared[("tests", "pytest -n 6")] = "pytest -n {workers}"
+    ran: CheckResult = {
+        "name": "tests",
+        "command": "pytest -n 6",
+        "passed": True,
+        "output": "",
+        "duration_s": 0.1,
+    }
+    never: CheckResult = {**ran, "name": "lint", "command": "ruff check ."}
+    assert g._declared_of(ran) == "pytest -n {workers}"
+    assert g._declared_of(never) == "ruff check ."
 
 
 # The develop node's RoleRun.
