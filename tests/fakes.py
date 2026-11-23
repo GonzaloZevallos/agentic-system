@@ -37,6 +37,7 @@ from agentic.core.process.application.ports import (
     FastForwardView,
     FlagVocabulary,
     FormatFiler,
+    FormatFixReads,
     FreeSpace,
     GitError,
     Grant,
@@ -2947,6 +2948,7 @@ def memory_ports(
     spec_validator: SpecValidator | None = None,
     now: Callable[[], str] | None = None,
     format_filing: FormatFiler | None = None,
+    format_fixes: FormatFixReads | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2977,6 +2979,7 @@ def memory_ports(
         spec_reader=spec_reader,
         spec_validator=spec_validator,
         format_filing=format_filing,
+        format_fixes=format_fixes,
     )
 
 

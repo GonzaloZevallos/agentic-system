@@ -202,8 +202,9 @@ UNREACHED = {
 }
 
 # Ports that are not ports: `Ports` carries the run's limits and its clock beside them. The
-# filing of format refusals (GH-1030) is dropped, not wrapped: a dry round files nothing.
-_NOT_PORTS = frozenset({"limits", "now", "format_filing"})
+# filing of format refusals (GH-1030) and the reads that release a format hold (GH-1067) are
+# dropped, not wrapped: a dry round files nothing and releases nothing.
+_NOT_PORTS = frozenset({"limits", "now", "format_filing", "format_fixes"})
 _LABELS = {
     "documents": "TaskDocuments",
     "stack": "ProductStack",
@@ -241,7 +242,7 @@ def read_only_ports(
     }
     return (
         # GH-1030: a dry round files no issue of a format refusal, whatever the ports carry.
-        _replace(ports, **wrapped, format_filing=None),
+        _replace(ports, **wrapped, format_filing=None, format_fixes=None),
         _wrap(registry, "RunRegistry", log),
         _wrap(lock, "RunLock", log),
         _wrap(launcher, "Launcher", log),

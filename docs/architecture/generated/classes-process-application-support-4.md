@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Launcher["Launcher"]
     class ports__ListMayBeCut["ListMayBeCut"]
     class ports__ListedPullRequest["ListedPullRequest"]
     class ports__LoadReader["LoadReader"]
@@ -32,7 +33,6 @@ classDiagram
     class ports__PerfLock["PerfLock"]
     class ports__PerfRunner["PerfRunner"]
     class ports__Ports["Ports"]
-    class ports__Presubmit["Presubmit"]
     ports__LockHeld o-- ports__LockRecord
 ```
 
@@ -57,6 +57,7 @@ classDiagram
   - `ports.Ports` se asocia con `ports.ProductStack`
   - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
+- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
