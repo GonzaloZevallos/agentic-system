@@ -413,6 +413,12 @@ En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el 
 _Avoid_: límite de tiempo (el *timeout* de un chequeo corta una corrida; el presupuesto sólo mide), presupuesto por nivel (el tiempo de pared de un nivel no es la suma de sus chequeos)
 _Campo_: performance budget — web.dev y Lighthouse CI, un tope declarado que una corrida mide; acá el tope es del tiempo de un chequeo de la suite
 
+**Presupuesto de la cuenta de GitHub**:
+Lo que le queda a una cuenta de GitHub para pedir, por cuenta (el host más un hash del token) y nunca por producto. Tiene tres recursos, `core`, `graphql` y `search`, y de cada uno se conoce lo que queda (*remaining*) y cuándo se repone (*reset*). Se lee de `gh api rate_limit` o de los encabezados `x-ratelimit-*` de una respuesta con `budget_from`, y vale 60 s desde esa lectura. Con él, `can_start` decide si una entrega empieza o espera: espera hasta el último de los *resets* de los recursos que alcanzan menos de lo que la entrega necesita (`Wait`). Un presupuesto desconocido o vencido deja empezar a la entrega, así que el presupuesto es sólo un aviso y nunca frena por sí solo.
+En el código se llama `Budget`, el valor que `budget_from` lee, y `Wait`, la espera que `can_start` devuelve.
+_Avoid_: límite de la cuenta (`account_limit`), Presupuesto de tamaño, Presupuesto de chequeo, cuota
+_Campo_: rate limit — GitHub REST/GraphQL
+
 **Resultado reutilizable**:
 El resultado de un chequeo que pasó, guardado bajo el nombre del chequeo, su comando exacto, el árbol (`HEAD^{tree}`) de un checkout limpio sobre el que corrió y una huella de su entorno (comandos de setup, versión de stage0, presupuesto). Cualquier puerta, de entrega, de merge o de aterrizaje, que pida el mismo chequeo con la misma clave toma ese pase en vez de correrlo de nuevo. Sólo se guardan pases, sobre árbol limpio, sin que el entorno haya derivado desde el setup, y valen 24 h; un fallo nunca se reutiliza, porque puede ser flaky. Lo firma un secreto de la máquina: una entrada sin firma válida es como si no existiera. Una fila de reintento (`rerun: true`) nunca se guarda: el primer intento falló, así que de ese chequeo no queda nada.
 En el código se llama `check_key` y `env_drifted` (dominio, `domain/check_results.py`), `CheckResults`, el port, y `FilesystemCheckResults`, el almacén; una fila reutilizada lleva `reused: true`.

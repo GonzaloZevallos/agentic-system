@@ -14,6 +14,7 @@ Esta página muestra los módulos del grupo `machine` de `domain` y los imports 
 graph TD
     g_domain__checks["checks (grupo)"]
     g_domain__state["state (grupo)"]
+    m_domain__rate_limit["domain.rate_limit"]
     m_domain__reaping["domain.reaping"]
     m_domain__refusal["domain.refusal"]
     m_domain__refusal_retry["domain.refusal_retry"]
@@ -22,6 +23,7 @@ graph TD
     m_domain__stage0_rotation["domain.stage0_rotation"]
     m_domain__stage0_window["domain.stage0_window"]
     m_domain__stall["domain.stall"]
+    m_domain__rate_limit --> g_domain__state
     m_domain__refusal_retry --> g_domain__state
     m_domain__stage0_rotation --> g_domain__state
     m_domain__stage0_window --> g_domain__checks
