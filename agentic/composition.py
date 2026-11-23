@@ -435,6 +435,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
             api_break_line=declared_api_break,
         )
     )
+    git_workspace = GitWorkspace(cfg.product_dir, cfg.git_identity)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -460,7 +461,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
-        workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
+        workspace=git_workspace,
+        # The same instance: one adapter answers both, read-only for the second.
+        pending_paths=git_workspace,
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
         ci_logs=GhCiLogs(

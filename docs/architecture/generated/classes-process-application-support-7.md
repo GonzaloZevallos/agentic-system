@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__TrackerRateLimited["TrackerRateLimited"]
     class ports__TrackerRefused["TrackerRefused"]
     class ports__TrackerTimedOut["TrackerTimedOut"]
     class ports__TrackerTransient["TrackerTransient"]
@@ -33,7 +34,6 @@ classDiagram
     class run_role__EstimateCapReached["EstimateCapReached"]
     class run_role__EstimateStop["EstimateStop"]
     class run_role__GuardChain["GuardChain"]
-    class run_role__Output["Output"]
     run_role__EstimateCapReached --|> run_role__Escalating
 ```
 
@@ -41,10 +41,6 @@ classDiagram
 
 - [application: landing](classes-process-application-landing.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`
-- [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
-  - `plan_carve_out.Judged` se asocia con `run_role.Output`
-- [application: support (parte 2)](classes-process-application-support-2.md)
-  - `run_role.Output` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`
 - [application: support (parte 4)](classes-process-application-support-4.md)
@@ -52,6 +48,7 @@ classDiagram
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`
 - [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.TrackerRateLimited` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerTimedOut` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerTransient` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`

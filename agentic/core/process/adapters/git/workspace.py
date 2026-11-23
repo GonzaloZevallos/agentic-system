@@ -143,6 +143,27 @@ SETUP_TREE_FILE = "agentic-setup-tree"
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
+def parse_pending_paths(stdout: str) -> tuple[str, ...]:
+    """The paths of `git status --porcelain=v1 -z` output, unstripped: records are
+    `XY<space><path>`, and a rename or copy is followed by a record holding the original
+    path. Anything else is a `GitError`."""
+    records = stdout.split("\0")
+    if records and records[-1] == "":
+        records.pop()
+    found: dict[str, None] = {}
+    pending = iter(records)
+    for record in pending:
+        if len(record) < 4 or record[2] != " ":
+            raise GitError(f"git status gave a malformed record: {record!r}")
+        found[record[3:]] = None
+        if "R" in record[:2] or "C" in record[:2]:
+            original = next(pending, "")
+            if not original:
+                raise GitError(f"git status gave no original path for {record!r}")
+            found[original] = None
+    return tuple(found)
+
+
 class GitWorkspace:
     def __init__(self, product_dir: Path, identity: Mapping[str, str]):
         # `identity` is `Configuration.git_identity`, handed in by the composition root:
@@ -248,6 +269,14 @@ class GitWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
+
+    def pending_paths(self, path: Path) -> tuple[str, ...]:
+        # `_run`, never `_git`: `_git` strips, and the first record of an unstaged edit starts
+        # with a space (` M path`), which would then read as malformed.
+        result = self._run("status", "--porcelain=v1", "-z", "--untracked-files=all", cwd=path)
+        if result.returncode != 0:
+            raise GitError(f"git status failed: {result.stderr.strip()}")
+        return parse_pending_paths(result.stdout)
 
     def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
         result = self._run("diff", "--quiet", verified, head, "--", ".", f":!{excluded}", cwd=path)
