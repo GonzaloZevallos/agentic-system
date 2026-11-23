@@ -1094,7 +1094,7 @@ def test_the_rule_prefix_of_the_tests_command_stops_before_the_option_that_owns_
 
 def test_the_rule_prefix_cuts_at_the_first_system_token_of_any_kind():
     assert presubmit.rule_prefix("pytest tests {failed_ids}") == "pytest tests"
-    assert presubmit.rule_prefix("run --since {base} -n {workers}") == "run --since"
+    assert presubmit.rule_prefix("run --since {base} -n {workers}") == "run"
     assert presubmit.rule_prefix("run --jobs={workers}") == "run"
     assert presubmit.rule_prefix("run -x -n {workers}") == "run -x"
 
