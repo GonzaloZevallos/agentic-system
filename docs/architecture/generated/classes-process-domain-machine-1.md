@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 3, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 4, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -11,6 +11,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -39,12 +40,10 @@ classDiagram
     class notify__DigestKey["DigestKey"]
     class notify__EventKey["EventKey"]
     class notify__NotifiedRecord["NotifiedRecord"]
+    class notify__PartFact["PartFact"]
+    class notify__ReleaseEvent["ReleaseEvent"]
+    class notify__SplitFacts["SplitFacts"]
     class notify__WaitingEvent["WaitingEvent"]
-    class output_repair__RepairContext["RepairContext"]
-    class reaping__ParsedMark["ParsedMark"]
-    class reaping__ReapScope["ReapScope"]
-    class reaping__ReapedProcess["ReapedProcess"]
-    class refusal__OutputRefusal["OutputRefusal"]
-    class retakes__Budget["Budget"]
+    notify__ReleaseEvent --> notify__EventKey
     notify__WaitingEvent --> notify__EventKey
 ```

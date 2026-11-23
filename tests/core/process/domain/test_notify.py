@@ -271,3 +271,170 @@ def test_the_slug_pattern_restates_the_knowledge_one():
 def test_notify_defines_no_digest_computation_and_is_inert():
     assert not hasattr(notify, "digest_hour") and not hasattr(notify, "digest_event")
     assert notify.SENDS_PER_ROUND == 5 and notify.DEFAULT_DIGEST_HOUR == 20
+
+
+def test_touches_person_reads_either_flag_without_a_type_filter():
+    assert rules.touches_person({"type": "bug", "flags": {"touches_ui": True}})
+    assert rules.touches_person({"flags": {"touches_copy": True}})
+    assert not rules.touches_person({"flags": {"touches_ui": False}})
+    assert not rules.touches_person({})
+
+
+CLOSED = datetime(2026, 11, 20, 10, tzinfo=UTC)
+MERGED = datetime(2026, 11, 20, 9, tzinfo=UTC)
+
+
+def _part(issue: Any, parent_of: Any, *, merged: Any = True, pr: Any = None) -> notify.PartFact:
+    return notify.PartFact(issue, merged, pr, parent_of)
+
+
+def _split(
+    parts: tuple[notify.PartFact, ...] = (),
+    *,
+    parents: tuple[Any, ...] = (),
+    closed: datetime | None = None,
+) -> notify.SplitFacts:
+    return notify.SplitFacts(parents, closed, parts)
+
+
+def _release(
+    state: Any,
+    split: notify.SplitFacts | None,
+    *,
+    issue: int = 10,
+    merged_at: datetime | None = None,
+) -> notify.ReleaseEvent | None:
+    return notify.release_event(state, "apostrophe", issue, split, auto_merged_at=merged_at)
+
+
+def test_a_parent_with_three_merged_ui_parts_gives_one_release_and_three_covered():
+    parts = (_part(13, 10, pr=3), _part(11, 10, pr=1), _part(12, 10, pr=2))
+    root = _release({}, _split(parts, closed=CLOSED))
+    assert root == notify.ReleaseEvent(
+        EventKey("release", "apostrophe", 10, CLOSED),
+        "send",
+        (parts[1], parts[2], parts[0]),
+    )
+    for part in parts:
+        covered = _release({}, _split(parents=(10,)), issue=part.issue, merged_at=MERGED)
+        assert covered == notify.ReleaseEvent(
+            EventKey("release", "apostrophe", part.issue, MERGED), "covered", ()
+        )
+
+
+def test_a_depth_two_tree_covers_leaf_and_intermediate_and_releases_the_root_once():
+    parts = (_part(20, 10, merged=False), _part(21, 20), _part(22, 20), _part(23, 10))
+    root = _release({}, _split(parts, closed=CLOSED))
+    assert root is not None
+    assert root.action == "send"
+    assert root.key == EventKey("release", "apostrophe", 10, CLOSED)
+    assert [(leaf.issue, leaf.parent_of) for leaf in root.leaves] == [(21, 20), (22, 20), (23, 10)]
+    leaf = _release({}, _split(parents=(20, 10)), issue=21, merged_at=MERGED)
+    assert leaf is not None and leaf.action == "covered" and leaf.leaves == ()
+    inter = _release(
+        {}, _split((_part(21, 20), _part(22, 20)), parents=(10,), closed=CLOSED), issue=20
+    )
+    assert inter == notify.ReleaseEvent(
+        EventKey("release", "apostrophe", 20, CLOSED), "covered", ()
+    )
+
+
+def test_an_intermediate_whose_children_name_it_builds_and_is_covered():
+    facts = _split((_part(21, 20),), parents=(10,), closed=CLOSED)
+    event = _release({}, facts, issue=20)
+    assert event is not None and event.action == "covered"
+
+
+def test_a_merged_leaf_of_an_abandoned_parent_is_covered_and_the_root_gives_none():
+    leaf = _release({}, _split(parents=(10,)), issue=11, merged_at=MERGED)
+    assert leaf is not None and leaf.action == "covered"
+    assert _release({}, _split((_part(11, 10),), closed=None)) is None
+
+
+def test_a_part_with_no_instant_gives_none():
+    assert _release({}, _split(parents=(10,)), issue=11) is None
+    assert _release({}, _split((_part(21, 20),), parents=(10,)), issue=20) is None
+
+
+def test_an_auto_merged_ui_task_without_parent_gives_a_release():
+    event = _release({"flags": {"touches_ui": True}}, _split(), merged_at=MERGED)
+    assert event == notify.ReleaseEvent(EventKey("release", "apostrophe", 10, MERGED), "send", ())
+    bug = _release({"type": "bug", "flags": {"touches_copy": True}}, _split(), merged_at=MERGED)
+    assert bug is not None and bug.action == "send"
+
+
+def test_an_auto_merged_task_with_empty_flags_gives_none():
+    assert _release({"flags": {}}, _split(), merged_at=MERGED) is None
+    assert _release({}, _split(), merged_at=MERGED) is None
+
+
+def test_a_ui_task_not_auto_merged_gives_none():
+    assert _release({"flags": {"touches_ui": True}}, _split()) is None
+
+
+def test_an_unreadable_split_gives_none_even_when_auto_merged():
+    assert _release({"flags": {"touches_ui": True}}, None, merged_at=MERGED) is None
+
+
+def test_an_unclosed_root_with_auto_merged_at_gives_none():
+    root = _split((_part(11, 10),))
+    assert _release({"flags": {"touches_ui": True}}, root, merged_at=MERGED) is None
+
+
+def test_a_closed_root_with_no_merged_leaf_gives_none():
+    assert _release({}, _split((_part(11, 10, merged=False),), closed=CLOSED)) is None
+
+
+def test_parts_naming_a_third_issue_raise_in_release_event():
+    with pytest.raises(ValueError, match="parts hang from 99"):
+        _release({}, _split((_part(11, 99),), closed=CLOSED), issue=10)
+
+
+def test_a_root_is_not_filtered_by_the_flags_of_its_leaves():
+    assert _release({"flags": {}}, _split((_part(11, 10),), closed=CLOSED)) is not None
+
+
+_PLUS_ONE = timezone(timedelta(hours=1))
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: _split((_part(11, 11),)),
+        lambda: _split((_part(11, 12), _part(12, 11))),
+        lambda: _split((_part(11, 10), _part(12, 99))),
+        lambda: _split((_part(11, 10), _part(12, 11), _part(13, 12), _part(14, 13))),
+        lambda: _split((_part(11, 10), _part(11, 10))),
+        lambda: _split(parents=(1, 2, 3)),
+        lambda: _split(parents=(0,)),
+        lambda: _split(parents=(True,)),
+        lambda: _split(closed=CLOSED),
+        lambda: _split(parents=(10,), closed=datetime(2026, 11, 20, 10)),
+        lambda: _split(parents=(10,), closed=datetime(2026, 11, 20, 10, tzinfo=_PLUS_ONE)),
+        lambda: _part(0, 10),
+        lambda: _part(True, 10),
+        lambda: _part(11, -1),
+        lambda: _part(11, 10, pr=0),
+        lambda: _part(11, 10, pr=True),
+        lambda: _part(11, 10, merged=1),
+    ],
+)
+def test_construction_rejects_an_incoherent_value(build: Any):
+    with pytest.raises(ValueError):
+        build()
+
+
+def test_a_tree_two_levels_below_the_task_is_accepted():
+    assert _split((_part(11, 10), _part(12, 11)))
+
+
+def test_pending_covers_a_due_unrecorded_release_and_nothing_else():
+    event = notify.ReleaseEvent(EventKey("release", "apostrophe", 10, CLOSED), "covered", ())
+    assert notify.pending(event, ACTIVE, NOW) == "covered"
+    recorded = replace(ACTIVE, keys={event.key: "covered"})
+    assert notify.pending(event, recorded, NOW) is None
+    old = notify.ReleaseEvent(
+        EventKey("release", "apostrophe", 10, NOW - timedelta(days=8)), "send", ()
+    )
+    assert notify.pending(old, ACTIVE, NOW) is None
+    assert notify.pending(event, EMPTY, NOW) is None
