@@ -545,6 +545,11 @@ class PlannedForm:
     path: str | None
 
 
+# What a gate with no affected plan ran: every check full, because the product declares no
+# affected form for any of them.
+UNPLANNED = PlannedForm("full", "no_affected_form", None, None)
+
+
 def plan_form(
     check: str,
     changed_paths: Sequence[str] | None,

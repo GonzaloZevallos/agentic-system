@@ -61,7 +61,12 @@ def planned(paths, check="tests", fallback=FALLBACK, commands=None, stuck=NO_STU
         ("tests", None, NO_STUCK, PlannedForm("full", "paths_unknown", None, None)),
         ("tests", (), NO_STUCK, PlannedForm("full", "paths_unknown", None, None)),
         ("types", ["src/a.py"], NO_STUCK, PlannedForm("full", "no_affected_form", None, None)),
-        ("tests", ["src/a.py"], frozenset({"tests"}), PlannedForm("full", "stuck_full", None, None)),
+        (
+            "tests",
+            ["src/a.py"],
+            frozenset({"tests"}),
+            PlannedForm("full", "stuck_full", None, None),
+        ),
         ("tests", ["src/a.py"], NO_STUCK, PlannedForm("affected-only", "none", None, None)),
     ],
     ids=[

@@ -26,7 +26,9 @@ from ..domain.presubmit import (
     AffectedPlan,
     CheckResult,
     FlakeGate,
+    GateForm,
     Mode,
+    PlannedForm,
     RerunForm,
     WitnessResult,
 )
@@ -239,6 +241,9 @@ class CheckoutPresubmit:
         # The wait and the run of each of those invocations, apart (GH-361): one record per
         # entry of `invocations`, in the same order.
         self.gates: list[GateRecord] = []
+        # The form each check of every such invocation ran and why, one list per invocation in
+        # the same order (`settle_form`): what the Developer's `RoleRun.forms` records.
+        self.forms: list[list[GateForm]] = []
         # The declared command behind each command a row ran, `{workers}` still in it: what
         # a stored pass is keyed by, so the share never splits the store.
         self._declared: dict[tuple[str, str], str] = {}
@@ -285,6 +290,11 @@ class CheckoutPresubmit:
     def gate(self) -> GateRecord | None:
         """The record of the last invocation that ran the checks, or None when none did."""
         return self.gates[-1] if self.gates else None
+
+    @property
+    def last_forms(self) -> list[GateForm]:
+        """The forms of the last invocation that ran the checks, `[]` when none did."""
+        return self.forms[-1] if self.forms else []
 
     def __call__(self) -> str | None:
         workspace = self.ports.workspace
@@ -398,10 +408,13 @@ class CheckoutPresubmit:
                 witness_reason = self._run_witness(self.witness)
             plan = self.affected
             if plan is None:
+                planned = dict.fromkeys(self.checks, presubmit.UNPLANNED)
                 results = self._run_unplanned()
             else:
-                results = self._run_under_plan(plan, self._modes(plan, head))
+                planned = self._planned(plan, head)
+                results = self._run_under_plan(plan, planned)
             self.head, self.results = head, results
+            self.forms.append(self._settled(planned, results))
             self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
             self.gates.append(
@@ -467,14 +480,30 @@ class CheckoutPresubmit:
             ids.extend(presubmit.failed_ids(first[-1]["output"], form.test_id))
         return tuple(ids)
 
-    def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
-        """Which form each check runs under the plan. A changed-paths lookup that fails
-        is `None` for the domain, which runs everything full."""
+    def _paths(self, plan: AffectedPlan, head: str) -> tuple[str, ...] | None:
+        """The paths the branch changed against the plan's base, the one source every plan
+        reads. A lookup that fails is `None` for the domain, which runs everything full."""
         try:
-            paths: tuple[str, ...] | None = self.ports.workspace.changed_paths(plan.base, head)
+            return self.ports.workspace.changed_paths(plan.base, head)
         except (GitError, OSError):
-            paths = None
-        return presubmit.check_modes(list(self.checks), plan, paths)
+            return None
+
+    def _planned(self, plan: AffectedPlan, head: str) -> dict[str, PlannedForm]:
+        """The form each check is planned to run, with the checks that already failed in full
+        on this instance taken before anything runs."""
+        paths, stuck = self._paths(plan, head), frozenset(self.stuck_full)
+        return {
+            name: presubmit.plan_form(name, paths, plan.fallback, plan.commands, stuck)
+            for name in self.checks
+        }
+
+    @staticmethod
+    def _settled(planned: Mapping[str, PlannedForm], results: list[CheckResult]) -> list[GateForm]:
+        """What each check ran, read from its rows and its plan, in declared order."""
+        return [
+            presubmit.settle_form(form, [r for r in results if r["name"] == name], "gate")
+            for name, form in planned.items()
+        ]
 
     def _run_unplanned(self) -> list[CheckResult]:
         if not self.parallel:
@@ -486,28 +515,28 @@ class CheckoutPresubmit:
             per_check = pool.map(lambda item: self._run_once(*item), self.checks.items())
             return [row for rows in per_check for row in rows]
 
-    def _run_under_plan(self, plan: AffectedPlan, modes: dict[str, Mode]) -> list[CheckResult]:
-        if not self.parallel:
-            return [
-                row
-                for name, command in self.checks.items()
-                for row in self._run_planned(name, command, modes[name], plan)
-            ]
-        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            per_check = pool.map(
-                lambda item: self._run_planned(item[0], item[1], modes[item[0]], plan),
-                self.checks.items(),
+    def _run_under_plan(
+        self, plan: AffectedPlan, planned: Mapping[str, PlannedForm]
+    ) -> list[CheckResult]:
+        def run(name: str, command: str) -> list[CheckResult]:
+            return self._with_rerun(
+                name, command, self._planned_rows(name, command, planned[name], plan)
             )
+
+        if not self.parallel:
+            return [row for name, command in self.checks.items() for row in run(name, command)]
+        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
+            per_check = pool.map(lambda item: run(*item), self.checks.items())
             return [row for rows in per_check for row in rows]
 
-    def _run_planned(
-        self, name: str, command: str, mode: Mode, plan: AffectedPlan
+    def _planned_rows(
+        self, name: str, command: str, planned: PlannedForm, plan: AffectedPlan
     ) -> list[CheckResult]:
-        """One check under a plan: its affected form, then the full one when the
-        affected one did not pass; the full form alone when the mode says so or the
-        check already failed in full on this instance."""
+        """One check under a plan: its affected form when it is planned, then the full one
+        when the affected one did not pass; the full form alone otherwise. A full red makes
+        the check stuck on this instance."""
         rows: list[CheckResult] = []
-        if mode == "affected-only" and name not in self.stuck_full:
+        if planned.mode == "affected-only":
             # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
             first = self._run(name, form, "affected-only")
@@ -518,7 +547,7 @@ class CheckoutPresubmit:
         rows.append(full)
         if not full["passed"]:
             self.stuck_full.add(name)
-        return self._with_rerun(name, command, rows)
+        return rows
 
     def _run_once(self, name: str, command: str) -> list[CheckResult]:
         """One check without a plan: its row, and its one rerun when it went red."""
@@ -720,6 +749,9 @@ class CheckoutPresubmit:
             row["truncated"] = True
         if mode is not None:
             row["mode"] = mode
+        if mode == "affected-only":
+            # The affected form's exit, for the cause of the full form that follows a red one.
+            row["exit_code"] = result.exit_code
         if self.readiness is not None and code is not None:
             self._classify(row, result, code, before, self.readiness)
         return row

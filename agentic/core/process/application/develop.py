@@ -310,6 +310,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             *patch["runs"][:-1],
             {**patch["runs"][-1], "gates": list(delivery_presubmit.gates)},
         ]
+    if delivery_presubmit.last_forms and patch.get("runs"):
+        # What each check of the gate's last invocation ran and why, at most `FORMS_MAX`.
+        kept, dropped = presubmit.cap_forms([], delivery_presubmit.last_forms)
+        recorded = {**patch["runs"][-1], "forms": kept}
+        if dropped:
+            recorded["forms_dropped"] = dropped
+        patch["runs"] = [*patch["runs"][:-1], recorded]
     if flakes := delivery_presubmit.flakes():
         # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
         # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head
