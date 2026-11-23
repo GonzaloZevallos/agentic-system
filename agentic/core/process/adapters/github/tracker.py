@@ -28,6 +28,7 @@ from ...application.ports import (
     tracker_failure_class,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from ...domain.github_access import GithubAccess
 from ...domain.hold import HELD_LIMIT, HOLD_LABEL
 from ...domain.presubmit import ApiBreakLine
 from ...domain.task import (
@@ -489,6 +490,7 @@ class GhTracker:
         retry: GhRetry | None = None,
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
+        access: GithubAccess | None = None,
     ):
         self.product_dir = product_dir
         # The product's `api_break_line` (GH-610), asked only when a check is red.
@@ -497,6 +499,7 @@ class GhTracker:
         self._run = run
         self._log = log
         self._retry = retry
+        self._access = access
 
     def open_pull_request(
         self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
@@ -1143,6 +1146,7 @@ class GhTracker:
             failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
             retry=retry,
             retry_timeouts=retry_timeouts,
+            access=self._access,
         )
 
     def _gh_read(self, *args: str) -> str:

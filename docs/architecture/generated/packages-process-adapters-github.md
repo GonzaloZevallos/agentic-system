@@ -39,6 +39,7 @@ graph TD
     m_adapters__github__label_timeline --> g_pkg__application
     m_adapters__github__label_timeline --> m_adapters__github__run
     m_adapters__github__run --> g_pkg__application
+    m_adapters__github__run --> g_pkg__domain
     m_adapters__github__tracker --> g_pkg__application
     m_adapters__github__tracker --> g_pkg__domain
     m_adapters__github__tracker --> m_adapters__github__run

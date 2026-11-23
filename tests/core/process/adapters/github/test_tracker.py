@@ -25,6 +25,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
+from agentic.core.process.domain.github_access import GithubAccess
 from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -2575,3 +2576,33 @@ def test_close_issue_with_a_comment_is_one_gh_call_carrying_it():
     assert run.calls == [
         ["gh", "issue", "close", "12", "--reason", "completed", "--comment", "All parts merged"]
     ]
+
+
+# --- the access keyword (GH-1091, ADR-0107) ----------------------------------------------
+
+
+def _spied_access(monkeypatch) -> list:
+    seen: list = []
+    real = tracker_module.run_gh
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["access"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tracker_module, "run_gh", spy)
+    return seen
+
+
+def test_a_tracker_passes_its_access_to_every_run_gh_call(monkeypatch):
+    seen = _spied_access(monkeypatch)
+    access = GithubAccess()
+    tracker = GhTracker(Path("/p"), Recorder(), access=access)
+    tracker.comment("GH-12", "PR: x")  # a retrying write
+    tracker.open_issue("T", "body")  # the door with no retry
+    assert seen == [access, access]
+
+
+def test_a_tracker_with_no_access_passes_none(monkeypatch):
+    seen = _spied_access(monkeypatch)
+    GhTracker(Path("/p"), Recorder()).comment("GH-12", "PR: x")
+    assert seen == [None]

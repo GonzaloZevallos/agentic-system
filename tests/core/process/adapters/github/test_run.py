@@ -6,10 +6,12 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.github import run as run_module
 from agentic.core.process.adapters.github.run import (
     GH_DRAIN_S,
     GH_TRANSIENT_STATUSES,
@@ -19,11 +21,14 @@ from agentic.core.process.adapters.github.run import (
 )
 from agentic.core.process.application.ports import (
     TrackerCallFailed,
+    TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
     TrackerUnreachable,
 )
+from agentic.core.process.domain.github_access import GithubAccess
+from tests.core.process.adapters.github.gh_fake import gh_response
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -679,3 +684,237 @@ def test_rate_limited_builds_from_a_message_alone_and_keeps_status():
     assert TrackerRateLimited("m").resets_at is None
     assert TrackerRateLimited("m", status=403).status == 403
     assert TrackerRateLimited("m", status=403).resets_at is None
+
+
+# --- the access keyword and the header-wait path (GH-1091, ADR-0107) ---------------------
+
+
+def _http_failed(status, headers, stderr, code=1):
+    """A failed `gh api -i`: the exception carries what `gh_response` prints as its stdout."""
+    stdout = gh_response(status, headers, "{}").stdout
+    return subprocess.CalledProcessError(code, ["gh"], output=stdout, stderr=stderr)
+
+
+BAD_GATEWAY = "gh: HTTP 502"
+SECONDARY = "gh: You have exceeded a secondary rate limit. (HTTP 403)"
+
+
+def _accessing(run, clock, *, cap=900, read=False, access=None):
+    lines: list[str] = []
+    call = lambda: run_gh(  # noqa: E731
+        run,
+        ("api", "-i", "/x"),
+        cwd=Path("."),
+        not_installed="no gh",
+        failed=lambda stderr: f"failed: {stderr}",
+        log=lines.append,
+        retry=_policy(clock, cap=cap),
+        retry_timeouts=read,
+        access=GithubAccess() if access is None else access,
+    )
+    return call, lines
+
+
+def test_a_502_with_retry_after_waits_the_header_value():
+    clock = _Clock()
+    run = _script(_http_failed(502, [("Retry-After", "7")], BAD_GATEWAY), "done")
+    call, lines = _accessing(run, clock)
+    assert call() == "done"
+    assert sum(clock.sleeps) == pytest.approx(7)
+    assert lines == [
+        "agentic: gh api -i met a transient GitHub error; retrying in 7 s (attempt 1/3)"
+    ]
+
+
+def test_a_502_with_no_header_wait_uses_the_backoff_under_access():
+    clock = _Clock()
+    run = _script(_http_failed(502, [("Content-Type", "text/plain")], BAD_GATEWAY), "done")
+    call, _ = _accessing(run, clock)
+    assert call() == "done" and sum(clock.sleeps) == 2
+
+
+def test_a_502_with_a_reset_header_waits_until_it():
+    clock = _Clock(1_000)
+    run = _script(_http_failed(502, [("X-RateLimit-Reset", "1005")], BAD_GATEWAY), "done")
+    call, _ = _accessing(run, clock)
+    assert call() == "done" and sum(clock.sleeps) == pytest.approx(5)
+
+
+def test_a_primary_limit_403_with_a_successful_read_keeps_resets_at_from_the_read():
+    clock = _Clock(1_000)
+    failure = _http_failed(403, [("Retry-After", "5")], RATE_LIMITED)
+    run = _script(failure, _reset_json(1_050), failure, _reset_json(1_050), failure)
+    call, _ = _accessing(run, clock)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at == datetime.fromtimestamp(1_050, UTC)
+    assert sum(clock.sleeps) == pytest.approx(50)  # the second reset has passed: no wait
+
+
+def test_a_primary_limit_403_with_a_successful_read_waits_the_read_not_the_header():
+    clock = _Clock(1_000)
+    run = _script(
+        _http_failed(403, [("Retry-After", "5")], RATE_LIMITED), _reset_json(1_040), "done"
+    )
+    call, _ = _accessing(run, clock)
+    assert call() == "done" and sum(clock.sleeps) == pytest.approx(40)
+
+
+def test_a_primary_limit_403_whose_read_failed_falls_to_the_header_and_sets_no_reset():
+    clock = _Clock(1_000)
+    failure = _http_failed(403, [("Retry-After", "5")], RATE_LIMITED)
+    run = _script(failure, _failed(RATE_LIMITED), failure, _failed(RATE_LIMITED), failure)
+    call, _ = _accessing(run, clock)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert sum(clock.sleeps) == pytest.approx(10)
+    assert raised.value.resets_at is None
+
+
+def test_a_secondary_403_with_retry_after_stays_refused():
+    clock = _Clock()
+    run = _script(_http_failed(403, [("Retry-After", "5")], SECONDARY))
+    call, lines = _accessing(run, clock)
+    with pytest.raises(TrackerRefused) as raised:
+        call()
+    assert raised.value.status == 403 and clock.sleeps == [] and lines == []
+    assert len(run.calls) == 1
+
+
+def test_a_transient_header_wait_over_the_bound_gives_up_without_sleeping():
+    clock = _Clock()
+    run = _script(_http_failed(502, [("Retry-After", "120")], BAD_GATEWAY), "never")
+    call, lines = _accessing(run, clock, cap=60)
+    with pytest.raises(TrackerTransient) as raised:
+        call()
+    assert str(raised.value) == (
+        "gh api -i met a transient GitHub error; GitHub asked to wait 120 s, "
+        "over the 60 s bound (HTTP 502)"
+    )
+    assert raised.value.status == 502
+    assert clock.sleeps == [] and lines == [] and len(run.calls) == 1
+
+
+def test_a_rate_limit_whose_read_failed_and_header_is_over_the_bound_gives_up_with_no_reset():
+    clock = _Clock()
+    run = _script(
+        _http_failed(403, [("Retry-After", "120")], RATE_LIMITED), _failed(RATE_LIMITED), "never"
+    )
+    call, lines = _accessing(run, clock, cap=60)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert "GitHub asked to wait 120 s, over the 60 s bound" in str(raised.value)
+    assert raised.value.resets_at is None and clock.sleeps == [] and lines == []
+
+
+def test_a_rate_limit_whose_read_failed_and_headers_are_unreadable_runs_out_with_no_reset():
+    clock = _Clock()
+    failure = _failed(RATE_LIMITED)
+    run = _script(failure, _failed(RATE_LIMITED), failure, _failed(RATE_LIMITED), failure)
+    call, _ = _accessing(run, clock)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at is None and sum(clock.sleeps) == 2 + 8
+
+
+def test_a_timeout_uses_the_backoff_even_with_access():
+    clock = _Clock()
+    run = _script(subprocess.TimeoutExpired(["gh"], 60), "done")
+    call, _ = _accessing(run, clock, read=True)
+    assert call() == "done" and sum(clock.sleeps) == 2
+
+
+def test_the_nested_rate_limit_read_runs_with_access_none(monkeypatch):
+    seen: list[GithubAccess | None] = []
+    real = run_module.run_gh
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("access", "absent"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(run_module, "run_gh", spy)
+    clock = _Clock(1_000)
+    run = _script(_http_failed(403, [], RATE_LIMITED), _reset_json(1_001), "done")
+    call, _ = _accessing(
+        run, clock, access=GithubAccess(gate=object(), cache=object(), budget=object())
+    )
+    assert call() == "done"
+    assert seen == [None]
+
+
+def _plain(stderr, code=1, stdout="not http"):
+    return subprocess.CalledProcessError(code, ["gh"], output=stdout, stderr=stderr)
+
+
+UNREACHABLE = "error connecting to api.github.com"
+_PARITY = {
+    "success": (lambda: ["ok"], False),
+    "transient": (lambda: [_plain(BAD_GATEWAY), "ok"], False),
+    "transient exhausted": (lambda: [_plain(BAD_GATEWAY)] * 3, False),
+    "transient with no stdout": (lambda: [_plain(BAD_GATEWAY, stdout=None), "ok"], False),
+    "rate limited, reset read": (
+        lambda: [_plain(RATE_LIMITED), _reset_json(1_030), "ok"],
+        False,
+    ),
+    "rate limited, reset not read": (
+        lambda: [_plain(RATE_LIMITED), _failed(RATE_LIMITED), "ok"],
+        False,
+    ),
+    "rate limited exhausted": (
+        lambda: [_plain(RATE_LIMITED), _reset_json(1_010)] * 2 + [_plain(RATE_LIMITED)],
+        False,
+    ),
+    "rate limited with no stdout": (
+        lambda: [_plain(RATE_LIMITED, stdout=None), _failed(RATE_LIMITED), "ok"],
+        False,
+    ),
+    "timeout retried": (lambda: [subprocess.TimeoutExpired(["gh"], 60), "ok"], True),
+    "timeout not retried": (lambda: [subprocess.TimeoutExpired(["gh"], 60)], False),
+    "unreachable": (lambda: [_plain(UNREACHABLE)] * 3, False),
+    "auth exit 4": (lambda: [_plain(UNREACHABLE, code=4)], False),
+    "plain refusal": (lambda: [_plain("gh: Not Found (HTTP 404)")], False),
+}
+
+
+def _observed(outcomes, read, access):
+    """Everything an outside observer sees of one `run_gh` call under a policy."""
+    queue = list(outcomes)
+    calls: list[tuple[list[str], dict]] = []
+
+    def run(argv, **kwargs):
+        calls.append(
+            (list(argv), {k: kwargs[k] for k in ("cwd", "capture_output", "text", "check")})
+        )
+        outcome = queue.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return subprocess.CompletedProcess(argv, 0, stdout=outcome, stderr="")
+
+    clock = _Clock(1_000)
+    lines: list[str] = []
+    try:
+        result: object = run_gh(
+            run,
+            ("api", "/x"),
+            cwd=Path("."),
+            not_installed="no gh",
+            failed=lambda stderr: f"failed: {stderr}",
+            log=lines.append,
+            retry=_policy(clock),
+            retry_timeouts=read,
+            access=access,
+        )
+    except Exception as exc:
+        result = (
+            type(exc),
+            str(exc),
+            getattr(exc, "status", None),
+            getattr(exc, "resets_at", None),
+        )
+    return calls, lines, clock.sleeps, result
+
+
+@pytest.mark.parametrize("case", list(_PARITY))
+def test_access_on_stdout_that_is_not_http_changes_nothing(case):
+    outcomes, read = _PARITY[case]
+    assert _observed(outcomes(), read, None) == _observed(outcomes(), read, GithubAccess())
