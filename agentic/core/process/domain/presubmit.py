@@ -495,6 +495,32 @@ def affected_prefix(command: str) -> str:
     return command[: min(cuts)].rstrip()
 
 
+def rule_prefix(command: str) -> str:
+    """What a `Bash(prefix:*)` rule for a declared check may hold: the command cut at its first
+    system token, stripped, and without a trailing word that starts with `-`, the option that
+    owned the token (`-n` of `-n {workers}`: the number it took is not text a rule can name, and
+    the rule stays what it was before the check was sized). A command without a token is
+    returned as it is, stripped. An empty cut is `""`, and the caller gives no rule for it."""
+    cuts = [i for i in (command.find(token) for token in _SYSTEM_TOKENS) if i >= 0]
+    if not cuts:
+        return command.strip()
+    cut = command[: min(cuts)].strip()
+    head, _, last = cut.rpartition(" ")
+    return head.strip() if last.startswith("-") else cut
+
+
+class UngrantedWorkers(Exception):
+    """A command that still holds `{workers}` was about to run with no share granted by the
+    check scheduler (ADR-0070): the shell would take the token as text. An ordinary exception,
+    not a `FailureReason`: no closed set gains a value for a state that is a bug of the caller."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__(
+            f"`{command}` holds {WORKERS_TOKEN} but the check scheduler granted no share: "
+            "a command is never run with the token unfilled"
+        )
+
+
 # The exit codes this repo's `scripts/affected_tests.py` gives for "selected nothing" and
 # "cannot decide". A convention of this repo, not a system contract: another product's affected
 # script that exits 8 or 9 reads the same here, and any other exit is `affected_red`. A test pins
