@@ -133,12 +133,13 @@ class RunCheck:
             # The witness runs before the check, in this same call: its agreement is what
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
             witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
-            row = gate._run(name, command)
+            workers = gate.whole_share()
+            row = gate._run(name, command, workers)
             after = self._read_load() if measured else None
             outcome: Outcome | None = None
             retry: Retry | None = None
             if self._classified(name):
-                row, outcome, retry = self._settle(name, command, row)
+                row, outcome, retry = self._settle(name, command, row, workers)
         if verification is not None:
             return self._verified(name, row, witness_reason, outcome, (before, after), retry)
         passed, reused = row["passed"], bool(row.get("reused", False))
@@ -198,7 +199,7 @@ class RunCheck:
         return run_check.evidence_markdown(self.calls)
 
     def _settle(
-        self, name: str, command: str, first: CheckResult
+        self, name: str, command: str, first: CheckResult, workers: int | None
     ) -> tuple[CheckResult, Outcome, Retry | None]:
         """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
         run once more in this same call, judged by the gate's own `flake_verdict`; the pair is
@@ -211,7 +212,7 @@ class RunCheck:
         spent = Retry(
             first.get("duration_s", 0.0), first.get("load_before"), first.get("load_after")
         )
-        again = self.gate._execute(name, command)
+        again = self.gate._execute(name, command, workers)
         if presubmit.flake_verdict(first, again) == "flake":
             return again, Outcome.PASSED, spent
         failed = Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
