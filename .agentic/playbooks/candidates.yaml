@@ -2365,3 +2365,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-23T18:05:22.226+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant or brief gives an exact command, run and report it verbatim; do not append flags such as -q or -p no:cacheprovider. If you need a variant, say so and also run the exact form.
+  confidence: medium
+  seen_in:
+  - GH-1076
+  sources:
+  - finding
+  added_at: '2026-11-23T21:57:26.224+00:00'
