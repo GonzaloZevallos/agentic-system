@@ -2398,6 +2398,28 @@ class FakeStopFlag:
         self.marked = True
 
 
+class FakeFormatFixReads:
+    """GH-1067: the reads that release a format hold, answering from `issues` (by URL) and
+    `commits` (by sha) and recording each call; what it does not know is `None`."""
+
+    def __init__(
+        self,
+        issues: Mapping[str, IssueState] | None = None,
+        commits: Mapping[str, bool] | None = None,
+    ) -> None:
+        self.issues = dict(issues or {})
+        self.commits = dict(commits or {})
+        self.calls: list[tuple[str, str]] = []
+
+    def closing(self, issue_url: str) -> IssueState | None:
+        self.calls.append(("closing", issue_url))
+        return self.issues.get(issue_url)
+
+    def contains(self, sha: str) -> bool | None:
+        self.calls.append(("contains", sha))
+        return self.commits.get(sha)
+
+
 class FakeFormatFiler:
     """GH-1030: the format-refusal filing, recording each call and answering `answer`."""
 

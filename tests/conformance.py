@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     ExperimentFile,
     FlagVocabulary,
     FormatFiler,
+    FormatFixReads,
     FreeSpace,
     Inbox,
     LabelTimeline,
@@ -61,6 +62,7 @@ from tests.fakes import (
     FakeCiLogs,
     FakeExperimentFile,
     FakeFormatFiler,
+    FakeFormatFixReads,
     FakeFreeSpace,
     FakeLabelTimeline,
     FakeLandRecord,
@@ -120,6 +122,7 @@ _board_sent: BoardSent = FakeBoardSent()
 _land_record: LandRecord = FakeLandRecord()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
 _format_filer: FormatFiler = FakeFormatFiler()
+_format_fixes: FormatFixReads = FakeFormatFixReads()
 
 
 def ports_of_doubles() -> Ports:
@@ -179,6 +182,7 @@ COVERED: dict[str, type] = {
     "LandRecord": FakeLandRecord,
     "LabelTimeline": FakeLabelTimeline,
     "FormatFiler": FakeFormatFiler,
+    "FormatFixReads": FakeFormatFixReads,
 }
 
 
