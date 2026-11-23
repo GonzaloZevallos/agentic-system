@@ -2374,3 +2374,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-23T21:57:26.224+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you edit a shared test registry or conformance table, run the repo's read-coverage and affected-tests guard tests on the real tree before you deliver, not only the tests for your own seam.
+  confidence: medium
+  seen_in:
+  - GH-1093
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T22:12:08.252+00:00'
