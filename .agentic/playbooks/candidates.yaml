@@ -2346,3 +2346,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-23T07:45:00.604+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: 'For each test you write, check that it can fail: make sure the fake''s output depends on the input you set up, so the assertion would break if the behavior under test were removed.'
+  confidence: low
+  seen_in:
+  - GH-1092
+  sources:
+  - finding
+  added_at: '2026-11-23T17:15:37.098+00:00'
