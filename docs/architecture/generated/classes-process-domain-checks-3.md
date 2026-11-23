@@ -32,8 +32,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class performance__Limit["Limit"]
-    class performance__Measurement["Measurement"]
     class performance__MetricResult["MetricResult"]
     class performance__Result["Result"]
     class performance__Run["Run"]
@@ -44,5 +42,12 @@ classDiagram
     class presubmit__CheckResult["CheckResult"]
     class presubmit__CiCover["CiCover"]
     class presubmit__CiDispatch["CiDispatch"]
-    performance__MetricResult --> performance__Limit
+    class presubmit__GateForm["GateForm"]
+    class presubmit__PlannedForm["PlannedForm"]
+    class presubmit__RedCheck["RedCheck"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - `performance.MetricResult` se asocia con `performance.Limit`
