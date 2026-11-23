@@ -2336,3 +2336,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-22T18:42:10.817+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep your diff for each invariant in the brief and confirm no code reads guarded data directly. Use only the accessors the invariant names, or add a public reader.
+  confidence: medium
+  seen_in:
+  - GH-1060
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T07:45:00.604+00:00'
