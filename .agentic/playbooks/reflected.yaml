@@ -1642,3 +1642,5 @@ tasks:
     decisions: 1
   GH-1092@review:
     cost_usd: 0.0422
+  GH-1090@review:
+    cost_usd: 0.0345

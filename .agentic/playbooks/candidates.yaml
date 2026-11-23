@@ -2355,3 +2355,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-23T17:15:37.098+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you edit a shared config or attribute file, find and run the existing tests that guard it, by searching the tests for its name, even if the full suite times out before reaching them. Quote the result.
+  confidence: medium
+  seen_in:
+  - GH-1090
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T18:05:22.226+00:00'
