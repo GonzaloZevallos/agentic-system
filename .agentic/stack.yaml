@@ -28,8 +28,13 @@
 product: agentic-system
 setup:
   deps: uv sync --locked
+# `tests` runs under pytest-xdist (GH-979): `{workers}` is the share of cores the check scheduler
+# (ADR-0070) grants the gate, filled in as an integer before the shell sees it, and `--dist load`
+# hands each idle worker the next test. CI's first run is the same command with `-n 4`, which
+# `tests/test_stack.py` accepts as the one token it matches (a positive integer, never `auto`).
+# A worker that crashes degrades to a red run with no flake block, not to a hang.
 checks:
-  tests: uv run pytest -m "not llm"
+  tests: uv run pytest -m "not llm" -n {workers} --dist load
   lint: uv run ruff check .
   format: uv run ruff format --check .
   types: uv run mypy
@@ -44,8 +49,10 @@ parallel_checks: true
 # the full suite (ADR-0046); `tests/test_affected_tests.py` reads this list through the
 # stack parser and fails when a test reads a repo path that nothing here or in the script's
 # table covers. This list lives only here.
+# The same `-n {workers} --dist load` follows the base: the script parses both strictly and
+# passes them to the pytest it runs, on a selection as well as on its way to a verdict.
 affected_checks:
-  tests: uv run python scripts/affected_tests.py {base}
+  tests: uv run python scripts/affected_tests.py {base} -n {workers} --dist load
 affected_fallback:
   - pyproject.toml
   - uv.lock
