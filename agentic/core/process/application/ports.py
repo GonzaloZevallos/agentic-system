@@ -2015,6 +2015,21 @@ class FormatFiler(Protocol):
     ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]: ...
 
 
+class FormatFixReads(Protocol):
+    """What the release of a format hold reads (GH-1067): the system's issue of a refusal and
+    whether its fix runs. Reads only, never raises, never fetches and never writes.
+
+    `closing` is the state of the issue at `issue_url`, or `None` when the URL is not an issue
+    of the system's own repo or the read failed. `contains` is `True` when the commit is
+    present and an ancestor of the commit this system runs (HEAD of the stage0 checkout),
+    `False` when it is present and not an ancestor (never read it as 'the fix is absent'),
+    and `None` when unknown: a missing object, a git error or an invalid sha."""
+
+    def closing(self, issue_url: str) -> IssueState | None: ...
+
+    def contains(self, sha: str) -> bool | None: ...
+
+
 class LabelTimeline(Protocol):
     """When a label was last added to an issue (GH-599). Narrow on purpose and apart from
     `Tracker`: only the close and the system merge read it, to record a task's lead time."""
@@ -2740,6 +2755,9 @@ class Ports:
     # Files or comments the issue of a format refusal in the system's repo (GH-1011). `None`
     # files nothing, which is how every run went before it existed (dry-run, evaluation).
     format_filing: FormatFiler | None = None
+    # What the release of a format hold reads (GH-1067). `None` releases nothing and makes no
+    # call, which is how every run went before it existed (dry-run, evaluation).
+    format_fixes: FormatFixReads | None = None
 
 
 class Stage0Store(Protocol):

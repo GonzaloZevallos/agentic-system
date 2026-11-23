@@ -60,6 +60,7 @@ from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.filesystem.stage0_users import ProcStage0Users
 from .core.process.adapters.git import GitWorkspace
+from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
@@ -71,6 +72,7 @@ from .core.process.adapters.github.board import (
 )
 from .core.process.adapters.github.ci_logs import GhCiLogs
 from .core.process.adapters.github.commit_ci import GhCommitCi
+from .core.process.adapters.github.format_fix_reads import GhFormatFixReads, GhRepoSlug
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -357,6 +359,7 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         board=None,
         board_sent=None,
         format_filing=None,
+        format_fixes=None,
     )
 
 
@@ -505,6 +508,13 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         # GH-1030: one filing per run, so its locks and filed pairs are the run's; it writes to
         # the system's own repo (`system_repo`), never the product's.
         format_filing=FormatFiling(system_repo(), print, utc_now),
+        # GH-1067: the reads that release a format hold, on the system's own repo and the
+        # stage0 checkout it runs (`telemetry.REPO`), never the product's.
+        format_fixes=GhFormatFixReads(
+            GhTracker(telemetry.REPO),
+            GhRepoSlug(telemetry.REPO),
+            GitAncestry(telemetry.REPO).contains,
+        ),
     )
 
 

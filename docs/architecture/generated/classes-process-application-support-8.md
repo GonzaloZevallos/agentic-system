@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class preflight__ScratchInARepository["ScratchInARepository"]
     class run_role__Escalating["Escalating"]
     class run_role__EstimateCapReached["EstimateCapReached"]
     class run_role__EstimateStop["EstimateStop"]
