@@ -986,8 +986,17 @@ def design_applies(state: TaskState) -> bool:
 
 def copy_applies(state: TaskState) -> bool:
     """Whether this task has its texts written and reviewed (README.md, 4): a feature, with
-    `touches_copy` among the validated flags. The only reader of that flag."""
+    `touches_copy` among the validated flags. The only reader of that flag that gates the copy
+    branch; `touches_person` reads it with no type filter, for the notifier."""
     return state.get("type") == "feature" and bool(state.get("flags", {}).get("touches_copy"))
+
+
+def touches_person(state: TaskState) -> bool:
+    """Whether the validated flags say the task touches UI or copy, whatever its type: what a
+    person notices when it lands. The one reader the notifier uses (GH-1056)."""
+    # Today only features carry these flags, so no type filter is needed.
+    flags = state.get("flags", {})
+    return bool(flags.get("touches_ui") or flags.get("touches_copy"))
 
 
 def _latest_index(state: TaskState, section: str) -> int | None:
