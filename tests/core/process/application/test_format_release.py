@@ -9,7 +9,12 @@ from datetime import timedelta
 
 from agentic.core.process.application import format_release, poll
 from agentic.core.process.application.format_release import FormatReleaseCarry
-from agentic.core.process.application.ports import IssueState, LockHeld, LockRecord
+from agentic.core.process.application.ports import (
+    IssueState,
+    LockHeld,
+    LockRecord,
+    TrackerTimedOut,
+)
 from agentic.core.process.domain import rules
 from tests.core.process.application import test_poll_format_retakes as held
 from tests.fakes import (
@@ -257,13 +262,27 @@ def test_a_released_task_is_retaken_in_the_same_round(tmp_path):
     assert [argv[3] for argv in launcher.spawned] == ["19"]
 
 
-def test_a_round_that_starts_nothing_or_is_dry_makes_no_call_and_writes_nothing(tmp_path):
+def test_a_dry_round_makes_no_call_and_writes_nothing(tmp_path):
     ports = memory_ports()
     _held(ports)
     reads = FakeFormatFixReads({URL: CLOSED}, {SHA: True})
     ports = replace(ports, format_fixes=reads)
     _round(tmp_path, ports, dry_run=True)
     assert reads.calls == [] and _doc(ports)["format_hold"] == HOLD
+
+
+def test_a_round_that_starts_nothing_makes_no_call_and_writes_nothing(tmp_path):
+    ports = memory_ports(documents=_OmitsNone())
+    _held(ports)
+    reads = FakeFormatFixReads({URL: CLOSED}, {SHA: True})
+    ports = replace(ports, format_fixes=reads)
+    ports.tracker.held_issues_error = TrackerTimedOut("gh timed out")  # the holds are unread
+    lines = _round(tmp_path, ports)
+    assert "agentic: poll: holds unread (timed_out)" in lines
+    assert reads.calls == [] and _doc(ports)["format_hold"] == HOLD
+    ports.tracker.held_issues_error = None  # the control: the same round, holds read
+    assert any("format hold released" in line for line in _round(tmp_path, ports))
+    assert reads.calls != []
 
 
 def test_a_round_without_the_port_prints_nothing_about_it(tmp_path):
