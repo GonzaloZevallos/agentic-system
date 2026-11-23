@@ -111,6 +111,24 @@ def test_scratch_dir_falls_back_to_the_home_dot_cache(monkeypatch):
     assert cfg.scratch_dir == Path("/home/t/.cache/agentic/scratch")
 
 
+def test_github_cache_dir_defaults_under_xdg_cache_home(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.github_cache_dir == Path("/tmp/cache/agentic/github")
+    assert Configuration(product_dir=Path("/tmp/p")).github_cache_dir == cfg.github_cache_dir
+
+
+@pytest.mark.parametrize("unset", [True, False])
+def test_github_cache_dir_falls_back_to_the_home_dot_cache(monkeypatch, unset):
+    if unset:
+        monkeypatch.delenv("XDG_CACHE_HOME")
+    else:
+        monkeypatch.setenv("XDG_CACHE_HOME", "")
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.github_cache_dir == Path("/home/t/.cache/agentic/github")
+
+
 def test_scratch_dir_is_overridable_by_the_environment():
     cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_DIR": "/var/scratch"})
     assert cfg.scratch_dir == Path("/var/scratch")

@@ -20,6 +20,7 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
+from ..domain.etag_cache import CacheEntry
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
@@ -2206,6 +2207,28 @@ class CheckResults(Protocol):
         """Store `row`, a pass, under `key` as of `now`; a row that did not pass is not
         stored. The output is stored as it is given: cut it before. Entries older than
         `MAX_AGE_S` and the oldest above the entry limit are pruned."""
+        ...
+
+
+class GithubCache(Protocol):
+    """The per-product disk store of GitHub REST responses, keyed by
+    `domain.etag_cache.entry_key`. Nothing is served from it without a revalidation: it
+    only keeps the body and the validators to ask again with."""
+
+    def get(self, key: str, now: float) -> CacheEntry | None:
+        """The valid entry for `key`, or `None`. A missing, unreadable, torn, other-repo,
+        other-version or expired entry is a miss; a read never raises and creates nothing.
+        It may only renew the mtime of a valid entry, and failing to does not change the
+        answer."""
+        ...
+
+    def put(self, entry: CacheEntry, now: float) -> None:
+        """Store `entry` under its key as of `now`, pruning on the write. An entry that is
+        not storable (no validator, a body over `BODY_MAX_BYTES`) is a no-op. Raises on
+        I/O only `OSError`, and never leaves a partial or `.tmp` file: a caller reading
+        through the cache catches it and returns GitHub's response as if there were no
+        cache. `ValueError` only for a key that is not 64 lowercase hex, or an entry of
+        another repo: misuse, which `entry_key` never produces."""
         ...
 
 
