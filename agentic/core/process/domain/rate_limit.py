@@ -65,23 +65,12 @@ def _instant(value: object) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def _previous_epoch(state: TaskState) -> list[PauseEntry]:
-    """The entries strictly between the second-to-last and the last `resumed` entry: the epoch
-    the last resume closed. Empty with no `resumed`; with exactly one, everything before it."""
-    log = state.get("pause_log", [])
-    resumed = [i for i, entry in enumerate(log) if entry["kind"] == "resumed"]
-    if not resumed:
-        return []
-    start = resumed[-2] + 1 if len(resumed) > 1 else 0
-    return list(log[start : resumed[-1]])
-
-
 def _previous_was_github(state: TaskState) -> bool:
     """Whether the epoch the last resume closed ended on a `github_rate_limit` failure (one the
     run did not retry: `rules.terminal_failures`)."""
     failures = [
         entry
-        for entry in rules.terminal_failures(_previous_epoch(state))
+        for entry in rules.terminal_failures(rules.previous_epoch(state))
         if entry["kind"] == "failure"
     ]
     return bool(failures) and failures[-1]["value"] == "github_rate_limit"

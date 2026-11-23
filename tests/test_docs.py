@@ -1188,7 +1188,8 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # against DIAGRAM_BUDGET.edges=30, so it splits in two; 27 again without that one import.
     # 29 once run_role.py imports drawing and checkouts (GH-766 1a): application.support
     # splits in two.
-    assert len(pages) <= 29
+    # 30 once notify.py (GH-1056 1a) joins the machine cluster: domain.machine splits in two.
+    assert len(pages) <= 30
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path
