@@ -1,0 +1,4 @@
+command: gh api -i /repos/<owner>/<repo>/issues (paginated, repeated link header)
+gh_version: 2.100.0
+origin: synthetic
+derived_from: ok_200.http

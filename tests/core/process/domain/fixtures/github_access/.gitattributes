@@ -1,0 +1,2 @@
+# gh api -i writes CRLF header lines; git must not rewrite those bytes (GH-1090).
+* -text

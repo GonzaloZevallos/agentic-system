@@ -1,0 +1,4 @@
+command: 'gh api -i /versions -H "If-None-Match: <etag of ok_200>"'
+gh_version: 2.100.0
+origin: captured
+derived_from: ""

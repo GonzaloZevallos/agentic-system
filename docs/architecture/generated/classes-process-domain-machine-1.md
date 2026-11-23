@@ -37,13 +37,18 @@ classDiagram
     class exempt_queue__ExemptFacts["ExemptFacts"]
     class exempt_queue__ExemptRank["ExemptRank"]
     class exempt_queue__ExemptWait["ExemptWait"]
+    class github_access__GithubAccess["GithubAccess"]
+    class github_access__HttpResponse["HttpResponse"]
+    class github_access__NotAnHttpResponse["NotAnHttpResponse"]
     class notify__DigestKey["DigestKey"]
     class notify__EventKey["EventKey"]
     class notify__NotifiedRecord["NotifiedRecord"]
     class notify__PartFact["PartFact"]
     class notify__ReleaseEvent["ReleaseEvent"]
-    class notify__SplitFacts["SplitFacts"]
-    class notify__WaitingEvent["WaitingEvent"]
     notify__ReleaseEvent --> notify__EventKey
-    notify__WaitingEvent --> notify__EventKey
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - `notify.WaitingEvent` se asocia con `notify.EventKey`

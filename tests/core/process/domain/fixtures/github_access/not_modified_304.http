@@ -1,0 +1,23 @@
+HTTP/2.0 304 Not Modified
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Security-Policy: default-src 'none'
+Date: Mon, 23 Nov 2026 13:12:29 GMT
+Etag: "f4d9b42305cab1dbd3f503fbbc80e3b9e508d9b3267ccb5a56e1cd693c55b191"
+Referrer-Policy: origin-when-cross-origin, strict-origin-when-cross-origin
+Server: github.com
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Github-Api-Version-Selected: 2022-11-28
+X-Github-Edge-Region: brazilsouth
+X-Github-Request-Id: DB56:17F558:392CA0D:6335F5D:6B043BBD
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4930
+X-Ratelimit-Reset: 1795440009
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 70
+X-Xss-Protection: 0
+

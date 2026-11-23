@@ -32,6 +32,8 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class notify__SplitFacts["SplitFacts"]
+    class notify__WaitingEvent["WaitingEvent"]
     class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
@@ -43,5 +45,9 @@ classDiagram
     class scratch__Orphans["Orphans"]
     class scratch__Owner["Owner"]
     class scratch__OwnerEntry["OwnerEntry"]
-    class scratch__OwnerRecord["OwnerRecord"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 1)](classes-process-domain-machine-1.md)
+  - `notify.WaitingEvent` se asocia con `notify.EventKey`
