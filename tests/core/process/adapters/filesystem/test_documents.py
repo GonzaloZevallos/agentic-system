@@ -640,3 +640,32 @@ def test_format_issue_round_trips_through_the_document_and_resume(tmp_path):
     assert missing is not None and missing["url"].endswith("/4")
     assert format_issue_for(resumed["format_issue"], "schema_invalid") is None
     assert "value_len" not in resumed["failures"][0]
+
+
+def _run(**extra):
+    return {
+        "role": "Developer",
+        "section": "Developer",
+        "version": 1,
+        "session_id": "s",
+        "model": "m",
+        "cost_usd": 0.5,
+        "cost_by_model": {"m": 0.5},
+        "turns": 3,
+        **extra,
+    }
+
+
+def test_the_forms_of_a_run_round_trip_and_a_document_saved_without_them_still_loads(tmp_path):
+    """ADR-0041: `forms` and `forms_dropped` are optional on read."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    form = {"check": "tests", "mode": "full", "cause": "fallback_glob", "via": "gate"}
+    with_forms = _run(forms=[form], forms_dropped=2)
+    documents.save({"id": "T-1", "title": "t", "description": "d", "runs": [with_forms]})
+    assert documents.load("T-1")["runs"][0]["forms"] == [form]
+    assert documents.load("T-1")["runs"][0]["forms_dropped"] == 2
+
+    path = documents.save({"id": "T-2", "title": "t", "description": "d", "runs": [_run()]})
+    assert "forms" not in path.read_text(encoding="utf-8")
+    loaded = documents.load("T-2")["runs"][0]
+    assert "forms" not in loaded and "forms_dropped" not in loaded
