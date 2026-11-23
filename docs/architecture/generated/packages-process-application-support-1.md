@@ -32,8 +32,8 @@ graph TD
     m_application__docs_settlement["application.docs_settlement"]
     m_application__format_hold["application.format_hold"]
     m_application__format_issue["application.format_issue"]
+    m_application__format_release["application.format_release"]
     m_application__landing_body["application.landing_body"]
-    m_application__limits["application.limits"]
     m_application__checkouts --> g_application__support__2
     m_application__checkouts --> g_domain__checks
     m_application__checkouts --> g_domain__roles
@@ -54,6 +54,9 @@ graph TD
     m_application__format_hold --> g_domain__state
     m_application__format_issue --> g_application__support__2
     m_application__format_issue --> g_domain__state
+    m_application__format_release --> g_application__support__2
+    m_application__format_release --> g_domain__roles
+    m_application__format_release --> g_domain__state
     m_application__landing_body --> g_application__checks
     m_application__landing_body --> g_application__landing
     m_application__landing_body --> g_application__lifecycle

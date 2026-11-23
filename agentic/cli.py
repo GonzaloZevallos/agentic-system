@@ -89,6 +89,7 @@ from .core.process.application import stop as stopmod
 from .core.process.application.delivered import files_patch, size_patch
 from .core.process.application.dry_run import DryRunRefused, read_only_ports
 from .core.process.application.escalate import NEEDS_HUMAN
+from .core.process.application.format_release import FormatReleaseCarry
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
@@ -1776,6 +1777,7 @@ async def _poll(
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
+        release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
         try:
             while True:
                 if stage0 is not None:
@@ -1801,6 +1803,7 @@ async def _poll(
                         eval_set=_round_eval_set(ports, upstream),
                         system_version=telemetry.fresh_system_version,
                         sweep_carry=sweep_carry,
+                        format_release_carry=release_carry,
                     ):
                         print(line, flush=True)
                 except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round

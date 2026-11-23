@@ -24,6 +24,7 @@ classDiagram
     class ci_push__Pushed["Pushed"]
     class ci_trust__TrustRead["TrustRead"]
     class format_issue__FormatFiling["FormatFiling"]
+    class format_release__FormatReleaseCarry["FormatReleaseCarry"]
     class limits__RunLimits["RunLimits"]
     class ports__AddedAdr["AddedAdr"]
     class ports__AddedLine["AddedLine"]

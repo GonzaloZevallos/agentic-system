@@ -57,6 +57,8 @@ markers = [
 [tool.mypy]
 # The command (`checks.types` in .agentic/stack.yaml, the CI step) carries no paths:
 # the checked scope lives here, widened one unit at a time (ADR-0021).
+# Not listed yet: agentic/core/process/application/format_release.py (GH-1054), because
+# `TaskDocuments.load` returns an untyped `dict` and the rules take `TaskState`.
 python_version = "3.13"
 files = [
     "agentic/shared",

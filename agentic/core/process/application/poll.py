@@ -85,6 +85,7 @@ from . import (
 )
 from . import escalate as escalate_module
 from .checkouts import task_base
+from .format_release import FormatReleaseCarry, release_fixed_holds
 from .ports import (
     GitError,
     HeldListMayBeCut,
@@ -3478,6 +3479,7 @@ def run_once(
     system_version: Callable[[], str | None] = lambda: None,
     dry_run: bool = False,
     sweep_carry: worktree_sweep.SweepCarry | None = None,
+    format_release_carry: FormatReleaseCarry | None = None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -3584,6 +3586,19 @@ def run_once(
         for r in registry.live()
         if r.product == mine and (number := ports.inbox.issue_of(r.task_id)) is not None
     )
+    release_lines: list[str] = []
+    if not dry_run and not starts_nothing:
+        # GH-1020: a noted hold whose refusal issue is fixed is released before the resumes, so
+        # the task is retaken in this same round; outside `registry.exclusive()`, and the reads
+        # of the step all happen before it takes a task's lock.
+        live_tasks = {r.task_id for r in registry.live() if r.product == mine}
+        release_lines = release_fixed_holds(
+            ports,
+            lock,
+            lambda task_id: stack_hold.free_writer(task_id, live_tasks, lock),
+            format_release_carry if format_release_carry is not None else FormatReleaseCarry(),
+            skip=stack_held | at_work,
+        )
     resumes = gather_resumes(
         ports,
         now,
@@ -3607,6 +3622,7 @@ def run_once(
         reported=reported,
         skip=stack_held,
     )
+    human_lines += release_lines
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     if not dry_run:
         # GH-1019: the task whose format retakes are spent is held, and its Nota announced; only
