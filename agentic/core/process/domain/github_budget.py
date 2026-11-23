@@ -157,7 +157,8 @@ def budget_from_document(doc: Mapping[str, object], now: datetime) -> Budget:
 def budget_from_headers(headers: Mapping[object, object], now: datetime) -> Budget:
     """The budget one response's `x-ratelimit-*` headers state, for the resource
     `x-ratelimit-resource` names; without a listed resource it is `UNKNOWN`."""
-    return _from_lowercased(_lowercased(headers), _utc(now))
+    now = _utc(now)
+    return _from_lowercased(_lowercased(headers), now)
 
 
 def budget_from(source: object, now: datetime) -> Budget:

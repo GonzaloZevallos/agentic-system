@@ -1,6 +1,7 @@
 """The GitHub account budget (agentic.core.process.domain.github_budget): what a document or
 a response's headers state, and whether a delivery may start on it."""
 
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -312,3 +313,22 @@ def test_a_non_utc_now_raises_even_when_it_is_the_same_instant():
         budget_from(doc(), plus_one)
     with pytest.raises(ValueError):
         can_start(UNKNOWN, {}, plus_one)
+
+
+class Unreadable(Mapping[object, object]):
+    """A mapping that fails when read, so only the order of the checks decides what raises."""
+
+    def __getitem__(self, key: object) -> object:
+        raise RuntimeError("read")
+
+    def __iter__(self) -> Iterator[object]:
+        raise RuntimeError("read")
+
+    def __len__(self) -> int:
+        raise RuntimeError("read")
+
+
+def test_now_is_validated_before_the_headers_are_read():
+    naive = datetime(2026, 11, 23, 12, 0, 0)
+    with pytest.raises(ValueError):
+        budget_from_headers(Unreadable(), naive)
