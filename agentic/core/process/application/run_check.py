@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 from ..domain import presubmit, run_check
-from ..domain.presubmit import CheckResult, tail
+from ..domain.presubmit import CheckResult, GateForm, tail
 from ..domain.run_check import (
     CheckRun,
     Outcome,
@@ -25,6 +25,7 @@ from ..domain.run_check import (
     VerificationCall,
     resolve_wall,
 )
+from .ports import GitError
 from .presubmit import CheckoutPresubmit
 
 
@@ -72,6 +73,9 @@ class RunCheck:
         # One entry per call on a verification, a refused name included, in order: what the
         # system writes into the Developer's section, never what the model says it ran.
         self.calls: list[VerificationCall] = []
+        # The form each call on a declared check ran, in call order, with `via` "tool": read by
+        # the develop node, which records them on the run before the gate's (GH-1096).
+        self.forms: list[GateForm] = []
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -84,20 +88,27 @@ class RunCheck:
     @property
     def timeout_s(self) -> float:
         """The longest one call may take: every declared check could be asked for, and the
-        witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption), plus the one
-        rerun the gate's own allowance gives each declared check (ADR-0066), so the harness
-        never kills a call that is inside one, plus the wait for a share (ADR-0070). A product
-        that declared a wall gets the larger of that and `call_timeout_s` (ADR-0065 addendum):
-        the longest wall twice, for the `not_ready` retry, the wait twice and the witness. One
-        that declared none gets the figure it always had."""
+        witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption), plus the
+        runs a call may spend on each declared check (`call_runs`: the full form and its
+        `not_ready` retry, and the affected form before them when the check has one), so the
+        harness never kills a call that is inside them, plus the wait for a share (ADR-0070). A
+        product that declared a wall gets the larger of that and `call_timeout_s` (ADR-0065
+        addendum): the longest wall that many times, the wait twice and the witness. One that
+        declared none, and no plan, gets the figure it always had."""
         gate = self.gate
-        checks = len(gate.checks)
-        legacy = gate.check_timeout_s * (checks + 1 + checks) + gate.wait_max_s
+        plan = gate.affected
+        # Per declared check, how many runs one call may spend on it: `call_runs`, and two for
+        # every check when there is no plan (the figure the tool always had).
+        runs = [
+            run_check.call_runs(plan is not None and name in plan.commands) for name in gate.checks
+        ]
+        legacy = gate.check_timeout_s * (1 + sum(runs)) + gate.wait_max_s
         if not gate.timeouts:
             return legacy
         witness_s = gate.check_timeout_s if gate.witness else 0.0
         walls = list(gate.timeouts.values())
-        return max(legacy, run_check.call_timeout_s(walls, gate.wait_max_s, witness_s))
+        longest = run_check.call_timeout_s(walls, gate.wait_max_s, witness_s, max(runs, default=2))
+        return max(legacy, longest)
 
     def __call__(self, name: str) -> str:
         return run_check.render(self.run(name))
@@ -115,8 +126,12 @@ class RunCheck:
             )
             return CheckRun(name, refused=run_check.unknown_check(name, known))
         workspace = gate.ports.workspace
-        committed = workspace.head(gate.path) != gate.before
-        clean = workspace.is_clean(gate.path)
+        # The head now, on every call: `before` only says whether anything was ever committed.
+        head = workspace.head(gate.path)
+        committed = head != gate.before
+        pending, clean, tree_read = (None, False, True)
+        if verification is None:
+            pending, clean, tree_read = self._look(gate)
         # What this tree may read and store is decided by the gate's own rule, here and
         # never again below; on a dirty or uncommitted tree it clears whatever an earlier
         # call left, so nothing is read or written for a tree that is not the head's.
@@ -133,16 +148,31 @@ class RunCheck:
             # The witness runs before the check, in this same call: its agreement is what
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
             witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
-            row = gate._run(name, command)
+            planned: presubmit.PlannedForm | None = None
+            rows: list[CheckResult] = []
+            if verification is not None:
+                row = gate._run(name, command)
+            else:
+                planned, rows = self._planned_rows(name, command, head, pending)
+                row = presubmit.final_results(rows)[-1]
             after = self._read_load() if measured else None
             outcome: Outcome | None = None
             retry: Retry | None = None
             if self._classified(name):
-                row, outcome, retry = self._settle(name, command, row)
+                settled, outcome, retry = self._settle(name, command, row)
+                if settled is not row:
+                    rows, row = [*rows, settled], settled
         if verification is not None:
             return self._verified(name, row, witness_reason, outcome, (before, after), retry)
+        assert planned is not None
+        form = gate.form_of(planned, rows)
+        if form["mode"] == "full" and row["passed"]:
+            # Only the tool releases a check from `stuck_full`, and only on a passing full row.
+            gate.stuck_full.discard(name)
         passed, reused = row["passed"], bool(row.get("reused", False))
-        key = gate._key(name, command)
+        # The deciding row is stored under its own declared command: an affected pass is the
+        # pass of the affected form, never of the full one.
+        key = gate._key(name, gate._declared_of(row))
         store = gate.ports.check_results
         fingerprinted = gate._fingerprint is not None
         # Past a fingerprint the gate's `_may_write` is the record and the drift rule in one:
@@ -158,6 +188,7 @@ class RunCheck:
             drifted=fingerprinted and recorded and not gate._may_write,
             witness_agreed=witness_reason is None,
             store=store is not None,
+            tree_read=tree_read,
         )
         if reason is None and not reused and store is not None and key is not None:
             try:
@@ -165,6 +196,7 @@ class RunCheck:
             except OSError:
                 # As at the gate: a store that cannot be written is only a miss later.
                 reason = "the store could not be written"
+        self.forms.append(form)
         return self._measured(
             CheckRun(
                 name,
@@ -174,11 +206,46 @@ class RunCheck:
                 duration_s=row.get("duration_s", 0.0),
                 unrecorded=reason,
                 witness=self._witness_line(witness_reason),
+                form=form,
             ),
             row,
             outcome,
             retry,
         )
+
+    def _look(self, gate: CheckoutPresubmit) -> tuple[tuple[str, ...] | None, bool, bool]:
+        """What the tree has pending, whether it is clean, and whether it could be read, once
+        per call. With the `PendingPaths` port wired a tree is clean when it has nothing
+        pending and a lookup that fails is pending `None`, not clean, not read. Without it the
+        tree is `is_clean`, with `()` pending when it is and `None` when it is not."""
+        port = gate.ports.pending_paths
+        if port is None:
+            clean = gate.ports.workspace.is_clean(gate.path)
+            return ((), True, True) if clean else (None, False, True)
+        try:
+            pending = port.pending_paths(gate.path)
+        except (GitError, OSError):
+            return None, False, False
+        return pending, not pending, True
+
+    def _planned_rows(
+        self, name: str, command: str, head: str, pending: tuple[str, ...] | None
+    ) -> tuple[presubmit.PlannedForm, list[CheckResult]]:
+        """What a declared check was planned to run and the rows it ran. Under a plan, the
+        gate's own `_planned_rows` (the affected form, then the full one on a red); without
+        one, the full command once. The changed paths come only from the gate's `_paths`."""
+        gate = self.gate
+        plan = gate.affected
+        if plan is None:
+            return presubmit.UNPLANNED, [gate._run(name, command)]
+        planned = presubmit.plan_form(
+            name,
+            gate._paths(plan, head, pending),
+            plan.fallback,
+            plan.commands,
+            frozenset(gate.stuck_full),
+        )
+        return planned, gate._planned_rows(name, command, planned, plan)
 
     def _classified(self, name: str) -> bool:
         ready = self.gate.readiness

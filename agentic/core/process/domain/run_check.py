@@ -20,7 +20,8 @@ DESCRIPTION = (
     "Run one of the product's declared checks in your checkout, through the system. Run by "
     "hand, through this tool, only the checks for what you touched; the delivery gate runs "
     "the rest and reuses your passes on the same tree. The exit status, the output and the "
-    "time come from the system, never from you."
+    "time come from the system, never from you. A check with an affected form runs that form "
+    "first, then the full command if it is not green, and the reply states which form ran."
 )
 
 # Why a verification's pass is not stored: it is not a check the gate declares, so there is no
@@ -71,10 +72,19 @@ def resolve_wall(
     return wall
 
 
-def call_timeout_s(walls: Sequence[float], wait_max_s: float, witness_s: float) -> float:
-    """How long one `run_check` call may take as a whole: the largest wall twice (a
-    `not_ready` run is retried once), the readiness wait twice, and the witness."""
-    return max(walls, default=0.0) * 2 + 2 * wait_max_s + witness_s
+def call_runs(affected: bool) -> int:
+    """How many times one `run_check` call may run a check's command: twice for a full form (a
+    `not_ready` run is retried once), three times when the check has an affected form, whose own
+    run comes first. The only place the runs of a call are counted."""
+    return 3 if affected else 2
+
+
+def call_timeout_s(
+    walls: Sequence[float], wait_max_s: float, witness_s: float, runs: int = 2
+) -> float:
+    """How long one `run_check` call may take as a whole: the largest wall `runs` times (two
+    by default: a `not_ready` run is retried once), the readiness wait twice, and the witness."""
+    return max(walls, default=0.0) * runs + 2 * wait_max_s + witness_s
 
 
 def saturated(before: float | None, after: float | None, cores: int) -> bool:
@@ -137,6 +147,9 @@ class CheckRun:
     load_after: float | None = None
     cores: int | None = None
     retry: Retry | None = None
+    # The form a declared check ran and why, as the system recorded it; None for a verification
+    # and for a refused name, whose reply has no `form:` line.
+    form: presubmit.GateForm | None = None
 
 
 def unknown_check(name: str, declared: Sequence[str]) -> str:
@@ -154,17 +167,21 @@ def unrecorded_reason(
     drifted: bool,
     witness_agreed: bool,
     store: bool,
+    tree_read: bool = True,
 ) -> str | None:
     """Why a pass is not stored, or None when it is (invariant 3 of ADR-0065): a pass on a
     clean tree with a commit, a fingerprint, a valid setup-tree record, no drift and a
-    witness that agreed in that same call or is not declared. A reused row is already in
-    the store and is never written again."""
+    witness that agreed in that same call or is not declared. A tree whose pending paths could
+    not be read (`tree_read` false) is refused before the dirty-tree reason. A reused row is
+    already in the store and is never written again."""
     if reused:
         return None
     if not passed:
         return "the check did not pass"
     if not committed:
         return "there is no commit yet"
+    if not tree_read:
+        return "the tree could not be read"
     if not clean:
         return "the tree is not clean"
     if not fingerprinted:
@@ -184,11 +201,26 @@ def _load(figure: float | None) -> str:
     return "unknown" if figure is None else f"{figure:.1f}"
 
 
+def form_line(form: presubmit.GateForm) -> str:
+    """The `form:` line of a reply: the affected form alone, or the full one with the cause and,
+    when there are any, the glob and the path that forced it."""
+    if form["mode"] == "affected-only":
+        return "form: affected-only"
+    detail = [f"cause: {form['cause']}"]
+    if "glob" in form:
+        detail.append(f"glob: {form['glob']}")
+    if "path" in form:
+        detail.append(f"path: {form['path']}")
+    return f"form: full ({', '.join(detail)})"
+
+
 def render(run: CheckRun) -> str:
     """The reply the model reads: every figure is the system's."""
     if run.refused is not None:
         return run.refused
     lines = [f"check: {run.name}"]
+    if run.form is not None:
+        lines.append(form_line(run.form))
     if run.outcome is not None:
         lines.append(f"outcome: {run.outcome}")
     # A machine too loaded to say is never reported as a red (invariant of GH-451).

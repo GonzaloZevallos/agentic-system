@@ -4,12 +4,16 @@ import pytest
 
 from agentic.core.process.domain.run_check import (
     DESCRIPTION,
+    CheckRun,
     Outcome,
     WallOverCeiling,
+    call_runs,
     call_timeout_s,
     description,
+    render,
     resolve_wall,
     saturated,
+    unrecorded_reason,
 )
 
 CHECK_S = 600.0
@@ -106,3 +110,51 @@ def test_the_description_lists_the_declared_verifications_after_the_fixed_text()
     assert "compare" in text
     assert "e2e" in text
     assert text != DESCRIPTION
+
+
+# The form a call ran, and the runs a call may spend (GH-1096).
+
+
+def test_a_check_with_an_affected_form_may_spend_three_runs_and_any_other_two():
+    assert (call_runs(True), call_runs(False)) == (3, 2)
+    assert call_timeout_s([10.0], 0.0, 0.0, runs=3) == 30.0
+    assert call_timeout_s([10.0], 0.0, 0.0) == call_timeout_s([10.0], 0.0, 0.0, runs=2) == 20.0
+
+
+def test_the_reply_states_the_form_right_after_the_check_and_a_verification_has_none():
+    affected = CheckRun(
+        "tests",
+        passed=True,
+        form={"check": "tests", "mode": "affected-only", "cause": "none", "via": "tool"},
+    )
+    assert render(affected).splitlines()[:2] == ["check: tests", "form: affected-only"]
+    full = CheckRun(
+        "tests",
+        form={
+            "check": "tests",
+            "mode": "full",
+            "cause": "fallback_glob",
+            "via": "tool",
+            "glob": "*.lock",
+            "path": "uv.lock",
+        },
+    )
+    assert "form: full (cause: fallback_glob, glob: *.lock, path: uv.lock)" in render(full)
+    assert "form:" not in render(CheckRun("compare", passed=True))
+
+
+def test_a_tree_that_could_not_be_read_is_refused_before_the_dirty_reason():
+    ok = dict(
+        passed=True,
+        reused=False,
+        committed=True,
+        clean=False,
+        fingerprinted=True,
+        setup_recorded=True,
+        drifted=False,
+        witness_agreed=True,
+        store=True,
+    )
+    assert unrecorded_reason(**ok, tree_read=False) == "the tree could not be read"
+    assert unrecorded_reason(**ok) == "the tree is not clean"
+    assert unrecorded_reason(**{**ok, "clean": True}) is None
