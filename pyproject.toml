@@ -72,6 +72,7 @@ files = [
     "agentic/core/process/adapters/shell/reaper.py",
     "agentic/core/process/adapters/shell/perf_runner.py",
     "agentic/core/process/adapters/filesystem/perf_lock.py",
+    "agentic/core/process/adapters/filesystem/write_gate.py",
     "agentic/core/process/adapters/filesystem/check_ledger.py",
     "agentic/core/process/adapters/filesystem/check_results.py",
     "agentic/core/process/adapters/filesystem/board_sent.py",

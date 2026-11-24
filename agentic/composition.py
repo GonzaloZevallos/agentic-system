@@ -125,7 +125,13 @@ from .core.process.domain.poller_units import unit_dir
 from .core.process.domain.presubmit import ApiBreakLine
 from .core.process.domain.stage0_rotation import Unreadable
 from .shared import stage0
-from .shared.configuration import STATE_FILE, Configuration, arm_input, state_file_for
+from .shared.configuration import (
+    STATE_FILE,
+    Configuration,
+    _default_cache_root,
+    arm_input,
+    state_file_for,
+)
 from .shared.environment import own_configuration_unset
 
 if TYPE_CHECKING:
@@ -551,8 +557,7 @@ def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
 def backfill_cache_root() -> Path:
     """Where the backfill keeps its read caches: `$XDG_CACHE_HOME` when set and not empty,
     else `~/.cache`, plus `agentic/scores-reads`. Read from the environment, no setting."""
-    base = os.environ.get("XDG_CACHE_HOME")
-    return (Path(base) if base else Path.home() / ".cache") / "agentic" / "scores-reads"
+    return _default_cache_root() / "agentic" / "scores-reads"
 
 
 def backfill_clock() -> Callable[[], datetime]:
