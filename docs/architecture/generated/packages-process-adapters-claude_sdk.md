@@ -2,7 +2,8 @@ Esta página muestra los módulos del adaptador `adapters.claude_sdk` y los impo
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:
-  - [adapters.filesystem](packages-process-adapters-filesystem.md)
+  - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
+  - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)

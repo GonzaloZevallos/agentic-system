@@ -244,7 +244,7 @@ def build_pages(
             for cluster in graph.layer_clusters[sub]:
                 pages.update(_cluster_pages(graph, sub, cluster))
         else:
-            pages[_key(sub)] = _adapter_page(graph, sub)
+            pages.update(_adapter_pages(graph, sub))
     return pages
 
 
@@ -263,13 +263,21 @@ def _index(graph: _Graph) -> Page:
         "otro. Cada página dibuja los imports que hacen sus módulos, no quién los importa: las "
         "flechas que llegan a un paquete se leen en la página del paquete que importa."
     )
-    return draw.page(
-        INDEX, "Paquetes de process", sentence, None, (), [_key(s) for s in graph.subpackages]
-    )
+    return draw.page(INDEX, "Paquetes de process", sentence, None, (), _sibling_keys(graph))
+
+
+def _sibling_keys(graph: _Graph) -> list[str]:
+    """The key of the page of every subpackage; an adapter kind split in runs has one per run."""
+    return [
+        key
+        for sub in graph.subpackages
+        for key in ([_key(sub)] if sub in LAYERS else _adapter_keys(graph, sub))
+    ]
 
 
 def _others(graph: _Graph, sub: str) -> list[str]:
-    return [_key(other) for other in graph.subpackages if other != sub]
+    own = {_key(sub)} if sub in LAYERS else set(_adapter_keys(graph, sub))
+    return [key for key in _sibling_keys(graph) if key not in own]
 
 
 def _layer_page(graph: _Graph, layer: str) -> Page:
@@ -455,9 +463,11 @@ def _cluster_pages(graph: _Graph, layer: str, cluster: str) -> dict[str, Page]:
     return found
 
 
-def _adapter_page(graph: _Graph, sub: str) -> Page:
+def _adapter_draw(graph: _Graph, sub: str, modules: list[str]) -> _Draw:
+    """The drawing of `modules` of the adapter kind `sub`: a module of the kind that is not in
+    `modules` (another run of a split kind) appears as a node without its imports."""
     draw = _Draw()
-    for source in graph.modules_of(sub):
+    for source in modules:
         here = _own_end(source)
         draw.node(here)
         for target in graph.targets[source]:
@@ -466,16 +476,46 @@ def _adapter_page(graph: _Graph, sub: str) -> Page:
                 draw.edge(here, _own_end(relative))
             else:
                 draw.edge(here, graph.sub_end(target))
+    return draw
+
+
+def _adapter_runs(graph: _Graph, sub: str) -> list[list[str]]:
+    """The modules of `sub` in one run, or in `chunks` of consecutive names when the one page
+    is over the budget (GH-1083: `adapters.filesystem` outgrew it)."""
+    modules = graph.modules_of(sub)
+    if not _adapter_draw(graph, sub, modules).over():
+        return [modules]
+    return chunks(modules)
+
+
+def _adapter_keys(graph: _Graph, sub: str) -> list[str]:
+    count = len(_adapter_runs(graph, sub))
+    return [_key(sub)] if count == 1 else [f"{_key(sub)}-{n}" for n in range(1, count + 1)]
+
+
+def _adapter_pages(graph: _Graph, sub: str) -> dict[str, Page]:
+    runs = _adapter_runs(graph, sub)
+    keys = _adapter_keys(graph, sub)
     what = (
         "los módulos sueltos de `adapters`, los que no están en ningún tipo de adaptador,"
         if sub == ADAPTERS
         else f"los módulos del adaptador `{sub}`"
     )
-    sentence = (
-        f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` es "
-        f"otro paquete: {_PACKAGE_NODES}"
-    )
-    return _checked(draw, _key(sub), sub, sentence, INDEX, _others(graph, sub))
+    found: dict[str, Page] = {}
+    for number, (key, run) in enumerate(zip(keys, runs, strict=True), start=1):
+        sentence = (
+            f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` "
+            f"es otro paquete: {_PACKAGE_NODES}"
+        )
+        if len(runs) > 1:
+            sentence += (
+                " El tipo no cabe en un diagrama: está partido en tandas de módulos consecutivos, "
+                "y un módulo de otra tanda aparece como nodo sin sus imports."
+            )
+        siblings = [other for other in _sibling_keys(graph) if other != key]
+        title = sub if len(runs) == 1 else f"{sub} (parte {number})"
+        found[key] = _checked(_adapter_draw(graph, sub, run), key, title, sentence, INDEX, siblings)
+    return found
 
 
 def _flat_draw(
