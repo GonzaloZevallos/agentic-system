@@ -2403,3 +2403,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-23T23:50:08.237+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant says a function must return a safe value on bad input, guard every numeric parameter for finiteness (NaN, inf), not only the parsed one, and add a test case for each parameter.
+  confidence: medium
+  seen_in:
+  - GH-1106
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:06:05.628+00:00'
