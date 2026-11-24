@@ -110,7 +110,13 @@ sequenceDiagram
    `qa_performance`, `full_checks`; `agentic/core/process/application/verifiers.py:verify`) y
    `deliver` espera a todos; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
    marcó con `Owner's rule:` en el issue (`agentic/core/process/application/owner_rules.py`); `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
-   (`agentic/core/process/application/deliver.py:deliver`). Cuando el stack declara
+   (`agentic/core/process/application/deliver.py:deliver`). Las líneas `Closes #N` del padre
+   salen del cuerpo actual del issue, que `deliver` lee en la entrega con `Inbox.task` (no de la
+   descripción guardada): una línea `Closes` por cada marcador `agentic-closes` que sea una línea
+   entera fuera de un bloque de código
+   (`agentic/core/process/domain/pull_request.py:closing_numbers`). Solo si `issue_of` devuelve
+   `None` se usa la descripción guardada. Si la lectura falla, `deliver` escala sin empujar ni
+   abrir nada: `delivery_transient` ante un fallo del tracker, `failure` ante un cuerpo vacío. Cuando el stack declara
    `api_break_line` y la tarea tiene un motivo registrado, el cuerpo de la primera entrega lleva
    la línea `Breaking-API:` primero; en una reentrega `deliver` lee el cuerpo
    (`Tracker.pull_request_body`), le antepone la línea si falta y lo edita
