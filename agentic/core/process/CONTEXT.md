@@ -416,6 +416,7 @@ _Campo_: performance budget — web.dev y Lighthouse CI, un tope declarado que u
 **Presupuesto de la cuenta de GitHub**:
 Lo que le queda a una cuenta de GitHub para pedir, por cuenta (el host más un hash del token) y nunca por producto. Tiene tres recursos, `core`, `graphql` y `search`, y de cada uno se conoce lo que queda (*remaining*) y cuándo se repone (*reset*). Se lee de `gh api rate_limit` o de los encabezados `x-ratelimit-*` de una respuesta con `budget_from`, y vale 60 s desde esa lectura. Con él, `can_start` decide si una entrega empieza o espera: espera hasta el último de los *resets* de los recursos que alcanzan menos de lo que la entrega necesita (`Wait`). Un presupuesto desconocido o vencido deja empezar a la entrega, así que el presupuesto es sólo un aviso y nunca frena por sí solo.
 En el código se llama `Budget`, el valor que `budget_from` lee, y `Wait`, la espera que `can_start` devuelve.
+Se guarda con `BudgetStore`, el port, que implementa `FilesystemBudgetStore` en `$XDG_CACHE_HOME/agentic/github/budget/github.com-<16 hex>.json` (directorio 0700, archivos 0600, un `flock` por cuenta con espera acotada), y `AccountKeys` saca la clave de la cuenta; como máximo se lee un `gh api rate_limit` por cuenta por minuto.
 _Avoid_: límite de la cuenta (`account_limit`), Presupuesto de tamaño, Presupuesto de chequeo, cuota
 _Campo_: rate limit — GitHub REST/GraphQL
 

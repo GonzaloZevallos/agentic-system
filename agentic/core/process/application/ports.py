@@ -21,6 +21,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.github_budget import Budget
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
@@ -2989,4 +2990,27 @@ class FailurePolicy(Protocol):
     def succeeded(self, sha: str) -> None:
         """`sha` is current and healthy. Idempotent: it is called again by every run that
         finds the rotation up to date."""
+        ...
+
+
+class BudgetStore(Protocol):
+    """The GitHub account's budget, shared by every process of this machine. Keyed by the
+    account key (`github.com-` and 16 hex), never by the token. Nothing raises past it but a
+    `ValueError` for a key of another shape: whatever cannot be read or written is unknown."""
+
+    def load(self, key: str) -> Budget | None:
+        """The stored budget; `None` when the file is missing, torn, foreign or of another
+        version, or the store is disabled."""
+        ...
+
+    def claim(self, key: str, now: datetime) -> datetime | None:
+        """Under the lock: `None` when the stored `read_at` is under `BUDGET_TTL` old.
+        Otherwise it writes `read_at=now` (whole seconds), keeps the stored resources and
+        `fetched_at`, and returns that instant: the caller may read `rate_limit` once."""
+        ...
+
+    def put(self, key: str, claim: datetime, budget: Budget) -> None:
+        """Under the lock, re-reads the file and drops the write when the stored `read_at`
+        is later than `claim` (a later claim already took the read). Otherwise writes
+        `read_at=claim`, `fetched_at` and the resources."""
         ...
