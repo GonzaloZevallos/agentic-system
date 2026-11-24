@@ -177,12 +177,17 @@ def budget_from(source: object, now: datetime) -> Budget:
     return UNKNOWN
 
 
+def is_fresh(budget: Budget, now: datetime) -> bool:
+    """The budget was fetched, not after `now`, and under `BUDGET_TTL` ago."""
+    fetched_at = budget.fetched_at
+    return fetched_at is not None and fetched_at <= now and now - fetched_at < BUDGET_TTL
+
+
 def can_start(budget: Budget, needed: Mapping[Resource, int], now: datetime) -> Start | Wait:
     """`Start` when the budget is unknown, expired or enough; otherwise `Wait` until the
     latest reset among the resources that are short."""
     now = _utc(now)
-    fetched_at = budget.fetched_at
-    if fetched_at is None or now - fetched_at >= BUDGET_TTL or fetched_at > now:
+    if not is_fresh(budget, now):
         return Start()
     wait: Wait | None = None
     for resource in RESOURCES:
