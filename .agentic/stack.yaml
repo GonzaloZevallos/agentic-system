@@ -88,14 +88,16 @@ rerun_checks:
 # GH-400, ADR-0076, sets this value). Measured: one `generate.py` run takes about 63 s idle and
 # 154 s with the machine loaded (eleven pyreverse runs, the import of the CLI and the compile of
 # the graph); the budget is the loaded time times 1.5, rounded up.
-# `tests` (GH-979): one foreground `uv run pytest -m "not llm" -n 4 --dist load` in this checkout,
-# the machine loaded by a second, serial `run_check("tests")` running at the same time: 20490
-# passed, 7 skipped, 1 xfailed in 1386.45 s with 4 workers (the share the CI first run uses; the
-# scheduler's own full-tier share was not read from `Limits` in that run). 1386.45 x 1.5, rounded
-# up, is 2080. The serial form timed out at 1500 s at 71 % in that same loaded window.
+# `tests` (GH-979): the full tier's share, read from the scheduler's own `Limits` (ADR-0070) for
+# this machine: 16 cores, a reserve of 4, so `cap(INTEGRATION)` = `cap(LAND)` = 12 workers (a
+# `subtask` gate gets 6). Measured with `uv run pytest -m "not llm" -n 12 --dist load` in this
+# checkout, the machine loaded by a serial `run_check("tests")` running at the same time: 20490
+# passed, 7 skipped, 1 xfailed in 754.83 s (green) and 775.34 s (one load-sensitive wait failed,
+# fixed in `test_graph_parallel.py`). The slower, 775.34 s, x 1.5 rounded up is 1164.
+# Serial, the same suite timed out at 1500 s at 71-95 % in those loaded windows.
 check_budgets:
   docs: 231
-  tests: 2080
+  tests: 1164
 # `docs`: the generated documentation (ADR-0074). `generate` rewrites every file the globs
 # own; the reserved `docs` check runs it and fails when the tree changed, and CI runs the same
 # command through `scripts/docs/check.py`. Hand-written pages never go under these globs.

@@ -500,10 +500,10 @@ def rule_prefix(command: str) -> str:
     system token, stripped, and without a trailing word that starts with `-`, the option that
     owned the token (`-n` of `-n {workers}`: the number it took is not text a rule can name, and
     the rule stays what it was before the check was sized). A command without a token is
-    returned as it is, stripped. An empty cut is `""`, and the caller gives no rule for it."""
+    returned exactly as it is. An empty cut is `""`, and the caller gives no rule for it."""
     cuts = [i for i in (command.find(token) for token in _SYSTEM_TOKENS) if i >= 0]
     if not cuts:
-        return command.strip()
+        return command
     cut = command[: min(cuts)].strip()
     head, _, last = cut.rpartition(" ")
     return head.strip() if last.startswith("-") else cut

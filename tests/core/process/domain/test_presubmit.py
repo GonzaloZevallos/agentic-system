@@ -1102,7 +1102,7 @@ def test_the_rule_prefix_cuts_at_the_first_system_token_of_any_kind():
 def test_the_rule_prefix_of_a_command_without_a_token_is_the_command_as_it_is():
     assert presubmit.rule_prefix("uv run ruff check .") == "uv run ruff check ."
     assert presubmit.rule_prefix("uv run pytest -x") == "uv run pytest -x"
-    assert presubmit.rule_prefix("uv run mypy  ") == "uv run mypy"
+    assert presubmit.rule_prefix("uv run mypy\n") == "uv run mypy\n"
 
 
 def test_the_rule_prefix_of_a_command_that_starts_with_a_token_is_empty():
