@@ -1,8 +1,9 @@
-Esta página muestra los módulos del adaptador `adapters.filesystem` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera.
+Esta página muestra los módulos del adaptador `adapters.filesystem` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El tipo no cabe en un diagrama: está partido en tandas de módulos consecutivos, y un módulo de otra tanda aparece como nodo sin sus imports.
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:
   - [adapters.claude_sdk](packages-process-adapters-claude_sdk.md)
+  - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
@@ -13,18 +14,8 @@ Esta página muestra los módulos del adaptador `adapters.filesystem` y los impo
 
 ```mermaid
 graph TD
-    g_pkg__adapters["adapters (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
-    m_adapters__filesystem__board_sent["adapters.filesystem.board_sent"]
-    m_adapters__filesystem__check_ledger["adapters.filesystem.check_ledger"]
-    m_adapters__filesystem__check_results["adapters.filesystem.check_results"]
-    m_adapters__filesystem__documents["adapters.filesystem.documents"]
-    m_adapters__filesystem__experiment_file["adapters.filesystem.experiment_file"]
-    m_adapters__filesystem__file_inbox["adapters.filesystem.file_inbox"]
-    m_adapters__filesystem__free_space["adapters.filesystem.free_space"]
-    m_adapters__filesystem__heartbeats["adapters.filesystem.heartbeats"]
-    m_adapters__filesystem__installed_products["adapters.filesystem.installed_products"]
     m_adapters__filesystem__liveness["adapters.filesystem.liveness"]
     m_adapters__filesystem__lock["adapters.filesystem.lock"]
     m_adapters__filesystem__perf_lock["adapters.filesystem.perf_lock"]
@@ -33,18 +24,7 @@ graph TD
     m_adapters__filesystem__scratch["adapters.filesystem.scratch"]
     m_adapters__filesystem__stage0_store["adapters.filesystem.stage0_store"]
     m_adapters__filesystem__stage0_users["adapters.filesystem.stage0_users"]
-    m_adapters__filesystem__board_sent --> g_pkg__application
-    m_adapters__filesystem__board_sent --> g_pkg__domain
-    m_adapters__filesystem__check_ledger --> g_pkg__application
-    m_adapters__filesystem__check_ledger --> g_pkg__domain
-    m_adapters__filesystem__check_ledger --> m_adapters__filesystem__liveness
-    m_adapters__filesystem__check_results --> g_pkg__domain
-    m_adapters__filesystem__documents --> g_pkg__adapters
-    m_adapters__filesystem__documents --> g_pkg__domain
-    m_adapters__filesystem__file_inbox --> g_pkg__domain
-    m_adapters__filesystem__free_space --> g_pkg__domain
-    m_adapters__filesystem__heartbeats --> g_pkg__domain
-    m_adapters__filesystem__installed_products --> g_pkg__domain
+    m_adapters__filesystem__write_gate["adapters.filesystem.write_gate"]
     m_adapters__filesystem__liveness --> g_pkg__application
     m_adapters__filesystem__liveness --> g_pkg__domain
     m_adapters__filesystem__lock --> g_pkg__application
@@ -59,4 +39,6 @@ graph TD
     m_adapters__filesystem__scratch --> m_adapters__filesystem__liveness
     m_adapters__filesystem__stage0_store --> g_pkg__domain
     m_adapters__filesystem__stage0_users --> g_pkg__domain
+    m_adapters__filesystem__write_gate --> g_pkg__application
+    m_adapters__filesystem__write_gate --> g_pkg__domain
 ```
