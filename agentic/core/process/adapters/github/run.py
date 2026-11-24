@@ -29,12 +29,15 @@ from ...application.ports import (
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
+    WriteGate,
 )
 from ...domain.github_access import (
     GithubAccess,
     HttpResponse,
     NotAnHttpResponse,
+    is_write,
     split_response,
     wait_from,
 )
@@ -401,6 +404,23 @@ def _retry_wait(
     return _Wait(seconds, None, None)
 
 
+def _take_turn(gate: WriteGate, call: str, remaining: float, log: Callable[[str], None]) -> float:
+    """One write turn for `call`: the seconds it waited when granted. A refused or stopped turn
+    writes one line and raises `TrackerTurnRefused`; `gh` is never launched. No line holds
+    anything `gh` printed."""
+    turn = gate.take(remaining)
+    if turn.outcome == "granted":
+        if turn.waited_s > 0:
+            log(f"agentic: gh {call} waiting {turn.waited_s:g} s for its write turn")
+        return turn.waited_s
+    reason = (
+        f"over the {gate.cap_s:g} s bound" if turn.outcome == "refused" else "the wait was stopped"
+    )
+    message = f"gh {call} write turn refused: {reason}"
+    log(f"agentic: {message}")
+    raise TrackerTurnRefused(message)
+
+
 def run_gh(
     run: Run,
     args: Sequence[str],
@@ -412,6 +432,7 @@ def run_gh(
     retry: GhRetry | None = None,
     retry_timeouts: bool = False,
     access: GithubAccess | None = None,
+    write: bool | None = None,
 ) -> str:
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
@@ -446,11 +467,26 @@ def run_gh(
     (`resets_at` comes only from that read) and uses the headers only when it gave nothing. A
     header wait over `retry.max_wait_s` neither sleeps nor clamps: it ends as the kind's error
     saying GitHub asked to wait that long. A timeout always waits the backoff. The kind is
-    decided from stderr alone, so a secondary 403 or a 429 stays a refusal."""
+    decided from stderr alone, so a secondary 403 or a 429 stays a refusal.
+
+    `write` says whether the call may change GitHub; `None` lets `is_write(args)` decide. Only
+    with `access.gate` and a write does the call take a turn (`gate.take`), on every attempt,
+    right before `gh` launches: a retry takes a new turn. The call's wait is bounded by
+    `gate.cap_s` in all, turn waits and retry sleeps together; a retry wait longer than what is
+    left is never shortened, it ends as the kind's error with no sleep. A turn that is refused
+    or whose wait was stopped writes one line and raises `TrackerTurnRefused`, and `gh` never
+    launches. No such line holds `gh` output, and no metric, label or span attribute is added.
+    With no gate, or for a read, every path is the one above."""
     call = " ".join(args[:2])
     attempt = 1
     last_reset: float | None = None
+    gate = access.gate if access is not None else None
+    if gate is not None and not (write if write is not None else is_write(args)):
+        gate = None
+    waited = 0.0
     while True:
+        if gate is not None:
+            waited += _take_turn(gate, call, max(gate.cap_s - waited, 0.0), log)
         try:
             result = run(["gh", *args], cwd=cwd, capture_output=True, text=True, check=True)
         except FileNotFoundError as exc:
@@ -492,12 +528,20 @@ def run_gh(
         seconds, giving_up = wait.seconds, wait.giving_up
         if wait.reset is not None:
             last_reset = wait.reset
+        if giving_up is None and gate is not None:
+            left = max(gate.cap_s - waited, 0.0)
+            if seconds > left:
+                giving_up = (
+                    f"gh {call} {_PHRASES[kind]}; its wait is {seconds:g} s, "
+                    f"over the {left:g} s left of its {gate.cap_s:g} s write bound"
+                )
         if giving_up is None:
             log(
                 f"agentic: gh {call} {_PHRASES[kind]}; "
                 f"retrying in {seconds:g} s (attempt {attempt}/{retry.attempts})"
             )
             if retry.wait(seconds):
+                waited += seconds
                 attempt += 1
                 continue
             giving_up = f"gh {call} {_PHRASES[kind]}; the wait was stopped"

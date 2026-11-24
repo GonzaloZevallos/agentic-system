@@ -21,6 +21,8 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.github_access import Turn as Turn
+from ..domain.github_access import WriteGate as WriteGate
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
@@ -940,6 +942,13 @@ class TrackerTransient(TrackerCallFailed):
     retries a `GhRetry` allows ran out (GH-389). A write may have been applied after all: a
     response can be lost after the change. The message names the call and the bound, never
     stderr."""
+
+
+class TrackerTurnRefused(TrackerTransient):
+    """A write's turn was refused (its wait was over the bound) or its wait was stopped, so
+    `gh` never launched and nothing reached GitHub. A `TrackerTransient`, so a caller that
+    treats a transient failure as a call to retry later absorbs it unchanged. The message
+    names the call and the bound, never stderr."""
 
 
 class TrackerRateLimited(TrackerCallFailed):
