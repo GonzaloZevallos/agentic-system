@@ -33,7 +33,7 @@ classDiagram
     class ports__BoardSent["BoardSent"]
     class ports__BoardWritten["BoardWritten"]
     class ports__BranchPullRequest["BranchPullRequest"]
-    class ports__CheckRequest["CheckRequest"]
+    class ports__BudgetStore["BudgetStore"]
 ```
 
 ## Relaciones con otras páginas
