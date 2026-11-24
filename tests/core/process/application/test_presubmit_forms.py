@@ -31,7 +31,16 @@ AFFECTED = "pytest --since abc"
 REUSE = Reuse("agentic", ("uv sync",), "0123456789abcdef0123456789abcdef01234567")
 
 
-def gate(commands=None, *, plan=PLAN, paths=("src/a.py",), store=None, workspace=None, reuse=None):
+def gate(
+    commands=None,
+    *,
+    plan=PLAN,
+    paths=("src/a.py",),
+    store=None,
+    workspace=None,
+    reuse=None,
+    via="gate",
+):
     workspace = workspace or MemoryWorkspace()
     workspace.diff_paths = paths
     workspace.moved.add(PATH)
@@ -51,6 +60,7 @@ def gate(commands=None, *, plan=PLAN, paths=("src/a.py",), store=None, workspace
         affected=plan,
         reuse=reuse,
         priority=CheckPriority.SUBTASK,
+        via=via,
     )
 
 
@@ -199,14 +209,20 @@ def test_form_of_carries_the_via_the_instance_was_built_with():
         "duration_s": 0.1,
     }
     assert gate().form_of(planned, [row])["via"] == "gate"
-    tool = gate()
-    tool.via = "tool"
+    tool = gate(via="tool")
     assert tool.form_of(planned, [row]) == {
         "check": "tests",
         "mode": "full",
         "cause": "no_affected_form",
         "via": "tool",
     }
+    assert tool.via == "tool" and gate().via == "gate"
+
+
+def test_every_form_a_tool_instance_records_carries_via_tool():
+    g = gate(via="tool")
+    assert g() is None
+    assert {form["via"] for form in g.last_forms} == {"tool"}
 
 
 def test_declared_of_gives_the_declared_command_of_an_executed_row_and_the_row_otherwise():
