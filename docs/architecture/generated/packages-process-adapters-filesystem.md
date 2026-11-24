@@ -1,4 +1,4 @@
-Esta página muestra las partes en que se dividió los módulos del adaptador `adapters.filesystem` por cantidad, y una flecha por cada parte que importa módulos de otra; cada nodo `<nombre> parte <n> (grupo)` tiene su página, con los módulos consecutivos en orden alfabético.
+Esta página muestra las partes en que se dividieron los módulos del adaptador `adapters.filesystem` por cantidad, y una flecha por cada parte que importa módulos de otra; cada nodo `<nombre> parte <n> (grupo)` tiene su página, con los módulos consecutivos en orden alfabético.
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:

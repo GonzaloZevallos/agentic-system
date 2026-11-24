@@ -515,7 +515,7 @@ def _adapter_pages(graph: _Graph, sub: str) -> dict[str, Page]:
                 if relative is not None and subpackage(relative) == sub:
                     kind.edge(_part_end(sub, number), _part_end(sub, _part_of(runs, relative)))
     sentence = (
-        f"Esta página muestra las partes en que se dividió {what} por cantidad, y una flecha "
+        f"Esta página muestra las partes en que se dividieron {what} por cantidad, y una flecha "
         "por cada parte que importa módulos de otra; cada nodo `<nombre> parte <n> (grupo)` "
         "tiene su página, con los módulos consecutivos en orden alfabético."
     )
