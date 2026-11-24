@@ -122,6 +122,12 @@ sequenceDiagram
    (`Tracker.pull_request_body`), le antepone la línea si falta y lo edita
    (`Tracker.update_pull_request_body`) antes del push. Sin clave o sin motivo, nada de esto ocurre
    (`agentic/core/process/domain/pull_request.py:with_required_lines`).
+   Las líneas `Closes #N` del padre salen del cuerpo del issue tal como está al entregar:
+   `deliver` lo lee una sola vez con `Inbox.task` (la descripción guardada solo sirve cuando no hay
+   issue, como en una evaluación) y `agentic/core/process/domain/pull_request.py:closing_numbers`
+   toma cada marcador `agentic-closes` que ocupa una línea entera fuera de un bloque de código.
+   Si esa lectura falla, `deliver` escala antes de empujar nada: `delivery_transient` ante una falla
+   del tracker, `failure` ante un cuerpo vacío, y la pausa de rate limit ante un 429.
 7. **Merge.** En rondas siguientes el poller reúne los pull requests entregados
    (`agentic/core/process/application/poll.py:gather_merges`) y lanza
    `agentic merge --issue N` (`agentic/cli.py:_merge`). Este verbo llama a
