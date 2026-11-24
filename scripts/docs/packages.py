@@ -488,7 +488,7 @@ def _adapter_draws(graph: _Graph, sub: str) -> list[tuple[str, _Draw]]:
     modules (`adapters-filesystem-1`, `adapters-filesystem-2`)."""
     modules = graph.modules_of(sub)
     whole = _adapter_draw(graph, sub, modules)
-    if not whole.over():
+    if not whole.over() or len(modules) < 2:  # one module cannot be split: `_checked` refuses it
         return [(_key(sub), whole)]
     return [
         (f"{_key(sub)}-{number}", _adapter_draw(graph, sub, run))
