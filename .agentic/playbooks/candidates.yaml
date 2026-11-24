@@ -2413,3 +2413,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-24T07:06:05.628+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief says to read a value from a named source, read it there and cite it; never substitute a guessed or assumed value, and do not leave a comment admitting you did not read it.
+  confidence: medium
+  seen_in:
+  - GH-1077
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:54:05.108+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, tick off every evidence item the brief asks for (counts, forced-failure demos, reruns) and record each one in your section; do not deliver with an item missing.
+  confidence: medium
+  seen_in:
+  - GH-1077
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:54:05.108+00:00'
