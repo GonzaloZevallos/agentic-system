@@ -1189,8 +1189,10 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # 29 once run_role.py imports drawing and checkouts (GH-766 1a): application.support
     # splits in two.
     # 30 once notify.py (GH-1056 1a) joins the machine cluster: domain.machine splits in two.
-    # 31 once run_check.py (GH-1096) imports the presubmit forms and the affected plan:
-    # application.checks splits in two.
+    # 31 once application/run_check.py (GH-1096) imports `presubmit` and `GateForm` from the
+    # domain and `CheckoutPresubmit` from application/presubmit.py: the application.checks page
+    # goes over DIAGRAM_BUDGET and splits in two (checks-1, checks-2). The cap was raised by a
+    # person's decision; run_check.py's imports were not shrunk.
     assert len(pages) <= 31
     texts = render.package_pages(pages)
     for path, text in texts.items():
