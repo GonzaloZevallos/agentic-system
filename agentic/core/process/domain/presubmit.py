@@ -116,6 +116,21 @@ class CheckResult(TypedDict):
     # True on a `full_checks` row that timed out while a gating CI job covers its suite
     # (GH-453): set only through `deferred_verdict`, never stored in the check-result store.
     deferred: NotRequired[bool]
+    # How many workers the command ran with (GH-1075). Absent when nothing recorded it, which
+    # reads as unknown, never as 1: `workers_of` is its one reader.
+    workers: NotRequired[int]
+
+
+class TimeoutFact(TypedDict):
+    """One check whose command hit `check_timeout_s` (GH-1075): the head it ran on, the check's
+    name, how long it ran and, when known, the workers it ran with. `workers` is absent when
+    nothing recorded it, which reads as unknown, never as 1 (`workers_of`). Lives here because
+    `task` imports this module; `task` re-exports it."""
+
+    head: str
+    check: str
+    seconds: float
+    workers: NotRequired[int]
 
 
 FlakeVerdict = Literal["pass", "flake", "fail"]
@@ -1060,6 +1075,55 @@ def gate_verdict(results: Sequence[CheckResult]) -> Literal["green", "red", "tim
     if any(row.get("timed_out", False) and not row["passed"] for row in last):
         return "timed_out"
     return "green"
+
+
+def check_timeout(results: Sequence[CheckResult]) -> bool:
+    """Whether a gate run came out `timed_out` (GH-1075): a timeout with no failing test. Reads
+    only the rows' `timed_out` field through `gate_verdict`, never their output text."""
+    return gate_verdict(results) == "timed_out"
+
+
+def workers_of(row: Mapping[str, object]) -> int | None:
+    """The workers a check ran with, or `None` when nothing recorded them (GH-1075). The only
+    reader of `workers`, on a `CheckResult` or a `TimeoutFact`: an absent value is unknown,
+    never 1."""
+    workers = row.get("workers")
+    return workers if isinstance(workers, int) and not isinstance(workers, bool) else None
+
+
+def timeout_facts(results: Sequence[CheckResult], head: str) -> list[TimeoutFact]:
+    """One fact per check of the final rows that timed out, sorted by check; `workers` only
+    when `workers_of` gives one. The caller decides whether the run `check_timeout`s: a real red
+    beside a timeout is not one, and has its own facts all the same."""
+    facts: list[TimeoutFact] = []
+    for row in sorted(final_results(results), key=lambda r: r["name"]):
+        if row["passed"] or not row.get("timed_out", False):
+            continue
+        fact: TimeoutFact = {
+            "head": head,
+            "check": row["name"],
+            "seconds": row.get("duration_s", 0.0),
+        }
+        if (workers := workers_of(row)) is not None:
+            fact["workers"] = workers
+        facts.append(fact)
+    return facts
+
+
+def storable(row: CheckResult) -> bool:
+    """Whether the check-result store may keep `row` (GH-1075): only a row that passed and did
+    not time out. A pass that a timeout cut short is no pass."""
+    return row["passed"] and not row.get("timed_out", False)
+
+
+def timeout_line(fact: TimeoutFact) -> str:
+    """The fixed line for `### Checks` and the claim of a timeout row (GH-1075): what ran out
+    and with how many workers, never why. Unverified: nothing says the timeout is the check's."""
+    workers = workers_of(fact)
+    return (
+        f"{fact['check']} timed out after {fact['seconds']:g}s with "
+        f"{'unknown' if workers is None else workers} workers, unverified"
+    )
 
 
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:

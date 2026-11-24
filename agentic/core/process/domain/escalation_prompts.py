@@ -132,7 +132,15 @@ ESCALATION_PROMPTS[("failure", "format_hold")] = (
     RESUME,
     (RESUME, CLOSE_UNPLANNED),
 )
+ESCALATION_PROMPTS[("ci", "check_timeout")] = (
+    "A check timed out twice with no failing test, on the same head and with the same workers. "
+    "Is the machine at fault, or does the check need a longer timeout? Resume once decided.",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
 for _cause in get_args(MechanicalCause):
+    if _cause == "check_timeout":
+        continue
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY
 for _spec_cause in get_args(SpecRouteCause):
     ESCALATION_PROMPTS[("classification", _spec_cause)] = (
