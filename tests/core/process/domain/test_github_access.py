@@ -479,6 +479,16 @@ def test_is_write_on_the_calls_the_adapters_make(args: tuple[str, ...], expected
         ),
         pytest.param(("api", "graphql", "-F", "owner=o"), True, id="no query"),
         pytest.param(("api", "graphql"), True, id="bare graphql"),
+        pytest.param(
+            ("api", "-X", "GET", "graphql", "-f", "query=mutation { x }"),
+            True,
+            id="flag value before graphql",
+        ),
+        pytest.param(
+            ("api", "-H", "Accept: x", "graphql", "-f", "query=query { x }"),
+            False,
+            id="header before graphql, a read",
+        ),
         pytest.param(("api", "-X", "get", "/repos/o/r"), False, id="-X get"),
         pytest.param(("api", "--method", "GET", "/x"), False, id="--method GET"),
         pytest.param(("api", "-XPOST", "/x"), True, id="-XPOST"),
@@ -531,6 +541,19 @@ def test_is_write_edge_cases(args: tuple[str, ...], expected: bool) -> None:
 )
 def test_last_slot_of(text: str, expected: float) -> None:
     assert last_slot_of(text, 1000.0, 100.5) == expected
+
+
+@pytest.mark.parametrize(
+    ("now", "horizon"),
+    [
+        pytest.param(float("nan"), 100.0, id="nan now"),
+        pytest.param(1000.0, float("nan"), id="nan horizon"),
+        pytest.param(1000.0, float("inf"), id="inf horizon"),
+        pytest.param(float("inf"), 100.0, id="inf now"),
+    ],
+)
+def test_last_slot_of_never_trusts_a_non_finite_time(now: float, horizon: float) -> None:
+    assert last_slot_of("990.25", now, horizon) == 0.0
 
 
 # --- write_slot -------------------------------------------------------------------------

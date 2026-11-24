@@ -166,14 +166,17 @@ class _ApiCall:
     method: str | None
     fields: tuple[str, ...]
     has_input: bool
+    paths: tuple[str, ...]
 
 
 def _read_api(args: Sequence[str]) -> _ApiCall:
-    """The method, the `key=value` fields and whether `--input` is given, in the arguments that
-    follow `api`."""
+    """The method, the `key=value` fields, whether `--input` is given and the positional
+    arguments (the endpoint), in the arguments that follow `api`; the value of a flag is never
+    a positional."""
     method: str | None = None
     fields: list[str] = []
     has_input = False
+    paths: list[str] = []
     pos = 0
     while pos < len(args):
         token = args[pos]
@@ -185,6 +188,8 @@ def _read_api(args: Sequence[str]) -> _ApiCall:
         elif token.startswith("-") and len(token) > 2 and token[:2] in _API_VALUE_FLAGS:
             flag, value = token[:2], token[2:]
         if flag not in _API_VALUE_FLAGS:
+            if not token.startswith("-"):
+                paths.append(token)
             continue
         if value is None:
             value = args[pos] if pos < len(args) else ""
@@ -195,7 +200,7 @@ def _read_api(args: Sequence[str]) -> _ApiCall:
             has_input = True
         elif flag in _API_FIELD_FLAGS:
             fields.append(value)
-    return _ApiCall(method, tuple(fields), has_input)
+    return _ApiCall(method, tuple(fields), has_input, tuple(paths))
 
 
 def _document_mutates(document: str) -> bool:
@@ -228,8 +233,7 @@ def is_write(args: Sequence[str]) -> bool:
         return True
     if args[0] == "api":
         call = _read_api(args[1:])
-        paths = [token for token in args[1:] if not token.startswith("-")]
-        if "graphql" in paths[:1]:
+        if call.paths[:1] == ("graphql",):
             return _graphql_is_write(call)
         if call.method is not None:
             return call.method.upper() != "GET"
@@ -239,13 +243,15 @@ def is_write(args: Sequence[str]) -> bool:
 
 def last_slot_of(text: str, now: float, horizon: float) -> float:
     """The slot the file holds, or 0.0 when `text` is empty, torn or not a float, when the value
-    is non-finite or negative, or when it is above `now + horizon` (a clock stepped back).
-    Exactly `now + horizon` is accepted."""
+    is non-finite or negative, when `now` or `horizon` is non-finite, or when it is above
+    `now + horizon` (a clock stepped back). Exactly `now + horizon` is accepted."""
     try:
         value = float(text.strip())
     except ValueError:
         return 0.0
-    if not math.isfinite(value) or value < 0 or value > now + horizon:
+    if not (math.isfinite(now) and math.isfinite(horizon) and math.isfinite(value)):
+        return 0.0
+    if value < 0 or value > now + horizon:
         return 0.0
     return value
 
