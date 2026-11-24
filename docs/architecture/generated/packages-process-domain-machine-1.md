@@ -20,6 +20,7 @@ graph TD
     m_domain__etag_cache["domain.etag_cache"]
     m_domain__exempt_queue["domain.exempt_queue"]
     m_domain__github_access["domain.github_access"]
+    m_domain__github_budget["domain.github_budget"]
     m_domain__launch_order["domain.launch_order"]
     m_domain__notify["domain.notify"]
     m_domain__output_repair["domain.output_repair"]

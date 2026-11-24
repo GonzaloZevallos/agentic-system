@@ -120,6 +120,7 @@ from .core.process.application.stage0_rotate import Prune
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
+from .core.process.domain.github_access import GithubAccess
 from .core.process.domain.poller_units import unit_dir
 from .core.process.domain.presubmit import ApiBreakLine
 from .core.process.domain.stage0_rotation import Unreadable
@@ -426,6 +427,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         except (ValueError, yaml.YAMLError):
             return None
 
+    # GH-1091: one access for this node's tracker and board; every field `None` until a later
+    # part of GH-1071 fills them.
+    access = GithubAccess()
     tracker = (
         GhTracker(cfg.product_dir, api_break_line=declared_api_break)
         if gh_retry is None
@@ -433,8 +437,10 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
             cfg.product_dir,
             retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
             api_break_line=declared_api_break,
+            access=access,
         )
     )
+    git_workspace = GitWorkspace(cfg.product_dir, cfg.git_identity)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -460,7 +466,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
-        workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
+        workspace=git_workspace,
+        # The same instance: one adapter answers both, read-only for the second.
+        pending_paths=git_workspace,
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
         ci_logs=GhCiLogs(
@@ -493,6 +501,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
                 backoff_s=BOARD_WRITE_BACKOFF_S,
                 stop=stop_flag,
             ),
+            access=access,
         ),
         board_sent=None
         if project is None
@@ -521,6 +530,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
 def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
     """The `gh` call of the scores backfill (GH-802): one attempt per page, no wait, a timeout
     included, and no line printed. Only the root builds it, so no read is ever repeated."""
+    access = GithubAccess()  # its own instance: it shares no budget with a node's
 
     def read(args: tuple[str, ...]) -> str:
         return run_gh(
@@ -532,6 +542,7 @@ def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
             log=lambda _line: None,
             retry=GhRetry(max_wait_s=0, attempts=1),
             retry_timeouts=True,
+            access=access,
         )
 
     return read

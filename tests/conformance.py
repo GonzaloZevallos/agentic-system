@@ -204,6 +204,11 @@ _INLINE = (
 )
 
 UNCOVERED: dict[str, Uncovered] = {
+    "PendingPaths": Uncovered(
+        (("agentic/core/process/adapters/git/workspace.py", "GitWorkspace"),),
+        "no fake implements it yet: nothing reads the port, and the real adapter is its only "
+        "implementation",
+    ),
     "Presubmit": Uncovered(
         (
             ("tests/core/process/application/test_coverage_guard.py", "CountingPresubmit"),

@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain.board import FieldWrite
+from agentic.core.process.domain.github_access import GithubAccess
 
 ETAPAS = [
     "Corriendo",
@@ -959,3 +960,25 @@ def test_a_value_error_caused_by_a_missing_gh_is_a_stop():
             raise ValueError("gh is not installed") from cause
     except ValueError as exc:
         assert board_module._verdict(exc) == "stop"
+
+
+# --- the access keyword (GH-1091, ADR-0107) ----------------------------------------------
+
+
+def _board_run(args, cwd, capture_output, text, check):
+    return subprocess.CompletedProcess(args, 0, "[]", "")
+
+
+def test_a_board_passes_its_access_to_run_gh(monkeypatch):
+    seen: list = []
+    real = board_module.run_gh
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["access"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(board_module, "run_gh", spy)
+    access = GithubAccess()
+    GhBoard(Path("/p"), "o", 3, _board_run, access=access).open_issues()
+    GhBoard(Path("/p"), "o", 3, _board_run).open_issues()
+    assert seen == [access, None]

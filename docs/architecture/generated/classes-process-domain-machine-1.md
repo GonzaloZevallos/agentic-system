@@ -41,14 +41,9 @@ classDiagram
     class github_access__GithubAccess["GithubAccess"]
     class github_access__HttpResponse["HttpResponse"]
     class github_access__NotAnHttpResponse["NotAnHttpResponse"]
+    class github_budget__Budget["Budget"]
+    class github_budget__ResourceBudget["ResourceBudget"]
+    class github_budget__Start["Start"]
+    class github_budget__Wait["Wait"]
     class notify__DigestKey["DigestKey"]
-    class notify__EventKey["EventKey"]
-    class notify__NotifiedRecord["NotifiedRecord"]
-    class notify__PartFact["PartFact"]
 ```
-
-## Relaciones con otras páginas
-
-- [domain: machine (parte 2)](classes-process-domain-machine-2.md)
-  - `notify.ReleaseEvent` se asocia con `notify.EventKey`
-  - `notify.WaitingEvent` se asocia con `notify.EventKey`

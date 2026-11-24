@@ -50,6 +50,7 @@ from ...application.ports import (
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
+from ...domain.github_access import GithubAccess
 from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
 
 BOARD_TIMEOUT_S: float = 30
@@ -176,6 +177,7 @@ class GhBoard:
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
+        access: GithubAccess | None = None,
     ):
         self.cwd = cwd
         self.owner = owner
@@ -183,6 +185,7 @@ class GhBoard:
         self.run: Run = run if run is not None else partial(bounded_run, timeout_s=BOARD_TIMEOUT_S)
         self.log = log
         self.retry = retry
+        self.access = access
         self.clock = clock
         self._exit = 0
         self._identity: _Identity | None = None
@@ -203,6 +206,7 @@ class GhBoard:
             else lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=self.log,
             retry=self.retry if write else None,
+            access=self.access,
         )
 
     def _keeping_errors(
