@@ -131,3 +131,45 @@ lectura de carga son de las subtareas siguientes de la misma tarea.
   los dos productos; (3) recién entonces apostrophe declara sus claves y hace que `compare.sh` salga
   con 75 cuando la app no está lista. Si un producto declara antes, sus corridas fallan al cargar
   porque las claves desconocidas se rechazan.
+
+## Adenda (2026-11-24, GH-1096): `run_check` corre bajo el plan afectado de la puerta
+
+`run_check` sobre un chequeo declarado deja de correr siempre el comando completo: corre bajo el
+mismo `AffectedPlan` que la puerta de entrega, y dice qué forma corrió. Es un cambio observable
+deliberado.
+
+- **Afectado primero, completo en rojo.** Un chequeo con forma afectada corre esa forma; si no
+  pasa, corre el comando completo en la misma llamada. Un afectado `not_ready` (salida 75) cae
+  directo al completo con causa `affected_red` y sin reintento propio; el reintento por `not_ready`
+  sigue siendo el del comando completo, como antes. La fila decisiva es la última de
+  `final_results(filas)`.
+- **Sin reintento ni compuerta de flakes.** La herramienta no recibe `rerun_forms` ni `flake_gate`:
+  el manejo de flakes de la herramienta queda como estaba (ADR-0066 vale sólo en la puerta).
+- **`stuck_full` propio.** La herramienta lleva su propio conjunto, separado del de la puerta: un
+  rojo sobre un árbol que todavía se edita no debe obligar al árbol entregado a correr completo.
+  Tras un rojo completo, la llamada siguiente corre completo con causa `stuck_full`. Sólo la
+  herramienta lo libera, y sólo cuando la fila decisiva es un completo que pasa; el
+  `_planned_rows` de la puerta nunca lo libera.
+- **HEAD actual más rutas pendientes.** Cada llamada lee `workspace.head` (nunca el `before` del
+  inicio del intento, que sólo decide `committed`) y, con el puerto `PendingPaths` cableado, las
+  rutas pendientes del árbol. Un archivo de glob de fallback o el del stack sin commitear da
+  `fallback_glob` o `stack_file` con su ruta. Una lectura que falla (`GitError` u `OSError`) da
+  `paths_unknown`: nunca un éxito vacío; y como el árbol no pudo leerse, el pase no se guarda
+  (`the tree could not be read`). Sin el puerto, se usa `is_clean`: `()` pendientes si está
+  limpio, `None` si no. `pending_paths` usa `--untracked-files=all`, más estricto que `is_clean`:
+  sólo puede negar un guardado, nunca permitir uno.
+- **Se guarda la fila decisiva, bajo su propio comando.** La clave sale del comando declarado de la
+  fila (`_declared_of`), no del completo. Esto corrige el defecto de que un pase afectado se
+  guardara bajo la clave del comando completo. Un pase afectado de la herramienta lo reutiliza la
+  puerta para el mismo comando afectado sobre el mismo árbol (el plan es el mismo objeto, armado una
+  vez en `develop.py`) y nunca cuando la puerta pide la forma completa.
+- **La línea `form:`.** La respuesta lleva, justo después de `check:`, `form: affected-only` o
+  `form: full (cause: <causa>)`, con `glob` y `path` cuando los hay. Un chequeo sin plan dice
+  `full (cause: no_affected_form)`. Una verificación no lleva la línea.
+- **Plazo de la llamada.** `timeout_s` cuenta las corridas por chequeo con `call_runs` (3 si tiene
+  forma afectada, 2 si no), en las dos ramas; sin plan da el número de antes.
+- **Formas registradas.** Las formas de la herramienta (`via: tool`) van en `RoleRun.forms` antes
+  de las de la puerta, en orden de llamada y con el tope de 50 (`cap_forms`). El alcance es la
+  invocación del nodo de desarrollo; un intento fallado no deja formas.
+- **Costo.** Un `git status` (`pending_paths`) y un diff de nombres (`changed_paths`) por llamada
+  a un chequeo declarado; lineal en las rutas cambiadas.
