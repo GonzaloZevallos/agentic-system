@@ -28,7 +28,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain.github_access import GithubAccess
-from tests.core.process.adapters.github.gh_fake import gh_response
+from tests.core.process.adapters.github.gh_fake import StubGate, gh_response
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -836,7 +836,7 @@ def test_the_nested_rate_limit_read_runs_with_access_none(monkeypatch):
     clock = _Clock(1_000)
     run = _script(_http_failed(403, [], RATE_LIMITED), _reset_json(1_001), "done")
     call, _ = _accessing(
-        run, clock, access=GithubAccess(gate=object(), cache=object(), budget=object())
+        run, clock, access=GithubAccess(gate=StubGate(), cache=object(), budget=object())
     )
     assert call() == "done"
     assert seen == [None]

@@ -5,6 +5,7 @@ it (synthetic); their sidecars say which."""
 from __future__ import annotations
 
 import subprocess
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,15 @@ from agentic.core.process.domain.github_access import (
     GithubAccess,
     HttpResponse,
     NotAnHttpResponse,
+    Turn,
+    WriteGate,
+    is_write,
+    last_slot_of,
     split_response,
     wait_from,
+    write_slot,
 )
-from tests.core.process.adapters.github.gh_fake import gh_response
+from tests.core.process.adapters.github.gh_fake import StubGate, gh_response
 
 FIXTURES = Path(__file__).parent / "fixtures" / "github_access"
 SIDECAR_KEYS = {"command", "gh_version", "origin", "derived_from"}
@@ -157,7 +163,7 @@ def test_response_and_access_are_frozen_values() -> None:
     # A frozen dataclass with `eq` is hashable; an unfrozen one is not.
     assert hash(_response(("a", "1"))) == hash(_response(("a", "1")))
     assert GithubAccess() == GithubAccess(gate=None, cache=None, budget=None)
-    assert hash(GithubAccess(gate=1)) == hash(GithubAccess(gate=1))
+    assert hash(GithubAccess(gate=StubGate())) == hash(GithubAccess(gate=StubGate()))
 
 
 # --- wait_from --------------------------------------------------------------------------
@@ -390,3 +396,194 @@ def test_gh_response_default_returncode_is_zero_for_2xx_and_304_and_explicit_win
     assert gh_response(502, [], "").returncode == 1
     assert gh_response(200, [], "", returncode=3).returncode == 3
     assert gh_response(500, [], "", returncode=0).returncode == 0
+
+
+# --- is_write ---------------------------------------------------------------------------
+
+_GQL = ("api", "graphql", "-f", "query={ viewer { login } }")
+
+# The literal arguments the adapters pass today. `tracker.py` reaches them through `_gh`,
+# `_gh_read` and `_gh_retrying`; `commit_ci.py` goes through GhTracker.
+_ADAPTER_CALLS = [
+    # tracker.py
+    pytest.param(("pr", "create", "--head", "b", "--title", "t", "--body-file", "p"), True),
+    pytest.param(("issue", "create", "--title", "t", "--body-file", "p"), True),
+    pytest.param(("issue", "comment", "7", "--body-file", "p"), True),
+    pytest.param(("issue", "comment", "7", "--body", "text"), True),
+    pytest.param(("issue", "edit", "7", "--body-file", "p"), True),
+    pytest.param(("issue", "edit", "7", "--add-label", "x"), True),
+    pytest.param(("issue", "close", "7", "--reason", "completed"), True),
+    pytest.param(("pr", "close", "7"), True),
+    pytest.param(("pr", "reopen", "7"), True),
+    pytest.param(("pr", "edit", "7", "--body-file", "p"), True),
+    pytest.param(("pr", "merge", "7", "--squash", "--match-head-commit", "abc"), True),
+    pytest.param(("run", "rerun", "99", "--failed"), True),
+    pytest.param(("workflow", "run", "ci.yml", "-f", "a=b"), True),
+    pytest.param(("label", "create", "x"), True),
+    # `label list` is a read, but every `label` subcommand counts as a write (conservative).
+    pytest.param(("label", "list", "--limit", "1000", "--json", "name"), True),
+    pytest.param(("run", "list", "--commit", "h", "--json", "url,conclusion"), False),
+    pytest.param(("run", "list", "--workflow", "ci.yml", "--event", "workflow_dispatch"), False),
+    pytest.param(("run", "view", "9", "--json", "jobs"), False),
+    pytest.param(("pr", "view", "7", "--json", "changedFiles"), False),
+    pytest.param(("pr", "list", "--state", "all", "--json", "number", "--limit", "500"), False),
+    pytest.param(("issue", "view", "7", "--json", "comments"), False),
+    pytest.param(("issue", "list", "--label", "agentic", "--state", "open"), False),
+    pytest.param(("repo", "view", "--json", "mergeCommitAllowed"), False),
+    pytest.param(
+        ("api", "graphql", "-f", "query=query { x }", "-F", "owner={owner}", "-F", "number=7"),
+        False,
+        id="CI GraphQL read with -F fields",
+    ),
+    # inbox.py, format_fix_reads.py
+    pytest.param(("issue", "view", "7", "--json", "title,body"), False),
+    pytest.param(("issue", "list", "--state", "open", "--json", "url,body"), False),
+    pytest.param(("repo", "view", "--json", "nameWithOwner"), False),
+    # label_timeline.py
+    pytest.param(("api", "graphql", "-f", "query=query($n: Int!) {}", "-F", "repo={repo}"), False),
+    # board.py: no visible document, so it counts as unknown. Conservative: board's reads go
+    # through `--input` too and are counted as writes until part 2 passes `write=` to the gate.
+    pytest.param(("api", "graphql", "--input", "/tmp/board-1.json"), True),
+    pytest.param(("issue", "list", "--state", "open", "--limit", "500", "--json", "id"), False),
+    pytest.param(("issue", "view", "7", "--json", "id"), False),
+    # ci_logs.py
+    pytest.param(("run", "view", "9", "--job", "5", "--log-failed"), False),
+    pytest.param(("run", "view", "9", "--job", "5", "--log"), False),
+]
+
+
+@pytest.mark.parametrize(("args", "expected"), _ADAPTER_CALLS)
+def test_is_write_on_the_calls_the_adapters_make(args: tuple[str, ...], expected: bool) -> None:
+    assert is_write(args) is expected
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        pytest.param(
+            ("api", "graphql", "-f", "query=# c\n  # d\nmutation { x }"), True, id="comments"
+        ),
+        pytest.param(
+            ("api", "graphql", "-f", "query=  \n# c\nquery { x }"), False, id="comment read"
+        ),
+        pytest.param(("api", "graphql", "-f", "query=# only a comment"), True, id="empty document"),
+        pytest.param(("api", "graphql", "--field=query=mutation { x }"), True, id="joined field"),
+        pytest.param(("api", "graphql", "-fquery=mutation { x }"), True, id="joined short"),
+        pytest.param(("api", "graphql", "-fquery=query { x }"), False, id="joined short read"),
+        pytest.param(("api", "graphql", "--raw-field", "query=query { x }"), False, id="raw"),
+        pytest.param(("api", "graphql", "-f", "query=@q.graphql"), True, id="query from a file"),
+        pytest.param(("api", "graphql", "-F", "query=@q.graphql"), True, id="query from a file F"),
+        pytest.param(("api", "graphql", "--input", "-"), True, id="input stdin"),
+        pytest.param(
+            ("api", "graphql", "-f", "query=query { x }", "--input", "f"), True, id="input"
+        ),
+        pytest.param(("api", "graphql", "-F", "owner=o"), True, id="no query"),
+        pytest.param(("api", "graphql"), True, id="bare graphql"),
+        pytest.param(("api", "-X", "get", "/repos/o/r"), False, id="-X get"),
+        pytest.param(("api", "--method", "GET", "/x"), False, id="--method GET"),
+        pytest.param(("api", "-XPOST", "/x"), True, id="-XPOST"),
+        pytest.param(("api", "--method=post", "/x"), True, id="--method=post"),
+        pytest.param(("api", "-X", "DELETE", "/x"), True, id="delete"),
+        pytest.param(("api", "-X", "GET", "-f", "a=b", "/x"), False, id="GET with fields"),
+        pytest.param(("api", "-f", "a=b", "/x"), True, id="-f no method"),
+        pytest.param(("api", "-F", "a=b", "/x"), True, id="-F no method"),
+        pytest.param(("api", "--field", "a=b", "/x"), True, id="--field no method"),
+        pytest.param(("api", "--raw-field=a=b", "/x"), True, id="--raw-field joined"),
+        pytest.param(("api", "/x", "--input", "f"), True, id="--input no method"),
+        pytest.param(("api", "rate_limit"), False, id="rate_limit"),
+        pytest.param(("api", "/repos/o/r/issues", "--paginate", "-i"), False, id="bare GET"),
+        pytest.param(("api", "-H", "Accept: x", "/x"), False, id="header value is not a path"),
+        pytest.param(("frobnicate", "x"), True, id="unknown verb"),
+        pytest.param(("pr", "frobnicate"), True, id="unknown pr form"),
+        pytest.param(("pr",), True, id="bare group"),
+        pytest.param(("auth", "status"), False, id="auth status"),
+        pytest.param(("pr", "checks", "7"), False, id="pr checks"),
+        pytest.param(("pr", "diff", "7"), False, id="pr diff"),
+        pytest.param(("workflow", "list"), True, id="workflow list is not in the table"),
+        pytest.param((), True, id="no arguments"),
+    ],
+)
+def test_is_write_edge_cases(args: tuple[str, ...], expected: bool) -> None:
+    assert is_write(args) is expected
+
+
+# --- last_slot_of -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("", 0.0, id="empty"),
+        pytest.param("   \n", 0.0, id="blank"),
+        pytest.param("1000.", 1000.0, id="trailing dot is a float"),
+        pytest.param("12.5x", 0.0, id="torn"),
+        pytest.param("garbage", 0.0, id="garbage"),
+        pytest.param("nan", 0.0, id="nan"),
+        pytest.param("inf", 0.0, id="inf"),
+        pytest.param("-inf", 0.0, id="-inf"),
+        pytest.param("-1", 0.0, id="negative"),
+        pytest.param(" 1.5\n", 1.5, id="whitespace around"),
+        pytest.param("1_0", 10.0, id="underscore parses as 10.0, an old slot"),
+        pytest.param("1100.5", 1100.5, id="exact boundary"),
+        pytest.param("1100.6", 0.0, id="beyond the horizon: the clock stepped back"),
+        pytest.param("990.25", 990.25, id="valid"),
+    ],
+)
+def test_last_slot_of(text: str, expected: float) -> None:
+    assert last_slot_of(text, 1000.0, 100.5) == expected
+
+
+# --- write_slot -------------------------------------------------------------------------
+
+
+def test_write_slot_an_old_last_slot_gives_no_wait() -> None:
+    assert write_slot(10.0, 1000.0, 1.0, 30.0) == 1000.0
+
+
+def test_write_slot_back_to_back_calls_are_one_second_apart() -> None:
+    first = write_slot(0.0, 1000.0, 1.0, 30.0)
+    assert first == 1000.0
+    assert first is not None
+    assert write_slot(first, 1000.0, 1.0, 30.0) == 1001.0
+
+
+def test_write_slot_a_turn_over_the_cap_is_refused() -> None:
+    assert write_slot(1031.0, 1000.0, 1.0, 30.0) is None
+    assert write_slot(1029.0, 1000.0, 1.0, 30.0) == 1030.0  # exactly the cap is granted
+
+
+def test_write_slot_cap_zero_with_no_wait_is_granted() -> None:
+    assert write_slot(0.0, 1000.0, 1.0, 0.0) == 1000.0
+    assert write_slot(1000.0, 1000.0, 1.0, 0.0) is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param((float("nan"), 1000.0, 1.0, 30.0), id="nan last slot"),
+        pytest.param((0.0, float("nan"), 1.0, 30.0), id="nan now"),
+        pytest.param((0.0, float("inf"), 1.0, 30.0), id="inf now"),
+        pytest.param((0.0, 1000.0, float("nan"), 30.0), id="nan spacing"),
+        pytest.param((0.0, 1000.0, 1.0, float("inf")), id="inf cap"),
+        pytest.param((float("-inf"), 1000.0, 1.0, 30.0), id="-inf last slot"),
+        pytest.param((0.0, 1000.0, -1.0, 30.0), id="negative spacing"),
+        pytest.param((0.0, 1000.0, 1.0, -1.0), id="negative cap"),
+    ],
+)
+def test_write_slot_never_grants_on_an_unreadable_time(
+    bad: tuple[float, float, float, float],
+) -> None:
+    with pytest.raises(ValueError):
+        write_slot(*bad)
+
+
+# --- Turn and WriteGate -----------------------------------------------------------------
+
+
+def test_a_stub_gate_implements_write_gate_and_takes_a_turn() -> None:
+    gate: WriteGate = StubGate()
+    assert gate.cap_s == 30.0
+    assert gate.take(5.0) == Turn("granted", 0.0)
+    assert hash(Turn("refused", 1.0)) == hash(Turn("refused", 1.0))
+    with pytest.raises(FrozenInstanceError):
+        setattr(Turn("stopped", 0.0), "waited_s", 1.0)
