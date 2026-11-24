@@ -93,6 +93,17 @@ TABLE: tuple[Row, ...] = (
         "directory or name it as the stand-in of the `Heartbeats` port",
     ),
     Row(
+        "agentic/core/process/adapters/filesystem/budget_store.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as the only implementation of the `BudgetStore` "
+        "port, and these import `tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
         "agentic/core/process/adapters/git/workspace.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",

@@ -1573,3 +1573,13 @@ def test_an_adapter_kind_over_budget_is_split_in_parts_that_link_each_other(
     assert len(first.nodes) + len(second.nodes) == 21
     assert "adapters-git-2" in first.siblings and "adapters-git-1" in second.siblings
     assert "adapters-git-1" in pages["index"].children
+
+
+def test_a_split_adapter_part_still_over_budget_is_refused_naming_the_part(
+    packages: ModuleType,
+) -> None:
+    outside = [f"agentic.p{n:02d}.x" for n in range(35)]
+    modules = ["adapters.git.a", "adapters.git.b"]
+    imports = {f"{PROCESS}.{m}": set(outside) for m in modules}
+    with pytest.raises(ValueError, match="'adapters-git-1' has 36 nodes and 35 edges"):
+        packages.build_pages(_world(modules, outside), imports, {})
