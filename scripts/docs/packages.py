@@ -244,7 +244,7 @@ def build_pages(
             for cluster in graph.layer_clusters[sub]:
                 pages.update(_cluster_pages(graph, sub, cluster))
         else:
-            pages[_key(sub)] = _adapter_page(graph, sub)
+            pages.update(_adapter_pages(graph, sub))
     return pages
 
 
@@ -264,12 +264,24 @@ def _index(graph: _Graph) -> Page:
         "flechas que llegan a un paquete se leen en la página del paquete que importa."
     )
     return draw.page(
-        INDEX, "Paquetes de process", sentence, None, (), [_key(s) for s in graph.subpackages]
+        INDEX, "Paquetes de process", sentence, None, (), _page_keys(graph, graph.subpackages)
     )
 
 
+def _page_keys(graph: _Graph, subs: Iterable[str]) -> list[str]:
+    """The keys of the pages of `subs`: one each, or one per part for an adapter kind whose
+    page is split."""
+    keys: list[str] = []
+    for sub in subs:
+        if sub in LAYERS:
+            keys.append(_key(sub))
+        else:
+            keys.extend(key for key, _ in _adapter_draws(graph, sub))
+    return keys
+
+
 def _others(graph: _Graph, sub: str) -> list[str]:
-    return [_key(other) for other in graph.subpackages if other != sub]
+    return _page_keys(graph, [other for other in graph.subpackages if other != sub])
 
 
 def _layer_page(graph: _Graph, layer: str) -> Page:
@@ -455,27 +467,61 @@ def _cluster_pages(graph: _Graph, layer: str, cluster: str) -> dict[str, Page]:
     return found
 
 
-def _adapter_page(graph: _Graph, sub: str) -> Page:
+def _adapter_draw(graph: _Graph, sub: str, modules: Sequence[str]) -> _Draw:
+    """The page of `modules`, of the adapter kind `sub`: an import of another module of the
+    kind that is in this page is an edge between nodes; any other target is one ghost."""
     draw = _Draw()
-    for source in graph.modules_of(sub):
+    for source in modules:
         here = _own_end(source)
         draw.node(here)
         for target in graph.targets[source]:
             relative = _relative(target)
-            if relative is not None and subpackage(relative) == sub:
+            if relative is not None and relative in modules:
                 draw.edge(here, _own_end(relative))
             else:
                 draw.edge(here, graph.sub_end(target))
+    return draw
+
+
+def _adapter_draws(graph: _Graph, sub: str) -> list[tuple[str, _Draw]]:
+    """The drawn pages of `sub`: one, or, when it is over the budget, `chunks` of consecutive
+    modules (`adapters-filesystem-1`, `adapters-filesystem-2`)."""
+    modules = graph.modules_of(sub)
+    whole = _adapter_draw(graph, sub, modules)
+    if not whole.over() or len(modules) < 2:  # one module cannot be split: `_checked` refuses it
+        return [(_key(sub), whole)]
+    return [
+        (f"{_key(sub)}-{number}", _adapter_draw(graph, sub, run))
+        for number, run in enumerate(chunks(modules), 1)
+    ]
+
+
+def _adapter_pages(graph: _Graph, sub: str) -> dict[str, Page]:
     what = (
         "los módulos sueltos de `adapters`, los que no están en ningún tipo de adaptador,"
         if sub == ADAPTERS
         else f"los módulos del adaptador `{sub}`"
     )
-    sentence = (
-        f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` es "
-        f"otro paquete: {_PACKAGE_NODES}"
-    )
-    return _checked(draw, _key(sub), sub, sentence, INDEX, _others(graph, sub))
+    draws = _adapter_draws(graph, sub)
+    keys = [key for key, _ in draws]
+    others = _others(graph, sub)
+    pages: dict[str, Page] = {}
+    for number, (key, draw) in enumerate(draws, 1):
+        sentence = (
+            f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` es "
+            f"otro paquete: {_PACKAGE_NODES}"
+        )
+        title = sub
+        if len(draws) > 1:
+            title = f"{sub} (parte {number})"
+            sentence += (
+                f" El adaptador se dividió por cantidad: esta es la parte {number} de "
+                f"{len(draws)}, con módulos consecutivos en orden alfabético; un import de un "
+                f"módulo de otra parte aparece como el nodo `{sub} (paquete)`."
+            )
+        siblings = [other for other in keys if other != key] + others
+        pages[key] = _checked(draw, key, title, sentence, INDEX, siblings)
+    return pages
 
 
 def _flat_draw(

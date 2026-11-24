@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__TrackerCallFailed["TrackerCallFailed"]
     class ports__TrackerRateLimited["TrackerRateLimited"]
     class ports__TrackerRefused["TrackerRefused"]
     class ports__TrackerTimedOut["TrackerTimedOut"]
@@ -33,7 +34,10 @@ classDiagram
     class run_role__Escalating["Escalating"]
     class run_role__EstimateCapReached["EstimateCapReached"]
     class run_role__EstimateStop["EstimateStop"]
-    class run_role__GuardChain["GuardChain"]
+    ports__TrackerRateLimited --|> ports__TrackerCallFailed
+    ports__TrackerTimedOut --|> ports__TrackerCallFailed
+    ports__TrackerTransient --|> ports__TrackerCallFailed
+    ports__TrackerUnreachable --|> ports__TrackerCallFailed
     run_role__EstimateCapReached --|> run_role__Escalating
 ```
 
@@ -42,16 +46,10 @@ classDiagram
 - [application: landing](classes-process-application-landing.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`
 - [application: support (parte 3)](classes-process-application-support-3.md)
+  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.UnstageablePath` hereda de `ports.GitError`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `ports.Workspace`
-- [application: support (parte 5)](classes-process-application-support-5.md)
-  - `run_role.GuardChain` agrega a `ports.SchemaGuard`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.TrackerRateLimited` hereda de `ports.TrackerCallFailed`
-  - `ports.TrackerTimedOut` hereda de `ports.TrackerCallFailed`
-  - `ports.TrackerTransient` hereda de `ports.TrackerCallFailed`
-  - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`
 - [application: support (parte 8)](classes-process-application-support-8.md)
   - `run_role.PromptFailure` hereda de `run_role.Escalating`
   - `run_role.RoleFailure` hereda de `run_role.Escalating`

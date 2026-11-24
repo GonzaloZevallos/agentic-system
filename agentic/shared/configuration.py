@@ -266,6 +266,9 @@ class Configuration(BaseModel):
     # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
     # Declared, not measured: a few parallel runs' worth of build and test scratch.
     scratch_floor_mb: int = Field(default=2048, ge=0)
+    # Where the GitHub account's request budget is kept, one file per account (GH-1071): a
+    # per-user cache, regenerable like scratch.
+    github_budget_dir: Path = Field(default_factory=lambda: _default_github_budget_dir())
 
     @model_validator(mode="after")
     def _ceiling_covers_the_check_timeout(self) -> Configuration:
@@ -453,6 +456,12 @@ def _default_scratch_dir() -> Path:
     base = os.environ.get("XDG_CACHE_HOME")
     root = Path(base) if base else Path.home() / ".cache"
     return root / "agentic" / "scratch"
+
+
+def _default_github_budget_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / "agentic" / "github" / "budget"
 
 
 def _default_perf_lock_path() -> Path:

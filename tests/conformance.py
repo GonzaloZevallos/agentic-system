@@ -200,6 +200,11 @@ _INLINE = (
 )
 
 UNCOVERED: dict[str, Uncovered] = {
+    "BudgetStore": Uncovered(
+        (("agentic/core/process/adapters/filesystem/budget_store.py", "FilesystemBudgetStore"),),
+        "no fake implements it yet: nothing reads the port, and the real adapter is its only "
+        "implementation",
+    ),
     "PendingPaths": Uncovered(
         (("agentic/core/process/adapters/git/workspace.py", "GitWorkspace"),),
         "no fake implements it yet: nothing reads the port, and the real adapter is its only "
