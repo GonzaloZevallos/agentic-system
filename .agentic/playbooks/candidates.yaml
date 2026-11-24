@@ -2433,3 +2433,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-24T07:54:05.108+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: Before you deliver, run every declared check a new module can affect, such as docs generation and registries, not only the tests you touched. Fix any budget or generated-output failure before handing off.
+  confidence: medium
+  seen_in:
+  - GH-1098
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T08:47:01.801+00:00'
