@@ -1211,7 +1211,9 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # 29 once run_role.py imports drawing and checkouts (GH-766 1a): application.support
     # splits in two.
     # 30 once notify.py (GH-1056 1a) joins the machine cluster: domain.machine splits in two.
-    assert len(pages) <= 30
+    # 32 once the filesystem adapters (GH-1071 part 5, github_cache.py) pass the node budget:
+    # the kind page stays and gains two part pages.
+    assert len(pages) <= 32
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path
