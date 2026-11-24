@@ -89,19 +89,19 @@ def test_both_red_is_no_flake_for_the_still_red_test(tmp_path):
 
 def test_both_red_prints_nothing(tmp_path):
     result = run(tmp_path, junit(case("t", "failure")), junit(case("t", "failure")))
-    assert (result.stdout, result.returncode) == ("", 0)
+    assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_first_green_prints_nothing(tmp_path):
     result = run(tmp_path, junit(case("t")), junit(case("t")))
-    assert (result.stdout, result.returncode) == ("", 0)
+    assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_malformed_xml_prints_no_block_and_exits_zero(tmp_path):
     good = junit(case("t", "failure"))
     for first, second in (("<not-xml", good), (good, "<testsuite><testcase"), ("", good)):
         result = run(tmp_path, first, second)
-        assert (result.stdout, result.returncode) == ("", 0)
+        assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_a_second_file_with_an_unclosed_root_prints_no_block(tmp_path):
@@ -112,14 +112,14 @@ def test_a_second_file_with_an_unclosed_root_prints_no_block(tmp_path):
 
 def test_a_missing_file_prints_no_block_and_exits_zero(tmp_path):
     result = run(tmp_path, junit(case("t", "failure")), None)
-    assert (result.stdout, result.returncode) == ("", 0)
+    assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_bad_arguments_still_exit_zero(tmp_path):
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--nope"], capture_output=True, text=True, cwd=REPO
     )
-    assert (result.stdout, result.returncode) == ("", 0)
+    assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_a_test_absent_on_retry_is_no_flake(tmp_path):
@@ -140,7 +140,7 @@ def test_a_test_in_error_on_retry_is_no_flake(tmp_path):
 
 def test_an_error_on_the_first_run_is_never_a_candidate(tmp_path):
     result = run(tmp_path, junit(case("t", "error")), junit(case("t")))
-    assert (result.stdout, result.returncode) == ("", 0)
+    assert (result.stdout, result.returncode) == ("", 0), result.stderr
 
 
 def test_a_well_formed_second_file_with_a_subset_gives_only_that_subset(tmp_path):
