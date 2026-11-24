@@ -1116,6 +1116,28 @@ def test_a_cluster_of_more_than_fifteen_modules_is_split_by_count(packages: Modu
     assert pages["domain"].children == ("domain-big-1", "domain-big-2")
 
 
+def test_an_adapter_kind_over_budget_is_split_by_count_into_part_pages(
+    packages: ModuleType,
+) -> None:
+    names = [f"adapters.fs.m{n:02d}" for n in range(21)]
+    imports = {name: () for name in names}
+    imports["adapters.fs.m00"] = ("adapters.fs.m20",)
+    pages = packages.build_pages(_world(names), _imports(imports), {})
+    assert "adapters-fs" in pages and pages["adapters-fs"].children == (
+        "adapters-fs-1",
+        "adapters-fs-2",
+    )
+    first, second = pages["adapters-fs-1"], pages["adapters-fs-2"]
+    assert first.parent == "adapters-fs" and first.siblings == ("adapters-fs-2",)
+    assert "adapters.fs parte 2 (grupo)" in _labels(first)
+    assert len(first.nodes) <= 20 and len(second.nodes) <= 20
+    assert "parte 1 de 2" in first.sentence
+    assert _labels(pages["adapters-fs"]) == [
+        "adapters.fs parte 1 (grupo)",
+        "adapters.fs parte 2 (grupo)",
+    ]
+
+
 def test_a_page_still_over_budget_after_the_split_is_refused_naming_the_cluster(
     packages: ModuleType,
 ) -> None:
