@@ -271,19 +271,23 @@ def test_timeout_with_a_declared_wall_counts_three_runs_of_it_when_a_check_has_a
 class CallingRunner(ScriptedRunner):
     """A Developer that calls `run_check` on `names` before it delivers."""
 
-    def __init__(self, names, **queues):
+    def __init__(self, names, *, gateless=False, **queues):
         super().__init__(**queues)
         self.names = names
+        # Withhold the presubmit, so the delivery gate never runs the checks.
+        self.gateless = gateless
 
     async def run_once(self, role, prompt, **kwargs):
         if (check_tool := kwargs.get("check_tool")) is not None:
             for name in self.names:
                 check_tool(name)
+        if self.gateless:
+            kwargs.pop("presubmit", None)
         return await super().run_once(role, prompt, **kwargs)
 
 
-async def developed(tmp_path, names, *, developer=None):
-    runner = CallingRunner(names, developer=developer or [delivered()])
+async def developed(tmp_path, names, *, developer=None, gateless=False):
+    runner = CallingRunner(names, gateless=gateless, developer=developer or [delivered()])
     stack = MemoryStack(
         checks=CHECKS,
         affected_checks={"tests": "pytest --since {base}"},
@@ -334,3 +338,11 @@ async def test_two_invocations_do_not_carry_forms_across(tmp_path):
     second, _ = await developed(tmp_path, ())
     assert len(first["runs"][-1]["forms"]) == 5
     assert {f["via"] for f in second["runs"][-1]["forms"]} == {"gate"}
+
+
+@pytest.mark.anyio
+async def test_the_tools_forms_are_recorded_when_the_gate_never_ran(tmp_path):
+    patch, _ = await developed(tmp_path, ("tests", "lint"), gateless=True)
+    run = patch["runs"][-1]
+    assert [(f["check"], f["via"]) for f in run["forms"]] == [("tests", "tool"), ("lint", "tool")]
+    assert "forms_dropped" not in run
