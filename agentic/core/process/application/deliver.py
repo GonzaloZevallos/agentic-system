@@ -18,7 +18,8 @@ from ..domain import document, landing, presubmit, rate_limit, rules, stacking, 
 from ..domain.pull_request import (
     BoundedBody,
     bounded_body,
-    closes_line,
+    closes_lines,
+    closing_numbers,
     stacked_line,
     with_required_lines,
 )
@@ -137,6 +138,28 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if record:
         state = {**state, **record}
     replaced_note = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    # GH-1104: the parent's `Closes` lines come from the issue body as it stands now, not from the
+    # description stored at classification, which a narrowing by hand leaves stale. Read once,
+    # never stored. An evaluation run has no issue: its description is all there is.
+    try:
+        step = "issue body read failed"
+        number = ports.inbox.issue_of(state["id"])
+        current_body = (
+            state.get("description", "")
+            if number is None
+            else ports.inbox.task(number)["description"]
+        )
+    except (ValueError, OSError) as failed:
+        return _ended(
+            state,
+            {
+                **_undelivered(step, failed, state, replaced, at=ports.now()),
+                **record,
+                **posted,
+                **items_done,
+            },
+            ports,
+        )
     over = _criteria_over_cap(task.branch, ports)
     if over:
         state = {**state, "criteria_over_cap": over}
@@ -144,7 +167,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         part
         for part in (
             replaced_note,
-            closes_line(state.get("description", "")),
+            closes_lines(closing_numbers(current_body, number)),
             stacked_line(stacking.stacked_on(state)),
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
