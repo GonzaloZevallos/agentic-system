@@ -22,6 +22,7 @@ from agentic.core.process.application.ports import (
     Board,
     BoardSent,
     CheckResults,
+    GithubCache,
     CheckScheduler,
     CiLogs,
     Commands,
@@ -78,6 +79,7 @@ from tests.fakes import (
     MemoryCommands,
     MemoryDocuments,
     MemoryFlags,
+    MemoryGithubCache,
     MemoryInbox,
     MemoryKnowledge,
     MemoryPrompts,
@@ -103,6 +105,7 @@ _workspace: Workspace = MemoryWorkspace()
 _tracker: Tracker = MemoryTracker()
 _registry: RunRegistry = MemoryRunRegistry()
 _check_results: CheckResults = MemoryCheckResults()
+_github_cache: GithubCache = MemoryGithubCache()
 _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
@@ -164,6 +167,7 @@ COVERED: dict[str, type] = {
     "Tracker": MemoryTracker,
     "RunRegistry": MemoryRunRegistry,
     "CheckResults": MemoryCheckResults,
+    "GithubCache": MemoryGithubCache,
     "Launcher": FakeLauncher,
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,

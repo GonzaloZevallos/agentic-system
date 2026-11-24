@@ -26,6 +26,8 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
   - [adapters](packages-process-adapters.md)
   - [adapters.claude_sdk](packages-process-adapters-claude_sdk.md)
   - [adapters.filesystem](packages-process-adapters-filesystem.md)
+    - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
+    - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)

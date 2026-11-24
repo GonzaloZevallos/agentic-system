@@ -32,6 +32,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class etag_cache__CacheEntry["CacheEntry"]
     class exempt_queue__ExemptAttempt["ExemptAttempt"]
     class exempt_queue__ExemptCandidate["ExemptCandidate"]
     class exempt_queue__ExemptFacts["ExemptFacts"]
@@ -44,11 +45,10 @@ classDiagram
     class notify__EventKey["EventKey"]
     class notify__NotifiedRecord["NotifiedRecord"]
     class notify__PartFact["PartFact"]
-    class notify__ReleaseEvent["ReleaseEvent"]
-    notify__ReleaseEvent --> notify__EventKey
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - `notify.ReleaseEvent` se asocia con `notify.EventKey`
   - `notify.WaitingEvent` se asocia con `notify.EventKey`

@@ -21,6 +21,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 classDiagram
     class ports__FreeSpace["FreeSpace"]
     class ports__GitError["GitError"]
+    class ports__GithubCache["GithubCache"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
-    class ports__ListMayBeCut["ListMayBeCut"]
 ```
 
 ## Relaciones con otras páginas

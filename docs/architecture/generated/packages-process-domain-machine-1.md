@@ -17,13 +17,13 @@ graph TD
     g_domain__state["state (grupo)"]
     m_domain__account_reset["domain.account_reset"]
     m_domain__boot["domain.boot"]
+    m_domain__etag_cache["domain.etag_cache"]
     m_domain__exempt_queue["domain.exempt_queue"]
     m_domain__github_access["domain.github_access"]
     m_domain__launch_order["domain.launch_order"]
     m_domain__notify["domain.notify"]
     m_domain__output_repair["domain.output_repair"]
     m_domain__poller_units["domain.poller_units"]
-    m_domain__rate_limit["domain.rate_limit"]
     m_domain__account_reset --> g_domain__state
     m_domain__exempt_queue --> g_domain__state
     m_domain__notify --> g_domain__state
@@ -31,5 +31,4 @@ graph TD
     m_domain__output_repair --> g_domain__machine__2
     m_domain__output_repair --> g_domain__state
     m_domain__poller_units --> g_domain__machine__2
-    m_domain__rate_limit --> g_domain__state
 ```
