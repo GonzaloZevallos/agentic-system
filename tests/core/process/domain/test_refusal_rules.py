@@ -256,15 +256,16 @@ def test_the_closed_set_of_ids_is_the_one_the_rows_cover():
         "depends_on_reason_too_long",
         "estimated_files_empty",
         "estimate_below_spent_floor",
+        "system_category",
         "output_missing",
         "schema_invalid",
         "unmapped",
     )
     covered = {row.rule for row in _ROWS.values()} | {"preview_slice_missing"}
-    assert (
-        set(get_args(refusal.RefusalRule)) - {"output_missing", "schema_invalid", "unmapped"}
-        == covered
-    )
+    # `system_category` (GH-1075) is a finding's category refused by `schemas.validate`, pinned in
+    # `test_schemas`, not one of the plan and drawing rows above.
+    not_in_rows = {"output_missing", "schema_invalid", "unmapped", "system_category"}
+    assert set(get_args(refusal.RefusalRule)) - not_in_rows == covered
 
 
 def test_task_re_exports_the_leaf_definitions():
