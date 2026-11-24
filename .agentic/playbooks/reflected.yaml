@@ -1663,3 +1663,5 @@ tasks:
   GH-1112@review:
     cost_usd: 0.0466
     decisions: 1
+  GH-1099@review:
+    cost_usd: 0.0267
