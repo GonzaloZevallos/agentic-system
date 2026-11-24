@@ -32,7 +32,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class ci__FailingHeader["FailingHeader"]
     class ci__FullTierVerdict["FullTierVerdict"]
     class ci__GhostWatch["GhostWatch"]
     class ci__HeaderScan["HeaderScan"]
@@ -44,5 +43,12 @@ classDiagram
     class coverage__Refusal["Refusal"]
     class coverage__Rejected["Rejected"]
     class merge_ci__PairCounts["PairCounts"]
+    class performance__Limit["Limit"]
+    class performance__Measurement["Measurement"]
     coverage__Rejected --> coverage__Refusal
 ```
+
+## Relaciones con otras páginas
+
+- [domain: checks (parte 3)](classes-process-domain-checks-3.md)
+  - `performance.MetricResult` se asocia con `performance.Limit`

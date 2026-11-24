@@ -33,6 +33,8 @@ def _load() -> ModuleType:
 
 
 script = _load()
+Options = script.Options
+RunPytest = script.RunPytest
 
 
 def _graph(**sources: str):
@@ -167,14 +169,16 @@ def test_changed_raises_on_a_base_git_cannot_resolve(repo: Path):
 # -- the exit contract: one fixed-token stderr line, no stdout, no full suite -----------------
 
 
-def _main(repo: Path, base: str, capfd, run_pytest=None) -> tuple[int, str, str]:
+def _main(
+    repo: Path, base: str, capfd, run_pytest: RunPytest | None = None, *options: str
+) -> tuple[int, str, str]:
     kwargs = {"run_pytest": run_pytest} if run_pytest else {}
-    code = script.main([base], root=repo, **kwargs)
+    code = script.main([base, *options], root=repo, **kwargs)
     out, err = capfd.readouterr()
     return code, out, err
 
 
-def _never_runs(files, root):
+def _never_runs(files: Sequence[str], root: Path, options: Options) -> int:
     raise AssertionError(f"pytest must not run, got {files}")
 
 
@@ -248,15 +252,97 @@ def test_a_selection_runs_pytest_with_the_marker_and_returns_its_exit_code_uncha
     repo: Path, capfd
 ):
     (repo / "tests" / "test_new.py").write_text("def test_a():\n    pass\n")
-    seen: list[tuple[Sequence[str], Path]] = []
+    seen: list[tuple[Sequence[str], Path, Options]] = []
 
-    def fake(files, root):
-        seen.append((files, root))
+    def fake(files: Sequence[str], root: Path, options: Options) -> int:
+        seen.append((files, root, options))
         return 5
 
     code, out, err = _main(repo, "HEAD", capfd, fake)
     assert (code, out, err) == (5, "", "")
-    assert seen == [(("tests/test_new.py",), repo)]
+    assert seen == [(("tests/test_new.py",), repo, Options(None, None))]
+
+
+def test_a_selection_hands_the_workers_and_the_dist_mode_to_pytest_unchanged(repo: Path, capfd):
+    (repo / "tests" / "test_new.py").write_text("def test_a():\n    pass\n")
+    seen: list[Options] = []
+
+    def fake(files: Sequence[str], root: Path, options: Options) -> int:
+        seen.append(options)
+        return 0
+
+    assert _main(repo, "HEAD", capfd, fake, "-n", "4", "--dist", "load")[0] == 0
+    assert seen == [Options(workers=4, dist="load")]
+
+
+def test_the_real_invocation_appends_the_workers_and_the_dist_mode_only_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(script.subprocess, "run", fake_run)
+    script._run_pytest(["tests/test_a.py"], REPO, Options(4, "load"))
+    script._run_pytest(["tests/test_a.py"], REPO, Options(None, None))
+    assert calls[0][1:] == [
+        "-m", "pytest", "-m", "not llm and not slow", "-n", "4", "--dist", "load", "tests/test_a.py"
+    ]  # fmt: skip
+    assert calls[1][1:] == ["-m", "pytest", "-m", "not llm and not slow", "tests/test_a.py"]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ("--dist", "load", "-n", "4"),
+        ("-n", "4", "--dist", "loadscope"),
+        ("-n", "4", "--dist", "no"),
+        ("-n", "0"),
+        ("-n", "-2"),
+        ("-n", "auto"),
+        ("-n", "04"),
+        ("-n", "4.0"),
+        ("-n4",),
+        ("-n=4",),
+        ("--dist=load",),
+        ("--dist", "load", "-n", "4", "-x"),
+        ("-n", "4", "--dist", "load", "tests/test_a.py"),
+        ("-n",),
+        ("--dist",),
+        ("-n", "4", "--dist"),
+        ("--numprocesses", "4"),
+        ("-n", "4", "-n", "4"),
+        ("tests/test_a.py",),
+    ],
+)
+def test_options_other_than_workers_then_dist_load_in_that_form_refuse_with_9(
+    repo: Path, capfd, options: tuple[str, ...]
+):
+    (repo / "tests" / "test_new.py").write_text("def test_a():\n    pass\n")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs, *options)
+    assert (code, out) == (9, "")
+    assert err.startswith("affected-tests: refused:") and err.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    "options", [("-n", "4"), ("--dist", "load"), ("-n", "4", "--dist", "load")]
+)
+def test_each_option_alone_or_together_is_accepted(repo: Path, capfd, options: tuple[str, ...]):
+    (repo / "tests" / "test_new.py").write_text("def test_a():\n    pass\n")
+    assert _main(repo, "HEAD", capfd, lambda files, root, opts: 0, *options)[0] == 0
+
+
+def test_exits_8_and_9_are_unchanged_with_the_options(repo: Path, capfd):
+    options = ("-n", "4", "--dist", "load")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs, *options)
+    assert (code, out) == (8, "") and err.startswith("affected-tests: empty:")
+    (repo / "tool.py").write_text("x = 1\n")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs, *options)
+    assert (code, out) == (9, "") and err.startswith("affected-tests: refused:")
+    code, out, err = _main(repo, "-p", capfd, _never_runs, *options)
+    assert (code, out) == (9, "") and err.startswith("affected-tests: refused:")
 
 
 def test_the_real_pytest_invocation_is_an_argv_list_with_the_llm_marker_deselected(
@@ -269,7 +355,7 @@ def test_the_real_pytest_invocation_is_an_argv_list_with_the_llm_marker_deselect
         return subprocess.CompletedProcess(argv, 3)
 
     monkeypatch.setattr(script.subprocess, "run", fake_run)
-    assert script._run_pytest(["tests/test_a.py"], REPO) == 3
+    assert script._run_pytest(["tests/test_a.py"], REPO, Options(None, None)) == 3
     ((argv, kwargs),) = calls
     assert argv[1:] == ["-m", "pytest", "-m", "not llm and not slow", "tests/test_a.py"]
     assert kwargs.get("shell") is None

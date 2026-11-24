@@ -81,14 +81,20 @@ def _declared_command_in_steps(command: str, run_steps: list[str]) -> bool:
     """Whether `command` is a `run:` step, or the head of one that retries it (GH-464): the
     stripped first line of the step starts with `command + " "` and what follows it, before the
     first `||`, is options only (no `;`, `&`, `|`, command substitution or second command)."""
-    if command in run_steps:
+    # `{workers}` is the one token a declared command may hold (GH-979): the step carries the
+    # share the system fills in as a positive integer literal, never `auto`, never nothing.
+    pattern = re.compile(
+        "([1-9][0-9]*)".join(re.escape(piece) for piece in command.split("{workers}"))
+    )
+    if any(pattern.fullmatch(step) for step in run_steps):
         return True
     for step in run_steps:
         lines = step.strip().splitlines()
         first = lines[0].strip() if lines else ""
-        if not first.startswith(command + " "):
+        found = pattern.match(first)
+        if found is None or not first[found.end() :].startswith(" "):
             continue
-        options = first[len(command) :].split("||", 1)[0]
+        options = first[found.end() :].split("||", 1)[0]
         if not any(op in options for op in _SHELL_OPERATORS) and "uv" not in options.split():
             return True
     return False
@@ -124,6 +130,66 @@ def test_the_declared_command_matcher_rejects_a_command_behind_another_one():
     assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} --x | tee log"])
     assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} --x; uv run other"])
     assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} uv run other"])
+
+
+SIZED = 'uv run pytest -m "not llm" -n {workers} --dist load'
+
+
+def test_a_workers_token_matches_only_an_integer_literal_in_the_step():
+    assert _declared_command_in_steps(SIZED, ['uv run pytest -m "not llm" -n 4 --dist load'])
+    assert _declared_command_in_steps(
+        SIZED, ['uv run pytest -m "not llm" -n 12 --dist load -o x=1 || {\n  y\n}']
+    )
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        'uv run pytest -m "not llm" -n auto --dist load',
+        'uv run pytest -m "not llm" --dist load',
+        'uv run pytest -m "not llm" -n {workers} --dist load',
+        'uv run pytest -m "not llm" -n 0 --dist load',
+        'uv run pytest -m "not llm" -n 04 --dist load',
+        'uv run pytest -m "not llm" -n -1 --dist load',
+        'uv run pytest -m "not llm" -n 4x --dist load',
+        'uv run pytest -m "not llm" -n 4 --dist loadscope',
+        'uv run pytest -m "not llm" -n 4',
+        'echo x && uv run pytest -m "not llm" -n 4 --dist load',
+        'uv run pytest -m "not llm" -n 4 --dist load && echo done',
+    ],
+)
+def test_a_workers_token_is_never_matched_by_anything_but_a_positive_integer(step: str):
+    assert not _declared_command_in_steps(SIZED, [step])
+
+
+def test_a_workers_token_at_the_end_of_a_command_needs_a_whole_integer():
+    assert _declared_command_in_steps("pytest -n {workers}", ["pytest -n 4"])
+    assert _declared_command_in_steps("pytest -n {workers}", ["pytest -n 4 -x"])
+    assert not _declared_command_in_steps("pytest -n {workers}", ["pytest -n 4x"])
+    assert not _declared_command_in_steps("pytest -n {workers}", ["pytest -n auto"])
+
+
+def _stack_data() -> dict:
+    return yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+
+
+def test_the_full_and_the_affected_tests_commands_carry_the_workers_token():
+    data = _stack_data()
+    assert "-n {workers} --dist load" in stack.checks(data, STACK_YAML)["tests"]
+    assert "-n {workers} --dist load" in stack.affected_checks(data, STACK_YAML)["tests"]
+
+
+def test_the_failed_tests_retry_is_serial_in_the_stack_and_in_ci():
+    data = _stack_data()
+    form = stack.rerun_checks(data, STACK_YAML)["tests"]
+    assert not re.search(r"(?:^|\s)-n(?:\s|=|\d|$)|--numprocesses|\{workers\}", form.command)
+    retry = [line for line in _pytest_step().splitlines() if "--last-failed" in line]
+    assert len(retry) == 1 and not re.search(r"(?:^|\s)-n(?:\s|=|\d|$)", retry[0])
+
+
+def test_the_first_run_of_the_ci_step_is_sized_to_four_workers():
+    first = _pytest_step().strip().splitlines()[0]
+    assert first.startswith('uv run pytest -m "not llm" -n 4 --dist load ')
 
 
 def _pytest_step() -> str:

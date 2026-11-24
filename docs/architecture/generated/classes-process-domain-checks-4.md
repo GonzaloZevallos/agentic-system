@@ -32,10 +32,8 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class presubmit__GateForm["GateForm"]
-    class presubmit__PlannedForm["PlannedForm"]
-    class presubmit__RedCheck["RedCheck"]
     class presubmit__RerunForm["RerunForm"]
+    class presubmit__UngrantedWorkers["UngrantedWorkers"]
     class presubmit__WitnessResult["WitnessResult"]
     class run_check__CheckRun["CheckRun"]
     class run_check__Outcome["Outcome"]
