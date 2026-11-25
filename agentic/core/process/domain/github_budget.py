@@ -198,3 +198,40 @@ def can_start(budget: Budget, needed: Mapping[Resource, int], now: datetime) -> 
             if wait is None or known.reset > wait.resets_at:
                 wait = Wait(resource, known.reset)
     return wait if wait is not None else Start()
+
+
+def _takes(stored: ResourceBudget | None, observed: ResourceBudget | None) -> bool:
+    if stored is None or observed is None:
+        return False
+    return observed.reset > stored.reset or (
+        observed.reset == stored.reset and observed.remaining <= stored.remaining
+    )
+
+
+def merged(stored: Budget, observed: Budget) -> Budget:
+    """`stored` refreshed by one response's `observed` budget. A resource is taken from
+    `observed` only when both hold it and the observed reset is later than the stored one,
+    or equal to it with a remaining that is not higher: a late response never raises a count
+    inside its window. A resource `stored` does not hold is ignored, and `stored.fetched_at`
+    stays, since only a `rate_limit` read says when the whole budget was fetched."""
+    taken = {
+        resource: (
+            observed.resources.get(resource)
+            if _takes(stored.resources.get(resource), observed.resources.get(resource))
+            else stored.resources.get(resource)
+        )
+        for resource in RESOURCES
+    }
+    return Budget(taken, stored.fetched_at)
+
+
+# What a delivery or a split asks of the account before its first GitHub write. Declared, not
+# measured: a margin, not a count. Search is never charged. These are the only copy.
+DELIVER_COST: Mapping[Resource, int] = {"core": 30, "graphql": 30}
+
+
+def split_cost(parts_left: int) -> Mapping[Resource, int]:
+    """What a split asks of the account: 10 plus 5 per part not yet created (a negative count
+    is 0), on core and on graphql, never on search. Declared, not measured."""
+    cost = 10 + 5 * max(parts_left, 0)
+    return {"core": cost, "graphql": cost}
