@@ -166,7 +166,7 @@ uv run python -c '
 import pathlib, subprocess, sys, tempfile
 sys.path.insert(0, "scripts")
 import affected_tests as a
-GLOBS = ["pyproject.toml", "uv.lock", "*conftest.py", "agentic/shared/*", "agentic/composition.py", "agentic/cli.py", "agentic/*/prompts/*", "agentic/plugins/*", "*CONTEXT*.md", ".github/*", "scripts/*", ".env.example"]
+GLOBS = ["pyproject.toml", "uv.lock", "*conftest.py", "agentic/shared/*", "agentic/composition.py", "agentic/cli.py", "agentic/*/prompts/*", "agentic/plugins/*", "*CONTEXT*.md", ".github/*", "scripts/*", "scripts/affected_tests.py", ".env.example"]
 sha = sys.argv[1] if len(sys.argv) > 1 else None
 with tempfile.TemporaryDirectory() as tmp:
     root = pathlib.Path(tmp if sha else ".")
@@ -204,9 +204,10 @@ Sobre 576 archivos de test. La columna «efectiva» es la del árbol de este dif
 | `*CONTEXT*.md` | 4 | 0,0 % | 0,0 % (45,0 % con la fila probada) | queda: confiabilidad sin confirmar |
 | `.github/*` | 4 | 0,0 % | 0,0 % | queda: la leen más de 5 tests |
 | `scripts/*` | 17 | 0,0 % | 0,3 % | **sale**, con filas |
+| `scripts/affected_tests.py` | 1 | 0,0 % | 0,0 % | queda: siempre completa, es el corredor del check |
 | `.env.example` | 1 | 0,0 % | 0,0 % | queda: siempre completa |
 
-`scripts/affected_tests.py` entra como entrada explícita en lugar de `scripts/*`.
+`scripts/affected_tests.py` entra como entrada explícita en lugar de `scripts/*`; está fuera del grafo (`ROOTS` es `agentic/` y `tests/`), por eso su clausura es 0,0 %, y queda por ser el corredor, no por la medición.
 
 ### Por qué quedan las que miden menos del 50 %
 
