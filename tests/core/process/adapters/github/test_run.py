@@ -11,10 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.budget_store import FilesystemBudgetStore
 from agentic.core.process.adapters.github import run as run_module
+from agentic.core.process.adapters.github.account import AccountBudget, AccountKeys
 from agentic.core.process.adapters.github.run import (
     GH_DRAIN_S,
     GH_TRANSIENT_STATUSES,
+    GhRetry,
     bounded_run,
     http_status,
     run_gh,
@@ -28,6 +31,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain.github_access import GithubAccess
+from agentic.core.process.domain.github_budget import Budget, ResourceBudget
 from tests.core.process.adapters.github.gh_fake import StubGate, gh_response
 
 
@@ -918,3 +922,184 @@ def _observed(outcomes, read, access):
 def test_access_on_stdout_that_is_not_http_changes_nothing(case):
     outcomes, read = _PARITY[case]
     assert _observed(outcomes(), read, None) == _observed(outcomes(), read, GithubAccess())
+
+
+# --- the header refresh of the budget (GH-1085) -------------------------------------------
+
+CAPTURES = Path(__file__).parents[2] / "domain" / "fixtures" / "github_access"
+RESET = 1795440009
+SEED_AT = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
+TOKEN = "ghp_REFRESH0123456789abcdefghijklmnopq"
+GH_API = ("api", "-i", "/x")
+
+
+def _capture(name):
+    return (CAPTURES / f"{name}.http").read_bytes().decode()
+
+
+def _seed(directory):
+    """A store holding core and graphql at the capture's reset with a higher remaining."""
+    reset = datetime.fromtimestamp(RESET, tz=UTC)
+    store = FilesystemBudgetStore(directory)
+    keys = AccountKeys(bounded_run, Path("."), {"GH_TOKEN": TOKEN}, lambda: SEED_AT)
+    account = keys.key()
+    assert account is not None
+    seeded = Budget(
+        {
+            "core": ResourceBudget(4990, reset),
+            "graphql": ResourceBudget(100, reset),
+            "search": None,
+        },
+        SEED_AT,
+    )
+    store.put(account, SEED_AT, seeded)
+    budget = AccountBudget(store, keys, bounded_run, Path("."), lambda: SEED_AT)
+    return store, account, budget, seeded
+
+
+def _outcome(run, args, access, retry=None):
+    try:
+        return (
+            "ok",
+            run_gh(
+                run,
+                args,
+                cwd=Path("."),
+                not_installed="no gh",
+                failed=lambda stderr: f"failed: {stderr}",
+                log=lambda line: None,
+                retry=retry,
+                access=access,
+            ),
+        )
+    except Exception as exc:
+        return ("raised", type(exc), str(exc), getattr(exc, "resets_at", None))
+
+
+def _run_of(stdout, returncode=0, stderr=""):
+    def run(argv, **kwargs):
+        if "rate_limit" in argv:
+            document = {"resources": {"core": {"remaining": 0, "reset": RESET}}}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(document), "")
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, argv, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    return run
+
+
+def _no_wait_retry():
+    return GhRetry(max_wait_s=1, now=lambda: 0.0, sleep=lambda seconds: None)
+
+
+_LIMITED = "gh: API rate limit exceeded (HTTP 403)"
+_REFRESH = [
+    pytest.param("ok_200", 0, "", None, 4930, id="ok_200"),
+    pytest.param("not_modified_304", 0, "", None, 4930, id="not_modified_304"),
+    pytest.param("not_found_404", 1, "gh: Not Found (HTTP 404)", None, 4929, id="not_found_404"),
+    pytest.param("bad_gateway_502", 1, "gh: HTTP 502", None, 4930, id="bad_gateway_502"),
+    pytest.param("rate_limited_403", 1, _LIMITED, None, 0, id="rate_limited_403"),
+    pytest.param("rate_limited_403", 1, _LIMITED, "retry", 0, id="rate_limited_403_retry"),
+    pytest.param("bad_gateway_502", 1, "gh: HTTP 502", "retry", 4930, id="bad_gateway_502_retry"),
+]
+
+
+@pytest.mark.parametrize(("name", "code", "stderr", "policy", "remaining"), _REFRESH)
+def test_a_captured_response_refreshes_its_resource_and_changes_nothing_else(
+    tmp_path, name, code, stderr, policy, remaining
+):
+    store, account, budget, seeded = _seed(tmp_path)
+    retry = _no_wait_retry() if policy else None
+    run = _run_of(_capture(name), code, stderr)
+    # With a policy, an access with no budget is the baseline: `access=None` would not read the
+    # headers' wait (GH-1091), which is not what the budget changes.
+    without = _outcome(run, GH_API, GithubAccess() if retry else None, retry)
+    assert store.load(account) == seeded  # no budget, nothing touched
+    with_budget = _outcome(run, GH_API, GithubAccess(budget=budget), retry)
+    assert with_budget == without
+    after = store.load(account)
+    assert after is not None
+    assert after.resources["core"].remaining == remaining
+    assert after.resources["core"].reset == seeded.resources["core"].reset
+    assert after.resources["graphql"] == seeded.resources["graphql"]
+    assert after.resources["search"] is None
+    assert after.fetched_at == seeded.fetched_at
+    if name == "rate_limited_403" and retry is not None:
+        assert with_budget[1] is TrackerRateLimited
+        assert with_budget[3] == datetime.fromtimestamp(RESET, tz=UTC)
+
+
+def test_a_repeated_header_response_is_the_same_string_and_the_store_stays_valid(tmp_path):
+    store, account, budget, seeded = _seed(tmp_path)
+    run = _run_of(_capture("repeated_header_200"))
+    without = _outcome(run, GH_API, None)
+    assert _outcome(run, GH_API, GithubAccess(budget=budget)) == without
+    assert store.load(account) is not None
+
+
+def test_paginate_observes_the_first_block_only(tmp_path):
+    store, account, budget, seeded = _seed(tmp_path)
+    first = _capture("ok_200")
+    second = first.replace("X-Ratelimit-Remaining: 4930", "X-Ratelimit-Remaining: 4000")
+    run = _run_of(first + second)
+    args = ("api", "--paginate", "-i", "/x")
+    assert _outcome(run, args, GithubAccess(budget=budget)) == _outcome(run, args, None)
+    after = store.load(account)
+    assert after is not None
+    assert after.resources["core"].remaining == 4930
+
+
+class _Spy:
+    def __init__(self):
+        self.seen = []
+
+    def observed(self, headers):
+        self.seen.append(dict(headers))
+
+
+@pytest.mark.parametrize("stdout", [None, b"HTTP/2.0 403 Forbidden\r\n\r\n"])
+def test_a_failed_call_whose_stdout_is_not_text_observes_nothing(stdout):
+    spy = _Spy()
+    run = _run_of(stdout, 1, "gh: HTTP 404")
+    assert _outcome(run, GH_API, GithubAccess(budget=spy)) == _outcome(run, GH_API, None)
+    assert spy.seen == []
+
+
+def test_a_call_that_does_not_ask_for_headers_splits_nothing(monkeypatch):
+    spy = _Spy()
+    calls = []
+    monkeypatch.setattr(run_module, "split_response", lambda text: calls.append(text))
+    run = _run_of(_capture("ok_200"))
+    _outcome(run, ("api", "/x"), GithubAccess(budget=spy))
+    _outcome(run, ("issue", "list", "-i"), GithubAccess(budget=spy))
+    assert calls == []
+    assert spy.seen == []
+
+
+def test_access_none_makes_no_store_call(tmp_path):
+    store, account, budget, seeded = _seed(tmp_path)
+    touched = []
+    budget._store = type(
+        "Spy",
+        (),
+        {"observe": lambda self, *a: touched.append(a), "load": lambda self, *a: touched.append(a)},
+    )()
+    _outcome(_run_of(_capture("ok_200")), GH_API, None)
+    assert touched == []
+
+
+def test_an_observer_that_raises_changes_neither_the_string_nor_the_error():
+    class Raising:
+        def observed(self, headers):
+            raise RuntimeError("boom")
+
+    for name, code, stderr in [("ok_200", 0, ""), ("not_found_404", 1, "gh: Not Found (HTTP 404)")]:
+        run = _run_of(_capture(name), code, stderr)
+        assert _outcome(run, GH_API, GithubAccess(budget=Raising())) == _outcome(run, GH_API, None)
+
+
+def test_stdout_that_is_not_http_is_swallowed_and_observed_by_nobody():
+    spy = _Spy()
+    run = _run_of("not http at all")
+    assert _outcome(run, GH_API, GithubAccess(budget=spy)) == ("ok", "not http at all")
+    assert spy.seen == []

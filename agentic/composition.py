@@ -48,6 +48,7 @@ from .core.process.adapters.evaluation import (
 )
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.filesystem.board_sent import FilesystemBoardSent
+from .core.process.adapters.filesystem.budget_store import FilesystemBudgetStore
 from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from .core.process.adapters.filesystem.experiment_file import FilesystemExperimentFile
@@ -64,6 +65,7 @@ from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
+from .core.process.adapters.github.account import AccountBudget, AccountKeys
 from .core.process.adapters.github.board import (
     BOARD_WRITE_ATTEMPTS,
     BOARD_WRITE_BACKOFF_S,
@@ -394,6 +396,33 @@ def system_repo() -> SystemRepo:
     return SystemRepo(GhTracker(telemetry.REPO), GhInbox(telemetry.REPO))
 
 
+def _aware_now() -> datetime:
+    return datetime.now(UTC)
+
+
+# One budget per budget directory and per process (GH-1085): every node's access and `Ports`
+# share it, so there is one store handle and one account-key memo for the process.
+_GITHUB_BUDGETS: dict[Path, AccountBudget] = {}
+
+
+def github_budget_for(budget_dir: Path, cwd: Path) -> AccountBudget:
+    """The process's `AccountBudget` over `budget_dir`, built on the first call and returned
+    as it is on every later one."""
+    found = _GITHUB_BUDGETS.get(budget_dir)
+    if found is None:
+        keys = AccountKeys(bounded_run, cwd, os.environ, _aware_now)
+        found = AccountBudget(
+            FilesystemBudgetStore(budget_dir), keys, bounded_run, cwd, _aware_now
+        )
+        _GITHUB_BUDGETS[budget_dir] = found
+    return found
+
+
+def reset_github_budgets() -> None:
+    """Forgets every budget built so far; for tests, so one does not see another's."""
+    _GITHUB_BUDGETS.clear()
+
+
 def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None) -> Ports:
     # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
     # handle on the same path, and whole lines are what makes that safe to interleave
@@ -427,9 +456,10 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         except (ValueError, yaml.YAMLError):
             return None
 
-    # GH-1091: one access for this node's tracker and board; every field `None` until a later
-    # part of GH-1071 fills them.
-    access = GithubAccess()
+    # GH-1091: one access for this node's tracker and board. Its budget (GH-1085) is the one
+    # `Ports.github_budget` carries, so what a response's headers say is what the port reads.
+    budget = github_budget_for(cfg.github_budget_dir, cfg.product_dir)
+    access = GithubAccess(budget=budget)
     tracker = (
         GhTracker(cfg.product_dir, api_break_line=declared_api_break)
         if gh_retry is None
@@ -469,6 +499,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         workspace=git_workspace,
         # The same instance: one adapter answers both, read-only for the second.
         pending_paths=git_workspace,
+        github_budget=budget,
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
         ci_logs=GhCiLogs(
@@ -529,8 +560,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
 
 def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
     """The `gh` call of the scores backfill (GH-802): one attempt per page, no wait, a timeout
-    included, and no line printed. Only the root builds it, so no read is ever repeated."""
-    access = GithubAccess()  # its own instance: it shares no budget with a node's
+    included, and no line printed. Only the root builds it, so no read is ever repeated. Its
+    access carries no budget, so it observes nothing and is never fenced."""
+    access = GithubAccess()
 
     def read(args: tuple[str, ...]) -> str:
         return run_gh(

@@ -16,7 +16,14 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 
-from ...domain.github_budget import BUDGET_TTL
+from ...application.github_budget import budget_for
+from ...application.ports import BudgetStore
+from ...domain.github_budget import (
+    BUDGET_TTL,
+    UNKNOWN,
+    Budget,
+    budget_from_headers,
+)
 from .run import Run, run_gh
 
 _HOST = "github.com"
@@ -54,6 +61,23 @@ class AccountKeys:
         self._memo = (now, key)
         return key
 
+    def peek(self) -> str | None:
+        """The key `key()` would most likely answer, without ever asking `gh`: the host rule
+        and the environment token as in `key()`, else the key of the last memo even when it has
+        expired, `None` when there never was one. Starts no process and writes no memo.
+
+        After a rotated token, until the next `key()` an observation may be filed under the
+        old key. That is harmless: `observe` needs an existing record, and `merged` takes only
+        the same or a later window."""
+        host = self._environ.get("GH_HOST")
+        if host and host != _HOST:
+            return None
+        env_token = self._environ.get("GH_TOKEN") or self._environ.get("GITHUB_TOKEN")
+        if env_token:
+            return _key_of(env_token)
+        memo = self._memo
+        return None if memo is None else memo[1]
+
 
 def _key_of(token: str | None) -> str | None:
     if not token or any(character.isspace() for character in token):
@@ -90,3 +114,52 @@ def read_rate_limit(run: Run, cwd: Path) -> object | None:
     except ValueError:
         return None
     return document
+
+
+class AccountBudget:
+    """The GitHub account's budget for this process: `GithubBudget` (`current`, `stored`) and
+    `BudgetObserver` (`observed`) over one store and one `AccountKeys`."""
+
+    def __init__(
+        self,
+        store: BudgetStore,
+        keys: AccountKeys,
+        run: Run,
+        cwd: Path,
+        clock: Callable[[], datetime],
+    ):
+        self._store = store
+        self._keys = keys
+        self._run = run
+        self._cwd = cwd
+        self._clock = clock
+
+    def current(self) -> Budget:
+        """The budget, with the one `rate_limit` read `budget_for` allows per minute."""
+        return budget_for(
+            self._store,
+            self._keys.key(),
+            lambda: read_rate_limit(self._run, self._cwd),
+            self._clock(),
+        )
+
+    def stored(self) -> Budget:
+        """What the store holds, `UNKNOWN` when nothing: no claim, no put, no `gh` call."""
+        account = self._keys.peek()
+        if account is None:
+            return UNKNOWN
+        found = self._store.load(account)
+        return UNKNOWN if found is None else found
+
+    def observed(self, headers: Mapping[str, str]) -> None:
+        """Files what one response's headers say into the store. Never raises."""
+        try:
+            account = self._keys.peek()
+            if account is None:
+                return
+            budget = budget_from_headers(headers, self._clock())
+            if all(resource is None for resource in budget.resources.values()):
+                return
+            self._store.observe(account, budget)
+        except Exception:
+            return

@@ -2774,6 +2774,9 @@ class Ports:
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None
+    # The GitHub account's budget (GH-1085). `None` reads none, which is how every run went
+    # before it existed; nothing acts on it yet.
+    github_budget: GithubBudget | None = None
 
 
 class Stage0Store(Protocol):
@@ -2990,6 +2993,19 @@ class FailurePolicy(Protocol):
     def succeeded(self, sha: str) -> None:
         """`sha` is current and healthy. Idempotent: it is called again by every run that
         finds the rotation up to date."""
+        ...
+
+
+class GithubBudget(Protocol):
+    """The GitHub account's budget as this process sees it."""
+
+    def current(self) -> Budget:
+        """The budget, reading `gh api rate_limit` at most once a minute per account."""
+        ...
+
+    def stored(self) -> Budget:
+        """What the store holds and nothing else: no claim, no put, no `gh` call; `UNKNOWN`
+        when nothing is stored."""
         ...
 
 

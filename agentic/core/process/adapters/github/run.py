@@ -35,6 +35,7 @@ from ...domain.github_access import (
     GithubAccess,
     HttpResponse,
     NotAnHttpResponse,
+    includes_headers,
     split_response,
     wait_from,
 )
@@ -343,6 +344,23 @@ def _response_of(exc: subprocess.CalledProcessError) -> HttpResponse | None:
         return None
 
 
+def _observe(access: GithubAccess | None, args: Sequence[str], stdout: object) -> None:
+    """Hands the headers of a `gh api -i` response to `access.budget`. Acts only with an
+    access that has a budget, a text stdout and an `-i` call (`includes_headers`); anything
+    else, `NotAnHttpResponse` and every error of the observer included, is swallowed, so it
+    never changes what `run_gh` returns or raises. With `--paginate` only the first page's
+    headers are observed, so the stored budget may sit above the real one, never below it."""
+    if access is None or access.budget is None or not isinstance(stdout, str):
+        return
+    if not includes_headers(args):
+        return
+    try:
+        response = split_response(stdout)
+        access.budget.observed(dict(response.headers))
+    except Exception:
+        return
+
+
 @dataclass(frozen=True)
 class _Wait:
     """What `_retry_wait` decided: `seconds` to sleep, or `giving_up` (the reason) instead,
@@ -456,6 +474,7 @@ def run_gh(
         except FileNotFoundError as exc:
             raise ValueError(not_installed) from exc
         except subprocess.CalledProcessError as exc:
+            _observe(access, args, exc.stdout)
             stderr = exc.stderr.strip()
             status = http_status(stderr)
             kind = None if retry is None else _retryable_kind(exc.returncode, stderr)
@@ -486,6 +505,7 @@ def run_gh(
             response = None
             cause = exc
         else:
+            _observe(access, args, result.stdout)
             return result.stdout.strip()
         assert retry is not None  # only a policy reaches a retryable kind
         wait = _retry_wait(kind, attempt, retry, run, cwd, call, response)
