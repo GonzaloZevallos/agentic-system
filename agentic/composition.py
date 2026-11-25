@@ -411,9 +411,7 @@ def github_budget_for(budget_dir: Path, cwd: Path) -> AccountBudget:
     found = _GITHUB_BUDGETS.get(budget_dir)
     if found is None:
         keys = AccountKeys(bounded_run, cwd, os.environ, _aware_now)
-        found = AccountBudget(
-            FilesystemBudgetStore(budget_dir), keys, bounded_run, cwd, _aware_now
-        )
+        found = AccountBudget(FilesystemBudgetStore(budget_dir), keys, bounded_run, cwd, _aware_now)
         _GITHUB_BUDGETS[budget_dir] = found
     return found
 

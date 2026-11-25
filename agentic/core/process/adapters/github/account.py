@@ -157,7 +157,8 @@ class AccountBudget:
             account = self._keys.peek()
             if account is None:
                 return
-            budget = budget_from_headers(headers, self._clock())
+            view: dict[object, object] = {name: value for name, value in headers.items()}
+            budget = budget_from_headers(view, self._clock())
             if all(resource is None for resource in budget.resources.values()):
                 return
             self._store.observe(account, budget)
