@@ -1487,7 +1487,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         affected_fallback,
         (),
         Computed(),
-        "list of globs whose change forces the full form of every check",
+        "list of globs whose change forces the full form of every check: the inputs with no "
+        "reliable mapping to the tests they can break",
     ),
     # Computed, not DependsOn("checks"): the reader returns `()` whenever the key is absent
     # (no tiers), whatever `checks` holds. The owner kept it so (GH-400): the reference

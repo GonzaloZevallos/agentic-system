@@ -55,7 +55,7 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Presencia**: opcional
 - **Se lee como**: `tuple[str, ...]`
 - **Si falta**: lista vacía (`()`)
-- **Qué es**: list of globs whose change forces the full form of every check
+- **Qué es**: list of globs whose change forces the full form of every check: the inputs with no reliable mapping to the tests they can break
 - **Lector**: `agentic.core.knowledge.domain.stack.affected_fallback`
 
 ## `delivery_checks`

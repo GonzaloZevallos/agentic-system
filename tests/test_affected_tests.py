@@ -623,6 +623,20 @@ ALLOWANCES: tuple[Allowance, ...] = (
     *(
         Allowance(
             test,
+            "scripts/*",
+            "names scripts in strings, in the glob it feeds the matcher or in a command line of a "
+            "fake; it never reads one",
+        )
+        for test in (
+            "tests/core/process/domain/test_master_gain.py",
+            "tests/core/process/domain/test_roles.py",
+            "tests/test_stack.py",
+            "tests/test_affected_tests.py",
+        )
+    ),
+    *(
+        Allowance(
+            test,
             path,
             "names the owner file in strings and in the keys of a fake; it never reads the real "
             "one",
@@ -1356,6 +1370,7 @@ def test_removing_every_dead_allowance_leaves_the_uncovered_reads_unchanged():
 OVERLAPS = {
     "agentic/*.py": "walkers and the guard read every source file, fallback ones included",
     "tests/*.py": "the guard parses every test file, `conftest.py` included",
+    "scripts/*": "tests only name scripts; `scripts/affected_tests.py` stays in the fallback",
 }
 
 
@@ -1567,6 +1582,8 @@ def test_a_module_that_no_test_reaches_does_not_resolve():
 
 DROPPED = (
     ("scripts/*", "scripts/ci_flakes.py", "tests/test_ci_flakes.py"),
+    ("scripts/*", "scripts/docs/check.py", "tests/test_docs.py"),
+    ("scripts/*", "scripts/docs/generate.py", "tests/test_docs.py"),
     ("scripts/*", "scripts/gate_concurrency.py", "tests/test_gate_concurrency.py"),
     ("scripts/*", "scripts/poll_waits.py", "tests/test_poll_waits.py"),
     ("scripts/*", "scripts/install-poller.sh", "tests/test_install_poller.py"),

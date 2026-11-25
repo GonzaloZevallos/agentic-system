@@ -299,6 +299,16 @@ TABLE: tuple[Row, ...] = (
         "that test runs the script as a process over junit fixtures",
     ),
     Row(
+        "scripts/docs/check.py",
+        ("tests/test_docs.py",),
+        "that test runs the checker as a process; the other modules of scripts/docs have no Row",
+    ),
+    Row(
+        "scripts/docs/generate.py",
+        ("tests/test_docs.py",),
+        "that test loads the generator and runs it as a process over a temporary root",
+    ),
+    Row(
         "scripts/gate_concurrency.py",
         ("tests/test_gate_concurrency.py",),
         "that test loads the script by path and runs it over recorded transcripts",
