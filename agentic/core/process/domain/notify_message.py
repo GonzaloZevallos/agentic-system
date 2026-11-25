@@ -289,7 +289,7 @@ class DigestView:
 
     def __post_init__(self) -> None:
         _positive("limit", self.limit)
-        if SLUG.match(self.product) is None:
+        if SLUG.fullmatch(self.product) is None:
             raise ValueError(f"product is not a slug: {self.product!r}")
         if type(self.local_date) is not date:
             raise ValueError(f"local_date is not a plain date: {self.local_date!r}")

@@ -391,6 +391,7 @@ def test_single_group_without_a_cut_is_rejected() -> None:
         {"limit": "3"},
         {"product": "Shop Now"},
         {"product": "a\nb"},
+        {"product": "shop\n"},
         {"local_date": datetime(2026, 11, 24, tzinfo=UTC)},
     ],
 )
