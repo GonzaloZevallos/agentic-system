@@ -34,6 +34,7 @@ class FilesystemNotified:
         self.path = path
 
     def load(self) -> NotifiedRecord:
+        """The saved record; the empty one when the file is missing, unreadable or malformed."""
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -44,6 +45,7 @@ class FilesystemNotified:
             return _EMPTY
 
     def save(self, record: NotifiedRecord) -> None:
+        """Writes `record` whole: a temp file beside the target, fsynced, then `os.replace`."""
         body = {
             "started_at": _stamp(record.started_at),
             "failed_at": _stamp(record.failed_at),
