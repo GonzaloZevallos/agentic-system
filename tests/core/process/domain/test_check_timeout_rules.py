@@ -209,6 +209,12 @@ def test_a_different_head_timeouts_after_a_spent_ceiling_stay_with_the_human():
     assert auto_resumable(state) is None
 
 
+def test_another_mechanical_cause_keeps_its_key_whatever_the_timeouts_before_it_were():
+    state = _pause(_resumed(_pause(_state(), [_fact()])), [_fact()])
+    log = [*state["pause_log"], rules.escalation_entry("ci", AT, cause="network")]
+    assert auto_resumable(_state(pause_log=log)) == "network"
+
+
 def test_an_entry_without_facts_is_external_but_never_retaken():
     log = [rules.escalation_entry("ci", AT, cause="check_timeout")]
     assert pause_kind(log) == "external"
