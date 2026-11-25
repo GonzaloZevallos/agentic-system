@@ -2,8 +2,7 @@ Esta página muestra los módulos del grupo `roles` de `domain` y los imports qu
 
 - Padre: [domain](packages-process-domain.md)
 - Hermanas:
-  - [domain: checks (parte 1)](packages-process-domain-checks-1.md)
-  - [domain: checks (parte 2)](packages-process-domain-checks-2.md)
+  - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
   - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
   - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
@@ -24,6 +23,7 @@ graph TD
     m_domain__docs["domain.docs"]
     m_domain__drawing["domain.drawing"]
     m_domain__format_retakes["domain.format_retakes"]
+    m_domain__forward_base["domain.forward_base"]
     m_domain__roles["domain.roles"]
     m_domain__schema_guard["domain.schema_guard"]
     m_domain__schemas["domain.schemas"]
@@ -37,6 +37,7 @@ graph TD
     m_domain__drawing --> g_domain__machine
     m_domain__drawing --> m_domain__design
     m_domain__format_retakes --> g_domain__state
+    m_domain__forward_base --> g_domain__checks
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state
     m_domain__roles --> g_pkg__agentic__shared
