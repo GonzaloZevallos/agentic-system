@@ -50,7 +50,7 @@ class Probe(ScriptedRunner):
 
 
 def finding(location: str, subtask: str = "other", status: str = "open") -> dict[str, Any]:
-    return {
+    row: dict[str, Any] = {
         "subtask": subtask,
         "version": 1,
         "location": location,
@@ -60,6 +60,7 @@ def finding(location: str, subtask: str = "other", status: str = "open") -> dict
         "category": "correctness",
         "status": status,
     }
+    return row
 
 
 async def hand_runs(runner: Probe, *, findings=(), commands=None) -> tuple[Probe, MemoryCommands]:
@@ -109,3 +110,10 @@ async def test_a_red_row_of_the_gates_last_look_opens_the_full_run_of_that_check
     runner, _ = await hand_runs(Probe(gate_first=True, developer=[delivered()]), commands=red)
     assert not refused(runner.replies["tests"])
     assert refused(runner.replies["lint"]) is False  # lint had no affected form and ran
+
+
+async def test_a_timed_out_row_of_the_gates_last_look_opens_the_full_run_in_the_tool_and_in_bash():
+    slow = MemoryCommands(pytest=[CommandResult(124, "slow", timed_out=True)] * 2)
+    runner, _ = await hand_runs(Probe(gate_first=True, developer=[delivered()]), commands=slow)
+    assert not refused(runner.replies["tests"])
+    assert runner.bash is None
