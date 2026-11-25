@@ -46,5 +46,10 @@ classDiagram
     class github_budget__ResourceBudget["ResourceBudget"]
     class github_budget__Start["Start"]
     class github_budget__Wait["Wait"]
-    class notify__DigestKey["DigestKey"]
+    class notify__DigestEvent["DigestEvent"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - `notify.DigestEvent` se asocia con `notify.DigestKey`
