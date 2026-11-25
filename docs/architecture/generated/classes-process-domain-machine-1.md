@@ -37,6 +37,7 @@ classDiagram
     class exempt_queue__ExemptFacts["ExemptFacts"]
     class exempt_queue__ExemptRank["ExemptRank"]
     class exempt_queue__ExemptWait["ExemptWait"]
+    class github_access__BudgetObserver["BudgetObserver"]
     class github_access__GithubAccess["GithubAccess"]
     class github_access__HttpResponse["HttpResponse"]
     class github_access__NotAnHttpResponse["NotAnHttpResponse"]
@@ -46,5 +47,4 @@ classDiagram
     class github_budget__ResourceBudget["ResourceBudget"]
     class github_budget__Start["Start"]
     class github_budget__Wait["Wait"]
-    class notify__DigestKey["DigestKey"]
 ```
