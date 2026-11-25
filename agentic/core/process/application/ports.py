@@ -3014,3 +3014,9 @@ class BudgetStore(Protocol):
         is later than `claim` (a later claim already took the read). Otherwise writes
         `read_at=claim`, `fetched_at` and the resources."""
         ...
+
+    def observe(self, key: str, budget: Budget) -> None:
+        """Merge the budget one response's headers state into the stored one. Never blocks
+        (one non-blocking lock attempt), creates no directory and no file, writes only when
+        the stored value would change and never touches `read_at`."""
+        ...

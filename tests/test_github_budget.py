@@ -359,8 +359,14 @@ def test_is_fresh_accepts_a_budget_just_under_the_ttl_old() -> None:
 # --- merged -----------------------------------------------------------------------------
 
 
-def one(resource: Resource, remaining: int, reset: int, fetched_at: datetime | None = NOW) -> Budget:
-    resources: dict[Resource, ResourceBudget | None] = {"core": None, "graphql": None, "search": None}
+def one(
+    resource: Resource, remaining: int, reset: int, fetched_at: datetime | None = NOW
+) -> Budget:
+    resources: dict[Resource, ResourceBudget | None] = {
+        "core": None,
+        "graphql": None,
+        "search": None,
+    }
     resources[resource] = ResourceBudget(remaining, at(reset))
     return Budget(resources, fetched_at)
 
@@ -407,7 +413,11 @@ def test_merged_keeps_the_stored_resource_when_the_observed_one_is_unknown() -> 
 
 def test_merged_only_changes_the_resource_it_observed() -> None:
     stored = Budget(
-        {"core": ResourceBudget(100, at(600)), "graphql": ResourceBudget(50, at(600)), "search": None},
+        {
+            "core": ResourceBudget(100, at(600)),
+            "graphql": ResourceBudget(50, at(600)),
+            "search": None,
+        },
         NOW,
     )
     result = merged(stored, one("core", 90, 600))

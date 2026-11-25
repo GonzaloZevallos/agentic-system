@@ -269,3 +269,154 @@ def test_a_symlinked_data_file_reads_as_unknown(tmp_path):
 def test_the_file_store_satisfies_the_port(tmp_path):
     store: BudgetStore = FilesystemBudgetStore(tmp_path)
     assert store.load(KEY) is None
+
+
+# --- observe ----------------------------------------------------------------------------
+
+
+def _observed(core: int, reset: datetime | None = None) -> Budget:
+    when = reset if reset is not None else T + timedelta(minutes=30)  # the window of _budget()
+    return Budget({"core": ResourceBudget(core, when), "graphql": None, "search": None}, T)
+
+
+def _seeded(tmp_path: Path) -> FilesystemBudgetStore:
+    """A store holding `_budget()` read at T, with its lock file in place."""
+    store = _store(tmp_path)
+    store.put(KEY, T, _budget())
+    return store
+
+
+def _listing(directory: Path) -> list[str]:
+    return sorted(path.name for path in directory.iterdir())
+
+
+def test_observe_writes_a_lower_count_and_keeps_read_at_and_the_other_resources(tmp_path):
+    store = _seeded(tmp_path)
+    store.observe(KEY, _observed(3999))
+    assert store.load(KEY) == Budget(
+        {
+            "core": ResourceBudget(3999, T + timedelta(minutes=30)),
+            "graphql": None,
+            "search": ResourceBudget(7, T + timedelta(seconds=40)),
+        },
+        T,
+    )
+    assert json.loads((tmp_path / f"{KEY}.json").read_text())["read_at"] == int(T.timestamp())
+    assert store.claim(KEY, T) is None  # read_at is still T: the read is not claimable
+
+
+def test_observe_ignores_a_higher_count(tmp_path):
+    store = _seeded(tmp_path)
+    store.observe(KEY, _observed(4001))
+    assert store.load(KEY) == _budget()
+
+
+def test_observe_takes_a_new_window(tmp_path):
+    store = _seeded(tmp_path)
+    later = T + timedelta(hours=2)
+    store.observe(KEY, _observed(4900, later))
+    loaded = store.load(KEY)
+    assert loaded is not None
+    assert loaded.resources["core"] == ResourceBudget(4900, later)
+
+
+def test_observe_unchanged_leaves_the_file_byte_identical(tmp_path):
+    store = _seeded(tmp_path)
+    path = tmp_path / f"{KEY}.json"
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    store.observe(KEY, _observed(4000))
+    store.observe(KEY, _observed(4001))
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == mtime
+    assert _listing(tmp_path) == [f"{KEY}.json", f"{KEY}.lock"]
+
+
+def test_observe_on_a_missing_record_writes_nothing(tmp_path):
+    (tmp_path / f"{KEY}.lock").touch()
+    before = _listing(tmp_path)
+    _store(tmp_path).observe(KEY, _observed(1))
+    assert _listing(tmp_path) == before
+
+
+def test_observe_on_a_missing_directory_leaves_it_missing(tmp_path):
+    directory = tmp_path / "budget"
+    _store(directory).observe(KEY, _observed(1))
+    assert not directory.exists()
+    assert _listing(tmp_path) == []
+
+
+def test_observe_without_a_lock_file_creates_none_and_writes_nothing(tmp_path):
+    path = _file(tmp_path)
+    before = path.read_bytes()
+    _store(tmp_path).observe(KEY, _observed(1))
+    assert path.read_bytes() == before
+    assert _listing(tmp_path) == [path.name]
+
+
+def test_observe_on_a_torn_record_writes_nothing(tmp_path):
+    (tmp_path / f"{KEY}.lock").touch()
+    path = tmp_path / f"{KEY}.json"
+    path.write_text('{"version": 1, "read_at"')
+    _store(tmp_path).observe(KEY, _observed(1))
+    assert path.read_text() == '{"version": 1, "read_at"'
+
+
+def test_observe_on_a_foreign_directory_writes_nothing(tmp_path, monkeypatch):
+    store = _seeded(tmp_path)
+    before = (tmp_path / f"{KEY}.json").read_bytes()
+    mine = os.getuid()
+    monkeypatch.setattr(budget_store.os, "getuid", lambda: mine + 1)
+    store.observe(KEY, _observed(1))
+    assert (tmp_path / f"{KEY}.json").read_bytes() == before
+
+
+def test_observe_returns_at_once_when_another_descriptor_holds_the_lock(tmp_path):
+    slept: list[float] = []
+    store = FilesystemBudgetStore(tmp_path, sleep=slept.append)
+    store.put(KEY, T, _budget())
+    path = tmp_path / f"{KEY}.json"
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    holder = os.open(tmp_path / f"{KEY}.lock", os.O_RDWR)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        store.observe(KEY, _observed(1))
+    finally:
+        os.close(holder)
+    assert slept == []
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == mtime
+
+
+def test_observe_makes_one_lock_attempt_and_never_reads_the_clock(tmp_path, monkeypatch):
+    def clock() -> float:
+        raise AssertionError("observe reads no clock")
+
+    _seeded(tmp_path)
+    store = FilesystemBudgetStore(tmp_path, clock=clock, sleep=lambda _: None)
+    attempts: list[int] = []
+    real = fcntl.flock
+
+    def flock(fd: int, how: int) -> None:
+        attempts.append(how)
+        real(fd, how)
+
+    monkeypatch.setattr(budget_store.fcntl, "flock", flock)
+    store.observe(KEY, _observed(3999))
+    assert attempts == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+
+
+def test_observe_swallows_an_os_error(tmp_path, monkeypatch):
+    store = _seeded(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "no")
+
+    monkeypatch.setattr(budget_store.os, "replace", broken)
+    store.observe(KEY, _observed(1))
+    assert store.load(KEY) == _budget()
+    assert [name for name in _listing(tmp_path) if name.endswith(".tmp")] == []
+
+
+def test_observe_refuses_a_key_of_another_shape(tmp_path):
+    with pytest.raises(ValueError):
+        _store(tmp_path).observe("github.com-token", _observed(1))
