@@ -38,6 +38,8 @@ classDiagram
     class notify__ReleaseEvent["ReleaseEvent"]
     class notify__SplitFacts["SplitFacts"]
     class notify__WaitingEvent["WaitingEvent"]
+    class notify_message__AcceptedDeparture["AcceptedDeparture"]
+    class notify_message__Message["Message"]
     class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
@@ -45,8 +47,6 @@ classDiagram
     class refusal__OutputRefusal["OutputRefusal"]
     class retakes__Budget["Budget"]
     class scratch__KeptFolder["KeptFolder"]
-    class scratch__Leftover["Leftover"]
-    class scratch__Orphans["Orphans"]
     notify__ReleaseEvent --> notify__EventKey
     notify__WaitingEvent --> notify__EventKey
 ```
