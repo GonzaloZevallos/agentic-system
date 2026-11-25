@@ -14,11 +14,13 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from html import escape
 from typing import Final
 
 from . import drawing_answer, escalation_prompts
 from .notify import PartFact, ReleaseEvent
+from .schemas import SLUG
 from .task import DepartureRecord, EscalationClass
 
 __all__ = [
@@ -26,8 +28,12 @@ __all__ = [
     "FIELD_MAX",
     "SUBJECT_MAX",
     "AcceptedDeparture",
+    "DigestRow",
+    "DigestView",
     "Message",
+    "WindowedSection",
     "clean",
+    "digest_message",
     "release_message",
     "repo_url",
     "waiting_message",
@@ -41,6 +47,7 @@ SEE_COMMENT: Final = "See the escalation comment on the issue."
 NO_USD: Final = "Set the amount from the escalation comment on the issue."
 NO_TITLE: Final = "(no title)"
 NO_PR: Final = "no pull request"
+NOTHING: Final = "Nothing to report."
 
 _REMOVED: Final = ("Cc", "Zl", "Zp")
 _DIRECTION: Final = frozenset([0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)])
@@ -237,3 +244,94 @@ def release_message(
         sections.append(lines)
     header = [_join("Released: ", _ref(repo, "issues", root), " ", _title(titles, root))]
     return _compose(f"[{product}] Released #{root}: {_title(titles, root)}", header, sections)
+
+
+@dataclass(frozen=True)
+class DigestRow:
+    """One line of the digest: an issue or pull request `number`, its `title` and, for a paused
+    task, the `reason` it is paused."""
+
+    number: int
+    title: str
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _positive("number", self.number)
+
+
+@dataclass(frozen=True)
+class WindowedSection:
+    """The `rows` of an activity window; `cut` says more existed than the limit, `single_group`
+    that the cut fell inside one instant so the rest could not be told apart."""
+
+    rows: tuple[DigestRow, ...]
+    cut: bool
+    single_group: bool
+
+    def __post_init__(self) -> None:
+        if self.single_group and not self.cut:
+            raise ValueError("single_group needs cut")
+
+
+@dataclass(frozen=True)
+class DigestView:
+    """What the daily digest of `product` on `local_date` shows: the snapshot sections (waiting,
+    paused, running), the windowed ones (merged, closed) and the `limit` that cut the latter."""
+
+    product: str
+    local_date: date
+    limit: int
+    waiting: tuple[DigestRow, ...]
+    paused: tuple[DigestRow, ...]
+    running: tuple[DigestRow, ...]
+    merged: WindowedSection
+    closed: WindowedSection
+
+    def __post_init__(self) -> None:
+        _positive("limit", self.limit)
+        if SLUG.match(self.product) is None:
+            raise ValueError(f"product is not a slug: {self.product!r}")
+        if type(self.local_date) is not date:
+            raise ValueError(f"local_date is not a plain date: {self.local_date!r}")
+
+
+def digest_message(view: DigestView, repo: str) -> Message:
+    """The daily digest: the snapshot sections first, then the windowed ones, empty ones omitted.
+    A cut windowed section says `{limit}+` in its heading."""
+    repo = repo_url(repo)
+
+    def block(
+        head: str, rows: Sequence[DigestRow], kind: str, extra: Sequence[_Line] = ()
+    ) -> list[_Line]:
+        lines = [_join(head), *extra]
+        for row in rows:
+            why = _join(" - paused: ", clean(row.reason)) if row.reason is not None else ""
+            lines.append(
+                _join(_ref(repo, kind, row.number), " ", clean(row.title) or NO_TITLE, why)
+            )
+        return lines
+
+    def windowed(name: str, section: WindowedSection, kind: str) -> list[_Line]:
+        count = f"{view.limit}+" if section.cut else str(len(section.rows))
+        note = [_join(f"More than {view.limit} items share one instant; some are not listed.")]
+        return block(f"{name} ({count})", section.rows, kind, note if section.single_group else ())
+
+    snapshots = (
+        ("Waiting for you", view.waiting),
+        ("Paused", view.paused),
+        ("Running", view.running),
+    )
+    sections = [block(f"{name} ({len(rows)})", rows, "issues") for name, rows in snapshots if rows]
+    for name, section, kind in (
+        ("Merged pull requests", view.merged, "pull"),
+        ("Closed issues", view.closed, "issues"),
+    ):
+        if section.rows or section.cut:
+            sections.append(windowed(name, section, kind))
+    day = view.local_date.isoformat()
+    header = (
+        [_join(f"Daily digest {day}")]
+        if sections
+        else [_join(f"Daily digest {day}"), _join(NOTHING)]
+    )
+    return _compose(f"[{view.product}] Daily digest {day}", header, sections)

@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -9,8 +9,12 @@ from agentic.core.process.domain.notify import EventKey, PartFact, ReleaseEvent
 from agentic.core.process.domain.notify_message import (
     BODY_MAX_BYTES,
     AcceptedDeparture,
+    DigestRow,
+    DigestView,
     Message,
+    WindowedSection,
     clean,
+    digest_message,
     release_message,
     repo_url,
     waiting_message,
@@ -297,3 +301,136 @@ def test_a_body_exactly_at_the_cap_is_not_cut(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(notify_message, "BODY_MAX_BYTES", size - 1)
     shorter = _release_with(3, "a")
     assert "(truncated)" in shorter.text and "(truncated)" in shorter.html
+
+
+NO_ROWS = WindowedSection((), cut=False, single_group=False)
+
+
+def _digest(**more: Any) -> DigestView:
+    args: dict[str, Any] = {
+        "product": "shop",
+        "local_date": date(2026, 11, 24),
+        "limit": 3,
+        "waiting": (),
+        "paused": (),
+        "running": (),
+        "merged": NO_ROWS,
+        "closed": NO_ROWS,
+    }
+    return DigestView(**{**args, **more})
+
+
+def _rows(start: int, count: int, title: str = "t") -> tuple[DigestRow, ...]:
+    return tuple(DigestRow(start + i, title) for i in range(count))
+
+
+def test_each_digest_section_renders_in_order_with_its_links() -> None:
+    view = _digest(
+        waiting=_rows(1, 1, "w"),
+        paused=(DigestRow(2, "p", "no budget"),),
+        running=_rows(3, 1, "r"),
+        merged=WindowedSection(_rows(40, 1, "m"), cut=False, single_group=False),
+        closed=WindowedSection(_rows(5, 1, "c"), cut=False, single_group=False),
+    )
+    message = digest_message(view, REPO)
+    assert message.subject == "[shop] Daily digest 2026-11-24"
+    order = [
+        message.text.index(x)
+        for x in ("Waiting for you (1)", "Paused (1)", "Running (1)", "Merged", "Closed")
+    ]
+    assert order == sorted(order)
+    assert "#2 (" + REPO + "/issues/2) p - paused: no budget" in message.text
+    assert f'<a href="{REPO}/pull/40">#40</a>' in message.html
+    assert f'<a href="{REPO}/issues/5">#5</a>' in message.html
+    assert "Merged pull requests (1)" in message.text and "Closed issues (1)" in message.text
+
+
+def test_empty_sections_are_omitted_and_an_empty_digest_says_so() -> None:
+    message = digest_message(_digest(running=_rows(3, 1)), REPO)
+    assert "Running (1)" in message.text
+    assert "Waiting" not in message.text and "Merged" not in message.text
+    assert "Nothing to report." in digest_message(_digest(), REPO).text
+    assert "Nothing to report." not in message.text
+
+
+def test_a_cut_shows_the_limit_with_a_plus_and_never_the_literal() -> None:
+    cut = WindowedSection(_rows(10, 3), cut=True, single_group=False)
+    message = digest_message(_digest(limit=3, merged=cut), REPO)
+    assert "Merged pull requests (3+)" in message.text and "(3+)" in message.html
+    assert "50+" not in message.text + message.html
+    assert (
+        "+"
+        not in digest_message(
+            _digest(merged=WindowedSection(_rows(10, 3), False, False)), REPO
+        ).text
+    )
+
+
+def test_the_single_group_line_shows_only_with_single_group_and_in_its_section() -> None:
+    line = "More than 3 items share one instant; some are not listed."
+    one = WindowedSection(_rows(10, 2), cut=True, single_group=True)
+    plain = WindowedSection(_rows(20, 2), cut=True, single_group=False)
+    message = digest_message(_digest(merged=plain, closed=one), REPO)
+    assert message.text.count(line) == 1 and message.html.count(line) == 1
+    assert message.text.index(line) > message.text.index("Closed issues (3+)")
+    assert line not in digest_message(_digest(merged=plain), REPO).text
+    empty = WindowedSection((), cut=True, single_group=True)
+    assert line in digest_message(_digest(closed=empty), REPO).text
+
+
+def test_single_group_without_a_cut_is_rejected() -> None:
+    with pytest.raises(ValueError, match="single_group"):
+        WindowedSection(_rows(1, 1), cut=False, single_group=True)
+
+
+@pytest.mark.parametrize(
+    "more",
+    [
+        {"limit": 0},
+        {"limit": True},
+        {"limit": "3"},
+        {"product": "Shop Now"},
+        {"product": "a\nb"},
+        {"local_date": datetime(2026, 11, 24, tzinfo=UTC)},
+    ],
+)
+def test_a_bad_digest_view_is_rejected(more: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        _digest(**more)
+
+
+@pytest.mark.parametrize("number", [0, -1, True, "1"])
+def test_a_bad_digest_row_number_is_rejected(number: Any) -> None:
+    with pytest.raises(ValueError):
+        DigestRow(number, "t")
+
+
+def test_a_digest_refuses_a_bad_repo() -> None:
+    with pytest.raises(ValueError):
+        digest_message(_digest(), "https://evil.example/a/b")
+
+
+def test_a_hostile_digest_title_and_reason_are_cleaned_and_escaped() -> None:
+    row = DigestRow(4, "<script>x</script>\r\nBcc: a@b", "<i>why</i>\x00")
+    message = digest_message(_digest(paused=(row,)), REPO)
+    assert (
+        "<script>" not in message.html and "&lt;script&gt;x&lt;/script&gt;Bcc: a@b" in message.html
+    )
+    assert "&lt;i&gt;why&lt;/i&gt;" in message.html
+    assert "\r" not in message.text and "\x00" not in message.text
+
+
+def test_a_large_digest_keeps_the_snapshot_and_shows_the_same_sections_in_both_parts() -> None:
+    merged = WindowedSection(_rows(1000, 250, "<&>" * 150), cut=True, single_group=False)
+    closed = WindowedSection(_rows(2000, 250, "<&>" * 150), cut=True, single_group=False)
+    message = digest_message(
+        _digest(waiting=_rows(1, 2, "w"), running=_rows(3, 2, "r"), merged=merged, closed=closed),
+        REPO,
+    )
+    assert max(len(message.text.encode()), len(message.html.encode())) <= BODY_MAX_BYTES
+    assert "Waiting for you (2)" in message.text and "Waiting for you (2)" in message.html
+    assert "Running (2)" in message.text and "Running (2)" in message.html
+    assert "(truncated)" in message.text and "(truncated)" in message.html
+    for heading in ("Merged pull requests", "Closed issues"):
+        assert (heading in message.text) == (heading in message.html)
+    assert _text_lines(message) == _html_paragraphs(message)
