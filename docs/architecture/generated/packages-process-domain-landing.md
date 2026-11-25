@@ -13,6 +13,7 @@ Esta página muestra los módulos del grupo `landing` de `domain` y los imports 
 ```mermaid
 graph TD
     g_domain__checks["checks (grupo)"]
+    g_domain__machine["machine (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state["state (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
@@ -45,6 +46,7 @@ graph TD
     m_domain__landing --> m_domain__pull_request
     m_domain__landing --> m_domain__stacking
     m_domain__landing_order --> g_domain__state
+    m_domain__merge_hold --> g_domain__machine
     m_domain__plan_revision --> g_domain__state
     m_domain__plan_settlement --> g_domain__roles
     m_domain__plan_settlement --> g_domain__state

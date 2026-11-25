@@ -26,6 +26,7 @@ from . import (
     exempt_queue,
     format_retakes,
     hold,
+    instant,
     launch_order,
     merge_ci,
     presubmit,
@@ -2623,11 +2624,11 @@ def promotion_pending(state: TaskState) -> bool:
     role = _FIRST_ROLE.get(state.get("type", ""))
     if not promotion or role is None:
         return False
-    at = _instant(promotion.get("at"))
+    at = instant.parse_instant(promotion.get("at"))
     if at is None:
         return False
     for run in state.get("runs", []):
-        started = _instant(run.get("started_at"))
+        started = instant.parse_instant(run.get("started_at"))
         if run.get("role") == role and started is not None and started > at:
             return False
     return True
@@ -4024,13 +4025,13 @@ def stranded_tracker_only(document: Mapping[str, Any]) -> bool:
         elif entry.get("kind") == "resumed" and seen_estimate:
             resumed_at = entry.get("at")
             seen_estimate = False  # a later estimate opens a new pair: the last one counts
-    resumed = _instant(resumed_at)
+    resumed = instant.parse_instant(resumed_at)
     if resumed is None:
         return False
     for run in document.get("runs", []):
         if run.get("role") != TECH_LEAD.name:
             continue
-        started = _instant(run.get("started_at"))
+        started = instant.parse_instant(run.get("started_at"))
         if started is None or started > resumed:
             return False
     return True
@@ -4435,7 +4436,7 @@ def escalation_at(entries: Sequence[PauseEntry]) -> datetime | None:
     escalations = [entry for entry in entries if entry["kind"] == "escalation"]
     if not escalations:
         return None
-    at = _instant(escalations[-1].get("at"))
+    at = instant.parse_instant(escalations[-1].get("at"))
     return None if at is None else at.astimezone(UTC)
 
 
@@ -4577,7 +4578,7 @@ def stated_reset(state: TaskState) -> datetime | None:
     entries without one, or with one that is not ISO-8601 with an offset, are ignored.
     `None` when none states a reset: the pause then follows its calendar as ever."""
     stated = [
-        _instant(entry.get("resets_at"))
+        instant.parse_instant(entry.get("resets_at"))
         for entry in current_epoch(state)
         if entry["kind"] == "failure" and entry["value"] in _RESET_STATING_REASONS
     ]
@@ -4679,24 +4680,12 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
 CLOCK_TOLERANCE = timedelta(seconds=120)
 
 
-def _instant(value: object) -> datetime | None:
-    """`value` as an aware datetime, `None` when it is missing, not text, not ISO-8601
-    or carries no offset (it could not be compared with GitHub's own `createdAt`)."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else None
-
-
 def run_ends(state: TaskState) -> list[datetime] | None:
     """Every run's own `ended_at`, `None` when any is missing or unreadable: the caller
     then falls back to the whole-chase count, which fails toward the human."""
     ends: list[datetime] = []
     for run in state.get("runs", []):
-        end = _instant(run.get("ended_at"))
+        end = instant.parse_instant(run.get("ended_at"))
         if end is None:
             return None
         ends.append(end)
@@ -4707,7 +4696,7 @@ def round_starts(rounds: Sequence[RoleRun]) -> list[datetime] | None:
     """Every round's own `started_at`, `None` when any is missing or unreadable."""
     starts: list[datetime] = []
     for run in rounds:
-        start = _instant(run.get("started_at"))
+        start = instant.parse_instant(run.get("started_at"))
         if start is None:
             return None
         starts.append(start)
@@ -5184,7 +5173,7 @@ def spend_runs(runs: Sequence[Mapping[str, object]]) -> tuple[list[SpendRun], in
     out: list[SpendRun] = []
     skipped = 0
     for run in runs:
-        end = _instant(run.get("ended_at"))
+        end = instant.parse_instant(run.get("ended_at"))
         cost = run.get("cost_usd")
         if (
             end is None
@@ -5196,7 +5185,7 @@ def spend_runs(runs: Sequence[Mapping[str, object]]) -> tuple[list[SpendRun], in
             skipped += 1
             continue
         end = end.astimezone(UTC)
-        start = _instant(run.get("started_at"))
+        start = instant.parse_instant(run.get("started_at"))
         start = end if start is None else min(start.astimezone(UTC), end)
         out.append(SpendRun(start, end, float(cost)))
     return out, skipped

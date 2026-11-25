@@ -5822,3 +5822,17 @@ def test_escalation_at_none_unreadable_offset_to_utc_and_last_of_several():
     assert rules.escalation_at(several) == datetime(2026, 11, 2, 10, tzinfo=UTC)
     last_unreadable = [_escalated("cap", "2026-11-01T10:00:00+00:00"), _escalated("cap", None)]
     assert rules.escalation_at(last_unreadable) is None
+
+
+def test_run_ends_reads_an_offset_instant_as_aware_and_a_naive_one_as_unreadable():
+    naive = {"ended_at": "2026-10-05T08:00:00"}
+    assert rules.run_ends({"runs": [naive]}) is None
+    offset = rules.run_ends({"runs": [{"ended_at": "2026-10-05T10:00:00+02:00"}]})
+    assert offset == [datetime(2026, 10, 5, 8, 0, tzinfo=UTC)]
+
+
+def test_escalation_at_reads_a_naive_instant_as_none_and_an_offset_one_in_utc():
+    assert rules.escalation_at([_escalated("cap", "2026-11-01T10:00:00")]) is None
+    at = rules.escalation_at([_escalated("cap", "2026-11-01T10:00:00+02:00")])
+    assert at == datetime(2026, 11, 1, 8, tzinfo=UTC)
+    assert at is not None and at.utcoffset() == timedelta(0)
