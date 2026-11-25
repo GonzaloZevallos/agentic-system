@@ -266,6 +266,7 @@ def hooks_for(
     store: Path | None = None,
     allowed: tuple[Path, ...] = (),
     runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -287,11 +288,17 @@ def hooks_for(
     `runs`, for a role that executes, notes the Developer's own Bash calls that run a declared
     check (GH-467, `check_run_log`): the Bash `PreToolUse` hook opens the row after its denial
     verdict, and two Bash matchers, `PostToolUse` and `PostToolUseFailure`, close it. They
-    answer `{}` always: recording never decides, never denies, never raises."""
+    answer `{}` always: recording never decides, never denies, never raises.
+
+    `refuse`, for a role that executes, is asked with each Bash command after the git and store
+    denials and before the row is opened: a text denies the call with it, `None` lets it
+    through. The default `None` leaves the hook as it was."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
-            HookMatcher(matcher="Bash", hooks=[_bash(cwd, store, runs)], timeout=GUARD_TIMEOUT_S),
+            HookMatcher(
+                matcher="Bash", hooks=[_bash(cwd, store, runs, refuse)], timeout=GUARD_TIMEOUT_S
+            ),
             HookMatcher(
                 matcher="Edit|Write",
                 hooks=[_edit(cwd, forbidden or (), allowed)],
@@ -366,7 +373,12 @@ def _closing(close: Callable[[HookInput, str | None], None]) -> HookCallback:
     return hook
 
 
-def _bash(cwd: Path, store: Path | None = None, runs: CheckRunLog | None = None) -> HookCallback:
+def _bash(
+    cwd: Path,
+    store: Path | None = None,
+    runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
+) -> HookCallback:
     # Resolved once, here, for every Bash call this role's run will ever make --
     # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
     # itself stays unresolved: it is what the git branch keeps comparing against.
@@ -382,6 +394,10 @@ def _bash(cwd: Path, store: Path | None = None, runs: CheckRunLog | None = None)
         )
         if reason:
             return _deny(reason)
+        # A hand run the delivery gate repeats (ADR-0065 addendum 2026-11-25): the application
+        # decides, with `suite_refusal`; a denied call is never recorded as a check run.
+        if refuse is not None and (refused := refuse(command)):
+            return _deny(refused)
         if runs is not None:
             runs.pre(data, tool_use_id)  # guarded inside: never changes this answer
         return {}

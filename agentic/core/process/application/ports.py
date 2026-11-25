@@ -359,6 +359,7 @@ class RoleRunner(Protocol):
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult: ...
 
 
