@@ -104,6 +104,17 @@ TABLE: tuple[Row, ...] = (
         "port, and these import `tests/conformance.py` or read it with the stand-in check",
     ),
     Row(
+        "agentic/core/process/adapters/filesystem/notified.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as a stand-in of the `Notified` port, and these import "
+        "`tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
         "agentic/core/process/adapters/git/workspace.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
