@@ -25,6 +25,7 @@ graph TD
     m_adapters__github__label_timeline["adapters.github.label_timeline"]
     m_adapters__github__run["adapters.github.run"]
     m_adapters__github__tracker["adapters.github.tracker"]
+    m_adapters__github__account --> g_pkg__application
     m_adapters__github__account --> g_pkg__domain
     m_adapters__github__account --> m_adapters__github__run
     m_adapters__github__board --> g_pkg__application
