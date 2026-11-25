@@ -2,7 +2,8 @@ Esta página muestra los módulos del grupo `roles` de `domain` y los imports qu
 
 - Padre: [domain](packages-process-domain.md)
 - Hermanas:
-  - [domain: checks](packages-process-domain-checks.md)
+  - [domain: checks (parte 1)](packages-process-domain-checks-1.md)
+  - [domain: checks (parte 2)](packages-process-domain-checks-2.md)
   - [domain: landing](packages-process-domain-landing.md)
   - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
   - [domain: machine (parte 2)](packages-process-domain-machine-2.md)

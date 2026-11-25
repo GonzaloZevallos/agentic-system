@@ -301,7 +301,8 @@ def _presubmit_arrays(
     status and the sum of its rows' seconds; with one row per check, which is every
     product that declares no affected form, this is what it always was. A reused row is
     counted but never sampled: a check with only reused rows has no duration entry, and a
-    rerun row (ADR-0066) is never sampled either."""
+    rerun row (ADR-0066) is never sampled either. A kept row (`reused_from`, GH-1125) counts
+    as reused and is never sampled."""
     last = len(invocations) - 1
     counts: dict[str, int] = {}
     durations: list[str] = []
@@ -311,7 +312,7 @@ def _presubmit_arrays(
         verdicts = outcomes(results)
         for check in final_results(results):
             result = "green" if check["passed"] else "red"
-            reused = check.get("reused", False)
+            reused = check.get("reused", False) or "reused_from" in check
             cell = f"{check['name']}/{result}/{final}/{reused}/{verdicts[check['name']]}"
             counts[cell] = counts.get(cell, 0) + 1
             if check["name"] in seconds:
