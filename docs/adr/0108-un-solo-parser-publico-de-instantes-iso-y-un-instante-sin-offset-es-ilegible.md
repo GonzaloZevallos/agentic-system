@@ -43,5 +43,21 @@ Fuera de alcance, para un issue de seguimiento:
 
 ## Evidencia del escaneo de documentos guardados
 
-Pendiente: lo completa la parte `ci-and-hold-record` con la ruta absoluta leída y el conteo
-por clave.
+Escaneo del 2026-11-25 de los documentos de tarea guardados (`*.md`, front matter YAML; cuenta
+de valores de texto sin offset sobre el total de valores de la clave):
+
+| Clave | `/home/zeta/dev/repos/agentic-system/.agentic/tasks` (525 archivos) | `/home/zeta/dev/repos/apostrophe/.agentic/tasks` (494 archivos) |
+|---|---|---|
+| `holds.start` | 0 de 0 | 0 de 0 |
+| `holds.end` | 0 de 0 | 0 de 0 |
+| `pushed_at` | 0 de 861 | 0 de 785 |
+| `node_started_at` | 0 de 310 | 0 de 287 |
+| `run_ended_at` | 0 de 305 | 0 de 272 |
+| `dispatched_at` | 0 de 0 | 0 de 0 |
+
+Ninguna raíz quedó sin leer. 13 y 32 archivos tienen un front matter que YAML no parsea; para
+ellos se contó por texto plano (`pushed_at`, `node_started_at` y `run_ended_at` con un valor sin
+offset): 0 en ambas raíces. Ningún documento guardado trae todavía un registro `holds` (el único
+hallazgo de `holds:` y de `dispatched_at` en cada raíz es prosa), así que 0 tareas quedan
+excluidas de las cifras de etapa por un valor `holds` sin offset. La decisión es rechazar en
+todos los casos; la captura está en la evidencia de la tarea (`ci-and-hold-record-scan.txt`).

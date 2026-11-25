@@ -121,3 +121,74 @@ def test_an_unreadable_push_instant_reads_the_run_unknown():
     built = ci.timing("never", NODE, "green", (done,), ("web",))
     assert built["run_started_at"] is None
     assert built["run_ended_at"] is None
+
+
+# -- an instant with no offset is unreadable (ADR-0108); one row per call site --------------------
+
+NAIVE_PUSH = "2026-11-06T10:00:00"
+
+
+@pytest.mark.parametrize("bound", ["run_ended_at", "pushed_at", "node_started_at"])
+def test_waited_seconds_with_any_naive_bound_is_unknown_where_it_was_a_number(bound):
+    naive = timing(**{bound: "2026-11-06T10:05:00"})
+    assert ci.waited_seconds(naive) == (None, False)
+    zoned = timing(**{bound: "2026-11-06T10:05:00Z"})
+    assert ci.waited_seconds(zoned)[0] is not None
+    # `+02:00` gives what `Z` gives for the same instant.
+    offset = timing(**{bound: "2026-11-06T12:05:00+02:00"})
+    assert ci.waited_seconds(offset) == ci.waited_seconds(zoned)
+
+
+def test_waited_seconds_with_a_naive_until_is_unknown():
+    none = timing(verdict="no_verdict", run_ended_at=None)
+    assert ci.waited_seconds(none, until="2026-11-06T10:30:00") == (None, False)
+    assert ci.waited_seconds(none, until="2026-11-06T10:30:00Z") == (1800.0, False)
+
+
+def test_a_naive_push_instant_reads_no_run_and_no_jobs_and_the_wait_stays_unknown():
+    done = check("web", "2026-11-06T10:00:30Z", "2026-11-06T10:03:00Z")
+    built = ci.timing(NAIVE_PUSH, NODE, "green", (done,), ("web",))
+    assert built["run_started_at"] is None
+    assert built["run_ended_at"] is None
+    assert "jobs" not in built
+    assert built["pushed_at"] == NAIVE_PUSH
+    for until in (None, "2026-11-06T10:30:00Z"):
+        assert ci.waited_seconds(built, until) == (None, False)
+    # The same push with `Z` or `+02:00` reads the run.
+    for pushed in ("2026-11-06T10:00:00Z", "2026-11-06T12:00:00+02:00"):
+        read = ci.timing(pushed, NODE, "green", (done,), ("web",))
+        assert read["run_started_at"] == "2026-11-06T10:00:30Z"
+        assert read["run_ended_at"] == "2026-11-06T10:03:00Z"
+        assert read["jobs"] == [{"name": "web", "duration_s": 150.0}]
+
+
+def test_a_claimed_check_with_a_naive_start_is_left_out_of_starts_ends_and_jobs():
+    naive = check("web", "2026-11-06T10:00:30", "2026-11-06T10:03:00Z")
+    other = check("e2e", "2026-11-06T10:01:00Z", "2026-11-06T10:02:00Z")
+    built = ci.timing(PUSHED, NODE, "green", (naive, other), ("web", "e2e"))
+    assert built["run_started_at"] == "2026-11-06T10:01:00Z"
+    assert built["run_ended_at"] == "2026-11-06T10:02:00Z"
+    assert built["jobs"] == [{"name": "e2e", "duration_s": 60.0}]
+    alone = ci.timing(PUSHED, NODE, "green", (naive,), ("web",))
+    assert alone["run_started_at"] is None and alone["run_ended_at"] is None
+    assert "jobs" not in alone
+    offset = check("web", "2026-11-06T12:00:30+02:00", "2026-11-06T10:03:00Z")
+    zoned = check("web", "2026-11-06T10:00:30Z", "2026-11-06T10:03:00Z")
+    assert ci.timing(PUSHED, NODE, "green", (offset,), ("web",))["jobs"] == [
+        {"name": "web", "duration_s": 150.0}
+    ]
+    assert ci.timing(PUSHED, NODE, "green", (zoned,), ("web",))["jobs"] == [
+        {"name": "web", "duration_s": 150.0}
+    ]
+
+
+def test_a_naive_end_keeps_the_start_and_adds_neither_an_end_nor_a_job_entry():
+    naive_end = check("web", "2026-11-06T10:00:30Z", "2026-11-06T10:03:00")
+    built = ci.timing(PUSHED, NODE, "green", (naive_end,), ("web",))
+    assert built["run_started_at"] == "2026-11-06T10:00:30Z"
+    assert built["run_ended_at"] is None
+    assert "jobs" not in built
+    zoned = check("web", "2026-11-06T10:00:30Z", "2026-11-06T12:03:00+02:00")
+    got = ci.timing(PUSHED, NODE, "green", (zoned,), ("web",))
+    assert got["run_ended_at"] == "2026-11-06T12:03:00+02:00"
+    assert got["jobs"] == [{"name": "web", "duration_s": 150.0}]

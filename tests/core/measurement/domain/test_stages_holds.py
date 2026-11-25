@@ -198,6 +198,22 @@ def test_a_malformed_holds_record_is_unknown_not_a_dropped_interval(record):
     assert split({"holds": record}) == StageUnknown("hold_unknown")
 
 
+@pytest.mark.parametrize("bound", ["start", "end"])
+def test_a_holds_interval_with_a_naive_bound_is_hold_unknown_where_it_read_as_utc(bound):
+    """ADR-0108: the entry that reads the record (`stage_split`, through `hold_record.read`)
+    excludes the task, never counts it as zero held minutes. The same record with `Z` or an
+    offset splits."""
+    zoned = {"start": at(10), "end": at(40)}
+    naive = {**zoned, bound: zoned[bound].removesuffix("Z")}
+    assert split({"holds": {"intervals": [naive]}}) == StageUnknown("hold_unknown")
+    assert split({"holds": {"intervals": [zoned, naive]}}) == StageUnknown("hold_unknown")
+    offset = {"start": "2026-10-20T12:10:00+02:00", "end": "2026-10-20T12:40:00+02:00"}
+    for record in (zoned, offset):
+        result = split({"holds": {"intervals": [record]}})
+        assert isinstance(result, StageSplit)
+        assert minutes(result, "held") == pytest.approx(30)
+
+
 def test_a_document_with_an_earlier_unknown_cause_keeps_it_over_a_bad_holds_record():
     bad = {"unknown": "unpaired"}
     assert split({"runs": [run(20, 10)], "holds": bad}) == StageUnknown("run_unbounded")

@@ -8,11 +8,12 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
+from .instant import parse_instant
 from .presubmit import FAILED_IDS_MAX, ID_FORBIDDEN
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
@@ -270,8 +271,8 @@ def _is_red(check: CiCheck) -> bool:
 
 def _order_key(check: CiCheck) -> datetime | None:
     """When a check run began (`started_at`), else when it ended (`completed_at`); `None` when
-    GitHub gave neither or it cannot be read."""
-    return _instant(check.started_at) or _instant(check.completed_at)
+    GitHub gave neither or it cannot be read (an instant with no offset is unreadable, ADR-0108)."""
+    return parse_instant(check.started_at) or parse_instant(check.completed_at)
 
 
 def _latest_of(name_runs: Sequence[CiCheck]) -> list[CiCheck]:
@@ -740,11 +741,12 @@ def ghost_fact_in_force(
 ) -> bool:
     """Whether a recorded ghost dispatch (GH-601) is still being waited on: it is for this very
     commit, not escalated, and its `dispatched_at` is readable and younger than `bound_s` as of
-    `now_iso`, both instants of this machine. An unreadable instant is not in force. It never reads
-    an instant GitHub gave; it is the only rule that decides to wait on a recorded dispatch."""
+    `now_iso`, both instants of this machine. An unreadable instant, one with no offset included
+    (ADR-0108), is not in force. It never reads an instant GitHub gave; it is the only rule that
+    decides to wait on a recorded dispatch."""
     if fact is None or fact["escalated"] or not rules.same_commit(fact["head"], head):
         return False
-    dispatched_at, now = _instant(fact["dispatched_at"]), _instant(now_iso)
+    dispatched_at, now = parse_instant(fact["dispatched_at"]), parse_instant(now_iso)
     return (
         dispatched_at is not None
         and now is not None
@@ -758,31 +760,19 @@ def ghost_fact_in_force(
 CI_DISPATCH_SKEW_S = 120
 
 
-def _instant(text: str | None) -> datetime | None:
-    """An ISO-8601 instant as an aware UTC datetime, `None` for a missing or unreadable one
-    (an instant with no zone is read as UTC). Parsing only: this module never reads a clock."""
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
-
-
 def waited_seconds(timing: CiTiming, until: str | None = None) -> tuple[float | None, bool]:
     """The CI wait of `timing` (GH-467), the only place it is derived: `max(0, end - max(
     pushed_at, node_started_at))`, where `end` is `run_ended_at` or, when that is `None`, `until`.
     The flag `clamped` is true when the raw difference was negative. `(None, False)` when a bound
-    is missing or unreadable: unknown, never 0.
+    is missing or unreadable (no offset included, ADR-0108): unknown, never 0.
 
     Two caveats. The machine's instants (`pushed_at`, `node_started_at`) and GitHub's
     (`run_ended_at`) are subtracted across two clocks, so a skew between them can show as a
     clamp. For a `no_verdict` timing, which has no `run_ended_at`, the only sanctioned `until` is
     the `at` of the `ci` escalation entry that ended the wait."""
-    end = _instant(timing["run_ended_at"] if timing["run_ended_at"] is not None else until)
-    pushed = _instant(timing["pushed_at"])
-    began = _instant(timing["node_started_at"])
+    end = parse_instant(timing["run_ended_at"] if timing["run_ended_at"] is not None else until)
+    pushed = parse_instant(timing["pushed_at"])
+    began = parse_instant(timing["node_started_at"])
     if end is None or pushed is None or began is None:
         return None, False
     raw = (end - max(pushed, began)).total_seconds()
@@ -803,7 +793,8 @@ def timing(
     is the earliest start, `run_ended_at` the latest end among the checks that finished, both
     `None` when none gave one, always for a `no_verdict`. `jobs` lists each finished check's
     duration, and is omitted when empty. An unreadable
-    `pushed_at` admits no check."""
+    `pushed_at` (no offset included, ADR-0108) admits no check, and a check whose `started_at`
+    is unreadable is left out whole."""
     result = CiTiming(
         pushed_at=pushed_at,
         node_started_at=node_started_at,
@@ -811,7 +802,7 @@ def timing(
         run_ended_at=None,
         verdict=verdict,
     )
-    floor = _instant(pushed_at)
+    floor = parse_instant(pushed_at)
     if verdict == "no_verdict" or floor is None:
         return result
     pool = tuple(checks)
@@ -821,11 +812,11 @@ def timing(
     ends: list[tuple[datetime, str]] = []
     jobs: list[CiJobTiming] = []
     for index, check in enumerate(pool):
-        started = _instant(check.started_at)
+        started = parse_instant(check.started_at)
         if index not in claimed or started is None or started < cutoff:
             continue
         starts.append((started, check.started_at or ""))
-        ended = _instant(check.completed_at)
+        ended = parse_instant(check.completed_at)
         if ended is not None:
             ends.append((ended, check.completed_at or ""))
             jobs.append({"name": check.name, "duration_s": (ended - started).total_seconds()})
