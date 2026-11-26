@@ -93,7 +93,8 @@ _REPRODUCE = (
 )
 
 # What was tried for each closed cause, as prose for the human: the cause itself is the value
-# the node chose from the step that failed, never text read back from `gh` or git (ADR-0029).
+# the node chose from the step that failed, never classified by text read back from `gh` or git
+# (ADR-0029); what `gh` said is added after the format, as `_gh_said`.
 _CI_DETAIL: dict[CiCause, str] = {
     "gh_unavailable": "`gh` could not be run for the whole {min:g} min wait on {ref}",
     "gh_unreadable": "`gh` answered something unreadable for the whole {min:g} min wait on {ref}",
@@ -231,6 +232,10 @@ class _NoVerdict:
     waited_s: float
     # The workflow file of a dispatched run that gave none; None for the task's own CI ref.
     workflow: str | None = None
+    # `gh_unavailable` / `gh_unreadable` only (GH-1151): what `gh` said on the read the wait ended
+    # on, already through `CiUnreadable.of`. Prose for the human only, never persisted; the `cause`
+    # stays the closed value (ADR-0029). A resumed wait starts with none.
+    gh_said: str | None = None
     # What a push that still failed after its retries reported (GH-487): git's stderr already
     # through `ci_push.scrub`, the tries it took and how it read. Prose for the human only; the
     # `cause` stays the closed value (ADR-0029). None for any other way of giving no verdict.
@@ -356,7 +361,7 @@ async def full_checks(
         patch = rules.ci_unavailable(
             outcome.cause,
             head,
-            detail + _not_tried_text(outcome) + _git_said(outcome),
+            detail + _gh_said(outcome) + _not_tried_text(outcome) + _git_said(outcome),
             at=ports.now(),
             ci=outcome.timing,
         )
@@ -391,6 +396,15 @@ def _not_tried_text(outcome: _NoVerdict) -> str:
         return ""
     unfetched = _UNFETCHED_DETAIL if outcome.not_tried.unfetched else ""
     return _NOT_TRIED_DETAIL[outcome.not_tried.why] + unfetched
+
+
+def _gh_said(outcome: _NoVerdict) -> str:
+    """What `gh` answered on the last read of an unreadable wait (GH-1151), as the tail of the
+    escalation's detail. Added after the `str.format`, like `_git_said`: it holds a third party's
+    braces. Empty when `gh` said nothing, and for any cause but the two unreadable ones."""
+    if not outcome.gh_said or outcome.cause not in ("gh_unavailable", "gh_unreadable"):
+        return ""
+    return f"; gh answered: {outcome.gh_said}"
 
 
 def _git_said(outcome: _NoVerdict) -> str:
@@ -734,6 +748,7 @@ async def _ci_full_checks(
             reported=reported,
             timing=_no_verdict_timing(pushed_at, node_started_at),
             not_tried=not_tried,
+            gh_said=read.detail if isinstance(read, CiUnreadable) else None,
         )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if ci.ghost_dispatch_due(verdict, read, ghosts.ghosts(clock())):
@@ -1161,6 +1176,7 @@ async def _dispatched_full_checks(
             stage=_stage_of(verdict),
             timing=_no_verdict_timing(pushed_at, node_started_at),
             ghost_dispatch=held,
+            gh_said=runs.detail if isinstance(runs, CiUnreadable) else None,
         )
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
