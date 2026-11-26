@@ -14,7 +14,7 @@ import yaml
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.playbook_land import land_playbook
-from agentic.core.process.application.ports import ListedPullRequest
+from agentic.core.process.application.ports import ListedPullRequest, TrackerTurnRefused
 from agentic.core.process.application.reflect_run import BRANCH
 from agentic.core.process.domain import playbook as pb
 from agentic.core.process.domain import playbook_candidates as pc
@@ -253,6 +253,21 @@ def test_another_failed_merge_call_is_recorded_as_failed_with_its_class():
     assert verdict == pl.Failed("gh_rejected")
     assert "gh_rejected" in line
     assert (world.saved.verdict, world.saved.cause) == ("failed", "gh_rejected")
+
+
+def test_a_refused_write_turn_is_failed_turn_refused_never_a_merge_call_failure():
+    world = World()
+
+    def refused(reference, head_sha, *, method=None):
+        raise TrackerTurnRefused("gh pr merge write turn refused: over the 900 s bound")
+
+    world.tracker.merge = refused
+
+    verdict, line = world.land()
+
+    assert verdict == pl.Failed("turn_refused")
+    assert "turn_refused" in line and "gh_unreadable" not in line
+    assert (world.saved.verdict, world.saved.cause) == ("failed", "turn_refused")
 
 
 def test_a_head_that_moves_between_the_two_ci_reads_waits():
