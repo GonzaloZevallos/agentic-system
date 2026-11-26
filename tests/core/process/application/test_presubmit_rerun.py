@@ -107,11 +107,11 @@ def test_red_twice_refuses_with_the_reruns_output():
     assert ran(commands).count("pytest") == 2  # one rerun, never a third run
 
 
-def test_a_timed_out_check_is_refused_without_a_rerun():
+def test_a_timed_out_check_is_passed_unverified_without_a_rerun():
     commands = MemoryCommands(pytest=[CommandResult(-9, "partial", timed_out=True)])
     g = gate(commands, forms={"tests": FORM})
-    reason = g()
-    assert reason is not None and "timed out" in reason
+    assert g() is None  # GH-1075: a timeout with no failing test is no refusal
+    assert [fact["check"] for fact in g.timeouts()] == ["tests"]
     assert ran(commands).count("pytest") == 1 and "pytest --lf" not in ran(commands)
     assert g.results is not None and g.results[0]["timed_out"] is True
     assert g.flakes() == []
@@ -353,8 +353,11 @@ def test_a_third_refusal_is_not_earned_when_the_ids_only_change_after_the_second
     assert verdicts(g, 4) == [True, True, False, False]
 
 
-def test_a_timeout_spends_a_refusal_and_its_reason_says_it_timed_out():
-    commands = MemoryCommands(pytest=[CommandResult(-9, "partial", timed_out=True)] * 3)
+def test_a_timeout_beside_a_real_red_spends_a_refusal_whose_reason_says_it_timed_out():
+    commands = MemoryCommands(
+        pytest=[CommandResult(-9, "partial", timed_out=True)] * 3,
+        **{"ruff check .": [CommandResult(1, "E501")] * 6},
+    )
     g = gate(commands, forms={"tests": FORM})
     first, second, third = g(), g(), g()
     assert first is not None and "`tests` timed out" in first and "(1 of 2)" in first
