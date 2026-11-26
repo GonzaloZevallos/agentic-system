@@ -154,7 +154,10 @@ def test_a_granted_gate_gives_the_same_results_and_timeout_as_one_granted_at_onc
             FakeCheckScheduler(share, wait_s=wait_s), commands, parallel=parallel, witness="w"
         )
         reason = gate()
-        rows = [{k: v for k, v in r.items() if k != "duration_s"} for r in gate.results or []]
+        rows = [
+            {k: v for k, v in r.items() if k not in ("duration_s", "workers")}
+            for r in gate.results or []
+        ]
         return reason, rows, gate.timeout_s, sorted(c for _, c in commands.ran)
 
     assert run(0.0, 4) == run(900.0, 2)
