@@ -32,6 +32,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class notify__EventKey["EventKey"]
     class notify__NotifiedRecord["NotifiedRecord"]
     class notify__PartFact["PartFact"]
     class notify__ReleaseEvent["ReleaseEvent"]
@@ -46,10 +47,6 @@ classDiagram
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]
     class scratch__Orphans["Orphans"]
+    notify__ReleaseEvent --> notify__EventKey
+    notify__WaitingEvent --> notify__EventKey
 ```
-
-## Relaciones con otras páginas
-
-- [domain: machine (parte 1)](classes-process-domain-machine-1.md)
-  - `notify.ReleaseEvent` se asocia con `notify.EventKey`
-  - `notify.WaitingEvent` se asocia con `notify.EventKey`

@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `filesystem`
 ```mermaid
 classDiagram
     class filesystem__board_sent__FilesystemBoardSent["FilesystemBoardSent"]
+    class filesystem__budget_store__FilesystemBudgetStore["FilesystemBudgetStore"]
     class filesystem__check_ledger__FilesystemCheckLedger["FilesystemCheckLedger"]
     class filesystem__check_results__FilesystemCheckResults["FilesystemCheckResults"]
     class filesystem__documents__FilesystemTaskDocuments["FilesystemTaskDocuments"]
@@ -19,5 +20,4 @@ classDiagram
     class filesystem__file_inbox__FileInbox["FileInbox"]
     class filesystem__free_space__StatvfsFreeSpace["StatvfsFreeSpace"]
     class filesystem__heartbeats__FilesystemHeartbeats["FilesystemHeartbeats"]
-    class filesystem__installed_products__SystemdUnitInstalledProducts["SystemdUnitInstalledProducts"]
 ```

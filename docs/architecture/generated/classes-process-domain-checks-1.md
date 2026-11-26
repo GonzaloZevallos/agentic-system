@@ -44,6 +44,7 @@ classDiagram
     class ci__CiUnreadable["CiUnreadable"]
     class ci__CiVerdict["CiVerdict"]
     class ci__DispatchedRun["DispatchedRun"]
+    class ci__FailingHeader["FailingHeader"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
 ```
