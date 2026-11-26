@@ -6361,6 +6361,7 @@ COMMAND_PATHS = [
     ("stack", "review"),
     ("stage0",),
     ("stage0", "rotate"),
+    ("stage0", "smoke"),
     ("scores",),
     ("scores", "backfill"),
     ("dashboards",),
