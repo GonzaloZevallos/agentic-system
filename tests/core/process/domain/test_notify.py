@@ -1,3 +1,4 @@
+import itertools
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
@@ -438,3 +439,104 @@ def test_pending_covers_a_due_unrecorded_release_and_nothing_else():
     )
     assert notify.pending(old, ACTIVE, NOW) is None
     assert notify.pending(event, EMPTY, NOW) is None
+
+
+def _at(minute: int) -> datetime:
+    return datetime(2026, 11, 20, 10, tzinfo=UTC) + timedelta(minutes=minute)
+
+
+def _row(minute: int, keyed: bool = True) -> tuple[datetime, EventKey | None]:
+    return _at(minute), (_key(_at(minute)) if keyed else None)
+
+
+def test_a_failed_candidate_in_the_middle_stops_just_before_it():
+    rows = [_row(1), _row(2), _row(3, keyed=False), _row(4)]
+    assert notify.advance_read_at(_at(0), rows, cut_at=None) == _at(2)
+
+
+def test_the_first_row_unkeyed_returns_read_at():
+    assert notify.advance_read_at(_at(0), [_row(1, keyed=False), _row(2)], cut_at=None) == _at(0)
+
+
+def test_no_read_at_with_every_row_keyed_returns_the_greatest():
+    assert notify.advance_read_at(None, [_row(3), _row(1), _row(2)], cut_at=None) == _at(3)
+
+
+def test_a_tie_exactly_at_the_cut_drops_the_whole_group():
+    rows = [_row(1), _row(2), _row(3), _row(3)]
+    assert notify.advance_read_at(_at(0), rows, cut_at=_at(3)) == _at(2)
+
+
+def test_a_cut_after_fifty_mixed_rows_advances_to_the_last_kept_row():
+    rows = [_row(minute) for minute in range(1, 49)] + [_row(50), _row(50)]
+    assert len(rows) == 50
+    assert notify.advance_read_at(None, rows, cut_at=_at(50)) == _at(48)
+
+
+def test_a_single_group_larger_than_the_limit_is_kept_and_advances_to_the_cut():
+    assert notify.advance_read_at(_at(0), [_row(5)] * 50, cut_at=_at(5)) == _at(5)
+
+
+def test_a_single_group_with_one_unkeyed_row_does_not_advance():
+    rows = [_row(5)] * 49 + [_row(5, keyed=False)]
+    assert notify.advance_read_at(_at(0), rows, cut_at=_at(5)) == _at(0)
+
+
+def test_only_stale_rows_with_a_cut_return_read_at():
+    assert notify.advance_read_at(_at(5), [_row(1), _row(5)], cut_at=_at(9)) == _at(5)
+
+
+@pytest.mark.parametrize(
+    ("read_at", "rows", "cut_at"),
+    [
+        (_at(5), [_row(1)], _at(5)),
+        (_at(0), [_row(1), _row(4)], _at(3)),
+        (_at(0), [(datetime(2026, 11, 20, 10, 1), None)], None),
+        (datetime(2026, 11, 20, 10), [], None),
+        (None, [(_at(1).astimezone(timezone(timedelta(hours=2))), None)], None),
+        (None, [_row(1)], datetime(2026, 11, 20, 10, 1)),
+    ],
+)
+def test_an_invalid_input_raises(read_at: Any, rows: Any, cut_at: Any):
+    with pytest.raises(ValueError):
+        notify.advance_read_at(read_at, rows, cut_at=cut_at)
+
+
+def _considered(read_at: datetime | None, rows: list[Any], cut_at: datetime | None) -> list[Any]:
+    live = [(i, k) for i, k in rows if read_at is None or i > read_at]
+    if cut_at is not None and any(i != cut_at for i, _ in live):
+        live = [(i, k) for i, k in live if i < cut_at]
+    return live
+
+
+def _oracle(read_at: datetime | None, rows: list[Any], cut_at: datetime | None) -> datetime | None:
+    live = _considered(read_at, rows, cut_at)
+    best = read_at
+    for candidate, _ in live:
+        if all(k is not None for i, k in live if i <= candidate):
+            best = candidate if best is None else max(best, candidate)
+    return best
+
+
+def test_every_small_input_matches_the_oracle_in_any_order():
+    pool = [_at(1), _at(2), _at(3)]
+    cells = [(instant, keyed) for instant in pool for keyed in (True, False)]
+    for size in range(4):
+        for combo in itertools.combinations_with_replacement(cells, size):
+            rows = [(i, _key(i) if keyed else None) for i, keyed in combo]
+            for read_at, cut_at in itertools.product([None, pool[0]], [None, *pool]):
+                live = [i for i, _ in rows if read_at is None or i > read_at]
+                if cut_at is not None and (
+                    (read_at is not None and cut_at <= read_at) or any(cut_at < i for i in live)
+                ):
+                    with pytest.raises(ValueError):
+                        notify.advance_read_at(read_at, rows, cut_at=cut_at)
+                    continue
+                got = notify.advance_read_at(read_at, rows, cut_at=cut_at)
+                assert got == _oracle(read_at, rows, cut_at)
+                assert read_at is None or (got is not None and got >= read_at)
+                assert got in [read_at, *(i for i, _ in rows)]
+                unkeyed = [i for i, k in _considered(read_at, rows, cut_at) if k is None]
+                assert all(got is None or got < i for i in unkeyed)
+                for order in itertools.permutations(rows):
+                    assert notify.advance_read_at(read_at, list(order), cut_at=cut_at) == got
