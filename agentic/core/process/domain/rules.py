@@ -123,8 +123,11 @@ from .task import (
     Subtask,
     TaskInput,
     TaskState,
+    TimeoutFact,
     TrackerPosted,
     apply,
+    returns,
+    timeout_rows,
 )
 
 # The return-limit decision and the count it reads live in `restart` (GH-593); every caller asks
@@ -163,8 +166,13 @@ def archivable_document(relative: str, task_id: str) -> bool:
     return relative == relative_path(task_id).as_posix()
 
 
-def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
-    """The `returns` patch after one more return of `pair`."""
+def record_return(state: TaskState, pair: Pair, *, category: str | None = None) -> dict[str, int]:
+    """The `returns` patch after one more return of `pair`. A caller added from GH-1075 on passes
+    `category=`, the category of the finding behind the return: a category no finding can return
+    a subtask with (`task.returns`, the `SYSTEM_CATEGORIES`) is a `ValueError`, a programming
+    error. Without one it behaves as it always did."""
+    if category is not None and not returns(category):
+        raise ValueError(f"a {category!r} finding returns no subtask: it cannot count a return")
     return {pair.key: state.get("changes_requested", {}).get(pair.key, 0) + 1}
 
 
@@ -173,7 +181,10 @@ def change_entry(
 ) -> ChangesRequested:
     """One entry of the return history: who returned, in which category, and the reason,
     so README §3's "same motive between the same roles" is computable. `attempt` (GH-593) is
-    written only above 1, on a return of a restarted attempt (`restart.attempt`)."""
+    written only above 1, on a return of a restarted attempt (`restart.attempt`). A `category` no
+    finding can return a subtask with (`task.returns`) is a `ValueError`."""
+    if not returns(category):
+        raise ValueError(f"a {category!r} finding returns no subtask: it has no change entry")
     entry: ChangesRequested = {"pair": pair.key, "category": category, "reason": reason}
     if attempt > 1:
         entry["attempt"] = attempt
@@ -4555,8 +4566,99 @@ def auto_resumable(state: TaskState) -> ResumeKey | None:
     not `escalated`'s own text, not any `failures[].error`. It reads the current epoch
     (`current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
     escalation carries a `MechanicalCause` (with no failure at all), or a mix of both. A pair at
-    its return limit, or any escalation with no cause that is not a `failure` one, is a human's."""
-    return _resume_key(current_epoch(state))
+    its return limit, or any escalation with no cause that is not a `failure` one, is a human's.
+
+    A `check_timeout` key (GH-1075) is returned only when `check_timeout_retake` holds over the
+    last such escalation's `timeouts` and `previous_timeouts`; `spent` counts the `check_timeout`
+    escalations of the whole `pause_log` strictly before it, `CHECK_TIMEOUT_RETAKES` of them or
+    more. `pause_kind` is unaffected: it reads `_resume_key`, so the pause stays external."""
+    key = _resume_key(current_epoch(state))
+    if key != "check_timeout":
+        return key
+    earlier = _check_timeout_escalations(state)
+    current = earlier.pop()
+    spent = len(earlier) >= CHECK_TIMEOUT_RETAKES
+    held = check_timeout_retake(
+        current.get("timeouts", []), current.get("previous_timeouts", []), spent
+    )
+    return key if held else None
+
+
+# The retakes a task's `check_timeout` pauses get in all: the first is free, the second runs only
+# on changed evidence (`check_timeout_retake`), a third timeout always goes to a human.
+# `auto_resume_limit` returns the same number, so the poller's count of `Auto-resumed:` comments
+# and the escalations `auto_resumable` counts stop together.
+CHECK_TIMEOUT_RETAKES = 2
+
+
+def _check_timeout_escalations(state: TaskState) -> list[EscalationPauseEntry]:
+    """The `escalation` entries of the whole `pause_log` whose cause is `check_timeout`, oldest
+    first. The whole log: a `ResumedPauseEntry` cannot tell a human's resume from a retake."""
+    return [
+        entry
+        for entry in state.get("pause_log", [])
+        if entry["kind"] == "escalation" and entry.get("cause") == "check_timeout"
+    ]
+
+
+def check_timeout_retake(
+    current: Sequence[TimeoutFact], previous: Sequence[TimeoutFact], spent: bool
+) -> bool:
+    """Whether a pause caused by checks that timed out (GH-1075) is retaken. Facts are matched
+    by `(head, check)`: a previous fact of another head or another check is no match. It retakes
+    only when it is not `spent`, there is a current fact, and every one has no match, has unknown
+    workers on its side or its match's, or has workers different from its match's: the same head
+    with the same workers ran out the same way, which a retake would only repeat.
+
+    The cap is on the evidence: a second retake needs changed evidence, and `spent` only stops a
+    run of timeouts whose evidence keeps changing."""
+    if spent or not current:
+        return False
+    matches = {(fact["head"], fact["check"]): fact for fact in previous}
+    for fact in current:
+        match = matches.get((fact["head"], fact["check"]))
+        if match is None:
+            continue
+        workers = presubmit.workers_of(fact)
+        if workers is not None and workers == presubmit.workers_of(match):
+            return False
+    return True
+
+
+def _timeout_text(fact: TimeoutFact) -> str:
+    workers = presubmit.workers_of(fact)
+    shown = "unknown" if workers is None else workers
+    return f"{fact['check']} {fact['seconds']:g}s with {shown} workers"
+
+
+def check_timeout_escalation(
+    state: TaskState, timeouts: Sequence[TimeoutFact], target: str, *, at: str
+) -> dict[str, Any]:
+    """The patch that pauses `target` on checks that timed out (GH-1075), and nothing else: class
+    `ci`, cause `check_timeout`, composed through `logged`, and the `timeout_rows` of `target` in
+    `findings`. It writes no `full_checks` record, no return and no `change_history`: a timeout
+    says nothing about the branch. The `escalation` entry carries `timeouts` and
+    `previous_timeouts`, both ordered by check; `previous_timeouts` is the `timeouts` of the
+    latest earlier `check_timeout` escalation of the whole `pause_log`, `[]` when there is none,
+    never read from `state["full_checks"]`.
+
+    The whole log is read, not the log since a human's reset, because a `ResumedPauseEntry` cannot
+    tell a human's resume from the poller's retake. An empty `timeouts` is a `ValueError`."""
+    if not timeouts:
+        raise ValueError("a check_timeout escalation needs the checks that timed out")
+    ordered = sorted(timeouts, key=lambda fact: fact["check"])
+    earlier = _check_timeout_escalations(state)
+    previous = earlier[-1].get("timeouts", []) if earlier else []
+    reason = (
+        f"checks timed out: {', '.join(_timeout_text(fact) for fact in ordered)}; "
+        f"previous: {', '.join(_timeout_text(fact) for fact in previous) or 'none'}"
+    )
+    patch = logged({**escalation("ci", reason, cause="check_timeout")}, at=at)
+    entry = patch["pause_log"][-1]
+    entry["timeouts"] = ordered
+    entry["previous_timeouts"] = list(previous)
+    patch["findings"] = timeout_rows(target, ordered, state.get("findings", []))
+    return patch
 
 
 def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
@@ -4658,7 +4760,14 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     chase on top of that is not this task's own risk to take -- six otherwise, the
     whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593); GitHub's rate
     limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s. A format
-    key (GH-1019) gets what `format_retakes.limit` leaves, which can be `0`: the hold is due."""
+    key (GH-1019) gets what `format_retakes.limit` leaves, which can be `0`: the hold is due.
+
+    `check_timeout` (GH-1075) gets `CHECK_TIMEOUT_RETAKES`, 2, ahead of the mechanical branch: the
+    poller's `resume_exhausted` stops at `prior >= limit`, `prior` counting the `Auto-resumed:`
+    comments, so a limit of 1 would block the second, evidence-based retake
+    `check_timeout_retake` allows, and the limit and `auto_resumable`'s `spent` agree on 2."""
+    if reason == "check_timeout":
+        return CHECK_TIMEOUT_RETAKES
     if reason in FORMAT_REASONS:
         return format_retakes.limit(state.get("format_retakes", {}), format_epoch_rules(state))
     if reason in MECHANICAL_CAUSES:
