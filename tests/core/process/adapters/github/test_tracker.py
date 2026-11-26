@@ -18,6 +18,7 @@ from agentic.core.process.application.ports import (
     TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
+    TrackerTransient,
     TrackerTurnRefused,
     TrackerUnreachable,
 )
@@ -201,6 +202,96 @@ def test_a_pull_request_answer_that_is_not_the_201_with_a_url_may_have_applied_a
     with pytest.raises(ValueError, match=r"^gh pr create failed: .*may have applied.*\(head b\)$"):
         tracker.open_pull_request("GH-12", "b", "t", "x")
     assert len(run.argv) == 2 and slept == []
+
+
+class _Raises:
+    """A `Run` that plays `steps` in order: an exception is raised, a `RecordingRun` answers."""
+
+    def __init__(self, *steps):
+        self.steps, self.calls = list(steps), 0
+
+    def __call__(self, args, **kwargs):
+        self.calls += 1
+        step = self.steps.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step(args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("run", "access", "cls", "phrase"),
+    [
+        pytest.param(
+            lambda: _Raises(*[RecordingRun("", _BAD_GATEWAY, 1)] * 3),
+            None,
+            TrackerTransient,
+            "met a transient GitHub error on each of 3 attempts",
+            id="base read keeps failing with a 502",
+        ),
+        pytest.param(
+            lambda: _Raises(*[subprocess.TimeoutExpired(["gh"], 60)] * 3),
+            None,
+            TrackerTimedOut,
+            "timed out on each of 3 attempts",
+            id="base read keeps timing out",
+        ),
+        pytest.param(
+            lambda: _Raises(_plain("main"), subprocess.TimeoutExpired(["gh"], 60)),
+            None,
+            TrackerTimedOut,
+            "timed out after 60 s",
+            id="POST times out",
+        ),
+        pytest.param(
+            lambda: _Raises(
+                _plain("main"), RecordingRun("", "error connecting to api.github.com", 1)
+            ),
+            None,
+            TrackerUnreachable,
+            "could not reach GitHub",
+            id="POST cannot reach GitHub",
+        ),
+        pytest.param(
+            lambda: _Raises(_plain("main")),
+            lambda: GithubAccess(gate=RefusingGate()),
+            TrackerTurnRefused,
+            "write turn refused",
+            id="POST turn refused",
+        ),
+        pytest.param(
+            lambda: _Raises(FileNotFoundError("gh")),
+            None,
+            ValueError,
+            "gh is not installed",
+            id="no gh",
+        ),
+    ],
+)
+def test_every_pull_request_failure_starts_gh_pr_create_failed_and_names_the_head(
+    run, access, cls, phrase
+):
+    policy, _ = _policy()
+    tracker = GhTracker(
+        Path("/p"), run(), lambda line: None, retry=policy, access=access() if access else None
+    )
+    with pytest.raises(cls) as raised:
+        tracker.open_pull_request("GH-12", "agentic/GH-12", "t", "x")
+    message = str(raised.value)
+    assert message.startswith("gh pr create failed: ") and phrase in message
+    assert message.endswith("(head agentic/GH-12)")
+    assert type(raised.value) is cls
+
+
+def test_a_rate_limited_pull_request_keeps_its_reset_and_status_under_the_prefix():
+    policy = GhRetry(max_wait_s=60, sleep=lambda seconds: None, now=lambda: 1_000.0)
+    # The base read is retried under the policy, and its reset is over the cap.
+    run = ScriptedRun(gh_fixture("rest_primary_limit_403.json"), _rate_limit_reads(9_000))
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(TrackerRateLimited) as raised:
+        tracker.open_pull_request("GH-12", "b", "t", "x")
+    assert str(raised.value).startswith("gh pr create failed: met the GitHub rate limit")
+    assert "(head b)" in str(raised.value)
+    assert raised.value.status == 403 and raised.value.resets_at is not None
 
 
 def test_open_pull_request_removes_its_file_when_gh_fails():

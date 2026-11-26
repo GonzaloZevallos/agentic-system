@@ -25,6 +25,8 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
     TrackerTurnRefused,
     TrackerUnreachable,
     tracker_failure_class,
@@ -516,6 +518,22 @@ def _body_file(text: str, *, newline: str | None = None) -> Iterator[str]:
         Path(path).unlink(missing_ok=True)
 
 
+_PR_CREATE_FAILED = "gh pr create failed:"
+
+
+def _as_pr_create_failure(exc: ValueError, head: str) -> ValueError:
+    """`exc` as the same class with a message that starts `gh pr create failed:` and ends
+    with the head: what `run_gh` says (`gh pr create timed out after 60 s`) goes after the
+    prefix, with its own `gh pr create ` dropped. Status and reset are kept."""
+    text = str(exc).removeprefix("gh pr create ")
+    message = f"{_PR_CREATE_FAILED} {text}{head}"
+    if isinstance(exc, TrackerRateLimited):
+        return TrackerRateLimited(message, status=exc.status, resets_at=exc.resets_at)
+    if isinstance(exc, TrackerCallFailed | TrackerRefused):
+        return type(exc)(message, status=exc.status)
+    return ValueError(message)
+
+
 def _unreadable(call: str, detail: str) -> ValueError:
     return ValueError(f"gh {call} failed: unreadable response; the write may have applied{detail}")
 
@@ -545,8 +563,18 @@ class GhTracker:
     ) -> str:
         if closes_issue and (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
-        # Every failure starts `gh pr create failed:` and names the head (GH-1089).
+        # Every failure starts `gh pr create failed:` and names the head (GH-1089): the ones
+        # built here already do; `run_gh`'s own (timeout, unreachable, retries spent, turn
+        # refused, no `gh`) are re-raised as the same class with that wording.
         head = f" (head {branch})"
+        try:
+            return self._create_pull_request(branch, title, body, head)
+        except (TrackerCallFailed, TrackerRefused, ValueError) as exc:
+            if str(exc).startswith(_PR_CREATE_FAILED):
+                raise
+            raise _as_pr_create_failure(exc, head) from (exc.__cause__ or exc)
+
+    def _create_pull_request(self, branch: str, title: str, body: str, head: str) -> str:
         # The base is the default branch, as `gh pr create` took it. A failed read ends the
         # call here: the POST is never attempted without a base.
         base = self._gh_read(
