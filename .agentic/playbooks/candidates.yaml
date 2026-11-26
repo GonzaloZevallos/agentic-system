@@ -2491,3 +2491,21 @@ candidates:
   - finding
   - return
   added_at: '2026-11-26T19:57:26.059+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a component, step or adapter, search the hand-written docs for it and update them in the same change. Regenerating the generated pages does not cover them.
+  confidence: medium
+  seen_in:
+  - GH-1152
+  sources:
+  - finding
+  added_at: '2026-11-26T23:49:05.013+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: Before you approve the integration, check that hand-written docs describing the changed components, steps or adapters were updated. Do not accept updates to the generated pages alone.
+  confidence: medium
+  seen_in:
+  - GH-1152
+  sources:
+  - finding
+  added_at: '2026-11-26T23:49:05.013+00:00'
