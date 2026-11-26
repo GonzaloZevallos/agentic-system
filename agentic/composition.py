@@ -355,7 +355,7 @@ def stage0_rotation(
     access = write_access(cfg, None, NullStopFlag())
     window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci, access)
     scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
-    candidate = ShellStage0Candidate(root, scratch, installed, origin)
+    candidate = ShellStage0Candidate(root, scratch, installed, origin, out=print)
     repo = system_repo(access)
     return Stage0Rotation(
         store=store,

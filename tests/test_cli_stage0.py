@@ -314,7 +314,7 @@ def smoking(
     yield runner, config_home, smoked
 
 
-def test_rotate_smokes_help_and_one_dry_poll_per_installed_product(
+def test_rotate_smokes_help_and_one_local_product_smoke_per_installed_product(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     smoking: tuple[RecordingRunner, Path, list[str]],
@@ -336,8 +336,8 @@ def test_rotate_smokes_help_and_one_dry_poll_per_installed_product(
     assert smoked == ["Green"]
     assert runner.calls == [
         ((agentic, "--help"), stage),
-        ((agentic, "poll", "--product-dir", "/srv/a", "--dry-run", "--once"), stage),
-        ((agentic, "poll", "--product-dir", "/srv/b", "--dry-run", "--once"), stage),
+        ((agentic, "stage0", "smoke", "--product-dir", "/srv/a"), stage),
+        ((agentic, "stage0", "smoke", "--product-dir", "/srv/b"), stage),
     ]
     assert capsys.readouterr().out == ""
 
