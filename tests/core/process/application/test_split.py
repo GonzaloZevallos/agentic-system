@@ -494,7 +494,13 @@ async def test_only_the_terminal_child_of_a_part_closes_the_parts_issue(tmp_path
     await split(part, Configuration(product_dir=tmp_path), ports)
 
     bodies = [body for _, body in ports.tracker.opened_issues]
-    assert [pull_request.closes_line(body) for body in bodies] == ["", "", "Closes #60"]
+    assert [
+        pull_request.closes_lines(pull_request.closing_numbers(body, None)) for body in bodies
+    ] == [
+        "",
+        "",
+        "Closes #60",
+    ]
 
 
 async def test_a_task_that_is_not_a_part_writes_no_closes_marker(tmp_path):

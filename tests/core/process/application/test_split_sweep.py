@@ -728,3 +728,99 @@ def test_append_blocker_leaves_a_fenced_line_untouched():
     assert (
         carve_out.append_blocker(old, 5, [5, 9]) == "```\nBlocked by: #5\n```\nBlocked by: #5, #9"
     )
+
+
+# --- the carrier gate (GH-1104) -------------------------------------------------------
+
+MARKED = "Part of the narrowed work.\n\n<!-- agentic-closes: #5 -->\n"
+HELD = "agentic: split: GH-5: close held by #20, #21"
+
+
+def carrier_ports(*, recorded=False, **more):
+    """GH-5 split into #8 and #9, both merged; #20 and #21 are open issues that were never
+    recorded as parts and carry only the parent's marker; #7 still waits on the parent."""
+    state = split_state(**more)
+    if recorded:
+        state["split_repointed_at"] = "2026-11-23T19:50:00+00:00"
+        state["split_closed_at"] = "2026-11-23T19:59:00+00:00"
+    return close_ports(
+        state, **{"7": "Blocked by: #5\n\nbody", "20": MARKED, "21": MARKED + "more"}
+    )
+
+
+def test_open_carriers_hold_a_parent_whose_close_is_already_recorded():
+    """The incident: every part merged, `split_closed_at` recorded, two issues carry the marker."""
+    ports = carrier_ports(recorded=True)
+    before = ports.documents.load("GH-5")
+
+    assert judge(ports, report_failures=True) == [HELD]
+    assert ports.tracker.closed_issues == [] and ports.tracker.updated_bodies == []
+    assert ports.documents.load("GH-5") == before
+
+
+def test_open_carriers_hold_the_re_point_and_its_record():
+    ports = carrier_ports()
+
+    assert judge(ports, report_failures=True) == [HELD]
+    assert ports.tracker.updated_bodies == [] and ports.tracker.commented_issues == []
+    assert ports.tracker.closed_issues == []
+    document = ports.documents.load("GH-5")
+    assert "split_repointed_at" not in document and "split_closed_at" not in document
+
+
+def test_a_held_parent_is_silent_without_report_failures():
+    ports = carrier_ports()
+
+    assert judge(ports) == [] and ports.tracker.closed_issues == []
+
+
+def test_a_carrier_that_is_closed_lets_the_parent_be_re_pointed_recorded_and_closed():
+    """Also the carrier closed as not planned: it is no longer in the open list."""
+    ports = carrier_ports()
+    assert judge(ports) == []
+
+    ports.inbox.refs = [ref for ref in ports.inbox.refs if not ref.url.endswith(("/20", "/21"))]
+
+    assert judge(ports) == [
+        "agentic: split: GH-5: 1 dependents re-pointed",
+        "agentic: split: GH-5: parent closed",
+    ]
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9\n\nbody")]
+    assert ports.tracker.closed_issues == ["GH-5"]
+    assert {"split_repointed_at", "split_closed_at"} <= set(ports.documents.load("GH-5"))
+
+
+def test_a_recorded_part_carrying_the_marker_is_not_a_carrier():
+    """GH-592: the terminal child of a split-again part carries the marker and is a part."""
+    ports = close_ports(split_state(), **{"7": "Blocked by: #5", "9": MARKED})
+    ports.documents.save({"id": "GH-9", "status": "split", "title": "t", "description": "d"})
+
+    assert judge(ports) == [
+        "agentic: split: GH-5: 1 dependents re-pointed",
+        "agentic: split: GH-5: parent closed",
+    ]
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
+def test_a_marker_quoted_in_backticks_or_a_fence_is_not_a_carrier():
+    quoted = (
+        "Narrowed: the line `<!-- agentic-closes: #5 -->` moved.\n\n"
+        "```\n<!-- agentic-closes: #5 -->\n```"
+    )
+    ports = close_ports(split_state(), **{"20": quoted})
+
+    assert judge(ports) == ["agentic: split: GH-5: parent closed"]
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
+def test_a_failed_read_of_the_open_issues_closes_and_re_points_nothing():
+    pending = carrier_ports()
+    pending.inbox.refs_error = ValueError("gh issue list failed")
+    assert judge(pending) == []
+    assert pending.tracker.closed_issues == [] and pending.tracker.updated_bodies == []
+    assert "split_repointed_at" not in pending.documents.load("GH-5")
+
+    recorded = carrier_ports(recorded=True)
+    recorded.inbox.refs_error = OSError("gh unreachable")
+    assert judge(recorded) == []
+    assert recorded.tracker.closed_issues == [] and recorded.tracker.updated_bodies == []

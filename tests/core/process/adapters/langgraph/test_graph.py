@@ -184,7 +184,8 @@ def compiled(
             # pass one run stored cannot show up as a reused row in the next run's prompt.
             check_results=None,
             sample_app=sample_app,
-            **({"inbox": inbox} if inbox is not None else {}),
+            # GH-1104: delivery reads the issue body now; the default inbox answers one.
+            inbox=inbox if inbox is not None else MemoryInbox(unseeded_body="Issue body."),
             **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
             **({"now": now} if now is not None else {}),
         )

@@ -118,3 +118,18 @@ def test_the_share_is_the_only_source_of_the_count(share):
     commands = MemoryCommands()
     gate_over(commands, {"tests": "t {workers}"}, scheduler=FakeCheckScheduler(share))()
     assert commands.ran[0][1] == f"t {share}"
+
+
+def test_a_command_with_the_token_and_no_grant_raises_instead_of_reaching_the_shell():
+    gate = gate_over(MemoryCommands(), {"tests": "pytest -n {workers}"})
+    with pytest.raises(presubmit.UngrantedWorkers, match="check scheduler"):
+        gate._sized("pytest -n {workers}")
+    assert gate._sized("pytest -x") == "pytest -x"
+
+
+def test_a_command_with_the_token_and_a_grant_is_sized_to_the_share():
+    scheduler = FakeCheckScheduler(5)
+    gate = gate_over(MemoryCommands(), {"tests": "pytest"}, scheduler=scheduler)
+    with gate._share():
+        assert gate._sized("pytest -n {workers} --dist load") == "pytest -n 5 --dist load"
+    assert scheduler.released

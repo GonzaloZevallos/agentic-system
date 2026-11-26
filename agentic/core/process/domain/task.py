@@ -45,6 +45,8 @@ from .presubmit import (
     FlakeGate,
     GateForm,
     RedCheck,
+    TimeoutFact,
+    timeout_line,
 )
 from .reaping import ReapedProcess
 from .refusal import OutputRefusal as OutputRefusal
@@ -107,10 +109,15 @@ FindingCategory = Literal[
     "spec-scope",
     "process-uncommitted",
     "process-suite-red",
+    "process-check-timeout",
     "plan-calibration",
     "plan-invariant",
     "integration-crosscut",
 ]
+# The categories only the system writes (GH-1075): a check that timed out with no failing test is
+# an observation about the machine, not a defect of the branch. No role is offered one, none
+# returns a subtask, and `timeout_rows` is the only place that creates a row with one.
+SYSTEM_CATEGORIES: frozenset[str] = frozenset({"process-check-timeout"})
 # What a text finding is about (the Tech Writer's review): `copy-unwritten` is a person-facing
 # text in the diff that Tech Writer never wrote, `copy-criteria-written` one it wrote that
 # breaks the product's writing criteria, `copy-criteria-changed` one the Developer changed
@@ -221,6 +228,7 @@ MechanicalCause = Literal[
     "ci_gh_unreadable",
     "ci_run_unfinished",
     "delivery_transient",
+    "check_timeout",
 ]
 # The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
 # `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
@@ -1278,6 +1286,16 @@ class GateRecord(TypedDict, total=False):
     overdue: bool
 
 
+# The most timeouts one `RoleRun` keeps: a gate has a handful of checks, so more than this is a
+# runaway, not a record.
+ROLE_TIMEOUTS_MAX = 20
+
+
+def capped_timeouts(timeouts: Sequence[TimeoutFact]) -> list[TimeoutFact]:
+    """The first `ROLE_TIMEOUTS_MAX` of `timeouts`, in the order given."""
+    return list(timeouts[:ROLE_TIMEOUTS_MAX])
+
+
 class RoleRun(TypedDict):
     """One successful run of a role. `section` is what it wrote (a role may write
     several: one per subtask, one per interview); `version` numbers the deliveries of
@@ -1419,6 +1437,10 @@ class RoleRun(TypedDict):
     # (`.get`). The merge gate reads the pair; nothing else does.
     perf_verdict: NotRequired[Literal["approved", "returned", "unverified"]]
     perf_head: NotRequired[str]
+    # The checks of the delivering attempt's last gate that timed out with no failing test
+    # (GH-1075), ordered by check and capped at `ROLE_TIMEOUTS_MAX` (`capped_timeouts`).
+    # Absent on a run recorded before this field existed, and on one with no timeout.
+    timeouts: NotRequired[list[TimeoutFact]]
 
 
 class InterviewStats(TypedDict):
@@ -1563,6 +1585,48 @@ class FindingRecord(TypedDict):
     landing_checks: NotRequired[list[str]]
 
 
+def system_written(category: str) -> bool:
+    """Whether `category` is one only the system writes (`SYSTEM_CATEGORIES`)."""
+    return category in SYSTEM_CATEGORIES
+
+
+def returns(category: str) -> bool:
+    """Whether a finding of `category` can return a subtask: false for a system-written one."""
+    return not system_written(category)
+
+
+def timeout_rows(
+    subtask: str, timeouts: Sequence[TimeoutFact], existing_findings: Sequence[FindingRecord]
+) -> list[FindingRecord]:
+    """The rows for the checks that timed out (GH-1075), one per check, in the order given: an
+    `observation` of scope `plan` at `checks:<check>`, with the fixed claim `timeout_line` writes.
+    A check adds none while an `open` row of `subtask` is already at its location, whatever its
+    seconds: the dedup is on `(subtask, location)`, never on the claim. The only place a row
+    with a `SYSTEM_CATEGORIES` category is created; `version` is 0, no review pass raised it."""
+    taken = {
+        (row["subtask"], row["location"]) for row in existing_findings if row["status"] == "open"
+    }
+    rows: list[FindingRecord] = []
+    for fact in timeouts:
+        location = f"checks:{fact['check']}"
+        if (subtask, location) in taken:
+            continue
+        taken.add((subtask, location))
+        rows.append(
+            {
+                "subtask": subtask,
+                "version": 0,
+                "location": location,
+                "claim": timeout_line(fact),
+                "severity": "observation",
+                "scope": "plan",
+                "category": "process-check-timeout",
+                "status": "open",
+            }
+        )
+    return rows
+
+
 class DesignItemRecord(TypedDict):
     """One remark from a lead's (UX Lead's or UI Lead's) walk or comparisons, or from
     PM's consolidation (ADR-0040), as `design_items` keeps it: the role that raised it
@@ -1684,6 +1748,10 @@ class EscalationPauseEntry(TypedDict):
     # Why a spec delivery's `questions` pause was raised (GH-594): written only when the patch
     # carried one, which needs a spec; never `None`, so a pause without a spec reads as before.
     spec_cause: NotRequired[SpecEscalationCause]
+    # The checks that timed out behind a `check_timeout` escalation, and those of the escalation
+    # before it (GH-1075), both ordered by check. Absent on every other entry.
+    timeouts: NotRequired[list[TimeoutFact]]
+    previous_timeouts: NotRequired[list[TimeoutFact]]
 
 
 class FailurePauseEntry(TypedDict):

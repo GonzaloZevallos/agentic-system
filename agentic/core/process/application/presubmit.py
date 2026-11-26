@@ -670,8 +670,11 @@ class CheckoutPresubmit:
 
     def _sized(self, command: str) -> str:
         """`{workers}` in a declared command, sized to the share held; the command as it is
-        without a grant or without the placeholder."""
+        without the placeholder. Without a grant a command that still holds the placeholder
+        raises `UngrantedWorkers`: the shell would take the token as text (GH-979)."""
         if self.grant is None:
+            if presubmit.WORKERS_TOKEN in command:
+                raise presubmit.UngrantedWorkers(command)
             return command
         return presubmit.workers_command(command, self.grant.share)
 

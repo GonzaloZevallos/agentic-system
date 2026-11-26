@@ -9,7 +9,20 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
+
+from agentic.core.process.domain.github_access import Turn
+
+
+@dataclass(frozen=True)
+class StubGate:
+    """A frozen, hashable `WriteGate` that grants every turn at once (GH-1083)."""
+
+    cap_s: float = 30.0
+
+    def take(self, remaining_s: float) -> Turn:
+        return Turn("granted", 0.0)
 
 
 class RecordingRun:

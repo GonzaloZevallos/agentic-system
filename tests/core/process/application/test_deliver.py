@@ -23,7 +23,7 @@ from agentic.core.process.domain import document, pull_request, rate_limit, rule
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeReaper, MemoryStack, memory_ports, unstamped
+from tests.fakes import FakeReaper, MemoryInbox, MemoryStack, memory_ports, unstamped
 
 pytestmark = pytest.mark.anyio
 
@@ -1180,14 +1180,95 @@ async def test_a_setup_that_fails_escalates_as_ever_and_clears_the_publication_o
 # --- GH-592: the terminal child of a part that split also closes the part's issue ---------
 
 
-async def test_the_terminal_child_of_a_part_closes_the_parts_issue_next_to_its_own(cfg):
-    description = f"Last slice.\n\n{pull_request.closes_marker(346)}"
-    ports = memory_ports()
-    await deliver({**TASK, "description": description}, cfg, ports)
+def _inbox_with(body: str | None = None, **kwargs):
+    """An inbox whose GH-12 has `body` now (the issue as it stands at delivery)."""
+    seeded = {} if body is None else {"12": {"id": "GH-12", "title": "", "description": body}}
+    return MemoryInbox(unseeded_body="Issue body.", **seeded, **kwargs)
 
-    body = ports.tracker.pull_requests[0][2]
-    assert body.startswith("Closes #346\n\n## PM")
+
+async def test_the_terminal_child_of_a_part_closes_the_parts_issue_next_to_its_own(cfg):
+    body = f"Last slice.\n\n{pull_request.closes_marker(346)}"
+    ports = memory_ports(inbox=_inbox_with(body))
+    await deliver({**TASK, "description": body}, cfg, ports)
+
+    text = ports.tracker.pull_requests[0][2]
+    assert text.startswith("Closes #346\n\n## PM")
     assert ports.tracker.closes_issue_calls == [True]  # the adapter adds the task's own line
+
+
+async def test_a_marker_removed_from_the_issue_before_delivery_writes_no_closes_line(cfg):
+    stale = f"Last slice.\n\n{pull_request.closes_marker(346)}"
+    ports = memory_ports(inbox=_inbox_with("Narrowed: the domain only."))
+
+    await deliver({**TASK, "description": stale}, cfg, ports)
+
+    assert "Closes" not in ports.tracker.pull_requests[0][2]
+
+
+async def test_every_marker_of_the_current_body_gets_a_closes_line_in_order(cfg):
+    body = f"{pull_request.closes_marker(346)}\n{pull_request.closes_marker(345)}"
+    ports = memory_ports(inbox=_inbox_with(body))
+
+    await deliver(TASK, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2].startswith("Closes #346\nCloses #345\n\n## PM")
+
+
+async def test_a_marker_quoted_in_the_current_body_writes_no_closes_line(cfg):
+    ports = memory_ports(inbox=_inbox_with(f"Drops `{pull_request.closes_marker(346)}` for now."))
+    await deliver(TASK, cfg, ports)
+    assert "Closes" not in ports.tracker.pull_requests[0][2]
+
+
+async def test_the_body_read_at_delivery_is_never_stored(cfg):
+    ports = memory_ports(inbox=_inbox_with(pull_request.closes_marker(346)))
+    await deliver(TASK, cfg, ports)
+    assert all(
+        pull_request.closes_marker(346) not in str(saved.get("description", ""))
+        for saved in ports.documents.saved
+    )
+
+
+async def test_an_unreachable_issue_body_read_escalates_transient_and_pushes_nothing(cfg):
+    inbox = _inbox_with()
+    inbox.task_exceptions[12] = TrackerUnreachable("down")
+    ports = memory_ports(inbox=inbox)
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["escalation_class"] == "system_delivery"
+    assert patch["escalation_cause"] == "delivery_transient"
+    assert ports.workspace.pushes == [] and ports.tracker.pull_requests == []
+
+
+async def test_an_empty_issue_body_escalates_as_a_failure_and_pushes_nothing(cfg):
+    ports = memory_ports(inbox=_inbox_with(task_errors={12}))
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["escalation_class"] == "failure"
+    assert ports.workspace.pushes == [] and ports.tracker.pull_requests == []
+
+
+async def test_a_rate_limited_issue_body_read_pauses_instead_of_escalating(cfg):
+    inbox = _inbox_with()
+    inbox.task_exceptions[12] = TrackerRateLimited("429")
+    ports = memory_ports(inbox=inbox)
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch.get("escalation_class") != "system_delivery"
+    assert ports.workspace.pushes == [] and ports.tracker.pull_requests == []
+
+
+async def test_a_run_with_no_issue_falls_back_to_the_stored_description(cfg):
+    description = f"Last slice.\n\n{pull_request.closes_marker(346)}"
+    ports = memory_ports(inbox=_inbox_with())
+
+    await deliver({**TASK, "id": "eval-1", "description": description}, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2].startswith("Closes #346\n\n## PM")
+    assert ports.inbox.task_calls == 0
 
 
 async def test_a_task_without_the_closes_marker_adds_no_closing_line(cfg):
