@@ -71,6 +71,7 @@ from .ports import (
     MergeFailed,
     Ports,
     RunRegistry,
+    TrackerTurnRefused,
     TrackerUnreachable,
     Upstream,
 )
@@ -1329,6 +1330,16 @@ def _merge(
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
+    except TrackerTurnRefused as exc:
+        # The turn of `gh pr merge` was refused or stopped (GH-1083): `gh` never launched, so
+        # nothing merged, and unlike a lost response it is no `gh_unreadable`. The intent is
+        # withdrawn and nothing is counted, commented or refused; the next round decides again.
+        ports.documents.record_closure(task_id, {"auto_merge_head": ""})
+        log(
+            f"agentic: merge: {task_id}: the write turn was refused ({exc}): "
+            "nothing merged, next round retries"
+        )
+        return MergeResult("stopped", "turn_refused")
     except TrackerUnreachable as exc:
         # Only the `repo view` read can reach here (GH-290): nothing was sent to merge, so
         # the intent is withdrawn and nothing is counted or commented; the next round decides

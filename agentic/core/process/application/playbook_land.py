@@ -15,7 +15,14 @@ from typing import Literal
 from ..domain import ci, master_gain, rules
 from ..domain import playbook_candidates as pc
 from ..domain import playbook_land as pl
-from .ports import GitError, LandRecord, ListedPullRequest, MergeCallFailed, Ports
+from .ports import (
+    GitError,
+    LandRecord,
+    ListedPullRequest,
+    MergeCallFailed,
+    Ports,
+    TrackerTurnRefused,
+)
 from .reflect_run import BRANCH
 
 _PREFIX = pc.PLAYBOOKS_DIR + "/"
@@ -113,6 +120,8 @@ def _verdict(
 def _merged(ports: Ports, pr: ListedPullRequest, verdict: pl.Merge) -> pl.Verdict:
     try:
         ports.tracker.merge(pr.url, verdict.head, method="merge")
+    except TrackerTurnRefused:
+        return pl.Failed("turn_refused")  # `gh` never launched: not a failed merge call
     except MergeCallFailed as exc:
         if exc.failure == "no_merge_method":
             return pl.Refuse("no_merge_commit")
