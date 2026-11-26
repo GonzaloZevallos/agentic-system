@@ -367,14 +367,14 @@ def test_red_smoke_with_default_policy_keeps_current_and_never_rejects() -> None
     assert w.out == [f"smoke_failed: {B}"]
 
 
-@pytest.mark.parametrize("where", ["prepare", "smoke"])
-def test_unavailable_keeps_and_promotes_nothing(where: str) -> None:
+@pytest.mark.parametrize(("where", "cause"), [("prepare", "clone"), ("smoke", "smoke_timeout")])
+def test_unavailable_keeps_and_promotes_nothing(where: str, cause: str) -> None:
     if where == "prepare":
         w = World(prepared=Unavailable("clone"))
     else:
         w = World(smokes=[Unavailable("smoke_timeout")])
     w.run()
-    assert w.out == ["keep: unavailable"]
+    assert w.out == [f"keep: unavailable ({cause})"]
     assert w.calls("promote") == []
     assert w.calls("switch_current") == []
     assert w.calls("reject") == []
@@ -594,9 +594,11 @@ def test_default_policy_removes_the_partial_and_never_rejects() -> None:
     log: list[str] = []
     store = Store(log)
     policy = DefaultFailurePolicy(store)
-    assert policy.prepare_failed(B, Unavailable("clone")) == Stop("keep: unavailable")
+    assert policy.prepare_failed(B, Unavailable("clone")) == Stop("keep: unavailable (clone)")
     assert policy.smoke_failed(B, f"{B}.partial", Red()) == Stop(f"smoke_failed: {B}")
-    assert policy.smoke_failed(B, f"{B}.partial", Unavailable("disk")) == Stop("keep: unavailable")
+    assert policy.smoke_failed(B, f"{B}.partial", Unavailable("disk")) == Stop(
+        "keep: unavailable (disk)"
+    )
     policy.succeeded(B)
     assert log == [f"remove_partial {B}"] * 3
     assert store.rejected_calls == []
