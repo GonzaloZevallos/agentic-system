@@ -2481,3 +2481,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-26T16:51:25.926+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never loosen a guard (cap, threshold, allowlist) outside the brief's seams to make a check pass. Fit the change within the limit, or record the check output showing it cannot hold under Decisions and assumptions.
+  confidence: medium
+  seen_in:
+  - GH-1129
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-26T19:57:26.059+00:00'
