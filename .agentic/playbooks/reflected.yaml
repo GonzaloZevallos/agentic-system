@@ -1667,4 +1667,4 @@ tasks:
     cost_usd: 0.0267
   GH-1104@review:
     cost_usd: 0.0
-    attempts: 1
+    attempts: 2
