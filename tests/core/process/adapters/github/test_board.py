@@ -1013,6 +1013,9 @@ def test_gh_passes_its_write_flag_to_run_gh(monkeypatch):
 
 
 def test_a_refused_turn_stops_the_write_with_its_own_line_once_and_no_second_call():
+    """The stop contract the board already had: a write that stops with nothing sent raises its
+    cause (here `TrackerTurnRefused`) instead of returning an empty `written`; `board_sync`
+    reads the raise as a failed round and rests 15 minutes."""
     gh = FakeGh([identity()])
     gate = RefusingGate()
     lines: list[str] = []
