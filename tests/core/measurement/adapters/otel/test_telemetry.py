@@ -992,6 +992,29 @@ def test_a_run_of_only_reused_rows_emits_checks_but_no_duration_sample(spans):
     assert "agentic.presubmit.duration" not in attributes
 
 
+def test_a_kept_row_counts_as_reused_and_is_never_sampled(spans):
+    kept = _check(duration_s=0.0) | {"mode": "affected-only", "reused_from": "a" * 40}
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": [[kept]], "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
+    assert "agentic.presubmit.duration" not in attributes
+
+
+def test_the_exit_8_row_then_the_kept_row_samples_only_the_exit_8_seconds(spans):
+    exit_8 = _check(passed=False, duration_s=5.0) | {
+        "mode": "affected-only",
+        "affected_base": "a" * 40,
+        "exit_code": 8,
+    }
+    kept = _check(duration_s=0.0) | {"mode": "affected-only", "reused_from": "a" * 40}
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": [[exit_8, kept]], "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
+    assert list(attributes["agentic.presubmit.duration"]) == ["tests=5.0"]
+
+
 def test_a_mode_on_a_row_changes_neither_the_cells_nor_the_durations(spans):
     plain = [[_check(duration_s=1.0), _check(name="lint", duration_s=2.0)]]
     moded = [[{**row, "mode": "full"} for row in plain[0]]]

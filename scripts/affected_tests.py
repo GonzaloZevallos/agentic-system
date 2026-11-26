@@ -218,6 +218,11 @@ TABLE: tuple[Row, ...] = (
         "the recorded page of the issues listing GhIssueListing parses",
     ),
     Row(
+        "tests/core/process/adapters/github/fixtures/*_[0-9][0-9][0-9]*.json",
+        ("tests/core/process/adapters/github/test_tracker.py",),
+        "the answers of `gh api -i` the moved writes (pr create, comment, edit) are run against",
+    ),
+    Row(
         "tests/core/process/adapters/github/fixtures/commit_ci_synthetic.json",
         ("tests/core/process/adapters/github/test_commit_ci.py",),
         "the synthetic answer to COMMIT_CI_QUERY the by-sha CI reader is run against",

@@ -66,3 +66,25 @@ Lo que la regla no prohíbe, y conviene decirlo porque se parece: que el humano 
 checkout del producto mientras una corrida trabaja sobre ese mismo repositorio. Ese es el
 caso normal del sistema desarrollándose a sí mismo. Lo prohibido es que el repositorio del
 producto sea el que ejecuta, no que alguien lo toque.
+
+## Adenda (GH-1142): el guard hace mecánica la regla de no escribir en el checkout del producto
+
+El 2026-11-24 el integrate de GH-1107 dejó dos merges en el `master` del checkout del
+producto. El worktree de la tarea había quedado a medio borrar: la carpeta existía, sin su
+archivo `.git`. Un git con esa carpeta como cwd sube por los padres, encuentra el `.git` del
+producto y escribe ahí. La regla de este ADR (el sistema nunca escribe en el checkout del
+producto) se cumplía por convención y no por código.
+
+Ahora la hace cumplir `adapters/git/guard.require_checkout(path, worktrees_root)`:
+
+- Reduce la ruta a la carpeta de la tarea con `worktree_sweep.task_of` (no hay una segunda
+  expresión regular) y exige que `<carpeta>/.git` sea un archivo regular. Un `.git` ausente o
+  que es un directorio levanta `ForeignCheckout` (un `GitError`).
+- Nunca niega una ruta fuera de `.agentic/worktrees` ni una carpeta que `task_of` no reconoce
+  (`integration-<hex>`, `perf-*`).
+- `GitWorkspace` lo llama antes de cada git con `cwd` (y de `repository_at`, que usa `-C`); el
+  hook Bash del Developer lo aplica al directorio efectivo del comando (`NO_CHECKOUT`). Un
+  subdirectorio de un worktree válido sigue permitido.
+
+Un `checks` del producto que corra git por su cuenta no pasa por el guard: queda como riesgo
+conocido.

@@ -57,6 +57,7 @@ from .poll import (
     LANDING,
     _merge_facts,
     ci_gate,
+    eval_set_unread_of,
     read_conflicts,
     with_ci,
     with_red_on_base,
@@ -71,6 +72,7 @@ from .ports import (
     MergeFailed,
     Ports,
     RunRegistry,
+    TrackerTurnRefused,
     TrackerUnreachable,
     Upstream,
 )
@@ -292,15 +294,18 @@ def merge_task(
     stack_memo = StackMemo()
 
     def decide(document: TaskState) -> rules.MergeFacts:
-        base_facts = _facts(
-            task_id,
-            document,
-            pull_request,
-            eval_set,
-            number,
-            master,
-            touched,
-            comments,
+        base_facts = replace(
+            _facts(
+                task_id,
+                document,
+                pull_request,
+                eval_set,
+                number,
+                master,
+                touched,
+                comments,
+            ),
+            eval_set_unread=eval_set_unread_of(upstream, eval_set),
         )
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
@@ -428,6 +433,7 @@ def merge_task(
             report=report,
             cause=cause,
             bodies=bodies,
+            left_out=upstream.left_out,
         )
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
@@ -1329,6 +1335,16 @@ def _merge(
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
+    except TrackerTurnRefused as exc:
+        # The turn of `gh pr merge` was refused or stopped (GH-1083): `gh` never launched, so
+        # nothing merged, and unlike a lost response it is no `gh_unreadable`. The intent is
+        # withdrawn and nothing is counted, commented or refused; the next round decides again.
+        ports.documents.record_closure(task_id, {"auto_merge_head": ""})
+        log(
+            f"agentic: merge: {task_id}: the write turn was refused ({exc}): "
+            "nothing merged, next round retries"
+        )
+        return MergeResult("stopped", "turn_refused")
     except TrackerUnreachable as exc:
         # Only the `repo view` read can reach here (GH-290): nothing was sent to merge, so
         # the intent is withdrawn and nothing is counted or commented; the next round decides
@@ -1673,6 +1689,7 @@ def _refuse(
     report: ci.CiReport | ci.CiUnreadable | None = None,
     cause: CiCause | None = None,
     bodies: Sequence[str] = (),
+    left_out: Sequence[str] = (),
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A
@@ -1714,6 +1731,11 @@ def _refuse(
         ):
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts, report), closing) if part
+            )
+        if facts is not None and facts.eval_set_unread == "local_commits":
+            # GH-1142: the refusal id stays `eval_set_unreadable`; the evidence names the cause.
+            text = "\n\n".join(
+                part for part in (first, rules.local_commits_note(left_out), closing) if part
             )
         if facts is not None and reason == "drawing_unsettled":
             text = "\n\n".join(part for part in (first, _drawing_evidence(facts), closing) if part)

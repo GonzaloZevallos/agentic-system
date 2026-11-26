@@ -87,7 +87,7 @@ class CountingTracker(MemoryTracker):
 
 class CountingInbox(MemoryInbox):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(unseeded_body="Issue body.")
         self.calls: Counter[str] = Counter()
 
     def open_issue_refs(self) -> list[IssueRef]:

@@ -13,6 +13,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
