@@ -155,6 +155,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         flake_gate="delivery",
         readiness=readiness_of(ports, base, cfg.check_cores),
         docs=ports.stack.docs(base),
+        # The delivery gate alone moves its affected base to the last green head (GH-1125):
+        # the integrator shares this function and the `run_check` instance below never does.
+        advance_base=True,
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so

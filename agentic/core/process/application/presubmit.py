@@ -19,7 +19,7 @@ from pathlib import Path
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
-from ..domain import presubmit, run_check
+from ..domain import forward_base, presubmit, run_check
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.docs import Docs
 from ..domain.presubmit import (
@@ -123,6 +123,18 @@ def readiness_of(ports: Ports, base: str, cores: int) -> Readiness | None:
     return Readiness(exits, ports.load_reader, cores)
 
 
+@dataclass(frozen=True)
+class ForwardForm:
+    """What one check's affected form is planned against in one gate call (GH-1125): the form
+    `plan_form` chose, the base it is measured against and the paths of that base. Built once
+    per check by `CheckoutPresubmit._planned` from a single `forward_base.base_for`; nothing
+    after it recomputes the base or reads the workspace for it."""
+
+    form: PlannedForm
+    base: str
+    paths: tuple[str, ...] | None
+
+
 class CheckoutPresubmit:
     """The `Presubmit` over one Developer's checkout. One per Developer run: the
     refusals it has left carry over to the retry."""
@@ -147,6 +159,8 @@ class CheckoutPresubmit:
         timeouts: Mapping[str, float] | None = None,
         readiness: Readiness | None = None,
         docs: Docs | None = None,
+        advance_base: bool = False,
+        green_heads: Mapping[str, str] | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -205,6 +219,14 @@ class CheckoutPresubmit:
         # The one line the restore leaves in the Developer's section (what it did, or why it
         # did not), None when it had nothing to say.
         self.docs_note: str | None = None
+        # The Developer's delivery gate only (GH-1125): a check's affected form is measured
+        # against `green_heads[check]`, the head it was last green on, instead of the task's
+        # base, and an empty selection keeps that verdict. `green_heads` is the starting G per
+        # check, filled by part 2 of GH-1069 from `RoleRun`; this instance moves it after each
+        # call (`forward_base.advance_greens`). Off, and empty, is the gate of before, byte for
+        # byte; `RunCheck` never reads or writes it.
+        self.advance_base = advance_base
+        self.green_heads: dict[str, str] = dict(green_heads or {})
         # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
         # environment fingerprint, and whether this checkout may store what it runs.
         self._tree: str | None = None
@@ -408,13 +430,14 @@ class CheckoutPresubmit:
                 witness_reason = self._run_witness(self.witness)
             plan = self.affected
             if plan is None:
-                planned = dict.fromkeys(self.checks, presubmit.UNPLANNED)
+                forms = dict.fromkeys(self.checks, presubmit.UNPLANNED)
                 results = self._run_unplanned()
             else:
                 planned = self._planned(plan, head)
                 results = self._run_under_plan(plan, planned)
+                forms = {name: forward.form for name, forward in planned.items()}
             self.head, self.results = head, results
-            self.forms.append(self._settled(planned, results))
+            self.forms.append(self._settled(forms, results))
             self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
             self.gates.append(
@@ -432,6 +455,10 @@ class CheckoutPresubmit:
             # checkout the witness doubts proves nothing about the tree.
             if self.witness is None or witness_reason is None:
                 self._store_passes(results)
+                if self.advance_base:
+                    self.green_heads = forward_base.advance_greens(
+                        self.green_heads, results, head, frozenset(self.stuck_full)
+                    )
             return witness_reason
 
     @contextmanager
@@ -488,14 +515,45 @@ class CheckoutPresubmit:
         except (GitError, OSError):
             return None
 
-    def _planned(self, plan: AffectedPlan, head: str) -> dict[str, PlannedForm]:
+    def _since(self, green: str, head: str) -> tuple[bool | None, tuple[str, ...] | None]:
+        """Whether `green` is an ancestor of `head` and what changed from it to `head`: one
+        look of each, `None` when git cannot say (unreadable), and no diff for a `green` that is
+        not an ancestor, since the task's base stands for it."""
+        workspace = self.ports.workspace
+        try:
+            ancestor = workspace.is_ancestor(self.path, green, head)
+        except (GitError, OSError):
+            return None, None
+        if not ancestor:
+            return ancestor, None
+        try:
+            return ancestor, workspace.changed_paths(green, head)
+        except (GitError, OSError):
+            return ancestor, None
+
+    def _planned(self, plan: AffectedPlan, head: str) -> dict[str, ForwardForm]:
         """The form each check is planned to run, with the checks that already failed in full
-        on this instance taken before anything runs."""
-        paths, stuck = self._paths(plan, head), frozenset(self.stuck_full)
-        return {
-            name: presubmit.plan_form(name, paths, plan.fallback, plan.commands, stuck)
-            for name in self.checks
-        }
+        on this instance taken before anything runs. Under `advance_base` each check's base is
+        its G when `forward_base.base_for` says so (the only place that decides), and the paths
+        `plan_form` reads are those of that base; each distinct G is looked at once per call.
+        Otherwise the base is the plan's and the paths are the task base's, as before."""
+        task_paths, stuck = self._paths(plan, head), frozenset(self.stuck_full)
+        sources: dict[str, tuple[bool | None, tuple[str, ...] | None]] = {}
+        planned: dict[str, ForwardForm] = {}
+        for name in self.checks:
+            base, paths = plan.base, task_paths
+            if self.advance_base:
+                green = self.green_heads.get(name)
+                ancestor, since = (None, None)
+                if green is not None:
+                    if green not in sources:
+                        sources[green] = self._since(green, head)
+                    ancestor, since = sources[green]
+                base = forward_base.base_for(green, ancestor, since, plan.base)
+                paths = since if green is not None and base == green else task_paths
+            form = presubmit.plan_form(name, paths, plan.fallback, plan.commands, stuck)
+            planned[name] = ForwardForm(form, base, paths)
+        return planned
 
     @staticmethod
     def _settled(planned: Mapping[str, PlannedForm], results: list[CheckResult]) -> list[GateForm]:
@@ -516,12 +574,12 @@ class CheckoutPresubmit:
             return [row for rows in per_check for row in rows]
 
     def _run_under_plan(
-        self, plan: AffectedPlan, planned: Mapping[str, PlannedForm]
+        self, plan: AffectedPlan, planned: Mapping[str, ForwardForm]
     ) -> list[CheckResult]:
         def run(name: str, command: str) -> list[CheckResult]:
-            return self._with_rerun(
-                name, command, self._planned_rows(name, command, planned[name], plan)
-            )
+            rows = self._planned_rows(name, command, planned[name], plan)
+            # A kept verdict ran nothing: no rerun of it (GH-1125).
+            return rows if "reused_from" in rows[-1] else self._with_rerun(name, command, rows)
 
         if not self.parallel:
             return [row for name, command in self.checks.items() for row in run(name, command)]
@@ -530,19 +588,26 @@ class CheckoutPresubmit:
             return [row for rows in per_check for row in rows]
 
     def _planned_rows(
-        self, name: str, command: str, planned: PlannedForm, plan: AffectedPlan
+        self, name: str, command: str, planned: ForwardForm, plan: AffectedPlan
     ) -> list[CheckResult]:
         """One check under a plan: its affected form when it is planned, then the full one
         when the affected one did not pass; the full form alone otherwise. A full red makes
-        the check stuck on this instance."""
+        the check stuck on this instance. The affected form is measured against the base the
+        `ForwardForm` carries and, when that is not the plan's, the row says so
+        (`affected_base`); an empty selection against it (`forward_base.kept_row`) is the whole
+        answer: the one kept row, with no full form after it. Reads no workspace."""
         rows: list[CheckResult] = []
-        if planned.mode == "affected-only":
+        if planned.form.mode == "affected-only":
             # `{base}` first, then `{workers}`: the order the substitution is defined in.
-            form = presubmit.affected_command(plan.commands[name], plan.base)
+            form = presubmit.affected_command(plan.commands[name], planned.base)
             first = self._run(name, form, "affected-only")
+            if planned.base != plan.base:
+                first["affected_base"] = planned.base
             rows.append(first)
             if first["passed"]:
                 return rows
+            if (kept := forward_base.kept_row(first, planned.base, planned.paths)) is not None:
+                return [kept]
         full = self._run(name, command, "full")
         rows.append(full)
         if not full["passed"]:
@@ -714,7 +779,7 @@ class CheckoutPresubmit:
             # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
             declared = self._declared.get((row["name"], row["command"]), row["command"])
             key = self._key(row["name"], declared)
-            if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
+            if key is None or not row["passed"] or not presubmit.ran(row):
                 continue
             try:
                 store.put(key, row, time.time())
