@@ -1036,8 +1036,7 @@ def test_a_refused_turn_is_not_split_under_a_retry_policy():
         Path("/p"), "o", 3, gh, log=lines.append, retry=retry, access=GithubAccess(gate=gate)
     )
     prime(gh, b, 7, 8)
-    assert b.write(
-        [FieldWrite(7, "etapa", "Trabada"), FieldWrite(8, "etapa", "Trabada")]
-    ).written == (frozenset())
+    with pytest.raises(TrackerTurnRefused):
+        b.write([FieldWrite(7, "etapa", "Trabada"), FieldWrite(8, "etapa", "Trabada")])
     assert gate.asked == 1  # not halved: one turn refused is the whole write
     assert len([line for line in lines if "write stopped:" in line]) == 1
