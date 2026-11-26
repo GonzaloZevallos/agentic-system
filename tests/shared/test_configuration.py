@@ -569,3 +569,16 @@ def test_a_ci_start_grace_of_zero_is_rejected():
 def test_lowering_the_check_timeout_below_the_default_grace_is_rejected():
     with pytest.raises(ValueError, match="ci_start_grace_s"):
         Configuration.from_sources({"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "100"})
+
+
+def test_github_budget_dir_defaults_under_xdg_cache_home(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.github_budget_dir == Path("/tmp/cache/agentic/github/budget")
+
+
+def test_github_budget_dir_falls_back_to_the_home_dot_cache_when_empty(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.github_budget_dir == Path("/home/t/.cache/agentic/github/budget")

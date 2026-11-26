@@ -271,6 +271,9 @@ class Configuration(BaseModel):
     # resolve the same cache root, `$XDG_CACHE_HOME` or `~/.cache`, or the spacing between
     # writes splits across two files.
     github_dir: Path = Field(default_factory=lambda: _default_github_dir())
+    # Where the GitHub account's request budget is kept, one file per account (GH-1071): a
+    # per-user cache, regenerable like scratch.
+    github_budget_dir: Path = Field(default_factory=lambda: _default_github_budget_dir())
 
     @model_validator(mode="after")
     def _ceiling_covers_the_check_timeout(self) -> Configuration:
@@ -467,6 +470,10 @@ def _default_scratch_dir() -> Path:
 
 def _default_github_dir() -> Path:
     return _default_cache_root() / "agentic" / "github"
+
+
+def _default_github_budget_dir() -> Path:
+    return _default_cache_root() / "agentic" / "github" / "budget"
 
 
 def _default_perf_lock_path() -> Path:

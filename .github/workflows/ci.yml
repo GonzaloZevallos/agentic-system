@@ -45,7 +45,7 @@ jobs:
       # reruns just the failed tests once; the step's exit is that rerun's, and `ci_flakes.py`
       # only prints the `agentic-flakes:` block (GH-464): its failure drops the block, nothing else.
       - run: |
-          uv run pytest -m "not llm" -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/first.xml" || {
+          uv run pytest -m "not llm" -n 4 --dist load -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/first.xml" || {
             rc=0
             uv run pytest -m "not llm" --last-failed --last-failed-no-failures none -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/second.xml" || rc=$?
             uv run python scripts/ci_flakes.py --check tests "$RUNNER_TEMP/first.xml" "$RUNNER_TEMP/second.xml" || echo "ci_flakes: no block"

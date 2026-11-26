@@ -97,6 +97,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.format_issue": "support",
     "application.format_release": "support",
     "application.full_checks": "checks",
+    "application.github_budget": "support",
     "application.integrate": "build",
     "application.interview": "definition",
     "application.interview_drawing": "definition",

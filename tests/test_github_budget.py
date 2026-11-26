@@ -17,6 +17,7 @@ from agentic.core.process.domain.github_budget import (
     budget_from_document,
     budget_from_headers,
     can_start,
+    is_fresh,
 )
 
 NOW = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
@@ -332,3 +333,20 @@ def test_now_is_validated_before_the_headers_are_read():
     naive = datetime(2026, 11, 23, 12, 0, 0)
     with pytest.raises(ValueError):
         budget_from_headers(Unreadable(), naive)
+
+
+def test_is_fresh_needs_a_fetched_at() -> None:
+    assert not is_fresh(UNKNOWN, NOW)
+
+
+def test_is_fresh_refuses_a_fetched_at_in_the_future() -> None:
+    assert not is_fresh(Budget({}, at(1)), NOW)
+
+
+def test_is_fresh_refuses_a_budget_exactly_the_ttl_old() -> None:
+    assert not is_fresh(Budget({}, NOW - BUDGET_TTL), NOW)
+
+
+def test_is_fresh_accepts_a_budget_just_under_the_ttl_old() -> None:
+    assert is_fresh(Budget({}, NOW - BUDGET_TTL + timedelta(seconds=1)), NOW)
+    assert is_fresh(Budget({}, NOW), NOW)
