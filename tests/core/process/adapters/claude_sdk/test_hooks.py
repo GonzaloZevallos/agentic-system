@@ -735,3 +735,51 @@ async def test_with_no_probe_evidence_a_call_without_a_code_never_reads_as_zero(
     await run_bash(matchers, "uv run ruff check .", tool_response={})
     (row,) = log.snapshot().rows
     assert (row["duration_s"], row["exit_code"]) == (2.5, None)
+
+
+class TestGitFromABrokenTaskCheckout:
+    """GH-1142: git run from a task checkout whose `.git` is not a gitfile would walk up to
+    the product checkout and write there."""
+
+    @pytest.fixture
+    def worktrees(self, tmp_path) -> Path:
+        root = tmp_path / "product" / ".agentic" / "worktrees"
+        root.mkdir(parents=True)
+        return root
+
+    def test_a_subdirectory_of_a_valid_worktree_is_allowed(self, worktrees):
+        valid = worktrees / "GH-1.api"
+        (valid / "src").mkdir(parents=True)
+        (valid / ".git").write_text("gitdir: elsewhere\n")
+        assert hooks.git_denial("git status", valid / "src") is None
+        assert hooks.git_denial("git status", valid) is None
+
+    def test_a_worktree_without_git_is_denied_with_no_checkout(self, worktrees):
+        broken = worktrees / "GH-1.api"
+        (broken / "src").mkdir(parents=True)
+        for cwd in (broken, broken / "src"):
+            reason = hooks.git_denial("git status", cwd)
+            assert reason == hooks._DENIED + hooks.NO_CHECKOUT
+
+    def test_a_worktree_whose_git_is_an_empty_directory_is_denied(self, worktrees):
+        broken = worktrees / "GH-1"
+        (broken / ".git").mkdir(parents=True)
+        assert hooks.git_denial("git log", broken) == hooks._DENIED + hooks.NO_CHECKOUT
+
+    def test_a_dash_c_inside_a_broken_worktree_is_denied_and_inside_a_valid_one_is_not(
+        self, worktrees
+    ):
+        for name in ("GH-1", "GH-2"):
+            (worktrees / name / "src").mkdir(parents=True)
+        (worktrees / "GH-2" / ".git").write_text("gitdir: elsewhere\n")
+        assert hooks.git_denial("git -C src status", worktrees / "GH-1") == (
+            hooks._DENIED + hooks.NO_CHECKOUT
+        )
+        assert hooks.git_denial("git -C src status", worktrees / "GH-2") is None
+
+    def test_a_folder_task_of_does_not_know_is_not_denied(self, worktrees):
+        (worktrees / "integration-abc").mkdir()
+        assert hooks.git_denial("git status", worktrees / "integration-abc") is None
+
+    def test_a_denial_says_what_to_do_instead(self):
+        assert "checkout" in hooks.NO_CHECKOUT and "system" in hooks.NO_CHECKOUT

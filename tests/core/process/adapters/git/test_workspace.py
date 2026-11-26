@@ -652,6 +652,31 @@ def test_a_branch_with_commits_the_upstream_lacks_starts_from_the_upstream_and_n
     assert found.note is not None and local in found.note
 
 
+def test_a_master_ahead_of_the_remote_gives_left_out_and_the_one_sentence(remote):
+    """GH-1142: the left-out shas are data on `Upstream`, the note is `local_commits_note`'s."""
+    merge = remote.merge_on_origin()
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    local = git("rev-parse", "--short", "HEAD", cwd=remote.clone)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == merge
+    assert found.left_out == (local,)
+    assert found.fetch_failed is False
+    assert found.note == rules.local_commits_note([local])
+
+
+def test_a_failed_fetch_with_local_commits_marks_the_failure_and_keeps_the_left_out(
+    remote, tmp_path
+):
+    remote.merge_on_origin()
+    git("fetch", "-q", cwd=remote.clone)
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    local = git("rev-parse", "--short", "HEAD", cwd=remote.clone)
+    _break_the_remote(remote, tmp_path)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.left_out == (local,) and found.fetch_failed is True
+    assert found.note and rules.local_commits_note([local]) in found.note
+
+
 def test_a_diverged_clone_warns_diverged_from_the_upstream_the_workspace_itself_reads(remote):
     """GH-420: the left-out note comes with a fetched tip, so the poller still judges against it."""
     remote.merge_on_origin()

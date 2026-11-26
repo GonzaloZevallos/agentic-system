@@ -21,6 +21,8 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.github_access import Turn as Turn
+from ..domain.github_access import WriteGate as WriteGate
 from ..domain.github_budget import Budget
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
@@ -943,6 +945,13 @@ class TrackerTransient(TrackerCallFailed):
     stderr."""
 
 
+class TrackerTurnRefused(TrackerTransient):
+    """A write's turn was refused (its wait was over the bound) or its wait was stopped, so
+    `gh` never launched and nothing reached GitHub. A `TrackerTransient`, so a caller that
+    treats a transient failure as a call to retry later absorbs it unchanged. The message
+    names the call and the bound, never stderr."""
+
+
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
@@ -1023,6 +1032,10 @@ class Upstream:
     # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
     # left out), for the run's log and the poll round's output. None when nothing to say.
     note: str | None
+    # GH-1142: the short shas of the product checkout's commits the upstream lacks, and whether
+    # the fetch failed; the data behind `note`, so no caller ever parses the note's text.
+    left_out: tuple[str, ...] = ()
+    fetch_failed: bool = False
 
 
 @dataclass(frozen=True)

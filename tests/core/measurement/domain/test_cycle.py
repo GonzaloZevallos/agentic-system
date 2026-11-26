@@ -498,6 +498,13 @@ def test_a_document_with_old_records_reads_unknown_never_zero():
     assert split(bare).waiting_s == 0.0
 
 
+def test_a_check_timeout_pause_without_ci_timing_adds_no_ci_wait():
+    entry = escalation(10, "ci", cause="check_timeout", timeouts=[], previous_timeouts=[])
+    document = closed(timed_run(0, 5), close_at=100, pause_log=[entry, resumed(20)])
+    assert cycle.waiting_intervals(document) == []
+    assert split(document).waiting_s == 0.0
+
+
 def test_a_task_with_no_failures_has_failed_zero():
     assert split(closed(timed_run(0, 5), close_at=100)).failed_s == 0.0
 

@@ -9,7 +9,12 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from agentic.core.process.application import board_sync
-from agentic.core.process.application.ports import IssueRow, SentMemory, TrackerCallFailed
+from agentic.core.process.application.ports import (
+    IssueRow,
+    SentMemory,
+    TrackerCallFailed,
+    TrackerTurnRefused,
+)
 from agentic.core.process.domain import rules
 from tests.fakes import FakeBoard, FakeBoardSent, MemoryDocuments, memory_ports
 
@@ -251,3 +256,23 @@ def test_a_remembered_issue_that_closed_is_read_one_by_one_and_goes_hecha() -> N
     board.calls.clear()
     mirror(ports)
     assert [name for name, _ in board.calls] == ["project_id", "open_issues"]
+
+
+def test_a_board_that_writes_nothing_keeps_the_cards_out_of_board_sent_and_the_next_round_resends():
+    board = FakeBoard(open=[row(1)], unwritten={1})
+    ports, sent = ports_with(board)
+    mirror(ports)
+    assert 1 not in sent.memory.issues
+    board.unwritten = set()
+    board.calls.clear()
+    mirror(ports, now=NOW + timedelta(minutes=16))
+    assert etapas(board) == {1: "En cola"}
+    assert 1 in sent.memory.issues
+
+
+def test_a_refused_write_turn_rests_the_board_and_records_no_card():
+    board = FakeBoard(open=[row(1)], fail=TrackerTurnRefused("gh api graphql write turn refused"))
+    ports, sent = ports_with(board)
+    lines = mirror(ports)
+    assert len(lines) == 1 and "next try in 15 min" in lines[0]
+    assert 1 not in sent.memory.issues

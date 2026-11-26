@@ -51,5 +51,6 @@ graph TD
     m_domain__plan_view --> g_domain__roles
     m_domain__plan_view --> g_domain__state
     m_domain__pull_request --> g_domain__state
+    m_domain__pull_request --> m_domain__landing
     m_domain__stacking --> g_domain__state
 ```

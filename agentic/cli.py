@@ -80,7 +80,7 @@ from .core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
-from .core.process.adapters.shell import EventStopFlag, inhibitor
+from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
 from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
@@ -3168,7 +3168,9 @@ async def _reflect(
                 summarise=_window_summary,
                 since=since,
                 task_id=task_id,
-                system=system if system is not None else composition.system_repo(),
+                system=system
+                if system is not None
+                else composition.system_repo(composition.write_access(cfg, None, NullStopFlag())),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc
