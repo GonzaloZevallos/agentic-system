@@ -18,10 +18,11 @@ from agentic.core.process.application.ports import (
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from agentic.core.process.domain.board import FieldWrite
-from agentic.core.process.domain.github_access import GithubAccess
+from agentic.core.process.domain.github_access import GithubAccess, Turn
 
 ETAPAS = [
     "Corriendo",
@@ -982,3 +983,61 @@ def test_a_board_passes_its_access_to_run_gh(monkeypatch):
     GhBoard(Path("/p"), "o", 3, _board_run, access=access).open_issues()
     GhBoard(Path("/p"), "o", 3, _board_run).open_issues()
     assert seen == [access, None]
+
+
+class RefusingGate:
+    """A fake `WriteGate` that refuses the turn of every write and counts the asks."""
+
+    cap_s = 900.0
+
+    def __init__(self):
+        self.asked = 0
+
+    def take(self, remaining_s):
+        self.asked += 1
+        return Turn("refused", 0.0)
+
+
+def test_gh_passes_its_write_flag_to_run_gh(monkeypatch):
+    seen: list[bool | None] = []
+
+    def fake_run_gh(*args, **kwargs):
+        seen.append(kwargs["write"])
+        return ""
+
+    monkeypatch.setattr(board_module, "run_gh", fake_run_gh)
+    b = board(FakeGh())
+    b._gh("issue", "list")
+    b._gh("api", "graphql", write=True)
+    assert seen == [False, True]
+
+
+def test_a_refused_turn_stops_the_write_with_its_own_line_once_and_no_second_call():
+    gh = FakeGh([identity()])
+    gate = RefusingGate()
+    lines: list[str] = []
+    b = GhBoard(Path("/p"), "o", 3, gh, log=lines.append, access=GithubAccess(gate=gate))
+    prime(gh, b, 7)
+    with pytest.raises(TrackerTurnRefused):  # nothing was sent: the stop raises its cause
+        b.write(WRITES)
+    assert gate.asked == 1
+    assert len(gh.bodies) == 1  # the identity read only: no write request ever launched
+    stopped = [line for line in lines if "write stopped:" in line]
+    assert len(stopped) == 1 and "write turn refused" in stopped[0]
+    assert not any("because of" in line for line in lines)
+
+
+def test_a_refused_turn_is_not_split_under_a_retry_policy():
+    gh = FakeGh([identity()])
+    gate = RefusingGate()
+    lines: list[str] = []
+    retry = GhRetry(max_wait_s=30, attempts=2, backoff_s=0, sleep=lambda s: None)
+    b = GhBoard(
+        Path("/p"), "o", 3, gh, log=lines.append, retry=retry, access=GithubAccess(gate=gate)
+    )
+    prime(gh, b, 7, 8)
+    assert b.write(
+        [FieldWrite(7, "etapa", "Trabada"), FieldWrite(8, "etapa", "Trabada")]
+    ).written == (frozenset())
+    assert gate.asked == 1  # not halved: one turn refused is the whole write
+    assert len([line for line in lines if "write stopped:" in line]) == 1
