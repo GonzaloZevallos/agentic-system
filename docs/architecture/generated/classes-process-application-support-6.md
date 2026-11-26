@@ -45,5 +45,5 @@ classDiagram
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
-- [application: support (parte 8)](classes-process-application-support-8.md)
+- [application: support (parte 9)](classes-process-application-support-9.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

@@ -25,6 +25,7 @@ graph TD
     m_adapters__filesystem__scratch["adapters.filesystem.scratch"]
     m_adapters__filesystem__stage0_store["adapters.filesystem.stage0_store"]
     m_adapters__filesystem__stage0_users["adapters.filesystem.stage0_users"]
+    m_adapters__filesystem__write_gate["adapters.filesystem.write_gate"]
     m_adapters__filesystem__liveness --> g_pkg__application
     m_adapters__filesystem__liveness --> g_pkg__domain
     m_adapters__filesystem__lock --> g_pkg__application
@@ -40,4 +41,6 @@ graph TD
     m_adapters__filesystem__scratch --> m_adapters__filesystem__liveness
     m_adapters__filesystem__stage0_store --> g_pkg__domain
     m_adapters__filesystem__stage0_users --> g_pkg__domain
+    m_adapters__filesystem__write_gate --> g_pkg__application
+    m_adapters__filesystem__write_gate --> g_pkg__domain
 ```
