@@ -2472,3 +2472,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-26T16:06:02.640+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a rule, limit or flow, search the docs for the old behavior and update every page that describes it in the same change, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1114
+  sources:
+  - finding
+  added_at: '2026-11-26T16:51:25.926+00:00'
