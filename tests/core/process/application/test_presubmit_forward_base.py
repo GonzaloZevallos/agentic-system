@@ -3,6 +3,7 @@ calls of one `CheckoutPresubmit`, a check's affected form is measured against th
 last green on, and an empty selection keeps that verdict instead of running the full suite.
 Without `advance_base` the gate is the one of before."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -317,7 +318,23 @@ def test_without_advance_base_the_gate_is_the_one_of_before() -> None:
     ]
     markdown = gate.markdown()
     assert markdown is not None
-    assert "kept from" not in markdown and "against `head" not in markdown
+    # The literal of today's gate, its seconds column normalised (the fakes run in no time).
+    assert re.sub(r"\| [\d.]+ \|$", "| 0.0 |", markdown, flags=re.MULTILINE) == (
+        "### Checks\n\n"
+        "Run by the system on `head2` when the Developer delivered.\n\n"
+        "| Check | Command | Mode | Result | Seconds |\n"
+        "|---|---|---|---|---|\n"
+        "| `tests` | `pytest --since abc` | affected-only | **failed** | 0.0 |\n"
+        "| `tests` | `pytest` | full | passed | 0.0 |\n"
+        "| `lint` | `ruff check .` | full | **failed** | 0.0 |\n"
+        "| `lint` | `ruff check .` | full | **failed** (rerun) | 0.0 |\n\n"
+        "`affected-only` rows ran the tests selected against `abc` (the whole branch, "
+        "`task_base..head`, not the increment under review); the full suite runs at merge "
+        "(ADR-0045).\n\n"
+        "`tests`, last lines:\n\n```text\n\n```\n\n"
+        "`lint`, last lines:\n\n```text\nred\n```\n\n"
+        "`lint`, last lines:\n\n```text\nred\n```"
+    )
 
 
 def test_run_check_never_reads_or_writes_the_green_heads() -> None:
