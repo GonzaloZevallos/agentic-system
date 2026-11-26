@@ -146,8 +146,8 @@ checkSuites(first: 50) {
 """
 
 # The same fragments for the three readers that follow the pages (GH-1151), with the `endCursor` of
-# each connection. `COMMIT_CI_QUERY` keeps the plain ones: the stage0 window reads one page, and says
-# so when there is more. A first page is the plain query; the pages after it are `_page_after`.
+# each connection. `COMMIT_CI_QUERY` keeps the plain ones: the stage0 window reads one page, and
+# says so when there is more. A first page is the plain query; the pages after it are `_page_after`.
 _PAGED_ROLLUP = _ROLLUP.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
 _PAGED_SUITES = _SUITES.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
 _PAGED_WATCHED_SUITES = _WATCHED_SUITES.replace(
@@ -1078,7 +1078,8 @@ class GhTracker:
     def ci_report(self, reference: str) -> CiReport | CiUnreadable:
         """See `Tracker.ci_report`. `gh` resolves the repository from `product_dir`. Never
         raises. It quotes what `gh` said (`CiUnreadable.of`) and never classifies by it: the
-        class of an unreadable answer is the step that failed (ADR-0029). `base_sha` is always None: the gate that would have filled it from the
+        class of an unreadable answer is the step that failed (ADR-0029). `base_sha` is always None:
+        the gate that would have filled it from the
         Actions runs failed (ADR-0045, GH-216 amendment), `pull_requests` being empty on
         every run of this product's CI."""
         try:
@@ -1172,7 +1173,8 @@ class GhTracker:
         `_SUITE_PAGES` pages; one call per page asks for the next page of every connection that is
         still open. Past a bound, or when a page is of another commit, cannot be read or gives no
         cursor, the read is unreadable: never the pages read so far. A whole first page is the
-        one call it always was and its commit is returned untouched. Every poll starts at page one."""
+        one call it always was and its commit is returned untouched. Every poll starts at page one.
+        """
         answer = self.graphql(query, fields)
         if isinstance(answer, CiUnreadable):
             return answer

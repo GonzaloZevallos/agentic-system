@@ -133,7 +133,7 @@ class CiUnreadable:
     def of(
         cls, cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"], raw: str
     ) -> CiUnreadable:
-        """An unreadable CI quoting `raw`, sanitised by `_quotable`: the one way to fill `detail`."""
+        """An unreadable CI quoting `raw` through `_quotable`: the one way to fill `detail`."""
         return cls(cause, _quotable(raw))
 
 

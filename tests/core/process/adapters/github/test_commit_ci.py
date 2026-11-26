@@ -138,6 +138,13 @@ def test_a_valid_oid_is_one_call_sent_as_a_raw_string():
     assert flags == ["-f"]  # one oid field, never `-F`, which would coerce or read `@file`
 
 
+def test_the_by_sha_reader_quotes_what_gh_returned_and_says_a_page_was_cut():
+    got = _reader(_answering("<html>502 Bad Gateway</html>")).read(OID)
+    assert isinstance(got, CiUnreadable) and got.detail == "<html>502 Bad Gateway</html>"
+    cut = _reader(_answering(_more_checks())).read(OID)
+    assert isinstance(cut, CiUnreadable) and cut.detail == "more checks than one page"
+
+
 def test_a_timed_out_gh_is_unreadable_never_raised():
     run = Recorder("", error=subprocess.TimeoutExpired(["gh"], 60))
     assert _reader(run).read(OID) == CiUnreadable("gh_unreadable")
