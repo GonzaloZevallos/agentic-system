@@ -22,6 +22,7 @@ classDiagram
     class ports__FormatFixReads["FormatFixReads"]
     class ports__FreeSpace["FreeSpace"]
     class ports__GitError["GitError"]
+    class ports__GithubBudget["GithubBudget"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__LabelTimeline["LabelTimeline"]
     class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
-    class ports__Launcher["Launcher"]
 ```
 
 ## Relaciones con otras páginas

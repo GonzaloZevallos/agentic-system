@@ -67,6 +67,9 @@ class FakeStore:
         self.read_at[key] = claim
         self.budgets[key] = budget
 
+    def observe(self, key: str, budget: Budget) -> None:
+        self.calls.append("observe")
+
 
 class Reader:
     """A `read` that counts its calls and answers what it was given."""

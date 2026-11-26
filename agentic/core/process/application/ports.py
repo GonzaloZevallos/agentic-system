@@ -2774,6 +2774,9 @@ class Ports:
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None
+    # The GitHub account's budget (GH-1085). `None` reads none, which is how every run went
+    # before it existed; nothing acts on it yet.
+    github_budget: GithubBudget | None = None
 
 
 class Stage0Store(Protocol):
@@ -2993,6 +2996,19 @@ class FailurePolicy(Protocol):
         ...
 
 
+class GithubBudget(Protocol):
+    """The GitHub account's budget as this process sees it."""
+
+    def current(self) -> Budget:
+        """The budget, reading `gh api rate_limit` at most once a minute per account."""
+        ...
+
+    def stored(self) -> Budget:
+        """What the store holds and nothing else: no claim, no put, no `gh` call; `UNKNOWN`
+        when nothing is stored."""
+        ...
+
+
 class BudgetStore(Protocol):
     """The GitHub account's budget, shared by every process of this machine. Keyed by the
     account key (`github.com-` and 16 hex), never by the token. Nothing raises past it but a
@@ -3013,4 +3029,10 @@ class BudgetStore(Protocol):
         """Under the lock, re-reads the file and drops the write when the stored `read_at`
         is later than `claim` (a later claim already took the read). Otherwise writes
         `read_at=claim`, `fetched_at` and the resources."""
+        ...
+
+    def observe(self, key: str, budget: Budget) -> None:
+        """Merge the budget one response's headers state into the stored one. Never blocks
+        (one non-blocking lock attempt), creates no directory and no file, writes only when
+        the stored value would change and never touches `read_at`."""
         ...

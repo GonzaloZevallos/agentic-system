@@ -632,3 +632,57 @@ def test_the_backfill_clock_reads_the_current_utc_time():
     moment = composition.backfill_clock()()
     assert before <= moment <= datetime.now(UTC)
     assert moment.tzinfo is not None
+
+
+# --- the one budget per process (GH-1085) ----------------------------------------------
+
+
+@pytest.fixture
+def fresh_budgets():
+    composition.reset_github_budgets()
+    yield
+    composition.reset_github_budgets()
+
+
+def _budget_ports(tmp_path, monkeypatch, **kwargs):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    return composition.default_ports(Configuration(product_dir=product), **kwargs)
+
+
+def test_one_budget_dir_gives_one_budget_and_another_gives_a_new_one(tmp_path, fresh_budgets):
+    first = composition.github_budget_for(tmp_path / "a", tmp_path)
+    assert composition.github_budget_for(tmp_path / "a", tmp_path) is first
+    assert composition.github_budget_for(tmp_path / "b", tmp_path) is not first
+    composition.reset_github_budgets()
+    assert composition.github_budget_for(tmp_path / "a", tmp_path) is not first
+
+
+def test_the_port_and_the_trackers_access_share_one_budget(tmp_path, monkeypatch, fresh_budgets):
+    ports = _budget_ports(tmp_path, monkeypatch, gh_retry="run")
+    assert ports.github_budget is not None
+    assert ports.tracker._access.budget is ports.github_budget
+
+
+def test_two_ports_calls_share_the_instance_and_evaluation_keeps_it(
+    tmp_path, monkeypatch, fresh_budgets
+):
+    first = _budget_ports(tmp_path, monkeypatch, gh_retry="run")
+    again = composition.default_ports(
+        Configuration(product_dir=tmp_path / "product"), gh_retry="exempt"
+    )
+    assert again.github_budget is first.github_budget
+    evaluated = composition.evaluation_ports(first, composition.ClosedInbox())
+    assert evaluated.github_budget is first.github_budget
+
+
+def test_the_backfills_access_carries_no_budget(monkeypatch):
+    seen = []
+
+    def spy(run, args, **kwargs):
+        seen.append(kwargs["access"])
+        return ""
+
+    monkeypatch.setattr(composition, "run_gh", spy)
+    composition.backfill_gh_read(Path("."))(("api", "/x"))
+    assert [access.budget for access in seen] == [None]

@@ -12,24 +12,29 @@ document only; anything it cannot read counts as a write. `last_slot_of` reads t
 text and `write_slot` computes the next slot, with `now`, `horizon`, `spacing` and `cap` as
 parameters. `Turn` is what a `WriteGate` answers when a write asks for its turn.
 
-`GithubAccess` is the access object later parts fill in: its `gate` is a `WriteGate`; `cache`
-and `budget` are still placeholders.
+`includes_headers` says whether a `gh` call is an `api` call that asks for the headers (`-i`);
+it is the only place that decides it.
+
+`GithubAccess` is the access object later parts fill in: its `gate` is a `WriteGate`, its
+`budget` a `BudgetObserver`; `cache` is still a placeholder.
 """
 
 from __future__ import annotations
 
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 __all__ = [
+    "BudgetObserver",
     "GithubAccess",
     "HttpResponse",
     "NotAnHttpResponse",
     "Turn",
     "WriteGate",
+    "includes_headers",
     "is_write",
     "last_slot_of",
     "split_response",
@@ -159,6 +164,7 @@ _API_VALUE_FLAGS = frozenset(
     }
 )
 _API_FIELD_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field"})
+_API_INCLUDE_FLAGS = frozenset({"-i", "--include"})
 
 
 @dataclass(frozen=True)
@@ -167,15 +173,17 @@ class _ApiCall:
     fields: tuple[str, ...]
     has_input: bool
     paths: tuple[str, ...]
+    include: bool
 
 
 def _read_api(args: Sequence[str]) -> _ApiCall:
-    """The method, the `key=value` fields, whether `--input` is given and the positional
-    arguments (the endpoint), in the arguments that follow `api`; the value of a flag is never
-    a positional."""
+    """The method, the `key=value` fields, whether `--input` is given, the positional
+    arguments (the endpoint) and whether `-i` or `--include` is a flag of its own, in the
+    arguments that follow `api`; the value of a flag is never a positional nor a flag."""
     method: str | None = None
     fields: list[str] = []
     has_input = False
+    include = False
     paths: list[str] = []
     pos = 0
     while pos < len(args):
@@ -188,7 +196,9 @@ def _read_api(args: Sequence[str]) -> _ApiCall:
         elif token.startswith("-") and len(token) > 2 and token[:2] in _API_VALUE_FLAGS:
             flag, value = token[:2], token[2:]
         if flag not in _API_VALUE_FLAGS:
-            if not token.startswith("-"):
+            if token in _API_INCLUDE_FLAGS:
+                include = True
+            elif not token.startswith("-"):
                 paths.append(token)
             continue
         if value is None:
@@ -200,7 +210,7 @@ def _read_api(args: Sequence[str]) -> _ApiCall:
             has_input = True
         elif flag in _API_FIELD_FLAGS:
             fields.append(value)
-    return _ApiCall(method, tuple(fields), has_input, tuple(paths))
+    return _ApiCall(method, tuple(fields), has_input, tuple(paths), include)
 
 
 def _document_mutates(document: str) -> bool:
@@ -239,6 +249,14 @@ def is_write(args: Sequence[str]) -> bool:
             return call.method.upper() != "GET"
         return bool(call.fields) or call.has_input
     return not (args[0] in _READ_GROUPS and len(args) > 1 and args[1] in _READ_SUBCOMMANDS)
+
+
+def includes_headers(args: Sequence[str]) -> bool:
+    """Whether `gh <args>` is an `api` call that asks for the response headers: `-i` or
+    `--include` as a flag of its own. The value of a flag (`-H -i`, `--jq -i`, `--jq=-i`) is
+    not that flag. Clustered short flags such as `-iX` are out of scope. The one place that
+    decides it: no adapter looks for `-i` in the arguments itself."""
+    return bool(args) and args[0] == "api" and _read_api(args[1:]).include
 
 
 def last_slot_of(text: str, now: float, horizon: float) -> float:
@@ -289,11 +307,19 @@ class WriteGate(Protocol):
     def take(self, remaining_s: float) -> Turn: ...
 
 
+class BudgetObserver(Protocol):
+    """The port that takes the headers of a `gh api -i` response so the account budget can
+    refresh from them. It never raises."""
+
+    def observed(self, headers: Mapping[str, str]) -> None: ...
+
+
 @dataclass(frozen=True)
 class GithubAccess:
-    """How a process reaches GitHub. `gate` is the write-turn port; `cache` and `budget` are
-    opaque placeholders that later parts type as their ports."""
+    """How a process reaches GitHub. `gate` is the write-turn port and `budget` the observer
+    that every `gh api -i` response's headers are handed to; `cache` is still an opaque
+    placeholder that a later part types as its port."""
 
     gate: WriteGate | None = None
     cache: object | None = None
-    budget: object | None = None
+    budget: BudgetObserver | None = None

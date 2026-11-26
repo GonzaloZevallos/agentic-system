@@ -40,6 +40,7 @@ from agentic.core.process.application.ports import (
     FormatFixReads,
     FreeSpace,
     GitError,
+    GithubBudget,
     Grant,
     Inbox,
     IssueComment,
@@ -2979,6 +2980,7 @@ def memory_ports(
     format_filing: FormatFiler | None = None,
     format_fixes: FormatFixReads | None = None,
     pending_paths: PendingPaths | None = None,
+    github_budget: GithubBudget | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -3011,6 +3013,7 @@ def memory_ports(
         format_filing=format_filing,
         format_fixes=format_fixes,
         pending_paths=pending_paths,
+        github_budget=github_budget,
     )
 
 

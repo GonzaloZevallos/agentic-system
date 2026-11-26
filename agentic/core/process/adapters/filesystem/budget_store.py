@@ -30,6 +30,7 @@ from ...domain.github_budget import (
     Budget,
     Resource,
     ResourceBudget,
+    merged,
 )
 
 _ACCOUNT = re.compile(r"github\.com-[0-9a-f]{16}")
@@ -99,7 +100,51 @@ class FilesystemBudgetStore:
         except OSError:
             return
 
+    def observe(self, key: str, budget: Budget) -> None:
+        """Merge one response's `budget` into the stored one, never blocking: one
+        non-blocking lock attempt, and a busy lock, a disabled directory, a missing or
+        unreadable record or an `OSError` returns with nothing written. Creates no directory
+        and no file, writes only when the merge changes the stored value, keeps `read_at`."""
+        _check(key)
+        try:
+            info = os.lstat(self._dir)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                return
+            if self._read(key) is None:
+                return
+            with self._try_locked(key) as held:
+                if not held:
+                    return
+                stored = self._read(key)
+                if stored is None:
+                    return
+                refreshed = merged(stored.budget, budget)
+                if refreshed != stored.budget:
+                    self._write(key, stored.read_at, refreshed)
+        except OSError:
+            return
+
     # -- directory and lock ---------------------------------------------------------
+
+    @contextlib.contextmanager
+    def _try_locked(self, key: str) -> Iterator[bool]:
+        """`<key>.lock` opened as it is (never created), one `flock(LOCK_EX | LOCK_NB)` and
+        no retry, released when the block ends. `False` when the file is missing or the lock
+        is held; no clock, no sleep."""
+        try:
+            fd = os.open(self._dir / f"{key}.lock", os.O_RDWR | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            yield False
+            return
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            yield True
+        finally:
+            os.close(fd)  # closing the descriptor drops the flock
 
     def _prepare(self) -> bool:
         """The directory exists, is ours and is 0700; `False` disables the call."""

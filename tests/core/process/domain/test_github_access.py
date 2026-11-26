@@ -17,6 +17,7 @@ from agentic.core.process.domain.github_access import (
     NotAnHttpResponse,
     Turn,
     WriteGate,
+    includes_headers,
     is_write,
     last_slot_of,
     split_response,
@@ -610,3 +611,29 @@ def test_a_stub_gate_implements_write_gate_and_takes_a_turn() -> None:
     assert hash(Turn("refused", 1.0)) == hash(Turn("refused", 1.0))
     with pytest.raises(FrozenInstanceError):
         setattr(Turn("stopped", 0.0), "waited_s", 1.0)
+
+
+# --- includes_headers -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        pytest.param(("api", "-i", "repos/x"), True, id="short flag"),
+        pytest.param(("api", "--include", "repos/x"), True, id="long flag"),
+        pytest.param(("api", "repos/x", "-i"), True, id="flag after the endpoint"),
+        pytest.param(("api", "-H", "-i", "repos/x"), False, id="value of -H"),
+        pytest.param(("api", "--jq", "-i", "repos/x"), False, id="value of --jq"),
+        pytest.param(("api", "--jq=-i", "repos/x"), False, id="joined value of --jq"),
+        pytest.param(("api", "repos/x"), False, id="no flag"),
+        pytest.param(("issue", "list", "-i"), False, id="not an api call"),
+        pytest.param((), False, id="no arguments"),
+    ],
+)
+def test_includes_headers(args: tuple[str, ...], expected: bool) -> None:
+    assert includes_headers(args) is expected
+
+
+def test_includes_headers_does_not_change_is_write() -> None:
+    assert is_write(("api", "-i", "repos/x")) is False
+    assert is_write(("api", "-i", "-X", "POST", "repos/x")) is True

@@ -8,8 +8,10 @@ import pytest
 
 from agentic.core.process.domain.github_budget import (
     BUDGET_TTL,
+    DELIVER_COST,
     UNKNOWN,
     Budget,
+    Resource,
     ResourceBudget,
     Start,
     Wait,
@@ -18,6 +20,8 @@ from agentic.core.process.domain.github_budget import (
     budget_from_headers,
     can_start,
     is_fresh,
+    merged,
+    split_cost,
 )
 
 NOW = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
@@ -350,3 +354,98 @@ def test_is_fresh_refuses_a_budget_exactly_the_ttl_old() -> None:
 def test_is_fresh_accepts_a_budget_just_under_the_ttl_old() -> None:
     assert is_fresh(Budget({}, NOW - BUDGET_TTL + timedelta(seconds=1)), NOW)
     assert is_fresh(Budget({}, NOW), NOW)
+
+
+# --- merged -----------------------------------------------------------------------------
+
+
+def one(
+    resource: Resource, remaining: int, reset: int, fetched_at: datetime | None = NOW
+) -> Budget:
+    resources: dict[Resource, ResourceBudget | None] = {
+        "core": None,
+        "graphql": None,
+        "search": None,
+    }
+    resources[resource] = ResourceBudget(remaining, at(reset))
+    return Budget(resources, fetched_at)
+
+
+def test_merged_ignores_a_higher_count_in_the_same_window() -> None:
+    stored = one("core", 100, 600)
+    assert merged(stored, one("core", 101, 600)) == stored
+
+
+def test_merged_takes_a_lower_count_in_the_same_window() -> None:
+    assert merged(one("core", 100, 600), one("core", 99, 600)).resources["core"] == (
+        ResourceBudget(99, at(600))
+    )
+
+
+def test_merged_takes_an_equal_count_in_the_same_window() -> None:
+    stored = one("core", 100, 600)
+    assert merged(stored, one("core", 100, 600)) == stored
+
+
+def test_merged_takes_a_new_window_even_with_a_higher_count() -> None:
+    assert merged(one("core", 5, 600), one("core", 4000, 4200)).resources["core"] == (
+        ResourceBudget(4000, at(4200))
+    )
+
+
+def test_merged_ignores_an_older_reset() -> None:
+    stored = one("core", 100, 600)
+    assert merged(stored, one("core", 1, 300)) == stored
+
+
+def test_merged_ignores_a_resource_the_store_does_not_hold() -> None:
+    stored = one("core", 100, 600)
+    result = merged(stored, one("graphql", 10, 600))
+    assert result == stored
+    assert result.resources["graphql"] is None
+
+
+def test_merged_keeps_the_stored_resource_when_the_observed_one_is_unknown() -> None:
+    stored = one("core", 100, 600)
+    assert merged(stored, all_none()) == stored
+    assert merged(stored, UNKNOWN) == stored
+
+
+def test_merged_only_changes_the_resource_it_observed() -> None:
+    stored = Budget(
+        {
+            "core": ResourceBudget(100, at(600)),
+            "graphql": ResourceBudget(50, at(600)),
+            "search": None,
+        },
+        NOW,
+    )
+    result = merged(stored, one("core", 90, 600))
+    assert result.resources == {
+        "core": ResourceBudget(90, at(600)),
+        "graphql": ResourceBudget(50, at(600)),
+        "search": None,
+    }
+
+
+def test_merged_keeps_the_stored_fetched_at() -> None:
+    stored = one("core", 100, 600, fetched_at=at(-30))
+    assert merged(stored, one("core", 90, 600, fetched_at=at(0))).fetched_at == at(-30)
+    assert merged(one("core", 100, 600, fetched_at=None), one("core", 90, 600)).fetched_at is None
+
+
+# --- the declared costs -----------------------------------------------------------------
+
+
+def test_deliver_cost_is_declared_for_core_and_graphql_and_never_search() -> None:
+    assert dict(DELIVER_COST) == {"core": 30, "graphql": 30}
+
+
+@pytest.mark.parametrize("parts_left", [0, 2, -1])
+def test_split_cost_is_ten_plus_five_per_part_left(parts_left: int) -> None:
+    charge = 10 + 5 * max(parts_left, 0)
+    assert dict(split_cost(parts_left)) == {"core": charge, "graphql": charge}
+
+
+def test_split_cost_counts_a_negative_as_zero() -> None:
+    assert split_cost(-5) == split_cost(0)
