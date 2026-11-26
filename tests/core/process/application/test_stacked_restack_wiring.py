@@ -28,7 +28,7 @@ from tests.core.process.application.test_landing_sync import (
 )
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.domain.test_landing import _facts
-from tests.fakes import MemoryStack, memory_ports
+from tests.fakes import MemoryInbox, MemoryStack, memory_ports
 
 AT = "2026-11-17T00:00:00+00:00"
 STACKED = StackParent(issue=9, task_id="GH-9", head="c" * 40, started_at="2026-11-16T10:00:00")
@@ -142,11 +142,14 @@ def test_the_row_survives_a_save_then_record_landing_and_a_reload(tmp_path, monk
     assert loaded["landing"] == saved["landing"]
 
 
+BODY = "How is my gym doing.\n\n<!-- agentic-closes: #346 -->"
+
+
 def _state(**more):
     return {
         "id": "GH-12",
         "title": "Dashboard",
-        "description": "How is my gym doing.\n\n<!-- agentic-closes: #12 -->",
+        "description": BODY,
         "type": "feature",
         "sections": {"PM": "### Consolidated definition\n\nSix numbers."},
         **more,
@@ -161,7 +164,7 @@ async def _delivered(tmp_path, state, ancestors=True):
     monkeypatch_clock = pytest.MonkeyPatch()
     monkeypatch_clock.setattr(deliver_node, "datetime", _Clock)
     try:
-        ports = memory_ports(stack=MemoryStack())
+        ports = memory_ports(stack=MemoryStack(), inbox=MemoryInbox(unseeded_body=BODY))
         if ancestors:
             ports.workspace.ancestors.add(MASTER)
         patch = await deliver(state, Configuration(product_dir=tmp_path), ports)
@@ -215,7 +218,7 @@ async def test_deliver_of_an_unstacked_task_patches_neither_key(tmp_path):
 
 
 async def _body(tmp_path, **more) -> str:
-    ports = memory_ports(stack=MemoryStack())
+    ports = memory_ports(stack=MemoryStack(), inbox=MemoryInbox(unseeded_body=BODY))
     await deliver(_state(**more), Configuration(product_dir=tmp_path), ports)
     return ports.tracker.pull_requests[0][2]
 
@@ -228,7 +231,7 @@ async def test_the_pr_line_follows_a_readable_stack_parent_only(tmp_path):
     unreadable = await _body(tmp_path, stack_parent={"issue": "nine"})
 
     assert stacked == plain.replace(
-        "Closes #12\n\n", "Closes #12\n\nStacked on #9: merges only after it.\n\n"
+        "Closes #346\n\n", "Closes #346\n\nStacked on #9: merges only after it.\n\n"
     )
     assert "Stacked on" in stacked and "Stacked on" not in unreadable
     assert unreadable == plain
