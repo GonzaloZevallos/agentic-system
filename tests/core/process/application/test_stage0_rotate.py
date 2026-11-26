@@ -15,6 +15,9 @@ from typing import Any
 import pytest
 
 from agentic.core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
+from agentic.core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
+from agentic.core.process.adapters.shell.stage0_candidate import ShellStage0Candidate, TimedOut
+from agentic.core.process.application.stage0_failure import SmokeFailurePolicy
 from agentic.core.process.application.stage0_prune import make_prune
 from agentic.core.process.application.stage0_rotate import (
     DefaultFailurePolicy,
@@ -34,6 +37,7 @@ from agentic.core.process.domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
 )
+from tests.fakes import MemoryScratch
 
 NEW_PURE_APPLICATION_MODULES = ("agentic/core/process/application/stage0_rotate.py",)
 FORBIDDEN_IMPORTS = ("os", "fcntl", "subprocess", "shutil")
@@ -902,3 +906,91 @@ def test_the_beats_double_refuses_what_the_adapter_refuses(
 ) -> None:
     with pytest.raises(ValueError):
         Beats([]).write(key, checkout, at, "end", interval_s)
+
+
+# --- GH-1152: a rotation whose old smoke would have been slow still moves `current` ----------
+
+
+class SlowLegacyRunner:
+    """A runner for the real `ShellStage0Candidate`: the `poll` dry-run it would have run before
+    GH-1152 runs out of time, every other child exits `new_step` (0 by default), and a `git
+    clone` leaves the `.git/HEAD` the adapter reads."""
+
+    def __init__(self, new_step: int = 0) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.new_step = new_step
+
+    def run(self, argv: Any, cwd: Path, env: Any, timeout_s: float) -> Any:
+        self.calls.append(tuple(argv))
+        if "poll" in argv:
+            return TimedOut()
+        if list(argv[:2]) == ["git", "clone"]:
+            git = Path(argv[-1]) / ".git"
+            git.mkdir(parents=True)
+            (git / "HEAD").write_text(B + "\n")
+        return self.new_step if "smoke" in argv else 0
+
+
+def rotate_over_a_hand_built_root(
+    tmp_path: Path, runner: SlowLegacyRunner, out: list[str]
+) -> FilesystemStage0Store:
+    """`rotate` over the real store of a root built by hand (`<A>/` and `current -> <A>`), the
+    real candidate over `runner`, and one installed product."""
+    (tmp_path / A).mkdir()
+    (tmp_path / "current").symlink_to(A)
+    store = FilesystemStage0Store(tmp_path)
+    log: list[str] = []
+    candidate = ShellStage0Candidate(
+        tmp_path,
+        MemoryScratch(root=tmp_path / "scratch"),
+        (Path("/srv/apostrophe"),),
+        "https://github.com/acme/system.git",
+        runner,
+        out.append,
+    )
+    rotate(
+        store,
+        Users(),
+        Window(log, GREEN_B),
+        candidate,
+        NoEscalation(),
+        pin=None,
+        now=NOW,
+        own=OWN,
+        heartbeats=Beats(log),
+        clock=lambda: NOW,
+        root=tmp_path,
+        failure_policy=SmokeFailurePolicy(store, candidate),
+        out=out.append,
+    )
+    return store
+
+
+def test_a_candidate_whose_poll_smoke_would_time_out_still_switches_current(
+    tmp_path: Path,
+) -> None:
+    out: list[str] = []
+    runner = SlowLegacyRunner()
+
+    store = rotate_over_a_hand_built_root(tmp_path, runner, out)
+
+    assert out == [f"switched: {B}"]
+    assert store.current() == B
+    assert not [argv for argv in runner.calls if "poll" in argv]
+    assert store.unavailable_record() is None
+
+
+def test_a_candidate_that_predates_stage0_smoke_and_whose_poll_times_out_keeps_with_its_cause(
+    tmp_path: Path,
+) -> None:
+    out: list[str] = []
+    runner = SlowLegacyRunner(new_step=2)
+
+    store = rotate_over_a_hand_built_root(tmp_path, runner, out)
+
+    assert out == [
+        "smoke: legacy step",
+        "keep: unavailable (smoke_timeout)",
+    ]
+    assert store.current() == A
+    assert store.rejected() == frozenset()
