@@ -9,7 +9,7 @@ import pytest
 
 from agentic.core.process.adapters.claude_sdk import check_run_log, hooks
 from agentic.core.process.application.ports import RunStopped
-from agentic.core.process.domain import turn_notice
+from agentic.core.process.domain import check_runs, turn_notice
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
@@ -735,6 +735,48 @@ async def test_with_no_probe_evidence_a_call_without_a_code_never_reads_as_zero(
     await run_bash(matchers, "uv run ruff check .", tool_response={})
     (row,) = log.snapshot().rows
     assert (row["duration_s"], row["exit_code"]) == (2.5, None)
+
+
+# -- the refusal of a hand run the delivery gate repeats (ADR-0065 addendum 2026-11-25, GH-1070)
+
+REFUSAL = "run the affected form instead"
+
+
+def refusing(command: str) -> str | None:
+    """A `refuse` callable as the application builds it, here over a fixed answer."""
+    found = check_runs.match(command, {"tests": "uv run pytest", "lint": "uv run ruff check ."})
+    return REFUSAL if found is not None and found.check == "tests" else None
+
+
+async def test_an_exact_command_the_gate_repeats_is_denied_with_the_refusal_and_not_recorded():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log, refuse=refusing)
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "uv run pytest"))
+    assert denied(outputs) == [REFUSAL]
+    assert log.snapshot().rows == []
+
+
+async def test_a_command_the_refusal_does_not_name_passes_and_is_recorded():
+    log = check_log(declared={"lint": "uv run ruff check ."})
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log, refuse=refusing)
+    for command in ("uv run ruff check .", "ls -la"):
+        outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", command))
+        assert denied(outputs) == []
+    assert len(log.snapshot().rows) == 1
+
+
+async def test_without_a_refuse_the_same_command_is_not_denied():
+    matchers = hooks.hooks_for(
+        DEVELOPER, CWD, None, runs=check_log(declared={"tests": "uv run pytest"})
+    )
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "uv run pytest"))
+    assert denied(outputs) == []
+
+
+async def test_a_git_denial_is_still_the_first_answer_with_a_refuse():
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, refuse=refusing)
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "git push"))
+    assert denied(outputs) and denied(outputs) != [REFUSAL]
 
 
 class TestGitFromABrokenTaskCheckout:
