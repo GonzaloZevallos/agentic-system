@@ -89,6 +89,7 @@ from ...application.ports import Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
+from ..git.guard import ForeignCheckout, require_checkout
 from .check_run_log import CheckRunLog
 
 # The tool Claude Code gives the model to hand back the structured output.
@@ -119,6 +120,10 @@ CONFIG = (
 PUSH = "`git push`: the system pushes the task branch when it delivers."
 WORKTREE = "`git worktree`: the system creates and removes the worktrees; work in yours."
 GIT_DIR = "`--git-dir`: work on the repository of your working directory."
+NO_CHECKOUT = (
+    "this working directory has lost its `.git` file: git run from here would act on the "
+    "product checkout. Stop and say so: the system rebuilds the checkout."
+)
 OUTSIDE = "`git -C` outside your working directory: work on your own checkout."
 NO_VERIFY = "`git commit --no-verify`: the product's hooks run on every commit; fix what they say."
 SWITCH = (
@@ -652,6 +657,8 @@ def _git(words: list[str], cwd: Path, here: Path) -> str | None:
                 return OUTSIDE
     if i >= len(words):
         return None
+    if _broken_checkout(here):
+        return NO_CHECKOUT
     subcommand, args = words[i], words[i + 1 :]
     if subcommand == "config":
         reading = args[:1] in (["get"], ["list"]) or bool(_CONFIG_READS & set(args))
@@ -665,6 +672,22 @@ def _git(words: list[str], cwd: Path, here: Path) -> str | None:
     if subcommand == "commit" and _skips_hooks(args):
         return NO_VERIFY
     return None
+
+
+def _broken_checkout(directory: Path) -> bool:
+    """`directory` is inside a task folder of `.agentic/worktrees` that exists and whose
+    `.git` is not a gitfile (GH-1142, `guard.require_checkout`). A directory that is not
+    there is left to git, which fails on it by itself."""
+    for folder in (directory.resolve(), *directory.resolve().parents):
+        if folder.parent.name == "worktrees" and folder.parent.parent.name == ".agentic":
+            if not folder.is_dir():
+                return False
+            try:
+                require_checkout(directory, folder.parent)
+            except ForeignCheckout:
+                return True
+            return False
+    return False
 
 
 def _skips_hooks(args: list[str]) -> bool:
