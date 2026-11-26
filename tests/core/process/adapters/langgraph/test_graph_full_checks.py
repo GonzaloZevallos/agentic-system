@@ -27,6 +27,7 @@ from tests.core.process.adapters.langgraph.test_graph import (
 )
 from tests.fakes import (
     MemoryCommands,
+    MemoryInbox,
     MemorySampleApp,
     MemoryStack,
     ScriptedRunner,
@@ -114,6 +115,7 @@ def build(script, stack, commands, fakes=None, workspace=None):
             stack=stack,
             commands=commands,
             sample_app=MemorySampleApp(),
+            inbox=MemoryInbox(unseeded_body="Issue body."),
             check_results=None,  # these tests pin the tiers, not the reuse of a pass
         )
 

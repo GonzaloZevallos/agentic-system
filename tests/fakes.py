@@ -800,9 +800,13 @@ class MemoryInbox:
         *,
         open_issues: list[tuple[str, str]] | None = None,
         task_errors: set[int] | None = None,
+        unseeded_body: str | None = None,
         **issues: TaskInput,
     ) -> None:
         self.issues = issues
+        # GH-1104: with a string, `task` of a number no scenario seeded answers an issue with this
+        # body (the current body a delivery reads); with `None` it raises `KeyError` as ever.
+        self.unseeded_body = unseeded_body
         # `(url, body)` pairs `open_issues()` hands back: a stack review's own read
         # seam, never filtered here -- the caller matches the marker (ADR-0034).
         self._open_issues = open_issues or []
@@ -827,6 +831,8 @@ class MemoryInbox:
             raise self.task_exceptions[number]
         if number in self.task_errors:
             raise ValueError(f"issue #{number} has no body; the roles need a description")
+        if self.unseeded_body is not None and str(number) not in self.issues:
+            return {"id": f"GH-{number}", "title": "", "description": self.unseeded_body}
         return self.issues[str(number)]
 
     def task_id(self, number: int) -> str:
@@ -2986,7 +2992,7 @@ def memory_ports(
         knowledge=knowledge if knowledge is not None else MemoryKnowledge(),
         prompts=prompts if prompts is not None else MemoryPrompts(),
         flags=flags if flags is not None else MemoryFlags(),
-        inbox=inbox if inbox is not None else MemoryInbox(),
+        inbox=inbox if inbox is not None else MemoryInbox(unseeded_body="Issue body."),
         workspace=workspace if workspace is not None else MemoryWorkspace(),
         tracker=tracker if tracker is not None else MemoryTracker(),
         stack=stack if stack is not None else MemoryStack(),

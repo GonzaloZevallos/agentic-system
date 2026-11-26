@@ -47,6 +47,7 @@ from ...application.ports import (
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
@@ -207,6 +208,7 @@ class GhBoard:
             log=self.log,
             retry=self.retry if write else None,
             access=self.access,
+            write=write,
         )
 
     def _keeping_errors(
@@ -378,7 +380,10 @@ class GhBoard:
 
     def _stop(self, rnd: _Round, exc: BaseException) -> None:
         rnd.stopped = rnd.stopped or exc
-        self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
+        if isinstance(exc, TrackerTurnRefused):
+            self._halt(rnd, f"agentic: board: write stopped: {exc}")
+        else:
+            self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
 
     def _add(
         self,
@@ -480,7 +485,14 @@ def _rate_limited(error: object) -> bool:
 
 def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
     """What one failed chunk does to the write, from the exception alone."""
-    stopping = (TrackerUnreachable, TrackerRateLimited, _RateLimited, _Unauthenticated, OSError)
+    stopping = (
+        TrackerTurnRefused,  # before `TrackerTransient`: a refused turn is not worth a split
+        TrackerUnreachable,
+        TrackerRateLimited,
+        _RateLimited,
+        _Unauthenticated,
+        OSError,
+    )
     if isinstance(exc, stopping):
         return "stop"
     if isinstance(exc, TrackerCallFailed | TrackerRefused) and exc.status in BOARD_STOP_STATUSES:
