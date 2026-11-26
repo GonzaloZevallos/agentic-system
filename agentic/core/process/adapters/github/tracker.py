@@ -24,6 +24,7 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     TrackerCallFailed,
+    TrackerTurnRefused,
     TrackerUnreachable,
     tracker_failure_class,
 )
@@ -1089,9 +1090,10 @@ class GhTracker:
         allow one raises `MergeCallFailed("no_merge_method")` and nothing is merged.
         Raises `MergeCallFailed`, its class chosen at the step that failed: never by
         reading `gh`'s stderr (ADR-0029), or `TrackerUnreachable` from the `repo view` read,
-        before anything could change. The reference is parsed first, so an
-        unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare number and
-        resolves the repository from `product_dir`, as `pull_request` does."""
+        before anything could change, or `TrackerTurnRefused` when the turn of `gh pr merge`
+        was refused: `gh` never launched, so it is never `gh_unreadable`. The reference is parsed
+        first, so an unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare
+        number and resolves the repository from `product_dir`, as `pull_request` does."""
         try:
             number = pull_request_number(reference)
         except ValueError as exc:
@@ -1124,6 +1126,8 @@ class GhTracker:
         # `--delete-branch`: the poller's own `close` owns what happens after.
         try:
             self._gh("pr", "merge", str(number), f"--{chosen}", "--match-head-commit", head_sha)
+        except TrackerTurnRefused:
+            raise  # `gh` never launched: nothing merged, so not `gh_unreadable`
         except ValueError as exc:
             missing = isinstance(exc.__cause__, FileNotFoundError)
             if isinstance(exc, TrackerCallFailed):  # the merge may or may not have happened

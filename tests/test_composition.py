@@ -15,6 +15,7 @@ from langgraph.types import Command, interrupt
 
 from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from agentic.core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
@@ -22,6 +23,7 @@ from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.ci import CiCheck, CiReport, red_checks
+from agentic.core.process.domain.github_access import GithubAccess
 from agentic.core.process.domain.landing import CI_LOG_JOBS
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
@@ -279,7 +281,7 @@ def _retry_of(tmp_path, monkeypatch, **kwargs):
 def test_the_tracker_has_no_retry_policy_unless_the_caller_asks(tmp_path, monkeypatch):
     # The poller, `inbox`, `close` and every other verb build their ports like this.
     assert _retry_of(tmp_path, monkeypatch) is None
-    assert composition.system_repo().tracker._retry is None
+    assert composition.system_repo(GithubAccess()).tracker._retry is None
 
 
 def test_run_and_resume_retry_with_the_long_cap_and_their_stop_flag(tmp_path, monkeypatch):
@@ -632,3 +634,53 @@ def test_the_backfill_clock_reads_the_current_utc_time():
     moment = composition.backfill_clock()()
     assert before <= moment <= datetime.now(UTC)
     assert moment.tzinfo is not None
+
+
+def _gated_ports(tmp_path, monkeypatch, **kwargs):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    # The board's memory file is named after the product, read from a stack the fixture lacks.
+    monkeypatch.setattr(composition.GitStack, "product", lambda self, revision="HEAD": "demo")
+    product = a_repository(tmp_path / "product")
+    cfg = Configuration(
+        product_dir=product, github_dir=tmp_path / "github", board_project="owner/7"
+    )
+    return cfg, composition.default_ports(cfg, **kwargs)
+
+
+def test_the_poller_tracker_and_its_board_share_one_gate_on_the_configured_file(
+    tmp_path, monkeypatch
+):
+    cfg, ports = _gated_ports(tmp_path, monkeypatch)
+    access = ports.tracker._access
+    assert access is not None and access.gate is not None
+    assert ports.board.access is access
+    assert ports.format_fixes._tracker._access is access
+    assert access.gate._path == tmp_path / "github" / WRITE_TURN_FILE
+    assert ports.format_filing._system.tracker._access is access
+
+
+def test_the_gate_cap_is_one_minute_under_exempt_and_the_long_cap_otherwise(tmp_path, monkeypatch):
+    for gh_retry, cap in ((None, 900), ("run", 900), ("exempt", 60)):
+        _, ports = _gated_ports(tmp_path / str(gh_retry), monkeypatch, gh_retry=gh_retry)
+        assert ports.tracker._access.gate.cap_s == cap
+        assert ports.board.access.gate.cap_s == cap
+
+
+def test_the_stop_flag_of_the_run_reaches_the_gate(tmp_path, monkeypatch):
+    stop = EventStopFlag()
+    _, ports = _gated_ports(tmp_path, monkeypatch, stop_flag=stop, gh_retry="run")
+    assert ports.tracker._access.gate._stop is stop
+
+
+def test_the_write_access_names_the_file_under_the_configured_github_dir(tmp_path):
+    cfg = Configuration(product_dir=tmp_path, github_dir=tmp_path / "gh")
+    gate = composition.write_access(cfg, None, NullStopFlag()).gate
+    assert gate._path == tmp_path / "gh" / WRITE_TURN_FILE
+    assert gate.cap_s == 900
+
+
+def test_the_system_repo_and_the_stage0_window_trackers_carry_the_access_given(tmp_path):
+    access = GithubAccess()
+    assert composition.system_repo(access).tracker._access is access
+    window = composition.stage0_master_window(tmp_path, "u", tmp_path, lambda s: (), access)
+    assert window.ci._tracker._access is access

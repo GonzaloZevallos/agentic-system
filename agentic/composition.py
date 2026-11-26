@@ -59,6 +59,7 @@ from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.filesystem.stage0_users import ProcStage0Users
+from .core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE, FilesystemWriteGate
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
@@ -209,6 +210,17 @@ GhWait = Literal["run", "exempt"]
 _GH_WAIT_CAPS: dict[GhWait, float] = {"run": GH_RATE_WAIT_MAX_S, "exempt": GH_EXEMPT_WAIT_MAX_S}
 
 
+def write_access(cfg: Configuration, gh_retry: GhWait | None, stop: StopFlag) -> GithubAccess:
+    """The one way to GitHub for every writer of a process (GH-1083, ADR-0107): its gate is the
+    file `WRITE_TURN_FILE` under `cfg.github_dir`, so the writes of the whole machine are spaced
+    through one file, and its wait is capped at 60 s in the `merge`/`land` children and 900 s
+    elsewhere. The only place that names the gate's path."""
+    gate = FilesystemWriteGate(
+        cfg.github_dir / WRITE_TURN_FILE, cap_s=_GH_WAIT_CAPS[gh_retry or "run"], stop=stop
+    )
+    return GithubAccess(gate=gate)
+
+
 def default_ports(
     cfg: Configuration, stop_flag: StopFlag | None = None, *, gh_retry: GhWait | None = None
 ) -> Ports:
@@ -258,6 +270,7 @@ def stage0_master_window(
     remote_url: str,
     product_dir: Path,
     stack_ci: Callable[[str], tuple[str, ...]],
+    access: GithubAccess,
 ) -> GitMasterWindow:
     """The stage0 rotation's view of master (GH-632, part 2c): a mirror under `root` of
     `remote_url`, each commit's CI read by sha through `gh` run in `product_dir`. Nothing calls it
@@ -269,7 +282,10 @@ def stage0_master_window(
     `remote_url` (the mirror) and the repository `gh` resolves from `product_dir` are assumed to be
     the same one: neither is derived from the other here, 2d checks it."""
     return GitMasterWindow(
-        root, remote_url, ci=GhCommitCi(GhTracker(product_dir)), stack_ci=stack_ci
+        root,
+        remote_url,
+        ci=GhCommitCi(GhTracker(product_dir, access=access)),
+        stack_ci=stack_ci,
     )
 
 
@@ -335,10 +351,11 @@ def stage0_rotation(
     root = root.resolve()
     store = FilesystemStage0Store(root)
     stack = GitStack(root / MIRROR)
-    window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci)
+    access = write_access(cfg, None, NullStopFlag())
+    window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci, access)
     scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
     candidate = ShellStage0Candidate(root, scratch, installed, origin)
-    repo = system_repo()
+    repo = system_repo(access)
     return Stage0Rotation(
         store=store,
         users=ProcStage0Users(root),
@@ -393,11 +410,11 @@ def perf_lock(cfg: Configuration) -> FilesystemPerfLock:
     return FilesystemPerfLock(cfg.perf_lock_path, NullStopFlag())
 
 
-def system_repo() -> SystemRepo:
+def system_repo(access: GithubAccess) -> SystemRepo:
     """The system's own repo, for the one thing the `reflect` verb writes there: an issue
     with `needs-triage` for a lesson about the system (ADR-0056, ADR-0002). The stage0
     checkout `gh` resolves the repo from is `telemetry.REPO`, never the product's."""
-    return SystemRepo(GhTracker(telemetry.REPO), GhInbox(telemetry.REPO))
+    return SystemRepo(GhTracker(telemetry.REPO, access=access), GhInbox(telemetry.REPO))
 
 
 def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None) -> Ports:
@@ -433,11 +450,10 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         except (ValueError, yaml.YAMLError):
             return None
 
-    # GH-1091: one access for this node's tracker and board; every field `None` until a later
-    # part of GH-1071 fills them.
-    access = GithubAccess()
+    # GH-1083: one access, so one gate, for every tracker and the board of this node.
+    access = write_access(cfg, gh_retry, stop_flag)
     tracker = (
-        GhTracker(cfg.product_dir, api_break_line=declared_api_break)
+        GhTracker(cfg.product_dir, api_break_line=declared_api_break, access=access)
         if gh_retry is None
         else GhTracker(
             cfg.product_dir,
@@ -522,11 +538,11 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         spec_validator=DomainSpecValidator(),
         # GH-1030: one filing per run, so its locks and filed pairs are the run's; it writes to
         # the system's own repo (`system_repo`), never the product's.
-        format_filing=FormatFiling(system_repo(), print, utc_now),
+        format_filing=FormatFiling(system_repo(access), print, utc_now),
         # GH-1067: the reads that release a format hold, on the system's own repo and the
         # stage0 checkout it runs (`telemetry.REPO`), never the product's.
         format_fixes=GhFormatFixReads(
-            GhTracker(telemetry.REPO),
+            GhTracker(telemetry.REPO, access=access),
             GhRepoSlug(telemetry.REPO),
             GitAncestry(telemetry.REPO).contains,
         ),
