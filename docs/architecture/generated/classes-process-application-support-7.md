@@ -24,6 +24,7 @@ classDiagram
     class ports__TrackerRefused["TrackerRefused"]
     class ports__TrackerTimedOut["TrackerTimedOut"]
     class ports__TrackerTransient["TrackerTransient"]
+    class ports__TrackerTurnRefused["TrackerTurnRefused"]
     class ports__TrackerUnreachable["TrackerUnreachable"]
     class ports__UnstageablePath["UnstageablePath"]
     class ports__Upstream["Upstream"]
@@ -33,10 +34,10 @@ classDiagram
     class preflight__ScratchInARepository["ScratchInARepository"]
     class run_role__Escalating["Escalating"]
     class run_role__EstimateCapReached["EstimateCapReached"]
-    class run_role__EstimateStop["EstimateStop"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
+    ports__TrackerTurnRefused --|> ports__TrackerTransient
     ports__TrackerUnreachable --|> ports__TrackerCallFailed
     run_role__EstimateCapReached --|> run_role__Escalating
 ```

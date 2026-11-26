@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class run_role__EstimateStop["EstimateStop"]
     class run_role__GuardChain["GuardChain"]
     class run_role__Output["Output"]
     class run_role__PromptFailure["PromptFailure"]
