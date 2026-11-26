@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing
 from agentic.core.process.application.ports import RawResult, TrackerTurnRefused, Upstream
 from agentic.core.process.domain import ci
@@ -273,11 +274,15 @@ def test_a_slice_waiting_for_its_ci_stays_open_and_merges_the_same_pull_request_
 def test_a_refused_write_turn_on_the_slice_merge_refuses_nothing_and_the_next_round_merges():
     ports = _world(frozenset({"integration.py"}))
     real_merge = ports.tracker.merge
+    turn_refused = [True]
 
-    def refused(reference, head_sha, *, method=None):
-        raise TrackerTurnRefused("gh pr merge write turn refused: over the 60 s bound")
+    def merge(reference, head_sha, *, method=None):
+        pull_request_number(reference)
+        if turn_refused:
+            raise TrackerTurnRefused("gh pr merge write turn refused: over the 60 s bound")
+        return real_merge(reference, head_sha, method=method)
 
-    ports.tracker.merge = refused
+    ports.tracker.merge = merge
     _land(ports)
 
     entry = _doc(ports)["landing"][-1]
@@ -286,7 +291,7 @@ def test_a_refused_write_turn_on_the_slice_merge_refuses_nothing_and_the_next_ro
     assert ports.tracker.closed_pull_requests == []  # `_refuse` closes the slice: it was not called
     assert _doc(ports).get("landed_slices", []) == []
 
-    ports.tracker.merge = real_merge
+    turn_refused.clear()
     _land(ports)
 
     assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]

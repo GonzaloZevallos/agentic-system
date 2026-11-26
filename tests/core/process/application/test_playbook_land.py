@@ -259,6 +259,7 @@ def test_a_refused_write_turn_is_failed_turn_refused_never_a_merge_call_failure(
     world = World()
 
     def refused(reference, head_sha, *, method=None):
+        pull_request_number(reference)
         raise TrackerTurnRefused("gh pr merge write turn refused: over the 900 s bound")
 
     world.tracker.merge = refused
