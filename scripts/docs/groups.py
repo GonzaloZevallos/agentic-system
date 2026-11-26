@@ -186,6 +186,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.finding_location": "state",
     "domain.format_issue": "state",
     "domain.format_retakes": "roles",
+    "domain.forward_base": "roles",
     "domain.gate_priority": "landing",
     "domain.github_access": "machine",
     "domain.github_budget": "machine",
