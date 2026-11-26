@@ -111,7 +111,14 @@ es la fábrica `agentic/composition.py:stage0_rotation`, que lo lee una sola vez
 pasa la tupla al candidato, de modo que el smoke del candidato, el de la repetición y el de
 control usan la misma lista; un directorio o una unidad ilegible da `Unreadable` antes de
 construir nada, y `agentic stage0 rotate` imprime `keep: unreadable` sin rechazar nada. Sin
-unidades el smoke corre solo `--help`. El comando `agentic stage0 rotate` lo llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
+unidades el smoke corre solo `--help`. Por producto, el smoke corre `agentic stage0 smoke
+--product-dir P` (GH-1152): el `preflight` real sobre los puertos de
+`agentic/composition.py:offline_ports`, donde tracker, inbox y board son
+`agentic/core/process/adapters/offline.py:NoGithub` y lanzan ante cualquier uso, de modo que no
+hay ninguna llamada a GitHub. Si ese paso sale 2 (un stage anterior al subcomando), el candidato
+corre el paso legado `poll --dry-run --once` y lo dice con `smoke: legacy step`; un 2 del paso
+nuevo nunca es `Red` por sí solo, y un tiempo agotado es `Unavailable` con la causa
+`smoke_timeout` en la línea `keep: unavailable (<causa>)`. El comando `agentic stage0 rotate` lo llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
 por sha, que arma el reporte con `agentic/core/process/adapters/github/tracker.py:commit_report`;
 un oid que no son 40 hex en minúscula, o cualquier falla, es `CiUnreadable`. Lo cablea la fábrica
 `agentic/composition.py:stage0_master_window`, que llama `stage0_rotation`. `Stage0Store` es la raíz de rotación

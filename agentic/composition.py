@@ -84,6 +84,7 @@ from .core.process.adapters.github.run import (
 )
 from .core.process.adapters.github.tracker import pull_request_number
 from .core.process.adapters.langgraph.graph import build_graph
+from .core.process.adapters.offline import NoGithub
 from .core.process.adapters.shell import (
     NullStopFlag,
     ShellCommands,
@@ -354,7 +355,7 @@ def stage0_rotation(
     access = write_access(cfg, None, NullStopFlag())
     window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci, access)
     scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
-    candidate = ShellStage0Candidate(root, scratch, installed, origin)
+    candidate = ShellStage0Candidate(root, scratch, installed, origin, out=print)
     repo = system_repo(access)
     return Stage0Rotation(
         store=store,
@@ -367,6 +368,18 @@ def stage0_rotation(
         products=installed,
         heartbeats=FilesystemHeartbeats(root),
         root=root,
+    )
+
+
+def offline_ports(cfg: Configuration) -> Ports:
+    """The ports `agentic stage0 smoke` runs over (GH-1152): the ones `poll` is built with, but
+    the tracker, the inbox and the board raise on any use, so nothing in the smoke can reach
+    GitHub. Everything else (the stack, the prompts, the workspace) is the product's own."""
+    return replace(
+        default_ports(cfg),
+        tracker=NoGithub("tracker"),
+        inbox=NoGithub("inbox"),
+        board=NoGithub("board"),
     )
 
 
