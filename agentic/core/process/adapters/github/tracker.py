@@ -7,10 +7,11 @@ is a no-op. `gh` resolves the repo from the checkout, as the inbox does.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,12 +25,14 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
     TrackerTurnRefused,
     TrackerUnreachable,
     tracker_failure_class,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
-from ...domain.github_access import GithubAccess
+from ...domain.github_access import GithubAccess, NotAnHttpResponse, split_response
 from ...domain.hold import HELD_LIMIT, HOLD_LABEL
 from ...domain.presubmit import ApiBreakLine
 from ...domain.task import (
@@ -38,7 +41,7 @@ from ...domain.task import (
     TrackerFailure,
     TrackerTarget,
 )
-from ...domain.tracker_refs import issue_number, pull_request_number
+from ...domain.tracker_refs import issue_number, issue_target, pull_request_number
 from .run import GhRetry, bounded_run, print_line, run_gh
 
 # The order a merge method is picked in: the first the repository allows.
@@ -482,6 +485,59 @@ def _blocked_by(raw: dict | None) -> tuple[int, ...] | None:
     return tuple(node["number"] for node in raw.get("nodes", []) if "number" in node)
 
 
+def rest_argv(
+    method: str,
+    path: str,
+    raw_fields: Sequence[tuple[str, str]] = (),
+    body_file: str | None = None,
+) -> tuple[str, ...]:
+    """The `gh` arguments of one REST write (GH-1089): `api -i -X <method> <path>`, each text
+    field as `-f key=value` (always raw: `@file`, `true` and `123` stay the text they are) and
+    the body only as `-F body=@<file>`, which reads the file and sends it as it is. No other
+    value is ever a `-F`."""
+    args = ["api", "-i", "-X", method, path]
+    for key, value in raw_fields:
+        args += ["-f", f"{key}={value}"]
+    if body_file is not None:
+        args += ["-F", f"body=@{body_file}"]
+    return tuple(args)
+
+
+@contextlib.contextmanager
+def _body_file(text: str, *, newline: str | None = None) -> Iterator[str]:
+    """`text` in a temp file for one call, removed when it ends: a body is never in argv,
+    whose slots a multibyte body near GitHub's bound would outgrow (ADR-0034)."""
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".md", delete=False, encoding="utf-8", newline=newline
+    ) as handle:
+        handle.write(text)
+        path = handle.name
+    try:
+        yield path
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+_PR_CREATE_FAILED = "gh pr create failed:"
+
+
+def _as_pr_create_failure(exc: ValueError, head: str) -> ValueError:
+    """`exc` as the same class with a message that starts `gh pr create failed:` and ends
+    with the head: what `run_gh` says (`gh pr create timed out after 60 s`) goes after the
+    prefix, with its own `gh pr create ` dropped. Status and reset are kept."""
+    text = str(exc).removeprefix("gh pr create ")
+    message = f"{_PR_CREATE_FAILED} {text}{head}"
+    if isinstance(exc, TrackerRateLimited):
+        return TrackerRateLimited(message, status=exc.status, resets_at=exc.resets_at)
+    if isinstance(exc, TrackerCallFailed | TrackerRefused):
+        return type(exc)(message, status=exc.status)
+    return ValueError(message)
+
+
+def _unreadable(call: str, detail: str) -> ValueError:
+    return ValueError(f"gh {call} failed: unreadable response; the write may have applied{detail}")
+
+
 class GhTracker:
     def __init__(
         self,
@@ -507,16 +563,50 @@ class GhTracker:
     ) -> str:
         if closes_issue and (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
-        # `--body-file`, as `open_issue`: a multibyte body near the bound is larger than
-        # one argv slot takes, and the limit that can bite is GitHub's own (ADR-0034).
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
-            h.write(body)
-            path = h.name
+        # Every failure starts `gh pr create failed:` and names the head (GH-1089): the ones
+        # built here already do; `run_gh`'s own (timeout, unreachable, retries spent, turn
+        # refused, no `gh`) are re-raised as the same class with that wording.
+        head = f" (head {branch})"
         try:
-            # Not a draft: the human merges it as it is (README.md, 9), or does not.
-            return self._gh("pr", "create", "--head", branch, "--title", title, "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+            return self._create_pull_request(branch, title, body, head)
+        except (TrackerCallFailed, TrackerRefused, ValueError) as exc:
+            if str(exc).startswith(_PR_CREATE_FAILED):
+                raise
+            raise _as_pr_create_failure(exc, head) from (exc.__cause__ or exc)
+
+    def _create_pull_request(self, branch: str, title: str, body: str, head: str) -> str:
+        # The base is the default branch, as `gh pr create` took it. A failed read ends the
+        # call here: the POST is never attempted without a base.
+        base = self._gh_read(
+            "api",
+            "repos/{owner}/{repo}",
+            "--jq",
+            ".default_branch",
+            call="pr create",
+            failed=lambda stderr: f"gh pr create failed: could not read the default branch{head}",
+        )
+        if not base:
+            raise ValueError(f"gh pr create failed: could not read the default branch{head}")
+        # Not a draft: the human merges it as it is (README.md, 9), or does not. Not retried:
+        # a second POST after a lost answer could open a second pull request.
+        with _body_file(body) as path:
+            response = self._rest(
+                "POST",
+                "repos/{owner}/{repo}/pulls",
+                (("title", title), ("head", branch), ("base", base)),
+                path,
+                call="pr create",
+                retrying=False,
+                expect=201,
+                detail=head,
+            )
+        try:
+            url = json.loads(response)["html_url"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise _unreadable("pr create", head) from exc
+        if not isinstance(url, str):
+            raise _unreadable("pr create", head)
+        return url
 
     def open_issue(
         self,
@@ -540,31 +630,39 @@ class GhTracker:
             Path(path).unlink(missing_ok=True)
 
     def comment_on_issue(self, reference: str, text: str) -> None:
-        # `--body-file`, as `open_issue`: the text carries ids from product output, and
-        # the one limit that can bite is GitHub's own, never argv's (ADR-0034).
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
-            h.write(text)
-            path = h.name
-        try:
-            self._gh_retrying("issue", "comment", reference, "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+        # The body goes as a file, as `open_issue`: the text carries ids from product output,
+        # and the one limit that can bite is GitHub's own, never argv's (ADR-0034).
+        target = issue_target(reference)
+        with _body_file(text) as path:
+            if target is None:
+                # Not a reference this module can build a path from: the subcommand, as before.
+                self._gh_retrying("issue", "comment", reference, "--body-file", path)
+                return
+            self._rest(
+                "POST",
+                f"{target}/comments",
+                (),
+                path,
+                call="issue comment",
+                retrying=True,
+                expect=201,
+            )
 
     def update_issue_body(self, number: int, body: str) -> None:
-        # `--body-file <path>`, never `-`: the runner passes `stdin=DEVNULL`, so `-`
-        # would send an empty body. An empty body is refused before any `gh` call.
+        # An empty body is refused before any call: GitHub would take it as the new body.
         if not body.strip():
             raise ValueError(f"refusing to write an empty body to issue #{number}")
         # `newline=""`: the body goes out byte for byte, CRLF lines included.
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".md", delete=False, encoding="utf-8", newline=""
-        ) as h:
-            h.write(body)
-            path = h.name
-        try:
-            self._gh_retrying("issue", "edit", str(number), "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+        with _body_file(body, newline="") as path:
+            self._rest(
+                "PATCH",
+                f"repos/{{owner}}/{{repo}}/issues/{number}",
+                (),
+                path,
+                call="issue edit",
+                retrying=True,
+                expect=200,
+            )
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         pull_request_number(reference)  # rejected before any `gh` call, as `merge` does
@@ -613,7 +711,16 @@ class GhTracker:
 
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh_retrying("issue", "comment", str(number), "--body", text)
+            with _body_file(text) as path:
+                self._rest(
+                    "POST",
+                    f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
+                    (),
+                    path,
+                    call="issue comment",
+                    retrying=True,
+                    expect=201,
+                )
 
     def note(self, task_id: str, text: str) -> TrackerFailure | None:
         return self._best_effort("comment", "note", lambda: self.comment(task_id, text))
@@ -1136,29 +1243,80 @@ class GhTracker:
         return chosen
 
     def _gh(self, *args: str) -> str:
-        """No retry, whatever the policy: open_issue, open_pull_request, merge, close_* and
-        rerun_failed_ci call this one, because repeating them can duplicate or merge twice."""
+        """No retry, whatever the policy: open_issue, merge, close_* and rerun_failed_ci call
+        this one, because repeating them can duplicate or merge twice. `open_pull_request` has
+        the same rule through `_rest(retrying=False)`."""
         return self._call(args, retry=None, retry_timeouts=False)
 
-    def _call(self, args: tuple[str, ...], *, retry: GhRetry | None, retry_timeouts: bool) -> str:
+    def _call(
+        self,
+        args: tuple[str, ...],
+        *,
+        retry: GhRetry | None,
+        retry_timeouts: bool,
+        call: str | None = None,
+        failed: Callable[[str], str] | None = None,
+    ) -> str:
+        label = call if call is not None else " ".join(args[:2])
         return run_gh(
             self._run,
             args,
             cwd=self.product_dir,
             log=self._log,
             not_installed="gh is not installed; delivering to GitHub needs the CLI",
-            failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+            failed=failed or (lambda stderr: f"gh {label} failed: {stderr}"),
             retry=retry,
             retry_timeouts=retry_timeouts,
             access=self._access,
+            call=call,
         )
 
-    def _gh_read(self, *args: str) -> str:
+    def _gh_read(
+        self, *args: str, call: str | None = None, failed: Callable[[str], str] | None = None
+    ) -> str:
         """A read: under a policy a timeout is retried too, since nothing changed."""
-        return self._call(args, retry=self._retry, retry_timeouts=True)
+        return self._call(args, retry=self._retry, retry_timeouts=True, call=call, failed=failed)
 
     def _gh_retrying(self, *args: str) -> str:
         """A write that is safe to repeat (a comment, a label, a body): retried under the
         policy except on a timeout, which may have applied it. The only other door to `gh`
         besides `_gh`, so the verbs that create or merge are the ones that call `_gh`."""
         return self._call(args, retry=self._retry, retry_timeouts=False)
+
+    def _rest(
+        self,
+        method: str,
+        path: str,
+        raw_fields: Sequence[tuple[str, str]],
+        body_file: str | None,
+        *,
+        call: str,
+        retrying: bool,
+        expect: int,
+        detail: str = "",
+    ) -> str:
+        """The one door of the writes moved to `gh api -i` (GH-1089): the body of the response
+        when GitHub answered exactly `expect`. The call goes through `run_gh` as `call` (the
+        subcommand it replaces, so logs and messages keep their wording) and, `retrying`, under
+        the policy except on a timeout, as `_gh_retrying`; a write that creates is never
+        retried. A failure is told by `gh`'s stderr alone, through `failed`; stdout is read only
+        on success, by `split_response`. Any other status, 2xx included, or a stdout that is no
+        response, raises a `ValueError` saying the write may have applied, outside the retry
+        loop: the write is never repeated on it. `detail` ends every message."""
+        raw = self._call(
+            rest_argv(method, path, raw_fields, body_file),
+            retry=self._retry if retrying else None,
+            retry_timeouts=False,
+            call=call,
+            failed=lambda stderr: f"gh {call} failed: {stderr}{detail}",
+        )
+        try:
+            response = split_response(raw)
+        except NotAnHttpResponse as exc:
+            raise _unreadable(call, detail) from exc
+        if response.status != expect:
+            raise ValueError(
+                f"gh {call} failed: unexpected HTTP {response.status}; "
+                f"the write may have applied{detail}"
+            )
+        return response.body
