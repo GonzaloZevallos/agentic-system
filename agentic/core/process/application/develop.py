@@ -187,6 +187,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 reuse=reuse,
                 timeouts=walls,
                 readiness=readiness_of(ports, base, cfg.check_cores),
+                # The same plan object the gate has, built once above (GH-1096): a pass the
+                # tool stores under a form's own key is the pass the gate reads. No rerun and
+                # no flake gate, and its own `stuck_full`: a red on a tree still being edited
+                # must not force the delivered tree to run full.
+                affected=plan,
+                criteria_base=base,
+                via="tool",
             ),
             verifications=verifications,
             # The system's own `LoadReader` and the Cupo de chequeo's cores, so a line for a
@@ -310,9 +317,12 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             *patch["runs"][:-1],
             {**patch["runs"][-1], "gates": list(delivery_presubmit.gates)},
         ]
-    if delivery_presubmit.last_forms and patch.get("runs"):
-        # What each check of the gate's last invocation ran and why, at most `FORMS_MAX`.
-        kept, dropped = presubmit.cap_forms([], delivery_presubmit.last_forms)
+    tool_forms = check_tool.forms if check_tool is not None else []
+    gate_forms = delivery_presubmit.last_forms
+    if (tool_forms or gate_forms) and patch.get("runs"):
+        # What each check ran and why, at most `FORMS_MAX`: the forms of the tool's calls in
+        # call order, then those of the gate's last invocation.
+        kept, dropped = presubmit.cap_forms(tool_forms, gate_forms)
         recorded = {**patch["runs"][-1], "forms": kept}
         if dropped:
             recorded["forms_dropped"] = dropped

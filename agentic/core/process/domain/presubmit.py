@@ -572,6 +572,9 @@ ModeCause = Literal[
     "kept_green",
 ]
 
+# Who asked for a form: the delivery gate, or the Developer's `run_check` tool.
+Via = Literal["gate", "tool"]
+
 
 class GateForm(TypedDict):
     """The form one check of a delivery gate ran and why: written by the system from exit
@@ -582,7 +585,7 @@ class GateForm(TypedDict):
     check: str
     mode: Mode
     cause: ModeCause
-    via: Literal["gate", "tool"]
+    via: Via
     glob: NotRequired[str]
     path: NotRequired[str]
 
@@ -639,9 +642,7 @@ def check_modes(
     }
 
 
-def settle_form(
-    planned: PlannedForm, rows: Sequence[CheckResult], via: Literal["gate", "tool"]
-) -> GateForm:
+def settle_form(planned: PlannedForm, rows: Sequence[CheckResult], via: Via) -> GateForm:
     """The form one check ran, from its rows in run order. The affected row is the first one
     with mode `affected-only` that is not a rerun (a reused one included): when it passed, that
     is the form; when it did not, the full form followed it and the cause is its exit

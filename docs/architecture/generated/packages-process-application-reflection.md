@@ -4,7 +4,8 @@ Esta página muestra los módulos del grupo `reflection` de `application` y los 
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks](packages-process-application-checks.md)
+  - [application: checks (parte 1)](packages-process-application-checks-1.md)
+  - [application: checks (parte 2)](packages-process-application-checks-2.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)

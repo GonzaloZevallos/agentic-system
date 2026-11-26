@@ -9,7 +9,7 @@ Developer's word."""
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -30,6 +30,7 @@ from ..domain.presubmit import (
     Mode,
     PlannedForm,
     RerunForm,
+    Via,
     WitnessResult,
 )
 from ..domain.task import FlakeRecord, GateRecord, TaskState
@@ -147,8 +148,12 @@ class CheckoutPresubmit:
         timeouts: Mapping[str, float] | None = None,
         readiness: Readiness | None = None,
         docs: Docs | None = None,
+        via: Via = "gate",
     ):
         self.ports = ports
+        # Who asked for the forms this instance records (`form_of`): the delivery gate, or the
+        # Developer's `run_check` tool. Keyword-only with the gate as default.
+        self.via: Via = via
         self.path = path
         self.before = before
         self.checks = checks
@@ -480,13 +485,30 @@ class CheckoutPresubmit:
             ids.extend(presubmit.failed_ids(first[-1]["output"], form.test_id))
         return tuple(ids)
 
-    def _paths(self, plan: AffectedPlan, head: str) -> tuple[str, ...] | None:
-        """The paths the branch changed against the plan's base, the one source every plan
-        reads. A lookup that fails is `None` for the domain, which runs everything full."""
+    def _paths(
+        self, plan: AffectedPlan, head: str, pending: Sequence[str] | None = ()
+    ) -> tuple[str, ...] | None:
+        """The paths the branch changed against the plan's base plus the `pending` ones the tree
+        still holds uncommitted, sorted and unique: the one source every plan reads. A lookup
+        that fails, `pending` included, is `None` for the domain, which runs everything full.
+        The gate asks with the default `()`: it demands a clean tree, so nothing is pending."""
+        if pending is None:
+            return None
         try:
-            return self.ports.workspace.changed_paths(plan.base, head)
+            changed = self.ports.workspace.changed_paths(plan.base, head)
         except (GitError, OSError):
             return None
+        return tuple(sorted({*changed, *pending}))
+
+    def form_of(self, planned: PlannedForm, rows: Sequence[CheckResult]) -> GateForm:
+        """The form one check ran, recorded with this instance's `via`: the only place a
+        recorded form gets one."""
+        return presubmit.settle_form(planned, list(rows), self.via)
+
+    def _declared_of(self, row: CheckResult) -> str:
+        """The declared command behind a row, `{workers}` still in it; the row's own command
+        for one that never ran here. What a stored pass is keyed by."""
+        return self._declared.get((row["name"], row["command"]), row["command"])
 
     def _planned(self, plan: AffectedPlan, head: str) -> dict[str, PlannedForm]:
         """The form each check is planned to run, with the checks that already failed in full
@@ -497,11 +519,12 @@ class CheckoutPresubmit:
             for name in self.checks
         }
 
-    @staticmethod
-    def _settled(planned: Mapping[str, PlannedForm], results: list[CheckResult]) -> list[GateForm]:
+    def _settled(
+        self, planned: Mapping[str, PlannedForm], results: list[CheckResult]
+    ) -> list[GateForm]:
         """What each check ran, read from its rows and its plan, in declared order."""
         return [
-            presubmit.settle_form(form, [r for r in results if r["name"] == name], "gate")
+            self.form_of(form, [r for r in results if r["name"] == name])
             for name, form in planned.items()
         ]
 
@@ -712,8 +735,7 @@ class CheckoutPresubmit:
         for row in results:
             # Keyed by the command as declared, `{workers}` and all, the same as the lookup in
             # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
-            declared = self._declared.get((row["name"], row["command"]), row["command"])
-            key = self._key(row["name"], declared)
+            key = self._key(row["name"], self._declared_of(row))
             if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
                 continue
             try:
