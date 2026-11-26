@@ -1,0 +1,20 @@
+{
+  "note": "DERIVED, not captured: the 403 of a secondary rate limit on a content-creating POST, shaped from GitHub's docs (rate limits and best practices: retry-after, no x-ratelimit-remaining of 0). Its message holds no `API rate limit exceeded`, so ADR-0107 keeps it a refusal.",
+  "status": 403,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "retry-after",
+      "60"
+    ],
+    [
+      "x-ratelimit-remaining",
+      "4000"
+    ]
+  ],
+  "body": "{\"message\": \"You have exceeded a secondary rate limit and have been temporarily blocked from content creation. Please retry your request again later.\", \"documentation_url\": \"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits\"}",
+  "stderr": "gh: You have exceeded a secondary rate limit and have been temporarily blocked from content creation. Please retry your request again later. (HTTP 403)"
+}

@@ -1133,3 +1133,84 @@ def test_without_a_gate_a_write_is_the_same_as_without_access(case):
     assert _observed_turnless(outcomes(), read, None) == _observed_turnless(
         outcomes(), read, GithubAccess()
     )
+
+
+# --- the `call` label (GH-1089) --------------------------------------------------------
+
+
+def _labelled(run, args, *, call, retry=None, retry_timeouts=False, access=None):
+    lines: list[str] = []
+    runner = lambda: run_gh(  # noqa: E731
+        run,
+        args,
+        cwd=Path("."),
+        not_installed="no gh",
+        failed=lambda stderr: f"failed: {stderr}",
+        log=lines.append,
+        retry=retry,
+        retry_timeouts=retry_timeouts,
+        access=access,
+        call=call,
+    )
+    return runner, lines
+
+
+_API_ARGS = ("api", "-i", "-X", "POST", "repos/{owner}/{repo}/pulls", "-f", "title=t")
+
+
+def test_a_call_label_names_the_timeout_and_the_unreachable_message_and_line():
+    runner, lines = _labelled(
+        _raising(subprocess.TimeoutExpired(["gh"], 60)), _API_ARGS, call="pr create"
+    )
+    with pytest.raises(TrackerTimedOut) as timed_out:
+        runner()
+    assert str(timed_out.value) == "gh pr create timed out after 60 s"
+    assert lines == [
+        "agentic: gh pr create timed out after 60 s; this read fails and the next round retries"
+    ]
+    runner, lines = _labelled(
+        _raising(_failed("error connecting to api.github.com")), _API_ARGS, call="pr create"
+    )
+    with pytest.raises(TrackerUnreachable) as unreachable:
+        runner()
+    assert str(unreachable.value) == "gh pr create could not reach GitHub (error connecting to)"
+    assert lines == [
+        "agentic: gh pr create could not reach GitHub (error connecting to); "
+        "this read fails and the next round retries"
+    ]
+
+
+def test_a_call_label_names_the_retry_lines_and_the_exhaustion_message():
+    clock = _Clock()
+    run = _script(*[_failed(BAD_GATEWAY)] * 3)
+    runner, lines = _labelled(run, _API_ARGS, call="issue comment", retry=_policy(clock))
+    with pytest.raises(TrackerTransient) as raised:
+        runner()
+    assert str(raised.value).startswith("gh issue comment met a transient GitHub error on each of")
+    assert all(line.startswith("agentic: gh issue comment ") for line in lines)
+
+
+def test_a_call_label_names_the_write_turn_lines():
+    call, lines = _labelled(
+        _script("ok"),
+        _API_ARGS,
+        call="pr create",
+        access=GithubAccess(gate=_FakeGate([Turn("granted", 2.5)])),
+    )
+    call()
+    assert lines == ["agentic: gh pr create waiting 2.5 s for its write turn"]
+
+
+def test_a_call_label_does_not_change_how_the_failure_text_is_built():
+    runner, _ = _labelled(_raising(_failed("boom")), _API_ARGS, call="pr create")
+    with pytest.raises(ValueError, match="^failed: boom$"):
+        runner()
+
+
+def test_without_a_call_label_the_wording_is_the_first_two_arguments():
+    runner, lines = _labelled(_raising(subprocess.TimeoutExpired(["gh"], 60)), _API_ARGS, call=None)
+    with pytest.raises(TrackerTimedOut, match="^gh api -i timed out after 60 s$"):
+        runner()
+    assert lines == [
+        "agentic: gh api -i timed out after 60 s; this read fails and the next round retries"
+    ]

@@ -1,0 +1,12 @@
+{
+  "note": "SYNTHETIC: a 201 to POST /repos/{owner}/{repo}/issues/{n}/comments, shaped from GitHub's REST docs.",
+  "status": 201,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ]
+  ],
+  "body": "{\"id\": 1, \"html_url\": \"https://github.com/o/r/issues/9#issuecomment-1\", \"body\": \"x\"}",
+  "stderr": ""
+}

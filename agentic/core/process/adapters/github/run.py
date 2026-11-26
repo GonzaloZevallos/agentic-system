@@ -421,6 +421,12 @@ def _take_turn(gate: WriteGate, call: str, remaining: float, log: Callable[[str]
     raise TrackerTurnRefused(message)
 
 
+# What stays on a subcommand (GH-1089): `pr merge`, `pr close`, `pr reopen`, `pr edit`,
+# `pr view`, `issue close`, `issue create`, `issue edit --add-label/--remove-label`, `issue
+# view`, `run list`, `run rerun`, `workflow run` and `label create` print no HTTP headers, so
+# they get only the backoff of `run_gh`, never a `retry-after` or `x-ratelimit-reset` wait. The
+# writes that went to `gh api -i` (`pr create`, `issue comment`, `issue edit --body-file`) pass
+# their subcommand name as `call=`.
 def run_gh(
     run: Run,
     args: Sequence[str],
@@ -433,6 +439,7 @@ def run_gh(
     retry_timeouts: bool = False,
     access: GithubAccess | None = None,
     write: bool | None = None,
+    call: str | None = None,
 ) -> str:
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
@@ -476,8 +483,13 @@ def run_gh(
     left is never shortened, it ends as the kind's error with no sleep. A turn that is refused
     or whose wait was stopped writes one line and raises `TrackerTurnRefused`, and `gh` never
     launches. No such line holds `gh` output, and no metric, label or span attribute is added.
-    With no gate, or for a read, every path is the one above."""
-    call = " ".join(args[:2])
+    With no gate, or for a read, every path is the one above.
+
+    `call` (GH-1089) is the name of the call in every log line, turn line and message this
+    function writes; `None` is the first two arguments, as before. A write moved to `gh api`
+    passes its subcommand name (`pr create`), so its wording does not become `api -i`."""
+    if call is None:
+        call = " ".join(args[:2])
     attempt = 1
     last_reset: float | None = None
     gate = access.gate if access is not None else None
