@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -118,9 +119,45 @@ class CiReport:
 class CiUnreadable:
     """The CI could not be read, which is not the same as a report that lacks a check:
     `gh` is missing or failed (`gh_unavailable`), or answered something this code cannot
-    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462)."""
+    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462).
+
+    `detail` is what `gh` said, for the escalation and refusal text only (GH-1151): never a span
+    attribute, a metric label or part of `cause`, and out of equality, so no verdict, rule or route
+    may read it. It is filled only by `of`, through `_quotable`, because the text goes to a comment
+    in a public repository."""
 
     cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"]
+    detail: str = field(default="", compare=False)
+
+    @classmethod
+    def of(
+        cls, cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"], raw: str
+    ) -> CiUnreadable:
+        """An unreadable CI quoting `raw`, sanitised by `_quotable`: the one way to fill `detail`."""
+        return cls(cause, _quotable(raw))
+
+
+_DETAIL_MAX = 200
+_REDACTED = "[redacted]"
+# A GitHub token in any of its forms, then the credentials of a URL (`://user:pass@`).
+_TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+")
+_URL_CREDENTIALS = re.compile(r"(?<=://)[^/\s@:]*:[^/\s@]*(?=@)")
+_COMMENT_MARKERS = ("`", "<!--", "-->", "{{")
+
+
+def _quotable(raw: str) -> str:
+    """`raw` made safe to quote in a comment: control characters (newlines included), backticks
+    and the `<!--`, `-->`, `{{` markers dropped (repeated until none is left, so one cannot be
+    rebuilt from what surrounds another), tokens and URL credentials replaced by `[redacted]`
+    before the cut to 200 characters, so a token the cut would split is never left in part."""
+    text = "".join(char for char in raw if unicodedata.category(char) != "Cc")
+    previous = None
+    while previous != text:
+        previous = text
+        for marker in _COMMENT_MARKERS:
+            text = text.replace(marker, "")
+    text = _URL_CREDENTIALS.sub(_REDACTED, _TOKENS.sub(_REDACTED, text))
+    return text.strip()[:_DETAIL_MAX]
 
 
 @dataclass(frozen=True)
