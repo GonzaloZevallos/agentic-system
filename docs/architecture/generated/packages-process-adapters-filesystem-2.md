@@ -1,4 +1,4 @@
-Esta página muestra los módulos del adaptador `adapters.filesystem` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El tipo no cabe en un diagrama: está partido en tandas de módulos consecutivos, y un módulo de otra tanda aparece como nodo sin sus imports.
+Esta página muestra los módulos del adaptador `adapters.filesystem` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El adaptador se dividió por cantidad: esta es la parte 2 de 2, con módulos consecutivos en orden alfabético; un import de un módulo de otra parte aparece como el nodo `adapters.filesystem (paquete)`.
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:

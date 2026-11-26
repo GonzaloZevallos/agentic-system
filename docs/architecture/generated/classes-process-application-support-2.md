@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__CheckRequest["CheckRequest"]
     class ports__CheckResults["CheckResults"]
     class ports__CheckRuns["CheckRuns"]
     class ports__CheckScheduler["CheckScheduler"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FormatFiler["FormatFiler"]
-    class ports__FormatFixReads["FormatFixReads"]
 ```
 
 ## Relaciones con otras páginas
