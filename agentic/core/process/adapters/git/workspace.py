@@ -58,9 +58,10 @@ from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
 from ...domain.ci import Containment
 from ...domain.docs import Ancestry
-from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
+from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR, kept_path_for
 from ...domain.size_budget import NumstatRow
 from ...domain.task import DependencyState, MergeOutcome
+from ...domain.worktree_sweep import task_of
 from .guard import ForeignCheckout, require_checkout
 
 WORKTREES = Path(".agentic/worktrees")
@@ -220,12 +221,46 @@ class GitWorkspace:
             self._note_base(branch, base)
         # The worktree on disk and not the branch decides `created`: the directory is
         # what the product's setup prepares, and a branch may exist with no worktree
-        # after a `cleanup` or a resume.
+        # after a `cleanup` or a resume. A folder that is not a valid checkout (its `.git`
+        # file lost, GH-1142) is no worktree: it is moved aside and rebuilt.
         created = not path.is_dir()
+        rebuilt = False
+        if not created and not self._is_checkout(path):
+            self._move_aside(path)
+            created = rebuilt = True
         if created:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if rebuilt:
+                # The admin entry of the folder just moved still names its branch.
+                self._git_locked("worktree", "prune")
             self._git_locked("worktree", "add", str(path), branch)
+            if rebuilt and not self._is_checkout(path):
+                raise ForeignCheckout(path, "missing")
         return Checkout(branch=branch, path=path, base=self._base_of(branch), created=created)
+
+    def _is_checkout(self, path: Path) -> bool:
+        """The folder has a gitfile and git, run from it, reports it as its own toplevel."""
+        try:
+            top = self._run("rev-parse", "--show-toplevel", cwd=path)
+        except ForeignCheckout:
+            return False
+        return top.returncode == 0 and Path(top.stdout.strip()).resolve() == path.resolve()
+
+    def _move_aside(self, path: Path) -> None:
+        """Move an invalid task folder to `.agentic/kept/<task>/orphaned-<name>-<stamp>`:
+        nothing in it is deleted (ADR-0011, GH-1142). A move that cannot be made leaves the
+        folder where it is and raises `ForeignCheckout`: no git runs from it."""
+        name = path.name
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        task = task_of(name) or name
+        destination = self.product_dir / kept_path_for(task) / f"orphaned-{name}-{stamp}"
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(path, destination)
+        except OSError as error:
+            reason = "not_a_file" if (path / ".git").exists() else "missing"
+            raise ForeignCheckout(path, reason) from error
+        print(f"agentic: moved invalid worktree {path} to {destination}", file=sys.stderr)
 
     def head(self, path: Path) -> str:
         return self._git("rev-parse", "--short", "HEAD", cwd=path)

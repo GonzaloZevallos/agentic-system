@@ -124,3 +124,81 @@ def test_repository_at_a_task_folder_without_git_does_not_answer_the_products_re
     (worktrees / "GH-2").mkdir(parents=True)
     with pytest.raises(ForeignCheckout):
         workspace.repository_at(worktrees / "GH-2")
+
+
+def lose_gitfile(folder: Path) -> None:
+    (folder / ".git").unlink()
+
+
+def test_a_worktree_that_lost_its_git_is_rebuilt_and_the_merge_never_touches_the_product(
+    repo, capsys
+):
+    workspace = GitWorkspace(repo, IDENTITY)
+    task = workspace.task_checkout("GH-7")
+    part = workspace.subtask_checkout("GH-7", "part")
+    (part.path / "part.txt").write_text("part\n")
+    git("add", "-A", cwd=part.path)
+    git("commit", "-qm", "part work", cwd=part.path)
+    (task.path / "kept-here.txt").write_text("old, uncommitted\n")
+    lose_gitfile(task.path)
+    before = refs_of(repo)
+
+    again = workspace.task_checkout("GH-7")
+    assert again.created is True
+    assert workspace.merge(again.path, part.branch) is None
+
+    assert refs_of(repo) == before
+    assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=again.path) == task.branch
+    assert (again.path / "part.txt").exists()
+    # Nothing is deleted: the old folder is moved under kept/, and it says so on stderr.
+    moved = list((repo / ".agentic" / "kept" / "GH-7").glob("orphaned-GH-7-*"))
+    assert len(moved) == 1
+    assert (moved[0] / "kept-here.txt").read_text() == "old, uncommitted\n"
+    assert f"agentic: moved invalid worktree {task.path} to {moved[0]}" in capsys.readouterr().err
+
+
+def test_a_worktree_whose_git_is_a_directory_is_rebuilt(repo):
+    workspace = GitWorkspace(repo, IDENTITY)
+    task = workspace.task_checkout("GH-8")
+    (task.path / ".git").unlink()
+    (task.path / ".git").mkdir()
+    before = refs_of(repo)
+    again = workspace.task_checkout("GH-8")
+    assert again.created is True
+    assert (again.path / ".git").is_file()
+    assert refs_of(repo) == before
+
+
+def test_a_valid_worktree_is_not_rebuilt(repo):
+    workspace = GitWorkspace(repo, IDENTITY)
+    workspace.task_checkout("GH-9")
+    assert workspace.task_checkout("GH-9").created is False
+    assert not (repo / ".agentic" / "kept").exists()
+
+
+def test_a_folder_whose_gitfile_git_cannot_read_is_rebuilt(repo):
+    workspace = GitWorkspace(repo, IDENTITY)
+    task = workspace.task_checkout("GH-10")
+    (task.path / ".git").write_text("gitdir: /nowhere/at/all\n")
+    again = workspace.task_checkout("GH-10")
+    assert again.created is True
+    assert git("rev-parse", "--show-toplevel", cwd=again.path) == str(again.path.resolve())
+
+
+def test_when_the_move_is_impossible_the_merge_raises_and_the_product_is_unchanged(repo):
+    workspace = GitWorkspace(repo, IDENTITY)
+    task = workspace.task_checkout("GH-11")
+    part = workspace.subtask_checkout("GH-11", "part")
+    (part.path / "part.txt").write_text("part\n")
+    git("add", "-A", cwd=part.path)
+    git("commit", "-qm", "part work", cwd=part.path)
+    lose_gitfile(task.path)
+    (repo / ".agentic" / "kept").write_text("in the way\n")
+    before = refs_of(repo)
+
+    with pytest.raises(ForeignCheckout):
+        workspace.task_checkout("GH-11")
+    with pytest.raises(ForeignCheckout):
+        workspace.merge(task.path, part.branch)
+
+    assert refs_of(repo) == before
