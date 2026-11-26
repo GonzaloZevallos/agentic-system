@@ -26,6 +26,7 @@ classDiagram
     class perf__PerfRefused["PerfRefused"]
     class perf__Report["Report"]
     class presubmit__CheckoutPresubmit["CheckoutPresubmit"]
+    class presubmit__ForwardForm["ForwardForm"]
     class presubmit__Readiness["Readiness"]
     class presubmit__Reuse["Reuse"]
     class run_check__RunCheck["RunCheck"]
