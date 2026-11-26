@@ -90,7 +90,9 @@ async def test_the_section_says_the_timeout_line_never_a_pass():
 
 
 async def test_a_real_red_beside_a_timeout_is_still_a_return():
-    commands = MemoryCommands(pytest=[TIMED_OUT], **{"ruff check .": [CommandResult(1, "E501")] * 2})
+    commands = MemoryCommands(
+        pytest=[TIMED_OUT], **{"ruff check .": [CommandResult(1, "E501")] * 2}
+    )
     patch = await full_checks_in_task_checkout(state_of(), CFG, local_ports(commands))
     assert patch["full_checks"]["passed"] is False
     assert not any(e.get("cause") == "check_timeout" for e in patch.get("pause_log", []))

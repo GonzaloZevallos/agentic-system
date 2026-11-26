@@ -614,7 +614,7 @@ class CheckoutPresubmit:
 
     def timeouts(self) -> list[TimeoutFact]:
         """The checks of the last call that timed out with no failing test (GH-1075), `[]` unless
-        that call checked the commit `head` holds. Derived from `results` on each call, never kept."""
+        that call checked the commit `head` holds. Derived from `results` on each call."""
         checked, head = self._checked_head, self.head
         if checked is None or head is None or not rules.same_commit(checked, head):
             return []
