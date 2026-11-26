@@ -1023,6 +1023,10 @@ class Upstream:
     # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
     # left out), for the run's log and the poll round's output. None when nothing to say.
     note: str | None
+    # GH-1142: the short shas of the product checkout's commits the upstream lacks, and whether
+    # the fetch failed; the data behind `note`, so no caller ever parses the note's text.
+    left_out: tuple[str, ...] = ()
+    fetch_failed: bool = False
 
 
 @dataclass(frozen=True)

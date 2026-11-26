@@ -126,8 +126,6 @@ _LOCK_ERROR = re.compile(r"Unable to create '[^']*\.lock': File exists|cannot lo
 _C_LOCALE = {"LC_ALL": "C"}
 # What git says of a `push --delete` whose ref a racing delete already removed: nothing left to do.
 _REMOTE_REF_GONE = "remote ref does not exist"
-# At most this many left-out local commits are named in a note.
-_LEFT_OUT_SHOWN = 10
 
 
 # Prefix of the line that names a commit in `git log --format`: a control character no
@@ -1177,14 +1175,20 @@ class GitWorkspace:
         failure = self._fetch(remote)
         tip = self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").stdout.strip()
         if failure is None and tip:
-            return Upstream(ref, tip, _left_out_note(self._left_out(ref), None))
+            left_out = self._left_out(ref)
+            return Upstream(ref, tip, _left_out_note(left_out, None), tuple(left_out))
         reason = failure or f"{ref} is not there after the fetch"
         # A failed fetch learnt nothing new about the remote: the last one we did is used
         # only when HEAD is behind it or diverged from it; a HEAD ahead of it, or no last
         # fetch at all, stays as it is today.
         if tip and self._run("merge-base", "--is-ancestor", tip, head).returncode != 0:
+            left_out = self._left_out(ref)
             return Upstream(
-                ref, tip, _left_out_note(self._left_out(ref), f"fetch failed: {reason}")
+                ref,
+                tip,
+                _left_out_note(left_out, f"fetch failed: {reason}"),
+                tuple(left_out),
+                fetch_failed=True,
             )
         return Upstream("HEAD", head, f"fetch failed ({reason}): starting from HEAD")
 
@@ -1411,10 +1415,7 @@ def _left_out_note(left_out: list[str], failure: str | None) -> str | None:
     where a local commit went finds it named; None when there is nothing to say."""
     parts = [failure] if failure else []
     if left_out:
-        shown = ", ".join(left_out[:_LEFT_OUT_SHOWN])
-        more = len(left_out) - _LEFT_OUT_SHOWN
-        extra = f" and {more} more" if more > 0 else ""
-        parts.append(f"local commits not on the upstream are left out of the base: {shown}{extra}")
+        parts.append(rules.local_commits_note(left_out))
     return "; ".join(parts) or None
 
 

@@ -309,6 +309,7 @@ def _merge_facts(
     current_master: str | None,
     *,
     comments: Sequence[IssueComment] | None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> rules.MergeFacts:
     """What the poller can know about a delivered task before any worktree exists, every
     fact off the product checkout's own document, the tracker and the upstream sha --
@@ -355,6 +356,7 @@ def _merge_facts(
         ),
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
+        eval_set_unread=eval_set_unread if eval_set is None else None,
         touched_paths=None,
         ci_untrusted=None,
         merge_ci=tuple(raw.get("merge_ci") or ()),
@@ -709,6 +711,7 @@ def assess_merge(
     cfg: Configuration | None,
     memo: StackMemo,
     now: datetime | None = None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
@@ -743,6 +746,7 @@ def assess_merge(
         number,
         current_master,
         comments=read_comments(ports, task_id) if thread_needed(raw) else [],
+        eval_set_unread=eval_set_unread,
     )
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
     # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
@@ -1183,6 +1187,7 @@ def evaluate_landing_order(
     *,
     memo: StackMemo,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.advance`, the one
@@ -1231,7 +1236,16 @@ def evaluate_landing_order(
             continue
         try:
             assessed = assess_merge(
-                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo, now=now
+                ports,
+                task_id,
+                raw,
+                number,
+                eval_set,
+                current_master,
+                cfg=cfg,
+                memo=memo,
+                now=now,
+                eval_set_unread=eval_set_unread,
             )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
@@ -1567,6 +1581,7 @@ def gather_merges(
     memo: StackMemo,
     dry_run: bool,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1618,6 +1633,7 @@ def gather_merges(
         integrating,
         memo=memo,
         skip=skip,
+        eval_set_unread=eval_set_unread,
     )
 
     def at_work(task_id: str) -> bool:
@@ -1701,6 +1717,8 @@ def gather_merges(
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            if decision.reason == "eval_set_unreadable" and facts.eval_set_unread is not None:
+                line += f" ({facts.eval_set_unread})"
             if decision.reason == "merge_conflict" and assessed.conflict_source is not None:
                 line += f" ({assessed.conflict_source})"
             if decision.reason == "checks_failed":
@@ -3215,6 +3233,20 @@ def _recent_spend(ports: Ports, now: datetime) -> tuple[list[rules.SpendRun], in
     return fresh, skipped
 
 
+def eval_set_unread_of(
+    upstream: Upstream, eval_set: frozenset[int] | None
+) -> rules.EvalSetUnread | None:
+    """Why `eval_set` is `None` for this round's `upstream` (GH-1142), `None` when it was
+    read. The upstream's data decides, never its note's text: any note besides the left-out
+    commits (no upstream, a failed fetch) is `failure`; a clean upstream with an unread set
+    is a declaration that did not parse."""
+    if eval_set is not None:
+        return None
+    only_left_out = bool(upstream.left_out) and not upstream.fetch_failed
+    failure = bool(upstream.note) and not only_left_out
+    return rules.eval_set_unread_cause(upstream.sha is not None, upstream.left_out, failure, False)
+
+
 def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
     """The one line a round says about its upstream, when it asked for one at all and the
     answer was not the plain fetched tip (GH-180): the poller's output is where a human
@@ -3720,6 +3752,7 @@ def run_once(
                 memo=stack_memo,
                 dry_run=dry_run,
                 skip=stack_held,
+                eval_set_unread=eval_set_unread_of(upstream(), eval_set),
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

@@ -6221,6 +6221,43 @@ MergeRefusal = Literal[
 """
 
 
+# At most this many left-out local commits are named in the sentence.
+_LEFT_OUT_SHOWN = 10
+
+EvalSetUnread = Literal["no_sha", "upstream_note", "local_commits", "unparsable"]
+
+
+def local_commits_note(shas: Sequence[str]) -> str:
+    """The one sentence that says the product checkout has commits the upstream lacks (GH-1142):
+    the workspace's note, the poll's upstream line and the refusal comment all take it from
+    here, so the owner reads the same words wherever the cause shows."""
+    shown = ", ".join(shas[:_LEFT_OUT_SHOWN])
+    more = len(shas) - _LEFT_OUT_SHOWN
+    extra = f" and {more} more" if more > 0 else ""
+    noun = "commit" if len(shas) == 1 else "commits"
+    return (
+        f"the product checkout has {len(shas)} local {noun} not on the upstream: "
+        f"{shown}{extra}, left out of the base"
+    )
+
+
+def eval_set_unread_cause(
+    sha_known: bool, left_out: Sequence[str], failure: bool, parsed: bool
+) -> EvalSetUnread | None:
+    """Why the evaluation set could not be read, `None` when it could (GH-1142). `failure` is
+    any note of the upstream besides the left-out commits (no upstream, a failed fetch): it
+    wins over local commits, because then the base is not the plain fetched tip. Local commits
+    with a clean fetch are the cause the owner can act on; a declaration that does not parse
+    is the last."""
+    if not sha_known:
+        return "no_sha"
+    if failure:
+        return "upstream_note"
+    if left_out:
+        return "local_commits"
+    return None if parsed else "unparsable"
+
+
 @dataclass(frozen=True)
 class MergeFacts:
     """Every fact `auto_merge_decision` reads, gathered by the caller from the product
@@ -6339,6 +6376,9 @@ class MergeFacts:
     ci_red_on_base: tuple[str, ...] = ()
     github_conflicting: bool = False
     close_docs: CloseDocs | None = None
+    # GH-1142: why `in_eval_set` is `None`, for the poll line and the refusal comment only;
+    # `auto_merge_decision` never reads it.
+    eval_set_unread: EvalSetUnread | None = None
     # GH-453: what the CI says about the jobs that cover the checks the latest `full_checks`
     # record of this very head deferred (`deferral_state`), `None` when it deferred none.
     deferral: ci.CoveringState | None = None

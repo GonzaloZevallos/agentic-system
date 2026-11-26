@@ -9,6 +9,8 @@ import dataclasses
 from datetime import UTC, datetime
 from typing import Literal, get_args
 
+import pytest
+
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import (
     landing,
@@ -89,10 +91,10 @@ def _ready(ports, number: int, checks: bool = True, **more) -> None:
     ports.documents.save(document)
 
 
-def _merges(ports, eval_set=frozenset(), master: str | None = MASTER, lock=None):
+def _merges(ports, eval_set=frozenset(), master: str | None = MASTER, lock=None, **more):
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, eval_set, master, lock or _Locks(), lines, dry_run=False, memo=StackMemo()
+        ports, eval_set, master, lock or _Locks(), lines, dry_run=False, memo=StackMemo(), **more
     )
     return found, lines
 
@@ -269,6 +271,43 @@ def test_an_unreadable_eval_set_refuses_every_issue():
     # GH-588: the head is refused with its reason; the next one waits behind it.
     assert lines[0].endswith("left to the human: eval_set_unreadable")
     assert lines[1] == "agentic: poll: auto-merge #6 -> waiting (unread) behind #5"
+
+
+def test_an_unreadable_eval_set_line_names_its_cause_and_a_readable_one_has_none():
+    """GH-1142: the poll line ends with the cause; the sentence itself is the round's one
+    upstream line, never one per pull request."""
+    _, lines = _merges(_ports(5, 6), eval_set=None, eval_set_unread="local_commits")
+    assert lines[0].endswith("left to the human: eval_set_unreadable (local_commits)")
+    assert "local commit" not in " ".join(lines)
+    _, plain = _merges(_ports(5), eval_set=None)
+    assert plain[0].endswith("left to the human: eval_set_unreadable")
+
+
+@pytest.mark.parametrize(
+    ("upstream", "eval_set", "cause"),
+    [
+        (Upstream("HEAD", None, "no base"), None, "no_sha"),
+        (Upstream("HEAD", MASTER, "fetch failed (x): starting from HEAD"), None, "upstream_note"),
+        (
+            Upstream("r", MASTER, "fetch failed: x; y", ("a1",), fetch_failed=True),
+            None,
+            "upstream_note",
+        ),
+        (Upstream("r", MASTER, "the sentence", ("a1",)), None, "local_commits"),
+        (Upstream("r", MASTER, None), None, "unparsable"),
+        (Upstream("r", MASTER, None), frozenset({5}), None),
+        (Upstream("r", MASTER, "the sentence", ("a1",)), frozenset(), None),
+    ],
+)
+def test_the_cause_of_an_unread_eval_set_comes_from_the_upstream_data(upstream, eval_set, cause):
+    assert poll.eval_set_unread_of(upstream, eval_set) == cause
+
+
+def test_the_upstream_line_says_the_product_checkout_has_local_commits():
+    note = rules.local_commits_note(["abc1234"])
+    lines = poll._upstream_notes(True, lambda: Upstream("r", MASTER, note, ("abc1234",)))
+    assert lines == [f"agentic: poll: upstream: {note}"]
+    assert "the product checkout has 1 local commit not on the upstream" in lines[0]
 
 
 def test_a_live_lock_skips_the_issue_without_a_line():

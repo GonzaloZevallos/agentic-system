@@ -19,7 +19,7 @@ from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.application import landing_plan
+from agentic.core.process.application import landing_plan, poll
 from agentic.core.process.application import merge as merge_module
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import (
@@ -364,6 +364,30 @@ def test_the_eval_set_helper_reads_upstream_and_refuses_what_it_cannot_read(worl
     assert cli._upstream_eval_set(world.ports, world.ports.workspace.upstream()) is None
 
     assert cli._upstream_eval_set(world.ports, Upstream("HEAD", "a" * 40, "fell back")) is None
+
+
+def test_a_master_ahead_of_the_upstream_refuses_naming_the_local_commits(world):
+    """GH-1142: the refusal id stays `eval_set_unreadable`; the comment and the poll's lines say
+    why: the product checkout has a commit the upstream lacks."""
+    (world.product / "local.txt").write_text("l\n")
+    git("add", "local.txt", cwd=world.product)
+    git("commit", "-q", "-m", "local only", cwd=world.product)
+    local = git("rev-parse", "--short", "HEAD", cwd=world.product)
+    upstream = world.ports.workspace.upstream()
+    sentence = rules.local_commits_note([local])
+    assert upstream.left_out == (local,) and upstream.note == sentence
+    assert cli._upstream_eval_set(world.ports, upstream) is None
+
+    world.merge()
+
+    assert world.tracker.merge_calls == []
+    [(_, comment)] = world.tracker.comments
+    assert comment.startswith(f"Auto-merge refused: {world.head} eval_set_unreadable")
+    assert sentence in comment
+    assert "the product checkout has 1 local commit not on the upstream" in comment
+    lines = poll._upstream_notes(True, lambda: upstream)
+    assert lines == [f"agentic: poll: upstream: {sentence}"]
+    assert poll.eval_set_unread_of(upstream, None) == "local_commits"
 
 
 def test_a_guarded_path_is_no_longer_refused_it_merges_on_the_local_checks(world):
