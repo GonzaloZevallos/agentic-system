@@ -2453,3 +2453,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-26T10:15:32.092+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Check each plan invariant against every exit path, including errors raised by helpers you call, not only the main path. Add a test for each failure path before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1089
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-26T16:06:02.640+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add files of a new kind, such as fixtures or data, run the declared affected-only tests check on your head before you deliver, and add the mapping row it asks for.
+  confidence: medium
+  seen_in:
+  - GH-1089
+  sources:
+  - finding
+  added_at: '2026-11-26T16:06:02.640+00:00'
