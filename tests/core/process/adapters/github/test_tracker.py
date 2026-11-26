@@ -15,6 +15,7 @@ from agentic.core.process.application.ports import (
     MergeCallFailed,
     TrackerCallFailed,
     TrackerTimedOut,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from agentic.core.process.domain import rules
@@ -25,7 +26,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
-from agentic.core.process.domain.github_access import GithubAccess
+from agentic.core.process.domain.github_access import GithubAccess, Turn
 from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -2606,3 +2607,52 @@ def test_a_tracker_with_no_access_passes_none(monkeypatch):
     seen = _spied_access(monkeypatch)
     GhTracker(Path("/p"), Recorder()).comment("GH-12", "PR: x")
     assert seen == [None]
+
+
+class RefusingGate:
+    """A fake `WriteGate` that refuses the turn of every write."""
+
+    cap_s = 60.0
+
+    def __init__(self, outcome="refused"):
+        self.outcome = outcome
+        self.asked = 0
+
+    def take(self, remaining_s):
+        self.asked += 1
+        return Turn(self.outcome, 0.0)
+
+
+def test_a_refused_turn_on_pr_merge_raises_turn_refused_not_gh_unreadable_and_never_runs_it():
+    run = MethodRecorder(True, True, True)
+    gate = RefusingGate()
+    tracker = GhTracker(Path("/p"), run, log=lambda line: None, access=GithubAccess(gate=gate))
+    with pytest.raises(TrackerTurnRefused) as raised:
+        tracker.merge(PR_URL, "abc123")
+    assert not isinstance(raised.value, MergeCallFailed)
+    assert gate.asked == 1  # `repo view` is a read: only the merge asked for a turn
+    assert [call[1:3] for call in run.calls] == [["repo", "view"]]  # `gh pr merge` never ran
+
+
+def test_a_stopped_turn_on_pr_merge_is_refused_the_same_way():
+    run = MethodRecorder(True, True, True)
+    tracker = GhTracker(
+        Path("/p"), run, log=lambda line: None, access=GithubAccess(gate=RefusingGate("stopped"))
+    )
+    with pytest.raises(TrackerTurnRefused):
+        tracker.merge(PR_URL, "abc123")
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+
+
+def test_a_refused_turn_makes_a_note_a_transient_failure_and_raises_nothing():
+    run = Recorder()
+    tracker = GhTracker(
+        Path("/p"),
+        run,
+        log=lambda line: None,
+        now=lambda: "2026-11-26T00:00:00+00:00",
+        access=GithubAccess(gate=RefusingGate()),
+    )
+    failure = tracker.note("GH-7", "a note")
+    assert failure is not None and failure.cls == "transient" and failure.target == "comment"
+    assert run.calls == []
