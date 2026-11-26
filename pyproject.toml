@@ -84,6 +84,7 @@ files = [
     "agentic/core/process/adapters/github/commit_ci.py",
     "agentic/core/process/adapters/git/master_window.py",
     "agentic/core/process/adapters/git/ancestry.py",
+    "agentic/core/process/adapters/git/guard.py",
     "agentic/core/process/adapters/github/format_fix_reads.py",
     "agentic/core/process/adapters/filesystem/scratch.py",
     "agentic/core/process/adapters/filesystem/free_space.py",
