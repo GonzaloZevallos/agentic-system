@@ -61,6 +61,7 @@ from ...domain.docs import Ancestry
 from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
 from ...domain.size_budget import NumstatRow
 from ...domain.task import DependencyState, MergeOutcome
+from .guard import ForeignCheckout, require_checkout
 
 WORKTREES = Path(".agentic/worktrees")
 # The glob covers SQLite's journal next to the file. `LOGS_DIR`: every invocation's log
@@ -180,6 +181,7 @@ class GitWorkspace:
         # Absolute before anything: `-C` is read from the process's directory, and so
         # would a relative answer be, which are not the same place.
         target = path.resolve()
+        require_checkout(target, self.product_dir / WORKTREES)
         try:
             result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
         except OSError:
@@ -1278,6 +1280,10 @@ class GitWorkspace:
     def _run_with_env(
         self, env: Mapping[str, str], *args: str, cwd: Path | None = None
     ) -> subprocess.CompletedProcess[str]:
+        if cwd is not None:
+            # Before any git runs: a task folder without its `.git` would walk up to the
+            # product checkout (GH-1142, ADR-0002).
+            require_checkout(cwd, self.product_dir / WORKTREES)
         return subprocess.run(
             ["git", *args],
             cwd=cwd or self.product_dir,
