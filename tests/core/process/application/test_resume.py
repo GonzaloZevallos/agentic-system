@@ -1310,3 +1310,30 @@ async def test_a_pending_record_whose_check_would_refuse_the_remainder_still_fin
     assert runner.calls == []
     assert patch["carve_out"]["outcome"] == "applied" and list(patch["subtasks"]) == ["api", "b"]
     assert patch.get("escalation_class") is None
+
+
+def test_a_saved_sizer_failure_resumes_to_the_early_check_once_more_then_to_the_plan():
+    fail = {"verdict": "go", "cause": "sizer_failed", "at": "2026-11-19T10:00:00+00:00"}
+    again = {**fail, "at": "2026-11-19T11:00:00+00:00", "hand_files": 3, "estimated_cost_usd": 2.5}
+    ports = memory_ports()
+    base = {
+        "id": "GH-2",
+        "title": "t",
+        "description": "d",
+        "status": "definition_ready",
+        "type": "feature",
+    }
+    ports.documents.save(document.parse(document.render({**base, "early_split": [fail]})))
+    resumed = resume.from_document("GH-2", ports)
+    assert resumed["early_split"] == [fail]
+    assert not rules.early_measured(resumed)
+    assert rules.resume_target(resumed) == "early_size"
+    rows = [fail, again]
+    ports.documents.save(document.parse(document.render({**base, "early_split": rows})))
+    resumed = resume.from_document("GH-2", ports)
+    assert resumed["early_split"] == rows
+    assert isinstance(resumed["early_split"][1]["at"], str)
+    assert isinstance(resumed["early_split"][1]["hand_files"], int)
+    assert isinstance(resumed["early_split"][1]["estimated_cost_usd"], float)
+    assert rules.early_measured(resumed)
+    assert rules.resume_target(resumed) == "plan"
