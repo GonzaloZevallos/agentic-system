@@ -14,6 +14,7 @@ from agentic.composition import stage0_master_window
 from agentic.core.process.adapters.git.master_window import GitMasterWindow
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.commit_ci import GhCommitCi
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.github.tracker import COMMIT_CI_QUERY, commit_report
 from agentic.core.process.domain import stage0_window
 from agentic.core.process.domain.ci import CiReport, CiUnreadable
@@ -194,7 +195,12 @@ def test_the_query_takes_the_oid_as_a_git_object_id_and_not_the_ghost_run_count(
 
 def test_the_factory_builds_a_window_that_reads_ci_by_sha():
     window = stage0_master_window(
-        Path("/r"), "https://example.test/o/r.git", Path("/p"), lambda s: (), GithubAccess()
+        Path("/r"),
+        "https://example.test/o/r.git",
+        Path("/p"),
+        lambda s: (),
+        GithubAccess(),
+        InProcessGhCallLog(),
     )
     assert isinstance(window, GitMasterWindow)
     assert isinstance(window.ci, GhCommitCi)

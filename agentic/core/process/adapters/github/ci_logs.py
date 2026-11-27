@@ -16,6 +16,7 @@ from typing import Protocol
 
 import yaml
 
+from ...application.ports import GhCallLog
 from ...domain import rules
 from ...domain.ci import (
     FLAKE_BLOCK_PREFIX,
@@ -31,7 +32,7 @@ from ...domain.ci import (
     runs_of,
 )
 from ...domain.landing import CI_LOG_JOBS
-from .run import StreamRead, bounded_stream
+from .run import StreamRead, stream_gh
 
 # Declared, not measured: a failed step's log is a few hundred KB at most on this product's CI.
 CI_LOG_JOB_BYTES = 1024 * 1024
@@ -48,12 +49,22 @@ _LOG_TIMESTAMP = re.compile(r"\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
 
 class _Stream(Protocol):
     def __call__(
-        self, args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        max_bytes: int,
+        timeout_s: float,
+        calls: GhCallLog | None,
     ) -> StreamRead: ...
 
 
-def _tail_stream(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
-    return bounded_stream(args, cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True)
+def _tail_stream(
+    args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: GhCallLog | None
+) -> StreamRead:
+    return stream_gh(
+        args, cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True, calls=calls
+    )
 
 
 class GhCiLogs:
@@ -65,13 +76,15 @@ class GhCiLogs:
         product_dir: Path,
         ci_report: Callable[[str], CiReport | CiUnreadable],
         *,
-        stream: _Stream = bounded_stream,
+        stream: _Stream = stream_gh,
         max_bytes: int = CI_LOG_JOB_BYTES,
         timeout_s: float = CI_LOG_TIMEOUT_S,
         flake_stream: _Stream = _tail_stream,
         flake_max_bytes: int = CI_FLAKE_LOG_BYTES,
         declared: Callable[[], Sequence[str]] = lambda: (),
+        calls: GhCallLog | None = None,
     ) -> None:
+        self._calls = calls
         self._declared = declared
         self._product_dir = product_dir
         self._ci_report = ci_report
@@ -108,10 +121,14 @@ class GhCiLogs:
         ids = JOB_LINK.search(check.link)
         if ids is None:
             return _unread(check.name, check.link, "unreadable")
-        args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log-failed"]
+        args = ["run", "view", ids.group(1), "--job", ids.group(2), "--log-failed"]
         try:
             read = self._stream(
-                args, cwd=self._product_dir, max_bytes=self._max_bytes, timeout_s=self._timeout_s
+                args,
+                cwd=self._product_dir,
+                max_bytes=self._max_bytes,
+                timeout_s=self._timeout_s,
+                calls=self._calls,
             )
         except (OSError, ValueError, subprocess.SubprocessError):
             return _unread(check.name, check.link, "unreadable")
@@ -157,13 +174,14 @@ class GhCiLogs:
         ids = JOB_LINK.search(check.link)
         if ids is None:
             return None
-        args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log"]
+        args = ["run", "view", ids.group(1), "--job", ids.group(2), "--log"]
         try:
             read = self._flake_stream(
                 args,
                 cwd=self._product_dir,
                 max_bytes=self._flake_max_bytes,
                 timeout_s=self._timeout_s,
+                calls=self._calls,
             )
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
