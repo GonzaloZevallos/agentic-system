@@ -1873,10 +1873,11 @@ def _budget_step(
     sink: Telemetry | None,
 ) -> Callable[[], None] | None:
     """The end of a poller round's GraphQL budget line (GH-939): `None` when there is no `read`
-    or no `gh_calls` (only `main`'s poll dispatch wires the process log), so nothing runs. Otherwise one call drains the log, reads, and prints the line; a stdout
-    that refuses the line (`OSError`) costs the line, never the loop. The carry lives as long as
-    the loop that built this. Synchronous on purpose: the read is bounded, and it blocks the way
-    the round's other `gh` calls do."""
+    or no `gh_calls` (only `main`'s poll dispatch wires the process log), so nothing runs.
+    Otherwise one call drains the log, reads, and prints the line; a stdout that refuses the
+    line (`OSError`) costs the line, never the loop. The carry lives as long as the loop that
+    built this. Synchronous on purpose: the read is bounded, and it blocks the way the round's
+    other `gh` calls do."""
     if read is None or gh_calls is None:
         return None
     log = gh_calls
