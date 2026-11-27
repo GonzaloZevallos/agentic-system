@@ -75,6 +75,7 @@ import errno
 import os
 import re
 import shlex
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
@@ -85,7 +86,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import Presubmit, RunStopped, SchemaGuard
+from ...application.ports import CheckAbandoned, Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
@@ -146,6 +147,10 @@ STORE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 STORE_WORDS = (".key", "agentic-setup-tree")
 
 
+# What the delivery hook and the `run_check` tool answer to a call of an abandoned attempt.
+ABANDONED_REPLY = "the attempt was abandoned; no check was run"
+
+
 @dataclass
 class TurnCount:
     """The runner's own tally of main-thread `AssistantMessage`s, the quantity
@@ -158,6 +163,25 @@ class TurnCount:
     hand."""
 
     value: int = 0
+
+
+class AttemptAbandon:
+    """Whether one attempt was abandoned (GH-1169): one instance per attempt, built in
+    `ClaudeSdkRunner.run_once` beside `HookActivity` and `TurnCount`, never kept at module
+    level and never stored in a `Presubmit` or a `RunCheck`, so the flag cannot outlive the
+    attempt that made it. The runner sets it on every exit of the attempt, before it reaps;
+    the delivery gate and `run_check`, which run in threads the reap cannot reach, poll
+    `is_set` and stop waiting for a share and launching checks. A check already launched is
+    not reached by it: it ends by its own wall, never by the attempt's stall reap."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
 
 
 class HookActivity:
@@ -559,6 +583,10 @@ def _delivery_gate(
                 # attempt, which the signal is already delivering, ends the wait; the hard
                 # deadline is the net if it never comes.
                 await anyio.sleep_forever()
+            except CheckAbandoned:
+                # The attempt was abandoned (GH-1169): this is not a refusal of the gate, so
+                # it is not counted and the hook does not wait; the answer is for nobody.
+                return _deny(ABANDONED_REPLY)
             if reason:
                 if on_presubmit_denied is not None:
                     on_presubmit_denied()
