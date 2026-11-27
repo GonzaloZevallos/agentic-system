@@ -2074,3 +2074,52 @@ def test_merge_without_a_message_keeps_gits_own(product):
     _commit_on(ws, other.path, "two")
     assert ws.merge(task.path, other.branch) is None
     assert git("log", "-1", "--format=%s", cwd=task.path).startswith("Merge")
+
+
+def _second_commit(repo: Path) -> str:
+    (repo / "NEXT.md").write_text("v1\n")
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v1", cwd=repo)
+    return git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_task_checkout_with_a_start_creates_the_branch_there_and_notes_its_base(product):
+    first = git("rev-parse", "HEAD", cwd=product)
+    second = _second_commit(product)
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12", start=lambda: first)
+    assert git("rev-parse", "agentic/GH-12", cwd=product) == first != second
+    assert (
+        task.base == ws.base_of("agentic/GH-12") == git("rev-parse", "--short", first, cwd=product)
+    )
+    assert not (task.path / "NEXT.md").exists()
+
+
+def test_task_checkout_without_a_start_still_starts_at_the_upstream(product):
+    second = _second_commit(product)
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12", start=None)
+    assert git("rev-parse", "agentic/GH-12", cwd=product) == second
+
+
+def test_the_start_is_never_asked_when_the_branch_exists(product):
+    first = git("rev-parse", "HEAD", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    asked: list[str] = []
+
+    def start() -> str:
+        asked.append("asked")
+        return first
+
+    again = ws.task_checkout("GH-12", start=start)
+    assert asked == [] and not again.created
+
+
+def test_a_start_that_does_not_exist_leaves_no_branch_worktree_or_base(product):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError):
+        ws.task_checkout("GH-12", start=lambda: "f" * 40)
+    assert git("branch", "--list", "agentic/GH-12", cwd=product) == ""
+    assert not (product / ".agentic/worktrees/GH-12").exists()
+    assert ws.base_of("agentic/GH-12") is None
