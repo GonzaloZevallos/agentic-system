@@ -1708,3 +1708,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1070
+  GH-1123@review:
+    cost_usd: 0.0
