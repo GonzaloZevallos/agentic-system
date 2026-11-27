@@ -1801,7 +1801,7 @@ async def _poll(
     `budget_read` (GH-939) is the zero-argument read of `gh api rate_limit`; with it `None` the
     budget step does not exist and nothing is printed or drained. With one, every round ends
     (in a `finally`, so after a failed or crashed round too) with the line `budget_round`
-    returns, drained from `gh_calls` (the process log when left out) and sent to
+    returns, drained from `gh_calls` (without it the step does not run either) and sent to
     `budget_telemetry` (`NoTelemetry` when left out). Only `main`'s poll dispatch passes them."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
@@ -1872,14 +1872,14 @@ def _budget_step(
     gh_calls: GhCallLog | None,
     sink: Telemetry | None,
 ) -> Callable[[], None] | None:
-    """The end of a poller round's GraphQL budget line (GH-939): `None` when there is no `read`,
-    so nothing runs. Otherwise one call drains the log, reads, and prints the line; a stdout
+    """The end of a poller round's GraphQL budget line (GH-939): `None` when there is no `read`
+    or no `gh_calls` (only `main`'s poll dispatch wires the process log), so nothing runs. Otherwise one call drains the log, reads, and prints the line; a stdout
     that refuses the line (`OSError`) costs the line, never the loop. The carry lives as long as
     the loop that built this. Synchronous on purpose: the read is bounded, and it blocks the way
     the round's other `gh` calls do."""
-    if read is None:
+    if read is None or gh_calls is None:
         return None
-    log = gh_calls if gh_calls is not None else composition.process_call_log()
+    log = gh_calls
     exporter = sink if sink is not None else NoTelemetry()
     carry = BudgetCarry()
 

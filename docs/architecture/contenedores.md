@@ -87,6 +87,15 @@ es el aviso inicial, las líneas de la ronda, las notas `would ...` y una línea
 `dry-run: unclassified <Puerto>.<nombre>` por cada rechazo. Termina con 0; con 1 si hubo algún
 rechazo o si el tracker falló (`TrackerCallFailed`, `round ended early`).
 
+Cada ronda de `agentic/cli.py:_poll` termina, en un `finally` (también tras `TrackerCallFailed` o
+cualquier otra excepción) y antes del sleep, con la línea `agentic: poll: graphql budget: ...` (GH-939).
+La arma `agentic/core/process/application/budget_round.py:budget_round`: drena el registro de
+llamadas `gh`, lee `gh api rate_limit` con `agentic/composition.py:budget_read` (acotada a
+`BUDGET_READ_TIMEOUT_S` = 5 s y nunca contada en ningún `GhCallLog` real) y calcula los puntos de
+la ronda con `domain/github_budget.py:round_points`. Solo corre si `main` pasa `budget_read` y
+`gh_calls`; sin alguno de los dos, `_poll` no imprime ni drena nada. La lectura es síncrona y puede
+frenar el lazo hasta unos 5 s, igual que las demás llamadas `gh` de la ronda.
+
 Al final de cada ronda, `poll.run_once` corre el barrido de worktrees (GH-824): borra los
 checkouts bajo `.agentic/worktrees` de las tareas cuyo issue está CLOSED, nunca las ramas. Corre
 después de `execute` y antes de `board_sync.mirror`, fuera de `registry.exclusive()`, y solo si la

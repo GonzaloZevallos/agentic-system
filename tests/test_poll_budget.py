@@ -274,6 +274,20 @@ async def test_without_a_read_no_budget_line_is_printed_and_the_log_is_not_drain
     assert log.drain()["api"] == 1
 
 
+@pytest.mark.anyio
+async def test_a_read_without_a_call_log_prints_no_budget_line(tmp_path, capsys):
+    reads: list[int] = []
+
+    def read() -> object:
+        reads.append(1)
+        return document(5)
+
+    await Loop(tmp_path, 1).run(budget_read=read, budget_telemetry=NoTelemetry())
+
+    assert budget_lines(capsys.readouterr().out) == []
+    assert reads == []
+
+
 @pytest.fixture
 def fresh_process_log() -> Iterator[None]:
     composition.process_call_log.cache_clear()
