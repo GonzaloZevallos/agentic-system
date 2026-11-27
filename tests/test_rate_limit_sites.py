@@ -31,7 +31,7 @@ from agentic.core.process.domain.task import StackParent
 from agentic.core.process.domain.worktree_sweep import SweepMemory
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeBoard, FakeBoardSent, MemoryInbox, memory_ports
-from tests.test_worktree_sweep import Clock, Lock, world
+from tests.fakes_worktree_sweep import Clock, Lock, world
 
 RATE_LIMITED = "GraphQL: API rate limit already exceeded for user ID 1."
 UNREACHABLE = "error connecting to api.github.com"
