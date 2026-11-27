@@ -7643,6 +7643,10 @@ class BlockerReport:
     open: tuple[int, ...] = ()
     closed_unresolved: tuple[tuple[int, BlockerReason], ...] = ()
     unknown: tuple[int, ...] = ()
+    # The one Ready same-split parent a stacked start would build on (GH-858, ADR-0103): an
+    # issue number, never a sha. Outside `__bool__` on purpose -- it is a reading, not a
+    # verdict: nothing resolves a blocker but `_blocker_verdict`'s merged-in-upstream check.
+    stacked_on: int | None = None
 
     def __bool__(self) -> bool:
         return bool(self.open or self.closed_unresolved or self.unknown)

@@ -1358,11 +1358,15 @@ class Workspace(Protocol):
         sha, and it never decides whether a replace is warranted: its caller does."""
         ...
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         """The full sha `origin` holds for `branch`, whose object is local afterwards (it
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
         remote has no such branch. A failed read, an unreachable origin or a remote that
-        moved between the read and the fetch raises `GitError`: it is never "absent"."""
+        moved between the read and the fetch raises `GitError`: it is never "absent".
+        `bounded=True` (the stacking judgement, GH-858) runs each git step under
+        `FETCH_TIMEOUT_S`, a timeout being a `GitError` too, and fetches into
+        `refs/agentic/stacking-tips/<branch>` instead of `refs/agentic/remote-tips/<branch>`;
+        the default is the call every other caller makes."""
         ...
 
     def publish_ci_ref(self, path: Path, ref: str) -> None:

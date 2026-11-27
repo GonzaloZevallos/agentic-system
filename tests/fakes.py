@@ -1038,6 +1038,8 @@ class MemoryWorkspace:
         self.remote_tips: dict[str, str] = {}
         self.remote_tip_error: str | None = None
         self.remote_tip_calls: list[tuple[Path, str]] = []
+        # The `bounded` flag of each `remote_tip` ask, in the same order as `remote_tip_calls`.
+        self.remote_tip_bounded: list[bool] = []
         # GH-376: `ci_refs` is the sha each `agentic-ci/` ref holds on the fake remote;
         # `ci_ref_calls` is every `publish_ci_ref` / `remote_refs` / `delete_remote_ref`
         # as `(verb, argument)`, and `ci_ref_error` makes each of them raise `GitError`.
@@ -1435,8 +1437,9 @@ class MemoryWorkspace:
         self.pushed.append(branch)
         self.pushes.append((branch, lease))
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         self.remote_tip_calls.append((path, branch))
+        self.remote_tip_bounded.append(bounded)
         if self.remote_tip_error is not None:
             raise GitError(self.remote_tip_error)
         return self.remote_tips.get(branch)

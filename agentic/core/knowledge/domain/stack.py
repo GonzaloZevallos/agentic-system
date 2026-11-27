@@ -1661,7 +1661,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "`numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or "
         "`yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated "
         "form instead of renumbering it",
-    ),    KeyReference(
+    ),
+    KeyReference(
         "stacking",
         stacking,
         (),
