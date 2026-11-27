@@ -3781,3 +3781,24 @@ async def test_a_rate_limit_a_check_hits_is_not_a_refusal_the_repairs_try_to_fix
     assert output is None
     assert "failures" not in patch
     assert rules.auto_resumable({"id": "T-1", **patch}) == "github_rate_limit"
+
+
+async def test_two_stalls_in_the_hook_end_in_a_session_stalled_escalation_comment(tmp_path):
+    from agentic.core.process.application import escalate
+    from agentic.core.process.domain import escalation_prompts
+
+    def hung() -> AttemptFailed:
+        return AttemptFailed(
+            "stalled", session_id="s-1", reason="stall", stall=Stall(1801, "system", True)
+        )
+
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(ScriptedRunner(pjm=[hung(), hung(), OK]))
+    patch = escalation(caught.value, at="2026-11-27T00:00:00+00:00")
+    merged = apply({"id": "GH-12", "pause_log": []}, patch)
+
+    text = escalate.comment(merged, Configuration(product_dir=tmp_path), memory_ports())
+
+    assert text.splitlines()[0].endswith(" (session_stalled)")
+    assert f"Question: {escalation_prompts.SESSION_STALLED_PROMPT[0]}" in text
+    assert merged["escalation_cause"] is None
