@@ -1163,9 +1163,14 @@ class MemoryWorkspace:
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
 
-    def task_checkout(self, task_id: str) -> Checkout:
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
         branch = rules.task_branch(task_id)
-        return self._made(branch, self.ROOT / task_id, "base0")
+        path = self.ROOT / task_id
+        # As the real one: the start is asked only for a branch not made yet, and its sha is
+        # the base. Without one, the default base.
+        if start is not None and branch not in self.checkouts_made:
+            return self._made(branch, path, start())
+        return self._made(branch, path, "base0")
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
         branch = rules.subtask_branch(task_id, subtask_id)
