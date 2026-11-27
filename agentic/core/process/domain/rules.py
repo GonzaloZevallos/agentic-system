@@ -7319,6 +7319,12 @@ def split_part_of(body: str) -> tuple[str, int, int] | None:
     return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
+def split_marker_ids(body: str) -> tuple[str, ...]:
+    """The task id of every `agentic-split` marker the body carries, in order. The stacking
+    judgement (GH-858) needs exactly one, so a body that holds two reads as ambiguous."""
+    return tuple(found.group(1) for found in _SPLIT_MARKER.finditer(body))
+
+
 # How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
 # size budget is repeated here; the budget is `size_budget.budget_text`.
 SLICING_RULES = (
