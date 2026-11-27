@@ -167,23 +167,40 @@ class HookActivity:
     hook runs the product's checks and can be silent for far longer than any stall
     threshold; the watchdog reads this to know the silence is the hook's, and to
     restart the whole threshold from the moment it left. `clock` is the runner's own
-    monotonic clock, so the instant is on the scale the watchdog compares it against."""
+    monotonic clock, so the instant is on the scale the watchdog compares it against.
+
+    Each live entry holds its expiry (`entered + ceiling_s` on that clock) or None when
+    its caller declared no ceiling; `expires` is the latest of them, so the watchdog stops
+    renewing on a hook only once every live one is past its own caller's deadline."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self.in_flight = 0
+        self._entries: dict[object, float | None] = {}
         self.last_exit: float | None = None
         # Whether any hook of this attempt raised `OSError(ENOSPC)` (GH-391); the SDK
         # answers the CLI with an error and the runner would otherwise never know.
         self.enospc = False
         self._clock = clock
 
+    @property
+    def in_flight(self) -> int:
+        return len(self._entries)
+
+    @property
+    def expires(self) -> float | None:
+        """The latest expiry among the live entries; None when none is live or any live
+        entry has no ceiling."""
+        if not self._entries or None in self._entries.values():
+            return None
+        return max(expiry for expiry in self._entries.values() if expiry is not None)
+
     @contextmanager
-    def running(self) -> Iterator[None]:
-        self.in_flight += 1
+    def running(self, ceiling_s: float | None = None) -> Iterator[None]:
+        token = object()
+        self._entries[token] = None if ceiling_s is None else self._clock() + ceiling_s
         try:
             yield
         finally:
-            self.in_flight -= 1
+            del self._entries[token]
             self.last_exit = self._clock()
 
 

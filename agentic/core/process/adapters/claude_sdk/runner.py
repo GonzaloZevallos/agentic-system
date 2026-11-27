@@ -594,6 +594,7 @@ class ClaudeSdkRunner:
                         pending_tools=len(pulse.pending),
                         hooks_in_flight=hooks.in_flight,
                         last_hook_exit=hooks.last_exit,
+                        hook_expires=None,  # placeholder: runner-wiring passes hooks.expires
                         child=child,
                         previous_child=previous,
                         timeout_s=self.stall_timeout_s,
@@ -601,7 +602,9 @@ class ClaudeSdkRunner:
                 )
                 pulse.last_activity, previous = verdict.last_activity, child
                 if verdict.stalled:
-                    stalled = Stall(int(now - verdict.last_activity), pulse.last_event)
+                    stalled = Stall(
+                        int(now - verdict.last_activity), pulse.last_event, in_hook=False
+                    )  # placeholder: runner-wiring passes hooks.in_flight > 0
                     left = await asyncio.to_thread(
                         self.reaper.reap_attempt, owner_task, os.getpid(), token
                     )
