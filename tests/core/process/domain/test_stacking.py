@@ -591,3 +591,32 @@ def test_an_expired_unfetchable_head_never_holds_a_row_that_refusal_does_not_hol
         assert stacking.held(expired) is False
         waiting = replace(facts, heads_fetched=False, unfetchable_expired=False)
         assert stacking.held(waiting) is want
+
+
+# -- ParentMemo: the round's reads of the stacking judgement (GH-858) -------------------
+
+
+def test_a_fresh_parent_memo_knows_nothing_and_origin_has_not_failed():
+    memo = stacking.ParentMemo()
+    assert memo.outcome(5, HEAD) is None
+    assert memo.origin_failed is False
+
+
+def test_a_parent_memo_keeps_each_outcome_under_parent_and_head():
+    memo = stacking.ParentMemo()
+    assert memo.record(5, HEAD, "stacked") == "stacked"
+    memo.record(5, "b" * 40, "doubt")
+    memo.record(6, HEAD, "not_stacked")
+    assert [memo.outcome(5, HEAD), memo.outcome(5, "b" * 40), memo.outcome(6, HEAD)] == [
+        "stacked",
+        "doubt",
+        "not_stacked",
+    ]
+
+
+def test_origin_failed_is_one_way_and_memos_do_not_share_state():
+    memo, other = stacking.ParentMemo(), stacking.ParentMemo()
+    memo.fail_origin()
+    memo.record(5, HEAD, "stacked")
+    assert memo.origin_failed is True
+    assert other.origin_failed is False and other.outcomes == {}
