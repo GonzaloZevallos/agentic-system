@@ -54,6 +54,7 @@ class StackHold:
     lines: list[str] = field(default_factory=list)
     causes: dict[int, PauseCause] = field(default_factory=dict)
     parents: dict[int, int] = field(default_factory=dict)
+    culprits: dict[int, int] = field(default_factory=dict)
     busy: frozenset[str] = frozenset()
 
 
@@ -84,14 +85,17 @@ def compute(
     tip = upstream().sha or "HEAD"
     for number, record in children.items():
         chain = stack_facts.parent_chain(ports, cfg, lock, record, tip, memo)
-        cause = stacking.pause_cause(chain)
+        cause, culprit = stacking.pause_link(chain)
         if cause == "none" and chain[0].in_upstream is False:
             cause = _unstarted(ports, cfg, number, record, chain[0], memo)
+            culprit = record["issue"] if cause == "parent_not_ready" else None
         hold.causes[number] = cause
         hold.parents[number] = record["issue"]
         if cause == "none":
             continue
         hold.held[number] = cause
+        if culprit is not None:
+            hold.culprits[number] = culprit
         if cause == "unreadable":
             hold.lines.append(f"agentic: poll: #{number} held (stacked, parent unreadable)")
     return hold
