@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -81,11 +81,13 @@ from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
+from .core.process.adapters.telemetry import NoTelemetry, Telemetry
 from .core.process.application import archive, close_issues, reflect_run, release, stacked_start
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application import stop as stopmod
+from .core.process.application.budget_round import BudgetCarry, budget_round
 from .core.process.application.delivered import files_patch, size_patch
 from .core.process.application.dry_run import DryRunRefused, read_only_ports
 from .core.process.application.escalate import NEEDS_HUMAN
@@ -93,6 +95,7 @@ from .core.process.application.format_release import FormatReleaseCarry
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
+    GhCallLog,
     Heartbeats,
     LabelTimeline,
     Launcher,
@@ -1025,6 +1028,9 @@ def main() -> None:
                 dry_run=args.dry_run,
                 stage0=rotation_store,
                 heartbeats=rotation_heartbeats,
+                budget_read=composition.budget_read(cfg.product_dir),
+                gh_calls=composition.process_call_log(),
+                budget_telemetry=NoTelemetry(),
             )
         else:
             if args.issue_input is not None:
@@ -1760,6 +1766,9 @@ async def _poll(
     stage0: Stage0Store | None = None,
     execve: Callable[..., NoReturn] = os.execve,
     proc: _Proc | None = None,
+    budget_read: Callable[[], object | None] | None = None,
+    gh_calls: GhCallLog | None = None,
+    budget_telemetry: Telemetry | None = None,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -1791,7 +1800,13 @@ async def _poll(
     `_reexec` compares its own checkout with the stage `current` names and, when they differ,
     replaces this process with the poller of that stage through `execve`. With it `None` there
     is no re-exec and no path is resolved. `proc` is where the zombies inherited across an exec
-    are read and reaped (only a process that carries `AGENTIC_REEXEC_FROM` has any)."""
+    are read and reaped (only a process that carries `AGENTIC_REEXEC_FROM` has any).
+
+    `budget_read` (GH-939) is the zero-argument read of `gh api rate_limit`; with it `None` the
+    budget step does not exist and nothing is printed or drained. With one, every round ends
+    (in a `finally`, so after a failed or crashed round too) with the line `budget_round`
+    returns, drained from `gh_calls` (without it the step does not run either) and sent to
+    `budget_telemetry` (`NoTelemetry` when left out). Only `main`'s poll dispatch passes them."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1808,6 +1823,7 @@ async def _poll(
     inherited = proc.children() if os.environ.get(REEXEC_MARKER) else frozenset[int]()
     told: set[Path] = set()
     hold = _PollHold()
+    budget_step = _budget_step(budget_read, gh_calls, budget_telemetry)
     with _locked(lock, pollmod.LOCK_KEY, hold=hold):
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
@@ -1821,33 +1837,63 @@ async def _poll(
                 inherited = _reap_inherited(inherited, proc)
                 beat("start")
                 try:
-                    # The round's one `upstream()` (GH-420): the warning and the eval set read it.
-                    upstream = ports.workspace.upstream()
-                    said, notice = _fast_forward_notice(ports, upstream, said)
-                    for line in notice:
-                        print(line, flush=True)
-                    for line in pollmod.run_once(
-                        cfg,
-                        ports,
-                        registry,
-                        real_launcher,
-                        datetime.now(UTC),
-                        spawn_as,
-                        lock=lock,
-                        current_boot=liveness.current_boot_id(),
-                        eval_set=_round_eval_set(ports, upstream),
-                        system_version=telemetry.fresh_system_version,
-                        sweep_carry=sweep_carry,
-                        format_release_carry=release_carry,
-                    ):
-                        print(line, flush=True)
-                except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
-                    print(f"agentic: poll: round ended early: {exc}", flush=True)
-                beat("end")
+                    try:
+                        # The round's one `upstream()` (GH-420): the warning and the eval set
+                        # read it.
+                        upstream = ports.workspace.upstream()
+                        said, notice = _fast_forward_notice(ports, upstream, said)
+                        for line in notice:
+                            print(line, flush=True)
+                        for line in pollmod.run_once(
+                            cfg,
+                            ports,
+                            registry,
+                            real_launcher,
+                            datetime.now(UTC),
+                            spawn_as,
+                            lock=lock,
+                            current_boot=liveness.current_boot_id(),
+                            eval_set=_round_eval_set(ports, upstream),
+                            system_version=telemetry.fresh_system_version,
+                            sweep_carry=sweep_carry,
+                            format_release_carry=release_carry,
+                        ):
+                            print(line, flush=True)
+                    except TrackerCallFailed as exc:  # a stalled `gh` ends this round
+                        print(f"agentic: poll: round ended early: {exc}", flush=True)
+                    beat("end")
+                finally:
+                    if budget_step is not None:
+                        budget_step()
                 await sleep(interval_s)
         except anyio.get_cancelled_exc_class():
             beat("stop")  # a clean stop, inside the lock: before `_locked` releases it
             raise
+
+
+def _budget_step(
+    read: Callable[[], object | None] | None,
+    gh_calls: GhCallLog | None,
+    sink: Telemetry | None,
+) -> Callable[[], None] | None:
+    """The end of a poller round's GraphQL budget line (GH-939): `None` when there is no `read`
+    or no `gh_calls` (only `main`'s poll dispatch wires the process log), so nothing runs.
+    Otherwise one call drains the log, reads, and prints the line; a stdout that refuses the
+    line (`OSError`) costs the line, never the loop. The carry lives as long as the loop that
+    built this. Synchronous on purpose: the read is bounded, and it blocks the way the round's
+    other `gh` calls do."""
+    if read is None or gh_calls is None:
+        return None
+    log = gh_calls
+    exporter = sink if sink is not None else NoTelemetry()
+    carry = BudgetCarry()
+
+    def step() -> None:
+        line = budget_round(read, log, carry, exporter)
+        with suppress(OSError):
+            print(line, flush=True)
+
+    return step
 
 
 def _stage0_wiring(root: Path) -> tuple[Stage0Store, Heartbeats]:
@@ -3243,7 +3289,10 @@ async def _reflect(
                 task_id=task_id,
                 system=system
                 if system is not None
-                else composition.system_repo(composition.write_access(cfg, None, NullStopFlag())),
+                else composition.system_repo(
+                    composition.write_access(cfg, None, NullStopFlag()),
+                    composition.process_call_log(),
+                ),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc

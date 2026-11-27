@@ -55,7 +55,7 @@ from ..domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
 )
-from ..domain.stall import ChildActivity
+from ..domain.stall import ChildActivity, Stall
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
@@ -208,6 +208,7 @@ class AttemptFailed(Exception):
         detail: str = "",
         repairs: Sequence[RefusalRepair] = (),
         value_len: int | None = None,
+        stall: Stall | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -267,6 +268,10 @@ class AttemptFailed(Exception):
         # The refusals this attempt repaired before the one that failed it (GH-1016): its own
         # record, never another attempt's; empty at every other site.
         self.repairs = list(repairs)
+        # How the stall was told (GH-978): the silence, the last event's kind and whether a
+        # hook was in flight, set only where `reason` is `stall` (the runner's watchdog);
+        # `None` at every other site.
+        self.stall = stall
         # The size of the refused value, measured by `run_role._refused` on the raw structured
         # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
         # at every other site and when the size is unknown.
@@ -781,6 +786,12 @@ class RunStopped(BaseException):
     the flake rerun, the thread pools of the presubmit, the `except Exception` of a graph
     node -- the same reason `PerfInterrupted` is not one. It is never a `CommandResult`, a
     rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
+
+
+class CheckAbandoned(BaseException):
+    """The attempt that asked for a share or a check was abandoned (a stall, or any exit of
+    the attempt). Not an `Exception`, for the reason `RunStopped` is not one. It is never a
+    verdict: no row, no flake, no refusal and no stored pass comes of it."""
 
 
 class StopFlag(Protocol):
@@ -2665,13 +2676,16 @@ class CheckRequest:
     and `token` are `None` on the gate's first call and are the grant's on every later one,
     so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
     may wait; `expires_after_s` is how long the share may be held before the ledger drops
-    it, whatever its holder says."""
+    it, whatever its holder says. `cancelled` is the abandonment flag of the attempt that
+    asks, or `None`: read on every pass of the wait, a set one leaves the queue by raising
+    `CheckAbandoned` instead of booking. It is no part of what the request says."""
 
     priority: CheckPriority
     wait_max_s: float
     expires_after_s: float
     enqueued_at: float | None = None
     token: str | None = None
+    cancelled: Callable[[], bool] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

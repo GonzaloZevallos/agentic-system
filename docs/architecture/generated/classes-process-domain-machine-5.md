@@ -33,6 +33,8 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class stage0_rotation__Prepared["Prepared"]
+    class stage0_rotation__Proceed["Proceed"]
     class stage0_rotation__Red["Red"]
     class stage0_rotation__Stop["Stop"]
     class stage0_rotation__SwitchRecord["SwitchRecord"]
@@ -45,3 +47,8 @@ classDiagram
     class stall__StallSnapshot["StallSnapshot"]
     class stall__Verdict["Verdict"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - `stage0_rotation.Proceed` se asocia con `stage0_rotation.Green`

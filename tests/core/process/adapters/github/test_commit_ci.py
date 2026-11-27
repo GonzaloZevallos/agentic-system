@@ -14,6 +14,7 @@ from agentic.composition import stage0_master_window
 from agentic.core.process.adapters.git.master_window import GitMasterWindow
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.commit_ci import GhCommitCi
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.github.tracker import COMMIT_CI_QUERY, commit_report
 from agentic.core.process.domain import stage0_window
 from agentic.core.process.domain.ci import CiReport, CiUnreadable
@@ -138,6 +139,13 @@ def test_a_valid_oid_is_one_call_sent_as_a_raw_string():
     assert flags == ["-f"]  # one oid field, never `-F`, which would coerce or read `@file`
 
 
+def test_the_by_sha_reader_quotes_what_gh_returned_and_says_a_page_was_cut():
+    got = _reader(_answering("<html>502 Bad Gateway</html>")).read(OID)
+    assert isinstance(got, CiUnreadable) and got.detail == "<html>502 Bad Gateway</html>"
+    cut = _reader(_answering(_more_checks())).read(OID)
+    assert isinstance(cut, CiUnreadable) and cut.detail == "more checks than one page"
+
+
 def test_a_timed_out_gh_is_unreadable_never_raised():
     run = Recorder("", error=subprocess.TimeoutExpired(["gh"], 60))
     assert _reader(run).read(OID) == CiUnreadable("gh_unreadable")
@@ -194,7 +202,12 @@ def test_the_query_takes_the_oid_as_a_git_object_id_and_not_the_ghost_run_count(
 
 def test_the_factory_builds_a_window_that_reads_ci_by_sha():
     window = stage0_master_window(
-        Path("/r"), "https://example.test/o/r.git", Path("/p"), lambda s: (), GithubAccess()
+        Path("/r"),
+        "https://example.test/o/r.git",
+        Path("/p"),
+        lambda s: (),
+        GithubAccess(),
+        InProcessGhCallLog(),
     )
     assert isinstance(window, GitMasterWindow)
     assert isinstance(window.ci, GhCommitCi)

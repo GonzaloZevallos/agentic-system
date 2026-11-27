@@ -42,5 +42,5 @@ classDiagram
   - `ports.AttemptFailed` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `limits.RunLimits`

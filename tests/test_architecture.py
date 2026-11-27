@@ -338,7 +338,7 @@ STACK_WRITER = Path("core/process/application/stacked_start.py")
 STACK_BUILDERS = frozenset({STACK_WRITER, Path("core/process/domain/stacking.py")})
 
 
-def _called_name(func: ast.expr) -> str | None:
+def _callee_name(func: ast.expr) -> str | None:
     """The name a call goes by, bare (`StackParent(...)`) or qualified (`task.StackParent(...)`)."""
     if isinstance(func, ast.Name):
         return func.id
@@ -358,7 +358,7 @@ def _stack_parent_leaks(package: Path) -> list[str]:
             for n in ast.walk(tree)
         )
         built = relative not in STACK_BUILDERS and any(
-            isinstance(n, ast.Call) and _called_name(n.func) == "StackParent"
+            isinstance(n, ast.Call) and _callee_name(n.func) == "StackParent"
             for n in ast.walk(tree)
         )
         if quoted or built:
@@ -391,4 +391,189 @@ def test_the_stack_parent_guard_rejects_a_module_that_writes_or_builds_it(tmp_pa
         "core/process/application/keyword.py",
         "core/process/application/other.py",
         "core/process/application/qualified.py",
+    ]
+
+
+# GH-990: every `gh` launch of this process counts into the one `GhCallLog`, so a call site that
+# leaves the log out is a launch nobody sees. Four scans over `agentic/**`, each with a self-test.
+GH_HOME = "core/process/adapters/github/run.py"
+# (repo-relative path, enclosing `Class.method` or function): a `run_gh(`/`stream_gh(` call that
+# passes no `calls=` on purpose, with the reason.
+UNCOUNTED_CALLS: dict[tuple[str, str], str] = {
+    (
+        "agentic/core/process/adapters/github/label_timeline.py",
+        "GhLabelTimeline.label_added_at",
+    ): "only `agentic close` and the system merge build it, never a node's ports",
+    (
+        "agentic/composition.py",
+        "backfill_gh_read",
+    ): "it has its own GithubAccess and runs as a separate process role",
+}
+GH_LAUNCHERS = ("run_gh", "stream_gh")
+GH_ADAPTERS = ("GhTracker", "GhInbox", "GhBoard", "GhCiLogs", "GhFormatFixReads", "GhRepoSlug")
+
+
+def _python_files(root: Path) -> list[Path]:
+    return sorted(root.rglob("*.py"))
+
+
+def _called_name(node: ast.Call) -> str | None:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else None
+
+
+def _enclosing_calls(tree: ast.AST) -> list[tuple[str, ast.Call]]:
+    """Every call with the dotted name of the class and function around it ("" at module level)."""
+    found: list[tuple[str, ast.Call]] = []
+
+    def walk(node: ast.AST, scope: tuple[str, ...]) -> None:
+        if isinstance(node, ast.Call):
+            found.append((".".join(scope), node))
+        inner = (
+            (*scope, node.name)
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+            else scope
+        )
+        for child in ast.iter_child_nodes(node):
+            walk(child, inner)
+
+    walk(tree, ())
+    return found
+
+
+def _calls_value(node: ast.Call) -> ast.expr | None:
+    return next((kw.value for kw in node.keywords if kw.arg == "calls"), None)
+
+
+def _without_calls(
+    root: Path, names: tuple[str, ...], allowed: dict[tuple[str, str], str]
+) -> list[str]:
+    """The calls of `names` under `root` that pass no `calls=` or pass the constant `None`, and
+    the `allowed` entries that no longer enclose such a call (a stale entry is a violation)."""
+    problems: list[str] = []
+    used: set[tuple[str, str]] = set()
+    for path in _python_files(root):
+        relative = f"{root.name}/{path.relative_to(root).as_posix()}"
+        for scope, node in _enclosing_calls(ast.parse(path.read_text(encoding="utf-8"))):
+            if _called_name(node) not in names:
+                continue
+            # A call in a function nested inside an allowed one (`backfill_gh_read.read`) is
+            # inside it.
+            enclosure = next(
+                (
+                    entry
+                    for entry in allowed
+                    if entry[0] == relative
+                    and (scope == entry[1] or scope.startswith(f"{entry[1]}."))
+                ),
+                None,
+            )
+            if enclosure is not None:
+                used.add(enclosure)
+                continue
+            value = _calls_value(node)
+            if value is None or (isinstance(value, ast.Constant) and value.value is None):
+                problems.append(f"{relative}:{node.lineno} {_called_name(node)}")
+    problems += [f"stale allow-list entry {entry}" for entry in sorted(set(allowed) - used)]
+    return problems
+
+
+def _gh_literals(root: Path, home: str) -> list[str]:
+    """The list or tuple literals under `root` whose first element is the string "gh", but for
+    the file `home`, the one place the executable is named."""
+    found: list[str] = []
+    for path in _python_files(root):
+        relative = path.relative_to(root).as_posix()
+        if relative == home:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.List | ast.Tuple)
+                and node.elts
+                and isinstance(node.elts[0], ast.Constant)
+                and node.elts[0].value == "gh"
+            ):
+                found.append(f"{relative}:{node.lineno}")
+    return found
+
+
+def _log_constructions(root: Path, home: tuple[str, str]) -> list[str]:
+    found: list[str] = []
+    for path in _python_files(root):
+        relative = path.relative_to(root).as_posix()
+        for scope, node in _enclosing_calls(ast.parse(path.read_text(encoding="utf-8"))):
+            if _called_name(node) == "InProcessGhCallLog" and (relative, scope) != home:
+                found.append(f"{relative}:{node.lineno}")
+    return found
+
+
+def test_no_gh_argument_list_is_written_outside_run_py():
+    assert _gh_literals(PACKAGE, GH_HOME) == []
+
+
+def test_the_gh_literal_scan_rejects_a_list_or_tuple_that_starts_with_gh(tmp_path):
+    (tmp_path / "run.py").write_text("ARGV = ['gh', 'api']\n")
+    (tmp_path / "list.py").write_text("ARGV = ['gh', 'api']\n")
+    (tmp_path / "tuple.py").write_text("ARGV = ('gh', *rest)\n")
+    (tmp_path / "fine.py").write_text("ARGV = ['git', 'gh']\nNAME = 'gh'\n")
+    assert _gh_literals(tmp_path, "run.py") == ["list.py:1", "tuple.py:1"]
+
+
+def test_every_gh_launch_passes_the_call_log_but_the_ones_named_here():
+    assert _without_calls(PACKAGE, GH_LAUNCHERS, UNCOUNTED_CALLS) == []
+
+
+def test_the_launch_scan_rejects_a_missing_argument_a_literal_none_and_a_stale_entry(tmp_path):
+    root = tmp_path / "agentic"
+    root.mkdir()
+    (root / "bad.py").write_text(
+        "def read(run):\n    run_gh(run, ())\n    stream_gh((), calls=None)\n"
+        "    stream_gh((), calls=log)\n"
+    )
+    stale = {("agentic/gone.py", "nobody"): "no longer calls"}
+    assert _without_calls(root, GH_LAUNCHERS, stale) == [
+        "agentic/bad.py:2 run_gh",
+        "agentic/bad.py:3 stream_gh",
+        "stale allow-list entry ('agentic/gone.py', 'nobody')",
+    ]
+
+
+def test_the_launch_scan_lets_an_allowed_enclosure_through(tmp_path):
+    root = tmp_path / "agentic"
+    root.mkdir()
+    (root / "own.py").write_text("class A:\n    def m(self):\n        run_gh(1)\n")
+    assert _without_calls(root, GH_LAUNCHERS, {("agentic/own.py", "A.m"): "reason"}) == []
+
+
+def test_every_gh_adapter_is_built_with_the_call_log():
+    assert _without_calls(PACKAGE, GH_ADAPTERS, {}) == []
+
+
+def test_the_adapter_scan_rejects_a_construction_without_the_log(tmp_path):
+    root = tmp_path / "agentic"
+    root.mkdir()
+    (root / "wire.py").write_text(
+        "a = GhTracker(p)\nb = GhInbox(p, calls=None)\nc = GhBoard(p, calls=log)\n"
+    )
+    assert _without_calls(root, GH_ADAPTERS, {}) == [
+        "agentic/wire.py:1 GhTracker",
+        "agentic/wire.py:2 GhInbox",
+    ]
+
+
+def test_the_process_log_is_built_only_by_process_call_log():
+    assert _log_constructions(PACKAGE, ("composition.py", "process_call_log")) == []
+
+
+def test_the_log_construction_scan_rejects_a_second_place_that_builds_it(tmp_path):
+    (tmp_path / "composition.py").write_text(
+        "def process_call_log():\n    return InProcessGhCallLog()\n"
+        "def other():\n    return InProcessGhCallLog()\n"
+    )
+    (tmp_path / "elsewhere.py").write_text("log = InProcessGhCallLog()\n")
+    assert _log_constructions(tmp_path, ("composition.py", "process_call_log")) == [
+        "composition.py:4",
+        "elsewhere.py:1",
     ]

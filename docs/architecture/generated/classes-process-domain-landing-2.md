@@ -54,5 +54,5 @@ classDiagram
 
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `landing_order.Yield` se asocia con `landing_order.Member`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

@@ -155,8 +155,8 @@ def test_defaults():
     assert cfg.agentic_dir == Path("/tmp/p/.agentic")
 
 
-def test_stall_timeout_defaults_to_forty_minutes_and_reads_its_environment():
-    assert Configuration.from_sources(PRODUCT, {}).stall_timeout_s == 2400
+def test_stall_timeout_defaults_to_thirty_minutes_and_reads_its_environment():
+    assert Configuration.from_sources(PRODUCT, {}).stall_timeout_s == 1800
     env = {"AGENTIC_STALL_TIMEOUT_S": "900"}
     assert Configuration.from_sources(PRODUCT, env).stall_timeout_s == 900
 

@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SystemRepo["SystemRepo"]
     class ports__TaskDocuments["TaskDocuments"]
     class ports__Tracker["Tracker"]
     class ports__TrackerCallFailed["TrackerCallFailed"]
@@ -33,7 +34,7 @@ classDiagram
     class ports__UpstreamMerge["UpstreamMerge"]
     class ports__Workspace["Workspace"]
     class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
-    class preflight__ScratchInARepository["ScratchInARepository"]
+    ports__SystemRepo --> ports__Tracker
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
@@ -47,10 +48,9 @@ classDiagram
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
+  - `ports.SystemRepo` se asocia con `ports.Inbox`
   - `ports.UnstageablePath` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
   - `ports.Ports` se asocia con `ports.Workspace`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.SystemRepo` se asocia con `ports.Tracker`

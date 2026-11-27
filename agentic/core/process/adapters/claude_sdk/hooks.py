@@ -75,6 +75,7 @@ import errno
 import os
 import re
 import shlex
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
@@ -85,7 +86,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import Presubmit, RunStopped, SchemaGuard
+from ...application.ports import CheckAbandoned, Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
@@ -146,6 +147,10 @@ STORE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 STORE_WORDS = (".key", "agentic-setup-tree")
 
 
+# What the delivery hook and the `run_check` tool answer to a call of an abandoned attempt.
+ABANDONED_REPLY = "the attempt was abandoned; no check was run"
+
+
 @dataclass
 class TurnCount:
     """The runner's own tally of main-thread `AssistantMessage`s, the quantity
@@ -160,6 +165,25 @@ class TurnCount:
     value: int = 0
 
 
+class AttemptAbandon:
+    """Whether one attempt was abandoned (GH-1169): one instance per attempt, built in
+    `ClaudeSdkRunner.run_once` beside `HookActivity` and `TurnCount`, never kept at module
+    level and never stored in a `Presubmit` or a `RunCheck`, so the flag cannot outlive the
+    attempt that made it. The runner sets it on every exit of the attempt, before it reaps;
+    the delivery gate and `run_check`, which run in threads the reap cannot reach, poll
+    `is_set` and stop waiting for a share and launching checks. A check already launched is
+    not reached by it: it ends by its own wall, never by the attempt's stall reap."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+
 class HookActivity:
     """Which delivery hooks of one attempt are in flight, and when the last one left
     (GH-299, ADR-0057): one instance per attempt, constructed in `_session` beside
@@ -167,23 +191,40 @@ class HookActivity:
     hook runs the product's checks and can be silent for far longer than any stall
     threshold; the watchdog reads this to know the silence is the hook's, and to
     restart the whole threshold from the moment it left. `clock` is the runner's own
-    monotonic clock, so the instant is on the scale the watchdog compares it against."""
+    monotonic clock, so the instant is on the scale the watchdog compares it against.
+
+    Each live entry holds its expiry (`entered + ceiling_s` on that clock) or None when
+    its caller declared no ceiling; `expires` is the latest of them, so the watchdog stops
+    renewing on a hook only once every live one is past its own caller's deadline."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self.in_flight = 0
+        self._entries: dict[object, float | None] = {}
         self.last_exit: float | None = None
         # Whether any hook of this attempt raised `OSError(ENOSPC)` (GH-391); the SDK
         # answers the CLI with an error and the runner would otherwise never know.
         self.enospc = False
         self._clock = clock
 
+    @property
+    def in_flight(self) -> int:
+        return len(self._entries)
+
+    @property
+    def expires(self) -> float | None:
+        """The latest expiry among the live entries; None when none is live or any live
+        entry has no ceiling."""
+        if not self._entries or None in self._entries.values():
+            return None
+        return max(expiry for expiry in self._entries.values() if expiry is not None)
+
     @contextmanager
-    def running(self) -> Iterator[None]:
-        self.in_flight += 1
+    def running(self, ceiling_s: float | None = None) -> Iterator[None]:
+        token = object()
+        self._entries[token] = None if ceiling_s is None else self._clock() + ceiling_s
         try:
             yield
         finally:
-            self.in_flight -= 1
+            del self._entries[token]
             self.last_exit = self._clock()
 
 
@@ -319,18 +360,26 @@ def hooks_for(
                 )
             )
     if guard is not None or presubmit is not None:
+        # One value, two uses: the SDK's own deadline for the hook and the ceiling the
+        # watchdog gives its in-flight renewal. `CheckoutPresubmit.timeout_s` already
+        # covers the whole call (first runs, affected forms, flake reruns, witness), so
+        # nothing is recomputed here.
+        gate_timeout = GUARD_TIMEOUT_S + (
+            presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0
+        )
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied, activity)],
+                hooks=[
+                    _delivery_gate(guard, presubmit, on_presubmit_denied, activity, gate_timeout)
+                ],
                 # The presubmit runs the product's checks: its own budget, plus the
                 # answer. The guard is in-process and fast, so it adds nothing here:
                 # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
                 # before the guard existed, when this was the presubmit's own timeout).
                 # GH-361: plus the longest the gate may wait for a share of the machine's
                 # cores, which is no part of `timeout_s` (the checks' clock starts after).
-                timeout=GUARD_TIMEOUT_S
-                + (presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0),
+                timeout=gate_timeout,
             )
         )
     hooks: dict[str, list[HookMatcher]] = {}
@@ -500,6 +549,7 @@ def _delivery_gate(
     presubmit: Presubmit | None,
     on_presubmit_denied: Callable[[], None] | None = None,
     activity: HookActivity | None = None,
+    gate_timeout: float | None = None,
 ) -> HookCallback:
     """The one `PreToolUse` callback on the delivery tool: the schema guard first, the
     presubmit second, the order this module's docstring promises written here in code
@@ -509,12 +559,13 @@ def _delivery_gate(
     for `denials`: a presubmit refusal is the gate working, never the re-emission of an
     invalid shape a schema rejection is, and the two travel as separate counts.
     `activity`, when given, says the hook is in flight for the whole call, the guard
-    included (`HookActivity`)."""
+    included (`HookActivity`), with `gate_timeout` as its ceiling (None: unbounded, as
+    before): the same deadline the delivery `HookMatcher` carries."""
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        with activity.running() if activity is not None else nullcontext():
+        with activity.running(ceiling_s=gate_timeout) if activity is not None else nullcontext():
             return await _gate(data)
 
     async def _gate(data: HookInput) -> HookJSONOutput:
@@ -532,6 +583,10 @@ def _delivery_gate(
                 # attempt, which the signal is already delivering, ends the wait; the hard
                 # deadline is the net if it never comes.
                 await anyio.sleep_forever()
+            except CheckAbandoned:
+                # The attempt was abandoned (GH-1169): this is not a refusal of the gate, so
+                # it is not counted and the hook does not wait; the answer is for nobody.
+                return _deny(ABANDONED_REPLY)
             if reason:
                 if on_presubmit_denied is not None:
                     on_presubmit_denied()

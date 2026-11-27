@@ -102,6 +102,7 @@ def test_reducers_are_read_from_the_annotations():
         "review_scopes",
         "stack_restacks",
         "stack_pauses",
+        "reintegrations",
         "shadow_reviews",
         "drawing_departures",
         "drawing_escalation",
