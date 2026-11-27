@@ -1710,3 +1710,5 @@ tasks:
       - GH-1070
   GH-1123@review:
     cost_usd: 0.0
+  GH-1113@review:
+    cost_usd: 0.0412
