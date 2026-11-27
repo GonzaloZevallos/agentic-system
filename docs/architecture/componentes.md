@@ -218,7 +218,9 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   un archivo ilegible, corrupto o de otra versión es una lectura nueva y se sobrescribe.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
-  proceso y la composición se lo pasa a `build_graph`.
+  proceso y la composición se lo pasa a `build_graph`. Todavía no implementa
+  `Telemetry.gh_budget` (GH-939 parte 4): el poller llama a ese método sobre `NoTelemetry`
+  hasta que la segunda mitad conecte el exportador.
 - `adapters/langfuse/`: puntajes (`agentic/core/measurement/adapters/langfuse/scores.py:LangfuseScores`)
   y dashboards (`agentic/core/measurement/adapters/langfuse/dashboards.py:PostgresDashboards`,
   `agentic/core/measurement/adapters/langfuse/widget_data.py:ClickHouseWidgetData`).
