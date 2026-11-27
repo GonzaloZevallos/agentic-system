@@ -116,8 +116,7 @@ def _facts(
 
 
 def _entry(card: domain.Card) -> SentEntry:
-    until = domain.hecho_until(card.finished) if card.etapa == "Hecho" and card.finished else None
-    return SentEntry(domain.fingerprint(card), domain.present(card), until)
+    return SentEntry(domain.fingerprint(card), domain.present(card), domain.last_hecho_day(card))
 
 
 def _settle(issues: Mapping[int, SentEntry], read: _Read, lines: list[str]) -> dict[int, SentEntry]:

@@ -141,6 +141,18 @@ def test_the_hecho_day_is_the_last_one_inclusive_and_expiry_has_one_comparison()
     assert board.hecho_expired(until, until + timedelta(days=1))
 
 
+def test_last_hecho_day_is_set_only_on_a_hecho_card_with_a_close_day():
+    closed = date(2026, 11, 20)
+    assert board.last_hecho_day(board.card(_facts(closed=True, closed_at=closed))) == date(
+        2026, 11, 27
+    )
+    assert board.last_hecho_day(board.card(_facts(closed=True, closed_at=None))) is None
+    assert board.last_hecho_day(board.card(_facts())) is None
+    assert (
+        board.last_hecho_day(board.card(_facts(closed=True, closed_at=date(2026, 11, 1)))) is None
+    )
+
+
 def test_the_motivo_fallbacks_are_non_empty_and_cover_every_etapa_but_hecho():
     assert set(board.FALLBACK_MOTIVO) == set(get_args(board.Etapa)) - {HECHO}
     assert all(board.FALLBACK_MOTIVO.values())

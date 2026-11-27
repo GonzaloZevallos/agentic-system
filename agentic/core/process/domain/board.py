@@ -117,6 +117,14 @@ def hecho_expired(until: date, today: date) -> bool:
     return today > until
 
 
+def last_hecho_day(value: Card) -> date | None:
+    """The last day `value` is Hecho, or None when it is not a Hecho card with a close day.
+    The one place that says which Etapa carries an expiry, so no caller names the option."""
+    if value.etapa == "Hecho" and value.finished is not None:
+        return hecho_until(value.finished)
+    return None
+
+
 def _first_line(text: object) -> str | None:
     if not isinstance(text, str):
         return None
