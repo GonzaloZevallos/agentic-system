@@ -64,6 +64,11 @@ INVENTORY: list[tuple[str, str, str]] = [
         "harmless_loss",
         "the format release's memory: losing it repeats a waiting line and a read of a spent pair",
     ),
+    (
+        "_poll.budget_step",
+        "harmless_loss",
+        "the budget line's step and its carry: losing them prints one `round points: unmeasured`",
+    ),
     ("_poll.upstream", "rebuilt_each_round", "read again by every round"),
     ("_poll.notice", "rebuilt_each_round", "the lines of one round, printed in it"),
     ("_poll.line", "rebuilt_each_round", "the loop variable over one round's lines"),
