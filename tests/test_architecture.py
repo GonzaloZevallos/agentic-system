@@ -338,6 +338,13 @@ STACK_WRITER = Path("core/process/application/stacked_start.py")
 STACK_BUILDERS = frozenset({STACK_WRITER, Path("core/process/domain/stacking.py")})
 
 
+def _called_name(func: ast.expr) -> str | None:
+    """The name a call goes by, bare (`StackParent(...)`) or qualified (`task.StackParent(...)`)."""
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else None
+
+
 def _stack_parent_leaks(package: Path) -> list[str]:
     """The files outside their home that hold the quoted `stack_parent` key, or call
     `StackParent(` outside the writer."""
@@ -346,10 +353,12 @@ def _stack_parent_leaks(package: Path) -> list[str]:
         relative = path.relative_to(package)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         quoted = relative not in STACK_PARENT_HOMES and any(
-            isinstance(n, ast.Constant) and n.value == "stack_parent" for n in ast.walk(tree)
+            (isinstance(n, ast.Constant) and n.value == "stack_parent")
+            or (isinstance(n, ast.keyword) and n.arg == "stack_parent")
+            for n in ast.walk(tree)
         )
         built = relative not in STACK_BUILDERS and any(
-            isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "StackParent"
+            isinstance(n, ast.Call) and _called_name(n.func) == "StackParent"
             for n in ast.walk(tree)
         )
         if quoted or built:
@@ -370,6 +379,8 @@ def test_the_stack_parent_guard_rejects_a_module_that_writes_or_builds_it(tmp_pa
         ),
         ("core/process/application/other.py", 'patch = {"stack_parent": None}\n'),
         ("core/process/application/builds.py", "r = StackParent(issue=1)\n"),
+        ("core/process/application/qualified.py", "r = task.StackParent(issue=1)\n"),
+        ("core/process/application/keyword.py", "patch = dict(stack_parent=None)\n"),
         ("core/process/application/prose.py", '"""The stack_parent key, in prose."""\n'),
     ):
         target = package / relative
@@ -377,5 +388,7 @@ def test_the_stack_parent_guard_rejects_a_module_that_writes_or_builds_it(tmp_pa
         target.write_text(source)
     assert _stack_parent_leaks(package) == [
         "core/process/application/builds.py",
+        "core/process/application/keyword.py",
         "core/process/application/other.py",
+        "core/process/application/qualified.py",
     ]
