@@ -81,7 +81,7 @@ from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
-from .core.process.application import archive, close_issues, reflect_run, release
+from .core.process.application import archive, close_issues, reflect_run, release, stacked_start
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
@@ -126,7 +126,6 @@ from .core.process.application.preflight import (
 from .core.process.application.registration import REGISTER_WAIT_S, await_registration
 from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
-from .core.process.application import stacked_start
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.application.stage0_rotate import rotate
 from .core.process.application.worktree_sweep import SweepCarry
