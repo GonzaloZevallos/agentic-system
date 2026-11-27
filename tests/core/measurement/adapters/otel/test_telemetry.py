@@ -13,6 +13,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.application.run_role import RoleFailure, escalation
+from agentic.core.process.domain.gh_calls import GH_CALL_KINDS, GhCallKind
+from agentic.core.process.domain.github_budget import Unmeasured
 from agentic.core.process.domain.roles import PJM
 from agentic.shared.stage0 import CHECKOUT
 from tests.readme_metrics import Family, _documented
@@ -1327,3 +1329,83 @@ def test_an_escalation_patch_with_two_refusals_carries_the_counts(spans):
     span = spans.get_finished_spans()[-1]
     assert span.attributes["agentic.role.refusals"] == ("output_missing=1", "schema_invalid=1")
     assert "agentic.role.repairs" not in span.attributes
+
+
+ONE_CALL_EACH: dict[GhCallKind, int] = {
+    "issue_list": 3,
+    "issue_view": 0,
+    "pr_list": 1,
+    "pr_view": 0,
+    "api": 2,
+    "other": 0,
+}
+NO_CALLS: dict[GhCallKind, int] = dict.fromkeys(GH_CALL_KINDS, 0)
+
+
+def test_gh_budget_exports_one_span_with_the_four_attributes(spans):
+    telemetry.gh_budget("poller", ONE_CALL_EACH, 4200, 17)
+    (span,) = spans.get_finished_spans()
+    assert span.name == "agentic.gh.budget" and span.parent is None
+    assert span.attributes == {
+        "agentic.gh.consumer": "poller",
+        "agentic.gh.calls": (
+            "api=2",
+            "issue_list=3",
+            "issue_view=0",
+            "other=0",
+            "pr_list=1",
+            "pr_view=0",
+        ),
+        "agentic.gh.graphql.remaining": 4200,
+        "agentic.gh.round_points": 17,
+    }
+
+
+def test_gh_budget_omits_what_it_did_not_measure(spans):
+    telemetry.gh_budget("run", ONE_CALL_EACH, None, Unmeasured.UNMEASURED)
+    (span,) = spans.get_finished_spans()
+    assert "agentic.gh.graphql.remaining" not in span.attributes
+    assert "agentic.gh.round_points" not in span.attributes
+    assert span.attributes["agentic.gh.consumer"] == "run"
+
+
+def test_gh_budget_keeps_a_measured_zero_round_points(spans):
+    telemetry.gh_budget("poller", NO_CALLS, 5000, 0)
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["agentic.gh.round_points"] == 0
+
+
+def test_gh_budget_with_every_count_zero_and_no_remaining_exports_nothing(spans):
+    telemetry.gh_budget("run", NO_CALLS, None, Unmeasured.UNMEASURED)
+    assert spans.get_finished_spans() == ()
+
+
+def test_gh_budget_without_a_provider_is_a_no_op():
+    telemetry.configure(tracer_provider=None)
+    telemetry.gh_budget("poller", ONE_CALL_EACH, 10, 1)
+
+
+GH_ENTERING = {"id": "T-1", "title": "t", "description": "d"}
+
+
+def test_finish_invocation_stamps_the_run_calls_zeros_included(spans):
+    with telemetry.task_span("T-1", "t", "gym-saas", arm="default") as run:
+        run.finish_invocation(GH_ENTERING, GH_ENTERING, "run", None, calls=ONE_CALL_EACH)
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["agentic.gh.consumer"] == "run"
+    assert span.attributes["agentic.gh.calls"] == (
+        "api=2",
+        "issue_list=3",
+        "issue_view=0",
+        "other=0",
+        "pr_list=1",
+        "pr_view=0",
+    )
+
+
+def test_finish_invocation_without_calls_leaves_the_attributes_absent(spans):
+    with telemetry.task_span("T-1", "t", "gym-saas", arm="default") as run:
+        run.finish_invocation(GH_ENTERING, GH_ENTERING, "run", None)
+    (span,) = spans.get_finished_spans()
+    assert "agentic.gh.consumer" not in span.attributes
+    assert "agentic.gh.calls" not in span.attributes

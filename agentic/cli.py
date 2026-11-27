@@ -144,6 +144,8 @@ from .core.process.domain import (
 )
 from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
+from .core.process.domain.gh_calls import GhConsumer
+from .core.process.domain.github_budget import Unmeasured
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
 from .core.process.domain.stage0_rotation import (
@@ -1013,6 +1015,7 @@ def main() -> None:
             # A dry round writes no log file: `_log_file_for` mkdirs `.agentic/logs`.
             log_file = None if args.dry_run else _log_file_for(cfg, "poll")
             rotation_store, rotation_heartbeats = _stage0_wiring(stage0_paths.DEFAULT_ROOT)
+            budget = _poll_budget_wiring(cfg.product_dir)
             work = partial(
                 _poll,
                 cfg,
@@ -1024,9 +1027,9 @@ def main() -> None:
                 dry_run=args.dry_run,
                 stage0=rotation_store,
                 heartbeats=rotation_heartbeats,
-                budget_read=composition.budget_read(cfg.product_dir),
-                gh_calls=composition.process_call_log(),
-                budget_telemetry=NoTelemetry(),
+                budget_read=budget.read,
+                gh_calls=budget.gh_calls,
+                budget_telemetry=budget.sink,
             )
         else:
             if args.issue_input is not None:
@@ -1802,7 +1805,8 @@ async def _poll(
     budget step does not exist and nothing is printed or drained. With one, every round ends
     (in a `finally`, so after a failed or crashed round too) with the line `budget_round`
     returns, drained from `gh_calls` (without it the step does not run either) and sent to
-    `budget_telemetry` (`NoTelemetry` when left out). Only `main`'s poll dispatch passes them."""
+    `budget_telemetry` (`NoTelemetry` when left out): `_poll_budget_wiring` builds them for `main`'s
+    poll dispatch, the only caller that passes them."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1864,6 +1868,7 @@ async def _poll(
                 await sleep(interval_s)
         except anyio.get_cancelled_exc_class():
             beat("stop")  # a clean stop, inside the lock: before `_locked` releases it
+            _bounded_flush("poll")  # the last round's span, never a hang
             raise
 
 
@@ -1890,6 +1895,23 @@ def _budget_step(
             print(line, flush=True)
 
     return step
+
+
+class _PollBudget(NamedTuple):
+    """What `_poll` gets for the GraphQL budget line (GH-991): the read, the process call log
+    and where the line goes (the otel module, which implements `Telemetry.gh_budget`)."""
+
+    read: Callable[[], object | None]
+    gh_calls: GhCallLog
+    sink: Telemetry
+
+
+def _poll_budget_wiring(product_dir: Path) -> _PollBudget:
+    """The one place the poller's budget line is wired, called only by `main`'s poll dispatch:
+    a named function so a test fails if the sink goes back to `NoTelemetry`."""
+    return _PollBudget(
+        composition.budget_read(product_dir), composition.process_call_log(), telemetry
+    )
 
 
 def _stage0_wiring(root: Path) -> tuple[Stage0Store, Heartbeats]:
@@ -1977,6 +1999,36 @@ def _flush_before_exec() -> None:
         print("agentic: poll: flush before the re-exec timed out", flush=True)
     elif problems:
         print(f"agentic: poll: flush before the re-exec failed: {problems[0]}", flush=True)
+
+
+def _bounded_flush(
+    what: str,
+    *,
+    flush: Callable[[], None] = telemetry.flush,
+    cap_s: float = _STOP_FLUSH_CAP_S,
+) -> None:
+    """The telemetry out before a process ends (GH-991), on a daemon thread joined with `cap_s`
+    so a collector that hangs costs at most that: a flush that hangs or raises says one line
+    (`agentic: <what>: telemetry flush timed out|failed: <ExcClass>`) and never raises."""
+    problems: list[Exception] = []
+
+    def work() -> None:
+        try:
+            flush()
+        except Exception as exc:  # whatever a flush raises must not change the exit
+            problems.append(exc)
+
+    flusher = threading.Thread(target=work, daemon=True)
+    flusher.start()
+    flusher.join(cap_s)
+    line = None
+    if flusher.is_alive():
+        line = f"agentic: {what}: telemetry flush timed out"
+    elif problems:
+        line = f"agentic: {what}: telemetry flush failed: {type(problems[0]).__name__}"
+    if line is not None:
+        with suppress(OSError):
+            print(line, flush=True)
 
 
 def _reexec_plan(
@@ -2796,18 +2848,51 @@ def _fast_forward_notice(
     return block, [f"agentic: poll: product checkout {cannot}"]
 
 
+def _report_gh_budget(command: Literal["merge", "land"], gh_calls: GhCallLog) -> None:
+    """The end of a `merge`/`land` child (GH-991): drains the process call log exactly once and
+    sends the launches of `gh` it made as `agentic.gh.budget` under consumer `run`, then flushes
+    within `_STOP_FLUSH_CAP_S`. A side channel: nothing here changes a result, an exit code or a
+    printed line other than its own failure line, and nothing raises out. Runs after the lock and
+    the registry entry were released, so a slow collector never holds either."""
+    calls = gh_calls.drain()
+    consumer: GhConsumer = "run"
+    try:
+        telemetry.gh_budget(consumer, calls, None, Unmeasured.UNMEASURED)
+    except Exception as exc:
+        with suppress(OSError):
+            print(f"agentic: {command}: gh budget not exported: {type(exc).__name__}", flush=True)
+    _bounded_flush(command)
+
+
 async def _merge(
     task_id: str,
     issue: int,
     cfg: Configuration,
     ports: Ports,
     label_timeline: LabelTimeline | None = None,
+    gh_calls: GhCallLog | None = None,
 ) -> None:
     """`agentic merge --issue N` (GH-178, ADR-0045): the task's pull request merged when
     `rules.auto_merge_decision` says so, after the checks ran on its head merged with the
     upstream. Under the task's own run lock and registered like any run; spends no model
     money and opens no span, like `close`. The closure runs in this process once the pull
-    request is merged."""
+    request is merged. Whatever the outcome, the `gh` launches of the whole command are drained
+    once and exported (`_report_gh_budget`); `gh_calls` is the log, the process one when left
+    out."""
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
+    try:
+        await _merge_pull_request(task_id, issue, cfg, ports, label_timeline)
+    finally:
+        _report_gh_budget("merge", log)
+
+
+async def _merge_pull_request(
+    task_id: str,
+    issue: int,
+    cfg: Configuration,
+    ports: Ports,
+    label_timeline: LabelTimeline | None,
+) -> None:
     lock = _lock_for(cfg)
     with (
         _locked(lock, task_id),
@@ -2910,14 +2995,29 @@ def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
 
 
 async def _land(
-    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind = "land_model"
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    run_kind: rules.RunKind = "land_model",
+    gh_calls: GhCallLog | None = None,
 ) -> None:
     """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
     refusal of the task's pull request, recorded under the task's run lock and then
     dispatched. Registered like any run; the kind
     it registers under is the one it was spawned with (`--run-kind`), fixed for its whole life
     and checked by `land` against the step it recomputes. Spends no model money itself and
-    opens no span."""
+    opens no span. Whatever the outcome, the `gh` launches of the whole command are drained once
+    and exported (`_report_gh_budget`); `gh_calls` is the log, the process one when left out."""
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
+    try:
+        await _land_step(task_id, cfg, ports, run_kind)
+    finally:
+        _report_gh_budget("land", log)
+
+
+async def _land_step(
+    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind
+) -> None:
     lock = _lock_for(cfg)
     registry = _registry_for(cfg)
 
@@ -3727,6 +3827,7 @@ async def _invoke(
     decision: str | None = None,
     scorer: LangfuseScores | None = None,
     stop: StopCause | None = None,
+    gh_calls: GhCallLog | None = None,
 ) -> TaskState:
     # The state as this invocation entered: `_run`'s fresh `TaskInput` (no prior cost),
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
@@ -3740,11 +3841,14 @@ async def _invoke(
     # composition root, so it calls `metrics.arm_label` directly, the same function
     # `composition._arm_for` closes over for the graph's own per-node role spans.
     arm = delivery_metrics.arm_label(arm_input(cfg))
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
     try:
         with telemetry.task_span(task["id"], task["title"], product_name(ports), arm=arm) as run:
             try:
                 final = await app.ainvoke(graph_input, config=config)
             except Exception:
+                # The one drain of this exit (GH-991): the launches up to the crash.
+                calls = log.drain()
                 # The run broke outside any use case; the task span still closes with a
                 # status, so the trace carries it (`crashed` is telemetry-only, never state).
                 # `stop.crashed` is what `_locked` reads to keep the lock marked: only here,
@@ -3753,10 +3857,11 @@ async def _invoke(
                     stop.crashed = True
                 crashed = cast(TaskState, {**task, "status": "crashed"})
                 run.finish(crashed)
-                run.finish_invocation(entering, crashed, kind, decision)
+                run.finish_invocation(entering, crashed, kind, decision, calls=calls)
                 raise
+            calls = log.drain()  # the one drain of this exit: up to the end of the graph run
             run.finish(final)
-            run.finish_invocation(entering, final, kind, decision)
+            run.finish_invocation(entering, final, kind, decision, calls=calls)
         # After the span closed, so the write's wait is never part of the task's trace; a
         # crashed invocation raised above and never gets here.
         _write_scores(scorer, task["id"], ports, finished_only=True)
