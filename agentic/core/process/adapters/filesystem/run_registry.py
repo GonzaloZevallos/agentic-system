@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
-from ...application.ports import LaunchAttempt, RunRegistration
+from ...application.ports import LaunchAttempt, RunRegistration, StackHint
 from ...domain import exempt_queue, landing, rules
 from .liveness import current_boot_id, is_alive
 
@@ -166,20 +166,33 @@ class FilesystemRunRegistry:
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         return LaunchAttempt(
-            datetime.fromisoformat(data["since"]), int(data["prior"]), data.get("arm")
+            datetime.fromisoformat(data["since"]),
+            int(data["prior"]),
+            data.get("arm"),
+            _stack_hint(data.get("stack_hint")),
         )
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         path = self._launch_path(product, issue)
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = self.launch_attempts(product, issue)
         prior = existing.prior if existing is not None else 0
         kept = arm if arm is not None else (existing.arm if existing is not None else None)
-        record: dict[str, str | int] = {"since": when.isoformat(), "prior": prior + 1}
+        record: dict[str, str | int | dict[str, str | int]] = {
+            "since": when.isoformat(),
+            "prior": prior + 1,
+        }
         if kept is not None:
             record["arm"] = kept
+        if stack_hint is not None:
+            record["stack_hint"] = {"parent": stack_hint.parent, "head": stack_hint.head}
         path.write_text(json.dumps(record), encoding="utf-8")
 
     def clear_launch(self, product: str, issue: int) -> None:
@@ -455,6 +468,17 @@ def _read_attempt(path: Path, product: str) -> _Attempt | None:
     if (seen is not None and seen.tzinfo is None) or (tried is not None and tried.tzinfo is None):
         return None
     return _Attempt(seen, tried, starved)
+
+
+def _stack_hint(raw: object) -> StackHint | None:
+    """The hint a launch record carries, `None` for an absent or illegible one: the start gate
+    reads the parent's facts afresh, so a hint it cannot read costs nothing."""
+    if not isinstance(raw, dict):
+        return None
+    parent, head = raw.get("parent"), raw.get("head")
+    if isinstance(parent, int) and not isinstance(parent, bool) and isinstance(head, str):
+        return StackHint(parent, head)
+    return None
 
 
 def _replace_json(path: Path, record: dict[str, object]) -> None:

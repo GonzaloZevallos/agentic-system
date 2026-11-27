@@ -41,6 +41,7 @@ from typing import Any, Literal, NoReturn, TypeVar, get_args
 
 from ...application.ports import (
     BoardWritten,
+    GhCallLog,
     IssueRow,
     TrackerCallFailed,
     TrackerRateLimited,
@@ -179,8 +180,10 @@ class GhBoard:
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
         access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
         self.cwd = cwd
+        self._calls = calls
         self.owner = owner
         self.number = number
         self.run: Run = run if run is not None else partial(bounded_run, timeout_s=BOARD_TIMEOUT_S)
@@ -209,6 +212,7 @@ class GhBoard:
             retry=self.retry if write else None,
             access=self.access,
             write=write,
+            calls=self._calls,
         )
 
     def _keeping_errors(

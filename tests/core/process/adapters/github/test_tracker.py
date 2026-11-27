@@ -2969,3 +2969,285 @@ def test_a_refused_turn_makes_a_note_a_transient_failure_and_raises_nothing():
     failure = tracker.note("GH-7", "a note")
     assert failure is not None and failure.cls == "transient" and failure.target == "comment"
     assert run.calls == []
+
+
+# -- GH-1151: a bounded page loop over the CI connections, and what `gh` said quoted -------------
+
+
+def _commit_page(
+    checks,
+    *,
+    next_checks=None,
+    suites=None,
+    next_suites=None,
+    oid="c" * 40,
+):
+    """One page of a commit's CI. `next_checks` / `next_suites` are the `endCursor` a connection
+    still has to follow (`None`: that connection is whole)."""
+    contexts = {
+        "nodes": checks,
+        "pageInfo": {"hasNextPage": next_checks is not None, "endCursor": next_checks},
+    }
+    commit: dict = {"oid": oid, "statusCheckRollup": {"contexts": contexts}}
+    if suites is not None:
+        commit["checkSuites"] = {
+            "nodes": suites,
+            "pageInfo": {"hasNextPage": next_suites is not None, "endCursor": next_suites},
+        }
+    return commit
+
+
+def _page_suite(run_id, status="COMPLETED", conclusion="SUCCESS", checks=1):
+    return {
+        "status": status,
+        "conclusion": conclusion,
+        "workflowRun": {"databaseId": run_id},
+        "checkRuns": {"totalCount": checks},
+    }
+
+
+def _as_pull_request(commit):
+    pull_request = {
+        "createdAt": "2026-10-07T10:00:00Z",
+        "baseRefName": "master",
+        "headRefOid": commit["oid"],
+        "commits": {"nodes": [{"commit": commit}]},
+    }
+    return {"data": {"repository": {"pullRequest": pull_request}}}
+
+
+def _as_branch(commit):
+    return {"data": {"repository": {"ref": {"target": commit}}}}
+
+
+# (how a page is wrapped, how the reader is asked): the three readers that follow the pages.
+_PAGED_READERS = pytest.mark.parametrize(
+    ("wrap", "read"),
+    [
+        (_as_pull_request, lambda tracker: tracker.ci_report(PR)),
+        (_as_branch, lambda tracker: tracker.branch_ci("master")),
+        (_as_branch, lambda tracker: tracker.watched_branch_ci("master")),
+    ],
+    ids=["ci_report", "branch_ci", "watched_branch_ci"],
+)
+
+
+def _scripted(wrap, *pages):
+    return ScriptedRun(*(_plain(json.dumps(wrap(page))) for page in pages))
+
+
+def _after(argv, variable):
+    """The value `-f <variable>=...` carried in one `gh` call, `None` when it had none."""
+    values = [arg.split("=", 1)[1] for arg in argv if arg.startswith(f"{variable}=")]
+    return values[0] if values else None
+
+
+@_PAGED_READERS
+def test_a_whole_first_page_is_one_call_with_no_cursor(wrap, read):
+    run = _scripted(wrap, _commit_page([_run_node("ci-ok", "COMPLETED", "SUCCESS")], suites=[]))
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport) and [c.name for c in report.checks] == ["ci-ok"]
+    [argv] = run.argv
+    assert _after(argv, "contextsAfter") is None and _after(argv, "suitesAfter") is None
+
+
+@_PAGED_READERS
+def test_checks_on_a_second_page_are_merged_into_one_report(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="cursor-1")
+    second = _commit_page([_run_node("ci-ok", "COMPLETED", "FAILURE")])
+    run = _scripted(wrap, first, second)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport)
+    assert [(c.name, c.conclusion) for c in report.checks] == [
+        ("unit", "SUCCESS"),
+        ("ci-ok", "FAILURE"),
+    ]
+    assert [_after(argv, "contextsAfter") for argv in run.argv] == [None, "cursor-1"]
+
+
+@_PAGED_READERS
+def test_suites_on_a_second_page_are_merged_before_the_runs_are_read(wrap, read):
+    first = _commit_page(
+        [_run_node("unit", "COMPLETED", "SUCCESS")],
+        suites=[_page_suite(1)],
+        next_suites="suite-cursor",
+    )
+    second = _commit_page(
+        [_run_node("unit", "COMPLETED", "SUCCESS")],
+        suites=[_page_suite(2, conclusion="CANCELLED")],
+    )
+    run = _scripted(wrap, first, second)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport)
+    assert report.cancelled_runs == frozenset({"2"}) and report.runs_completed is True
+    # The checks were whole on page one: only the suites asked for a next page, and the checks
+    # the second answer repeats are not added twice.
+    assert [c.name for c in report.checks] == ["unit"]
+    assert [_after(argv, "suitesAfter") for argv in run.argv] == [None, "suite-cursor"]
+    assert _after(run.argv[1], "contextsAfter") is None
+
+
+@_PAGED_READERS
+def test_both_connections_are_followed_together_one_call_per_page(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node(f"c{n}", "COMPLETED", "SUCCESS")],
+            next_checks=f"k{n}" if n < 3 else None,
+            suites=[_page_suite(n)],
+            next_suites=f"s{n}" if n < 2 else None,
+        )
+        for n in (1, 2, 3)
+    ]
+    run = _scripted(wrap, *pages)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport) and [c.name for c in report.checks] == ["c1", "c2", "c3"]
+    assert len(run.argv) == 3
+
+
+@_PAGED_READERS
+def test_more_than_five_pages_of_checks_is_unreadable_naming_the_bound_never_a_part(wrap, read):
+    pages = [
+        _commit_page([_run_node(f"c{n}", "COMPLETED", "FAILURE")], next_checks=f"k{n}")
+        for n in range(1, 7)
+    ]
+    run = _scripted(wrap, *pages)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "contexts" in got.detail and "5 pages" in got.detail
+    assert len(run.argv) == 5  # no sixth call
+
+
+@_PAGED_READERS
+def test_five_pages_of_checks_that_end_on_the_fifth_are_read_whole(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node(f"c{n}", "COMPLETED", "SUCCESS")], next_checks=f"k{n}" if n < 5 else None
+        )
+        for n in range(1, 6)
+    ]
+    report = read(GhTracker(Path("/p"), _scripted(wrap, *pages)))
+    assert isinstance(report, CiReport) and len(report.checks) == 5
+
+
+@_PAGED_READERS
+def test_more_than_three_pages_of_suites_is_unreadable_naming_the_bound(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node("unit", "COMPLETED", "SUCCESS")],
+            suites=[_page_suite(n)],
+            next_suites=f"s{n}",
+        )
+        for n in range(1, 5)
+    ]
+    run = _scripted(wrap, *pages)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "checkSuites" in got.detail and "3 pages" in got.detail
+    assert len(run.argv) == 3
+
+
+@_PAGED_READERS
+def test_a_cut_list_of_checks_with_no_cursor_is_unreadable_never_followed(wrap, read):
+    page = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="x")
+    page["statusCheckRollup"]["contexts"]["pageInfo"]["endCursor"] = None
+    run = _scripted(wrap, page)
+    assert read(GhTracker(Path("/p"), run)) == CiUnreadable("gh_unreadable")
+    assert len(run.argv) == 1
+
+
+@_PAGED_READERS
+def test_a_later_page_that_says_more_and_gives_no_cursor_is_unreadable_never_whole(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    second = _commit_page([_run_node("ci-ok", "COMPLETED", "FAILURE")], next_checks="x")
+    second["statusCheckRollup"]["contexts"]["pageInfo"]["endCursor"] = None
+    run = _scripted(wrap, first, second)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "cursor" in got.detail
+    assert len(run.argv) == 2
+
+
+@_PAGED_READERS
+def test_a_next_page_of_another_commit_is_unreadable_never_mixed(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    second = _commit_page([_run_node("web", "COMPLETED", "SUCCESS")], oid="d" * 40)
+    assert read(GhTracker(Path("/p"), _scripted(wrap, first, second))) == CiUnreadable(
+        "gh_unreadable"
+    )
+
+
+@_PAGED_READERS
+def test_a_next_page_that_cannot_be_read_is_that_unreadable_never_the_first_page_alone(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    run = ScriptedRun(_plain(json.dumps(wrap(first))), _plain("<html>502 Bad Gateway</html>"))
+    got = read(GhTracker(Path("/p"), run))
+    assert isinstance(got, CiUnreadable) and "502 Bad Gateway" in got.detail
+
+
+def test_the_three_queries_that_follow_pages_ask_for_the_cursor_and_the_next_page_takes_it():
+    for query in (
+        tracker_module._PULL_REQUEST_CI_QUERY,
+        tracker_module._BRANCH_CI_QUERY,
+        tracker_module._WATCHED_BRANCH_CI_QUERY,
+    ):
+        assert query.count("endCursor") == 2 and "after:" not in query
+        after = tracker_module._page_after(query)
+        assert "$contextsAfter: String, $suitesAfter: String" in after
+        assert "contexts(first: 100, after: $contextsAfter)" in after
+        assert "checkSuites(first: 50, after: $suitesAfter)" in after
+
+
+@_PAGED_READERS
+def test_non_json_from_gh_is_unreadable_and_quotes_what_gh_returned(wrap, read):
+    got = read(GhTracker(Path("/p"), Recorder(stdout="<html>502 Bad Gateway</html>")))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and got.detail == "<html>502 Bad Gateway</html>"
+
+
+@_PAGED_READERS
+def test_a_gh_that_exits_non_zero_quotes_the_first_line_of_its_message_sanitised(wrap, read):
+    stderr = "HTTP 401: bad credentials ghp_AbC123xyz `oops`\nsecond line"
+    got = read(GhTracker(Path("/p"), ScriptedRun(RecordingRun("", stderr, 1))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable)
+    assert got.detail == "gh api graphql failed: HTTP 401: bad credentials [redacted] oops"
+
+
+@_PAGED_READERS
+def test_null_data_is_unreadable_and_says_what_it_could_not_find(wrap, read):
+    got = read(GhTracker(Path("/p"), Recorder(stdout=json.dumps({"data": None}))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and got.detail != ""
+
+
+@_PAGED_READERS
+def test_a_cancelled_check_run_with_every_nullable_field_null_is_a_readable_failure_input(
+    wrap, read
+):
+    """GH-1133's shape, pinned: `conclusion`, `detailsUrl` and both times may be null on a check
+    run cut at its limit; none of them makes the read unreadable."""
+    cancelled = {
+        "__typename": "CheckRun",
+        "id": "id-1",
+        "name": "e2e-shard (1)",
+        "status": "COMPLETED",
+        "conclusion": "CANCELLED",
+        "detailsUrl": None,
+        "startedAt": None,
+        "completedAt": None,
+    }
+    nodes = [cancelled, _run_node("ci-ok", "COMPLETED", "FAILURE")]
+    report = read(
+        GhTracker(Path("/p"), _scripted(wrap, _commit_page(nodes, suites=[_page_suite(1)])))
+    )
+    assert isinstance(report, CiReport)
+    assert report.checks[0] == CiCheck("e2e-shard (1)", "COMPLETED", "CANCELLED", "")
+    assert report.checks[1].conclusion == "FAILURE" and report.runs_completed is True
+
+
+@_PAGED_READERS
+def test_a_check_run_with_a_null_name_is_unreadable_naming_the_field(wrap, read):
+    nameless = {**_run_node("x", "COMPLETED", "CANCELLED"), "name": None}
+    got = read(GhTracker(Path("/p"), _scripted(wrap, _commit_page([nameless]))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "check field" in got.detail

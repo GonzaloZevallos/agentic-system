@@ -30,17 +30,34 @@ from claude_agent_sdk import (
 
 from agentic.core.process.adapters.claude_sdk import check_run_log
 from agentic.core.process.adapters.claude_sdk import runner as module
-from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL
+from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL, GUARD_TIMEOUT_S
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
 from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
 from agentic.core.process.adapters.shell import ShellReaper
-from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.application.ports import (
+    AttemptFailed,
+    CheckAbandoned,
+    CheckRequest,
+    Grant,
+)
+from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
+from agentic.core.process.application.run_check import RunCheck, resolved_walls
 from agentic.core.process.domain import reaping
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
+from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import SpaceReading
+from agentic.core.process.domain.stall import Stall
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
-from tests.fakes import FakeFreeSpace, FakeReaper
+from tests.fakes import (
+    FakeFreeSpace,
+    FakeReaper,
+    MemoryCheckResults,
+    MemoryCommands,
+    MemoryWorkspace,
+    memory_ports,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -1806,6 +1823,9 @@ async def test_a_silent_attempt_is_reaped_and_fails_as_a_stall_on_the_eof_path(
     assert written.count("stalled") == 1
     assert "stalled 3000s, last event system" in written
     assert "cost unknown" in written
+    # The record travels on the exception: ints, the closed event kind and a bool only.
+    assert failure.stall == Stall(3000, "system", in_hook=False)
+    assert type(failure.stall.seconds) is int
 
 
 async def test_the_attempt_is_reaped_before_any_scope_is_cancelled_when_the_cli_survives(
@@ -1948,7 +1968,7 @@ async def test_a_long_delivery_hook_holds_the_attempt_and_the_whole_threshold_re
         hook = options.hooks["PreToolUse"][0].hooks[0]
         running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
         await until(lambda: reaper.scans >= 1)
-        clock.now += 3 * 1500  # a hook thrice the check timeout, with no message
+        clock.now += 1000  # a hook silent past the threshold but inside its 1530 s ceiling
         scans = reaper.scans
         await until(lambda: reaper.scans >= scans + 3)
         reaped_at.append(len(reaper.calls))  # during the hook: no reap
@@ -1978,6 +1998,55 @@ async def test_a_long_delivery_hook_holds_the_attempt_and_the_whole_threshold_re
     assert reaped_at == [0, 0]
 
 
+async def test_a_hook_past_its_ceiling_is_killed_as_a_stall_one_threshold_after_the_last_renewal(
+    monkeypatch, tmp_path, clock
+):
+    presubmit = SlowPresubmit()  # ceiling: GUARD_TIMEOUT_S + 1500 s, from the clock at entry
+    ceiling = GUARD_TIMEOUT_S + presubmit.timeout_s
+    killed = threading.Event()
+    # No pending tool and a child that never moves: nothing but the hook clause could hold it.
+    reaper = HungReaper(on_reap=killed.set, ticks=lambda scan: 7, running=False)
+    reaped_at: list[int] = []
+
+    async def query(prompt, options):
+        yield INIT
+        hook = options.hooks["PreToolUse"][0].hooks[0]
+        running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
+        await until(presubmit.entered.is_set)
+        entered_at = clock.now
+        clock.now = entered_at + ceiling  # exactly at the expiry: still inside it
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        renewed = clock.now  # the last tick that renewed
+        clock.now = renewed + TIMEOUT_S  # a whole threshold after it, not past it
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        reaped_at.append(len(reaper.calls))  # no reap yet
+        clock.now += 1  # the first tick over the threshold fires
+        await until(killed.is_set)
+        presubmit.release.set()
+        await running
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await stalling_runner(clock, reaper, buffer).run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            presubmit=presubmit,
+            owner_task="GH-1",
+        )
+    assert caught.value.reason == "stall"
+    assert caught.value.stall == Stall(int(TIMEOUT_S) + 1, "system", in_hook=True)
+    assert reaped_at == [0]
+    written = buffer.getvalue()
+    assert f"stalled {int(TIMEOUT_S) + 1}s, last event system, in_hook True" in written
+
+
 async def test_the_hook_counter_is_per_attempt_not_shared_between_sessions(
     monkeypatch, tmp_path, clock
 ):
@@ -1998,7 +2067,7 @@ async def test_the_hook_counter_is_per_attempt_not_shared_between_sessions(
             yield result()
         else:
             await until(presubmit.entered.is_set)  # the other attempt's hook is in flight
-            clock.now += 5 * TIMEOUT_S
+            clock.now += 2 * TIMEOUT_S  # past the threshold, inside the hook's ceiling
             while not killed.is_set():
                 await anyio.sleep(0.005)
 
@@ -2520,3 +2589,260 @@ async def test_without_declared_checks_no_check_run_hook_is_installed(monkeypatc
         owner_task="GH-1",
     )
     assert "PostToolUseFailure" not in seen[0][1].hooks
+
+
+# --- GH-1169: an abandoned attempt's gate and run_check stop waiting and launching ----------
+# Seam: `ClaudeSdkRunner.run_once` over a fake query and reaper and a real `CheckoutPresubmit`
+# whose scheduler waits in `acquire` the way the ledger does, polling `request.cancelled`.
+
+GATE_PATH = Path("/memory/worktrees/GH-1.api")
+ABANDONED_REPLY = "the attempt was abandoned; no check was run"
+
+
+class WaitingScheduler:
+    """`acquire` waits until the request's flag is set, then leaves by `CheckAbandoned`, as
+    `FilesystemCheckLedger` does; with `block` off it grants at once under the request's token."""
+
+    def __init__(self) -> None:
+        self.block = True
+        self.requests: list[CheckRequest] = []
+        self.waiting = threading.Event()
+        self.released: list[Grant] = []
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        self.requests.append(request)
+        if not self.block:
+            return Grant(4, 0.0, 0, False, 0.0, request.token or "none")
+        self.waiting.set()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if request.cancelled is not None and request.cancelled():
+                raise CheckAbandoned
+            time.sleep(0.005)
+        raise AssertionError("the wait was never abandoned")
+
+    def release(self, grant: Grant) -> None:
+        self.released.append(grant)
+
+
+VERIFICATIONS = {"compare": Verification("compare.sh", 60.0)}
+
+
+def real_gate(scheduler: WaitingScheduler, commands: MemoryCommands | None = None):
+    workspace = MemoryWorkspace()
+    workspace.moved.add(GATE_PATH)
+    ports = memory_ports(
+        workspace=workspace,
+        commands=commands or MemoryCommands(),
+        check_scheduler=scheduler,
+        check_results=MemoryCheckResults(),
+    )
+    return CheckoutPresubmit(
+        ports,
+        GATE_PATH,
+        "base",
+        {"tests": "pytest"},
+        30.0,
+        priority=CheckPriority.SUBTASK,
+        wait_max_s=900.0,
+        timeouts=resolved_walls(VERIFICATIONS, {}, 30.0, 3600.0),
+        reuse=Reuse("shop", ("uv sync",), "a" * 40),
+    )
+
+
+async def run_with(runner: ClaudeSdkRunner, tmp_path, **ports):
+    return await runner.run_once(
+        DEVELOPER,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
+        **ports,
+    )
+
+
+def delivery_matcher(options):
+    return next(m for m in options.hooks["PreToolUse"] if m.matcher == DELIVERY_TOOL)
+
+
+def delivery_hook(options):
+    return delivery_matcher(options).hooks[0]
+
+
+async def test_a_stalled_gate_is_abandoned_before_the_reap_and_the_next_attempt_gates_in_full(
+    monkeypatch, tmp_path, clock
+):
+    scheduler, commands = WaitingScheduler(), MemoryCommands()
+    gate = real_gate(scheduler, commands)
+    killed, flag_at_reap = threading.Event(), []
+
+    def on_reap() -> None:
+        flag_at_reap.append(scheduler.requests[0].cancelled())
+        killed.set()
+
+    first_answers: list = []
+
+    async def stalling(prompt, options):
+        yield INIT
+        running = asyncio.ensure_future(delivery_hook(options)({"tool_input": {}}, None, {}))
+        await until(scheduler.waiting.is_set)
+        clock.now += 10_000  # past the hook's ceiling and the whole stall threshold
+        await until(killed.is_set)
+        first_answers.append(await running)
+
+    monkeypatch.setattr(module, "query", stalling)
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await run_with(
+            stalling_runner(clock, HungReaper(on_reap=on_reap), buffer), tmp_path, presubmit=gate
+        )
+    assert caught.value.reason == "stall"
+    # the watchdog's reap and the one `run_once` ends with: the flag was set before each
+    assert flag_at_reap == [True, True]
+    (denial,) = first_answers  # the gate thread returned, and the hook answered the fixed text
+    assert denial["hookSpecificOutput"]["permissionDecisionReason"] == ABANDONED_REPLY
+    assert caught.value.presubmit_denials == 0
+    assert commands.ran == [] and scheduler.released == [] and gate.gates == []
+    assert gate.grant is None and gate.waited_s == 0.0 and gate.refusals == 0
+
+    # Attempt 2 on the very same presubmit: its own flag, its own token, its checks in full.
+    scheduler.block = False
+    second_answers: list = []
+
+    async def retry(prompt, options):
+        yield INIT
+        second_answers.append(await delivery_hook(options)({"tool_input": {}}, None, {}))
+        yield result()
+
+    monkeypatch.setattr(module, "query", retry)
+    await run_with(make_runner(), tmp_path, presubmit=gate)
+    assert second_answers == [{}]
+    first, second = scheduler.requests
+    assert first.token and second.token and first.token != second.token
+    assert [c for _, c in commands.ran] == ["pytest"]
+    assert len(gate.gates) == 1 and gate.refusals == 0 and gate.waited_s == 0.0
+    assert len(scheduler.released) == 1 and scheduler.released[0].token == second.token
+
+
+async def test_a_stalled_run_check_wait_ends_by_abandonment_and_stores_nothing(
+    monkeypatch, tmp_path, clock
+):
+    scheduler = WaitingScheduler()
+    check = RunCheck(real_gate(scheduler), verifications=VERIFICATIONS)
+    seen: list = []
+    monkeypatch.setattr(module, "check_server", lambda tool, activity=None: seen.append(tool) or {})
+    killed, outcome = threading.Event(), []
+
+    async def stalling(prompt, options):
+        yield INIT
+        (wrapper,) = seen
+
+        def ask() -> None:
+            try:
+                wrapper("tests")
+            except CheckAbandoned as abandoned:
+                outcome.append(abandoned)
+
+        thread = threading.Thread(target=ask)
+        thread.start()
+        await until(scheduler.waiting.is_set)
+        clock.now += 10_000
+        await until(killed.is_set)
+        await until(lambda: bool(outcome))
+        thread.join(5.0)
+
+    monkeypatch.setattr(module, "query", stalling)
+    with pytest.raises(AttemptFailed) as caught:
+        await run_with(
+            stalling_runner(clock, HungReaper(on_reap=killed.set)), tmp_path, check_tool=check
+        )
+    assert caught.value.reason == "stall" and len(outcome) == 1
+    assert check.calls == [] and check.gate.grant is None and scheduler.released == []
+
+
+@pytest.mark.parametrize("ending", ["failure", "delivery"])
+async def test_every_other_exit_of_an_attempt_sets_the_flag_before_the_reap_too(
+    monkeypatch, tmp_path, ending
+):
+    scheduler = WaitingScheduler()
+    gate = real_gate(scheduler)
+    flag_at_reap: list[bool] = []
+    left_running: list = []
+
+    class Reaper(FakeReaper):
+        def reap_attempt(self, task_id, run, token):
+            flag_at_reap.append(scheduler.requests[0].cancelled())
+            return super().reap_attempt(task_id, run, token)
+
+    async def query(prompt, options):
+        yield INIT
+        left_running.append(
+            asyncio.ensure_future(delivery_hook(options)({"tool_input": {}}, None, {}))
+        )
+        await until(scheduler.waiting.is_set)
+        if ending == "failure":
+            raise RuntimeError("the SDK broke")
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    runner = make_runner(reaper=Reaper())
+    if ending == "failure":
+        with pytest.raises(AttemptFailed) as caught:
+            await run_with(runner, tmp_path, presubmit=gate)
+        assert caught.value.reason == "sdk"
+    else:
+        await run_with(runner, tmp_path, presubmit=gate)
+    assert flag_at_reap == [True]
+    (answer,) = [await task for task in left_running]  # the abandoned gate thread has returned
+    assert answer["hookSpecificOutput"]["permissionDecisionReason"] == ABANDONED_REPLY
+
+
+async def test_the_real_objects_hold_what_a_gate_and_a_run_check_did_through_the_wrapper(
+    monkeypatch, tmp_path
+):
+    scheduler = WaitingScheduler()
+    scheduler.block = False
+    gate = real_gate(scheduler)
+    check = RunCheck(gate, verifications=VERIFICATIONS)
+    seen: list = []
+    monkeypatch.setattr(module, "check_server", lambda tool, activity=None: seen.append(tool) or {})
+    reply: list[str] = []
+    options_seen: list = []
+
+    async def query(prompt, options):
+        options_seen.append(options)
+        yield INIT
+        assert await delivery_hook(options)({"tool_input": {}}, None, {}) == {}
+        reply.append(await asyncio.to_thread(seen[0], "compare"))
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    await run_with(make_runner(), tmp_path, presubmit=gate, check_tool=check)
+    (wrapper,) = seen
+    assert wrapper is not check  # the attempt's view, not the real object
+    assert wrapper.names == check.names == ("tests",)
+    assert wrapper.verification_names == check.verification_names == ("compare",)
+    assert wrapper.timeout_s == check.timeout_s
+    assert len(gate.gates) == 1 and len(check.calls) == 1 and check.evidence() is not None
+    assert "check: compare" in reply[0]
+    matcher = delivery_matcher(options_seen[0])
+    assert matcher.timeout > gate.timeout_s + gate.wait_max_s
+
+
+async def test_a_fake_presubmit_and_a_fake_tool_pass_through_unwrapped(monkeypatch, tmp_path):
+    seen: list = []
+    monkeypatch.setattr(module, "check_server", lambda tool, activity=None: seen.append(tool) or {})
+    fake_query(monkeypatch, [result()])
+
+    class FakeTool:
+        names = ("tests",)
+        timeout_s = 10.0
+
+        def __call__(self, name: str) -> str:
+            return "ok"
+
+    tool = FakeTool()
+    await run_with(make_runner(), tmp_path, check_tool=tool)
+    assert seen == [tool]

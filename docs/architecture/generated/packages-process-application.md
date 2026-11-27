@@ -63,4 +63,5 @@ graph TD
     g_application__support --> g_application__checks
     g_application__support --> g_application__landing
     g_application__support --> g_application__lifecycle
+    g_application__support --> g_application__reflection
 ```

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     Board,
@@ -30,6 +31,7 @@ from agentic.core.process.application.ports import (
     FormatFiler,
     FormatFixReads,
     FreeSpace,
+    GhCallLog,
     Inbox,
     LabelTimeline,
     LandRecord,
@@ -117,6 +119,7 @@ _spec_reader: SpecReader = FakeSpecReader({})
 _spec_validator: SpecValidator = FakeSpecValidator()
 _domain_spec_validator: SpecValidator = DomainSpecValidator()
 _stop_flag: StopFlag = FakeStopFlag()
+_gh_call_log: GhCallLog = InProcessGhCallLog()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
 _land_record: LandRecord = FakeLandRecord()
@@ -177,6 +180,7 @@ COVERED: dict[str, type] = {
     "SpecReader": FakeSpecReader,
     "SpecValidator": FakeSpecValidator,
     "StopFlag": FakeStopFlag,
+    "GhCallLog": InProcessGhCallLog,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
     "LandRecord": FakeLandRecord,

@@ -33,6 +33,9 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class scratch__OwnerEntry["OwnerEntry"]
+    class scratch__OwnerRecord["OwnerRecord"]
+    class scratch__PartitionFolder["PartitionFolder"]
     class scratch__PartitionListing["PartitionListing"]
     class scratch__RecordFact["RecordFact"]
     class scratch__Removal["Removal"]
@@ -43,8 +46,9 @@ classDiagram
     class stage0_rotation__Green["Green"]
     class stage0_rotation__Heartbeat["Heartbeat"]
     class stage0_rotation__Keep["Keep"]
-    class stage0_rotation__Prepared["Prepared"]
-    class stage0_rotation__Proceed["Proceed"]
-    class stage0_rotation__Red["Red"]
-    stage0_rotation__Proceed --> stage0_rotation__Green
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 5)](classes-process-domain-machine-5.md)
+  - `stage0_rotation.Proceed` se asocia con `stage0_rotation.Green`

@@ -100,6 +100,9 @@ EXCLUDES = (
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
 # network blinking must cost a run a fallback and a note, never a hang.
 FETCH_TIMEOUT_S: float = 30
+# Where the stacking judgement fetches a parent's task branch (GH-858): a namespace of its own,
+# apart from the `refs/agentic/remote-tips/` ref `deliver` reads, and never under `refs/heads/`.
+STACKING_TIPS_REF = "refs/agentic/stacking-tips/"
 # How long one `git merge-tree` may take (GH-255). Declared, not measured: it bounds one
 # serial poll round, so a hung probe costs a conflict left unread, never a hung poller.
 MERGE_TREE_TIMEOUT_S: float = 30
@@ -197,9 +200,12 @@ class GitWorkspace:
 
     # -- checkouts --------------------------------------------------------------
 
-    def task_checkout(self, task_id: str) -> Checkout:
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
+        """`start`, when given, is asked only for a branch that does not exist yet and returns
+        the sha it starts at (GH-858): already decided, so nothing slow runs under git's lock.
+        Without it the branch starts at the fetched upstream, as always."""
         return self._checkout(
-            rules.task_branch(task_id), WORKTREES / task_id, start=self._new_task_base
+            rules.task_branch(task_id), WORKTREES / task_id, start=start or self._new_task_base
         )
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
@@ -650,7 +656,9 @@ class GitWorkspace:
         # the lease to whatever the remote holds now and defeat it.
         self._git("push", "-u", f"--force-with-lease=refs/heads/{branch}:{lease}", "origin", branch)
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
+        if bounded:
+            return self._remote_tip_bounded(path, branch)
         listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path)
         if not listed:
             return None
@@ -658,6 +666,25 @@ class GitWorkspace:
         private = f"refs/agentic/remote-tips/{branch}"
         self._git("fetch", "origin", f"+refs/heads/{branch}:{private}", cwd=path)
         fetched = self._git("rev-parse", private, cwd=path)
+        if fetched != observed:
+            raise GitError(
+                f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
+            )
+        return fetched
+
+    def _remote_tip_bounded(self, path: Path, branch: str) -> str | None:
+        """`remote_tip` for the stacking judgement (GH-858): the same read, each git step under
+        `FETCH_TIMEOUT_S` (a hang is a `GitError`, never a wait without end) and the fetch into
+        `refs/agentic/stacking-tips/`, so it never rewrites the ref `deliver` keeps."""
+        listed = self._git_bounded(
+            "ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path
+        )
+        if not listed:
+            return None
+        observed = listed.split()[0]
+        private = f"{STACKING_TIPS_REF}{branch}"
+        self._git_bounded("fetch", "origin", f"+refs/heads/{branch}:{private}", cwd=path)
+        fetched = self._git_bounded("rev-parse", private, cwd=path)
         if fetched != observed:
             raise GitError(
                 f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
@@ -1317,7 +1344,11 @@ class GitWorkspace:
         return self._run_with_env({}, *args, cwd=cwd)
 
     def _run_with_env(
-        self, env: Mapping[str, str], *args: str, cwd: Path | None = None
+        self,
+        env: Mapping[str, str],
+        *args: str,
+        cwd: Path | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if cwd is not None:
             # Before any git runs: a task folder without its `.git` would walk up to the
@@ -1329,6 +1360,7 @@ class GitWorkspace:
             env={**os.environ, **self.identity, **env},
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
 
     def _run_locked(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -1357,6 +1389,18 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout
+
+    def _git_bounded(self, *args: str, cwd: Path | None = None) -> str:
+        """`_git` under `FETCH_TIMEOUT_S`: a timeout is a `GitError`, like any failed step."""
+        try:
+            result = self._run_with_env({}, *args, cwd=cwd, timeout=FETCH_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise GitError(f"git {' '.join(args)} timed out after {FETCH_TIMEOUT_S:g} s") from exc
+        if result.returncode != 0:
+            raise GitError(
+                f"git {' '.join(args)} failed: {result.stderr.strip()}", stderr=result.stderr
+            )
+        return result.stdout.strip()
 
     def _git(
         self, *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None

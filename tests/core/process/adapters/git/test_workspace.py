@@ -983,6 +983,87 @@ def test_remote_tip_raises_when_the_remote_moved_between_the_read_and_the_fetch(
     assert seen["observed"] != seen["moved"]
 
 
+def test_a_bounded_remote_tip_fetches_into_its_own_private_namespace(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    theirs = _third_clone_pushes(product, task.branch, tmp_path)
+    tip = ws.remote_tip(product, task.branch, bounded=True)
+    assert tip == theirs
+    assert git("rev-parse", f"refs/agentic/stacking-tips/{task.branch}", cwd=product) == tip
+    refs = git("for-each-ref", "--format=%(refname)", "refs/agentic", cwd=product).splitlines()
+    assert not any("remote-tips" in name for name in refs)
+    heads = git("for-each-ref", "--format=%(refname)", "refs/heads", cwd=product).splitlines()
+    assert not any("stacking-tips" in name for name in heads)
+
+
+def test_the_default_remote_tip_still_uses_the_remote_tips_namespace(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    tip = ws.remote_tip(task.path, task.branch)
+    assert git("rev-parse", f"refs/agentic/remote-tips/{task.branch}", cwd=product) == tip
+    refs = git("for-each-ref", "--format=%(refname)", "refs/agentic", cwd=product).splitlines()
+    assert not any("stacking-tips" in name for name in refs)
+
+
+def test_a_bounded_remote_tip_of_an_unpublished_branch_is_none(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    assert ws.remote_tip(product, task.branch, bounded=True) is None
+
+
+def test_a_bounded_remote_tip_against_an_unreachable_origin_raises_git_error(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote"):
+        ws.remote_tip(product, task.branch, bounded=True)
+
+
+@pytest.mark.parametrize("verb", ["ls-remote", "fetch"])
+def test_a_bounded_remote_tip_that_times_out_raises_git_error_under_fetch_timeout(
+    product, monkeypatch, verb
+):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    real = subprocess.run
+    seen: list[float | None] = []
+
+    def slow(args, **kwargs):
+        if verb in args:
+            seen.append(kwargs.get("timeout"))
+            raise subprocess.TimeoutExpired(args, kwargs.get("timeout") or 0)
+        return real(args, **kwargs)
+
+    monkeypatch.setattr(workspace_module.subprocess, "run", slow)
+    with pytest.raises(GitError, match="timed out"):
+        ws.remote_tip(product, task.branch, bounded=True)
+    assert seen == [workspace_module.FETCH_TIMEOUT_S]
+
+
+def test_a_bounded_remote_tip_raises_when_the_remote_moved_between_the_read_and_the_fetch(
+    product, tmp_path, monkeypatch
+):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    real = ws._run_with_env
+    moved: list[str] = []
+
+    def moving(env, *args, cwd=None, timeout=None):
+        done = real(env, *args, cwd=cwd, timeout=timeout)
+        if args[0] == "ls-remote":
+            moved.append(_third_clone_pushes(product, task.branch, tmp_path))
+        return done
+
+    monkeypatch.setattr(ws, "_run_with_env", moving)
+    with pytest.raises(GitError, match="moved between ls-remote"):
+        ws.remote_tip(product, task.branch, bounded=True)
+    assert moved
+
+
 def test_a_plain_push_fast_forwards_and_a_diverged_one_is_refused(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
@@ -1993,3 +2074,52 @@ def test_merge_without_a_message_keeps_gits_own(product):
     _commit_on(ws, other.path, "two")
     assert ws.merge(task.path, other.branch) is None
     assert git("log", "-1", "--format=%s", cwd=task.path).startswith("Merge")
+
+
+def _second_commit(repo: Path) -> str:
+    (repo / "NEXT.md").write_text("v1\n")
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v1", cwd=repo)
+    return git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_task_checkout_with_a_start_creates_the_branch_there_and_notes_its_base(product):
+    first = git("rev-parse", "HEAD", cwd=product)
+    second = _second_commit(product)
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12", start=lambda: first)
+    assert git("rev-parse", "agentic/GH-12", cwd=product) == first != second
+    assert (
+        task.base == ws.base_of("agentic/GH-12") == git("rev-parse", "--short", first, cwd=product)
+    )
+    assert not (task.path / "NEXT.md").exists()
+
+
+def test_task_checkout_without_a_start_still_starts_at_the_upstream(product):
+    second = _second_commit(product)
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12", start=None)
+    assert git("rev-parse", "agentic/GH-12", cwd=product) == second
+
+
+def test_the_start_is_never_asked_when_the_branch_exists(product):
+    first = git("rev-parse", "HEAD", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    asked: list[str] = []
+
+    def start() -> str:
+        asked.append("asked")
+        return first
+
+    again = ws.task_checkout("GH-12", start=start)
+    assert asked == [] and not again.created
+
+
+def test_a_start_that_does_not_exist_leaves_no_branch_worktree_or_base(product):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError):
+        ws.task_checkout("GH-12", start=lambda: "f" * 40)
+    assert git("branch", "--list", "agentic/GH-12", cwd=product) == ""
+    assert not (product / ".agentic/worktrees/GH-12").exists()
+    assert ws.base_of("agentic/GH-12") is None

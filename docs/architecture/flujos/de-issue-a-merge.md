@@ -59,7 +59,13 @@ sequenceDiagram
    falla, la ronda no arranca nada y dice `holds unread`; los cierres y los barridos siguen.
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
-   `agentic/composition.py:graph`.
+   `agentic/composition.py:graph`. Antes de archivar y de escribir cualquier documento,
+   `agentic/cli.py:_stack_gate` consulta la puerta del arranque apilado
+   (`agentic/core/process/application/stacked_start.py:decide`) cuando hay una pista de
+   lanzamiento o, con `--fresh`, un `stack_parent` legible en el documento anterior. Un
+   `Wait` en la puerta termina la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr,
+   sin invocar el grafo. Un `Wait` al crear la rama (`StackWait` atrapada en
+   `agentic/cli.py:_invoke`, ya iniciado el grafo) termina igual. Ninguno escala.
 4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
    (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
    `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del

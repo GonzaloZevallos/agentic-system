@@ -591,3 +591,87 @@ def test_an_expired_unfetchable_head_never_holds_a_row_that_refusal_does_not_hol
         assert stacking.held(expired) is False
         waiting = replace(facts, heads_fetched=False, unfetchable_expired=False)
         assert stacking.held(waiting) is want
+
+
+# -- ParentMemo: the round's reads of the stacking judgement (GH-858) -------------------
+
+
+def test_a_fresh_parent_memo_knows_nothing_and_origin_has_not_failed():
+    memo = stacking.ParentMemo()
+    assert memo.outcome(5, HEAD) is None
+    assert memo.origin_failed is False
+
+
+def test_a_parent_memo_keeps_each_outcome_under_parent_and_head():
+    memo = stacking.ParentMemo()
+    assert memo.record(5, HEAD, "stacked") == "stacked"
+    memo.record(5, "b" * 40, "doubt")
+    memo.record(6, HEAD, "not_stacked")
+    assert [memo.outcome(5, HEAD), memo.outcome(5, "b" * 40), memo.outcome(6, HEAD)] == [
+        "stacked",
+        "doubt",
+        "not_stacked",
+    ]
+
+
+def test_origin_failed_is_one_way_and_memos_do_not_share_state():
+    memo, other = stacking.ParentMemo(), stacking.ParentMemo()
+    memo.fail_origin()
+    memo.record(5, HEAD, "stacked")
+    assert memo.origin_failed is True
+    assert other.origin_failed is False and other.outcomes == {}
+
+
+# -- start_ref (GH-858, ADR-0104): where a stacked child's branch starts --------------------------
+
+
+def _parent_facts(**over: Any) -> stacking.ParentFacts:
+    base: dict[str, Any] = {
+        "merged": False,
+        "abandoned": False,
+        "paused": False,
+        "ready": True,
+        "head": HEAD,
+        "carried": True,
+    }
+    return stacking.ParentFacts(**{**base, **over})
+
+
+def test_start_ref_a_merged_parent_starts_the_child_at_the_upstream():
+    assert stacking.start_ref(7, _parent_facts(merged=True)) == stacking.Upstream()
+
+
+def test_start_ref_an_abandoned_parent_starts_the_child_at_the_upstream():
+    assert stacking.start_ref(7, _parent_facts(abandoned=True, ready=False, head=None)) == (
+        stacking.Upstream()
+    )
+
+
+def test_start_ref_an_unmerged_ready_parent_whose_head_is_carried_gives_that_head():
+    assert stacking.start_ref(7, _parent_facts()) == stacking.Parent(head=HEAD)
+
+
+@pytest.mark.parametrize(
+    ("over", "cause"),
+    [
+        ({"ready": False}, "parent_not_ready"),  # archived or any status but ready_for_review
+        ({"ready": True, "head": None}, "parent_not_ready"),
+        ({"carried": False}, "head_not_carried"),
+        ({"paused": True}, "parent_paused"),
+        ({"paused": True, "ready": False}, "parent_paused"),
+        ({"merged": None}, "unreadable"),
+        ({"abandoned": None}, "unreadable"),
+        ({"paused": None}, "unreadable"),
+        ({"ready": None}, "unreadable"),
+        ({"carried": None}, "unreadable"),
+    ],
+)
+def test_start_ref_anything_else_waits_and_names_why(
+    over: dict[str, Any], cause: stacking.StackWaitCause
+):
+    assert stacking.start_ref(7, _parent_facts(**over)) == stacking.Wait(cause=cause)
+
+
+def test_start_ref_a_merged_parent_wins_over_an_unreadable_later_fact():
+    facts = _parent_facts(merged=True, paused=None, ready=None, carried=None)
+    assert stacking.start_ref(7, facts) == stacking.Upstream()

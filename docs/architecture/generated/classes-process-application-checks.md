@@ -37,5 +37,6 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [application: support (parte 4)](classes-process-application-support-4.md)
-  - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
   - `presubmit.Readiness` se asocia con `ports.LoadReader`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`

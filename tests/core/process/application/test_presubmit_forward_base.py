@@ -146,6 +146,7 @@ CASES = {
         ran=["pytest", LINT],
         form=("full", "stuck_full"),
         rows=["full"],
+        first_refused=False,
     ),
     # an exit 8 that timed out is no empty selection: full follows
     "a timed-out exit 8 keeps nothing": Case(
@@ -211,7 +212,8 @@ def test_two_gate_calls_move_the_base_to_the_last_green_head(case: Case) -> None
         task_paths=case.task_paths,
         witness=case.witness,
     )
-    assert gate() is not None  # call 1 is refused, for the lint or the witness or the timeout
+    # Call 1 is refused for the lint or the witness; a timeout alone passes unverified (GH-1075).
+    assert (gate() is not None) is case.first_refused
     assert gate.green_heads == case.greens
     first = len(commands.ran)
 

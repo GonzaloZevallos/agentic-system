@@ -19,6 +19,7 @@ from typing import Literal
 
 from ...application.ports import (
     BranchPullRequest,
+    GhCallLog,
     HeldListMayBeCut,
     IssueComment,
     IssueState,
@@ -145,6 +146,26 @@ checkSuites(first: 50) {
 }
 """
 
+# The same fragments for the three readers that follow the pages (GH-1151), with the `endCursor` of
+# each connection. `COMMIT_CI_QUERY` keeps the plain ones: the stage0 window reads one page, and
+# says so when there is more. A first page is the plain query; the pages after it are `_page_after`.
+_PAGED_ROLLUP = _ROLLUP.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
+_PAGED_SUITES = _SUITES.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
+_PAGED_WATCHED_SUITES = _WATCHED_SUITES.replace(
+    "pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }"
+)
+
+
+def _page_after(query: str) -> str:
+    """`query` asking for the page after a cursor: its `contexts` and `checkSuites` take
+    `$contextsAfter` and `$suitesAfter` (a null one is the first page)."""
+    return (
+        query.replace("query($", "query($contextsAfter: String, $suitesAfter: String, $", 1)
+        .replace("contexts(first: 100)", "contexts(first: 100, after: $contextsAfter)")
+        .replace("checkSuites(first: 50)", "checkSuites(first: 50, after: $suitesAfter)")
+    )
+
+
 _PULL_REQUEST_CI_QUERY = (
     """
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -154,8 +175,8 @@ query($owner: String!, $repo: String!, $number: Int!) {
       baseRefName
       headRefOid
       commits(last: 1) { nodes { commit { oid """
-    + _ROLLUP
-    + _SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_SUITES
     + """ } } }
     }
   }
@@ -168,8 +189,8 @@ _BRANCH_CI_QUERY = (
 query($owner: String!, $repo: String!, $ref: String!) {
   repository(owner: $owner, name: $repo) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
-    + _ROLLUP
-    + _SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_SUITES
     + """ } } }
   }
 }
@@ -196,8 +217,8 @@ _WATCHED_BRANCH_CI_QUERY = (
 query($owner: String!, $repo: String!, $ref: String!) {
   repository(owner: $owner, name: $repo) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
-    + _ROLLUP
-    + _WATCHED_SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_WATCHED_SUITES
     + """ } } }
   }
 }
@@ -272,6 +293,73 @@ def _check_run_ids(commit: object) -> dict[str, str]:
 
 class _Unreadable(Exception):
     """Inside this module only: a CI answer that is not whole. Never leaves it."""
+
+
+def _why(exc: Exception) -> str:
+    """Our own account of why an answer could not be read, for `CiUnreadable.of`: the message of
+    an `_Unreadable`, else the kind of error and what it names (a missing key, a null)."""
+    return str(exc) if isinstance(exc, _Unreadable) else f"{type(exc).__name__}: {exc}"
+
+
+# How many pages of each connection of a commit's CI one read follows (GH-1151). Past the bound the
+# read is unreadable and names it: never a partial list used as whole. Each call asks for the next
+# page of every connection still open, so a poll is at most `max(5, 3)` calls more than the first.
+_CONTEXT_PAGES = 5
+_SUITE_PAGES = 3
+
+
+def _connection(commit: object, name: str) -> dict | None:
+    """The `contexts` (under `statusCheckRollup`) or `checkSuites` connection of a GraphQL
+    `Commit`, `None` when the commit does not carry one."""
+    holder = (
+        commit.get("statusCheckRollup")
+        if name == "contexts" and isinstance(commit, dict)
+        else commit
+    )
+    connection = holder.get(name) if isinstance(holder, dict) else None
+    return connection if isinstance(connection, dict) else None
+
+
+def _next_cursor(connection: dict | None) -> str | None:
+    """The `endCursor` of the page after this one, `None` when the connection is whole or absent, or
+    says there is more and gives no cursor: it cannot be followed, and `_commit_ci` (a cut list of
+    checks) or `_runs_completed` (a cut list of suites) already treat it as not whole."""
+    page = connection.get("pageInfo") if connection is not None else None
+    if not isinstance(page, dict) or page.get("hasNextPage") is not True:
+        return None
+    cursor = page.get("endCursor")
+    return cursor if isinstance(cursor, str) and cursor else None
+
+
+def _says_more(connection: dict | None) -> bool:
+    """Whether the connection says a page follows (`hasNextPage` true), cursor or not."""
+    page = connection.get("pageInfo") if connection is not None else None
+    return isinstance(page, dict) and page.get("hasNextPage") is True
+
+
+def _page_nodes(connection: dict | None) -> list:
+    nodes = connection.get("nodes") if connection is not None else None
+    if not isinstance(nodes, list):
+        raise _Unreadable("a page without a node list")
+    return nodes
+
+
+def _whole(commit: dict, nodes: dict[str, list]) -> dict:
+    """`commit` with the connections that were followed replaced by their pages merged, each
+    marked whole (`hasNextPage` false): what `_commit_ci` and the suite readers expect."""
+    merged = dict(commit)
+    done = {"hasNextPage": False}
+    rollup = commit.get("statusCheckRollup")
+    if "contexts" in nodes and isinstance(rollup, dict):
+        contexts = {**rollup["contexts"], "nodes": nodes["contexts"], "pageInfo": done}
+        merged["statusCheckRollup"] = {**rollup, "contexts": contexts}
+    if "checkSuites" in nodes:
+        merged["checkSuites"] = {
+            **commit["checkSuites"],
+            "nodes": nodes["checkSuites"],
+            "pageInfo": done,
+        }
+    return merged
 
 
 def _commit_ci(commit: object) -> tuple[str, tuple[CiCheck, ...]]:
@@ -548,7 +636,9 @@ class GhTracker:
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
         access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
+        self._calls = calls
         self.product_dir = product_dir
         # The product's `api_break_line` (GH-610), asked only when a check is red.
         self._api_break_line = api_break_line
@@ -996,23 +1086,26 @@ class GhTracker:
 
     def ci_report(self, reference: str) -> CiReport | CiUnreadable:
         """See `Tracker.ci_report`. `gh` resolves the repository from `product_dir`. Never
-        raises and never reads stderr: the class of an unreadable answer is the step that
-        failed. `base_sha` is always None: the gate that would have filled it from the
-        Actions runs failed (ADR-0045, GH-216 amendment), `pull_requests` being empty on
-        every run of this product's CI."""
+        raises. It quotes what `gh` said (`CiUnreadable.of`) and never classifies by it: the
+        class of an unreadable answer is the step that failed (ADR-0029). `base_sha` is always None:
+        the gate that would have filled it from the Actions runs failed (ADR-0045, GH-216
+        amendment), `pull_requests` being empty on every run of this product's CI."""
         try:
             number = pull_request_number(reference)
         except ValueError:
             return CiUnreadable("gh_unreadable")
-        answer = self.graphql(
+        read = self._paged_commit(
             _PULL_REQUEST_CI_QUERY,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-F", f"number={number}"),
+            lambda answer: answer["data"]["repository"]["pullRequest"]["commits"]["nodes"][0][
+                "commit"
+            ],
         )
-        if isinstance(answer, CiUnreadable):
-            return answer
+        if isinstance(read, CiUnreadable):
+            return read
+        answer, commit = read
         try:
             pull_request = answer["data"]["repository"]["pullRequest"]
-            commit = pull_request["commits"]["nodes"][0]["commit"]
             head_sha, checks = _commit_ci(commit)
             checks = self._with_failed_step(checks, commit)
             cancelled_runs, running_runs = _suite_run_ids(commit)
@@ -1026,8 +1119,8 @@ class GhTracker:
                 cancelled_runs=cancelled_runs,
                 running_runs=running_runs,
             )
-        except (_Unreadable, KeyError, IndexError, TypeError):
-            return CiUnreadable("gh_unreadable")
+        except (_Unreadable, KeyError, IndexError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
 
     def _with_failed_step(self, checks: tuple[CiCheck, ...], commit: object) -> tuple[CiCheck, ...]:
         """`checks` with `failed_step` filled on the red runs of the product's `api_break_line`
@@ -1065,18 +1158,79 @@ class GhTracker:
     def _read_branch(self, query: str, branch: str) -> tuple[CiReport, object] | CiUnreadable:
         """The latest commit of `branch` read with `query`: its report and the GraphQL commit it
         was built from, so a caller can read more off the same answer."""
-        answer = self.graphql(
+        read = self._paged_commit(
             query,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-f", f"ref=refs/heads/{branch}"),
+            lambda answer: answer["data"]["repository"]["ref"]["target"],
         )
+        if isinstance(read, CiUnreadable):
+            return read
+        target = read[1]
+        try:
+            report = commit_report(target)
+        except (_Unreadable, KeyError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
+        return report, target
+
+    def _paged_commit(
+        self, query: str, fields: tuple[str, ...], locate: Callable[[dict], object]
+    ) -> tuple[dict, object] | CiUnreadable:
+        """One commit's CI read page by page (GH-1151): the first answer, and the commit `locate`
+        finds in it with the `contexts` and `checkSuites` pages merged and marked whole. Each
+        connection is followed only while its `hasNextPage` is true, up to `_CONTEXT_PAGES` and
+        `_SUITE_PAGES` pages; one call per page asks for the next page of every connection that is
+        still open. Past a bound, or when a page is of another commit, cannot be read or gives no
+        cursor, the read is unreadable: never the pages read so far. A whole first page is the
+        one call it always was and its commit is returned untouched. Every poll starts at page one.
+        """
+        answer = self.graphql(query, fields)
         if isinstance(answer, CiUnreadable):
             return answer
         try:
-            target = answer["data"]["repository"]["ref"]["target"]
-            report = commit_report(target)
-        except (_Unreadable, KeyError, TypeError):
-            return CiUnreadable("gh_unreadable")
-        return report, target
+            commit = locate(answer)
+            variables = {"contextsAfter": "contexts", "suitesAfter": "checkSuites"}
+            bounds = {"contexts": _CONTEXT_PAGES, "checkSuites": _SUITE_PAGES}
+            cursors = {name: _next_cursor(_connection(commit, name)) for name in variables.values()}
+            nodes = {
+                name: list(_page_nodes(_connection(commit, name)))
+                for name, cursor in cursors.items()
+                if cursor is not None
+            }
+            pages = dict.fromkeys(nodes, 1)
+            while any(cursor is not None for cursor in cursors.values()):
+                for name in nodes:
+                    if cursors[name] is not None and pages[name] >= bounds[name]:
+                        return CiUnreadable.of(
+                            "gh_unreadable", f"more {name} than {bounds[name]} pages"
+                        )
+                after = tuple(
+                    part
+                    for variable, name in variables.items()
+                    if cursors[name] is not None
+                    for part in ("-f", f"{variable}={cursors[name]}")
+                )
+                page = self.graphql(_page_after(query), fields + after)
+                if isinstance(page, CiUnreadable):
+                    return page
+                fetched = locate(page)
+                if not isinstance(fetched, dict) or fetched.get("oid") != commit["oid"]:
+                    return CiUnreadable.of(
+                        "gh_unreadable", "the commit changed while its pages were read"
+                    )
+                for name in nodes:
+                    if cursors[name] is None:
+                        continue
+                    connection = _connection(fetched, name)
+                    nodes[name].extend(_page_nodes(connection))
+                    pages[name] += 1
+                    cursors[name] = _next_cursor(connection)
+                    if cursors[name] is None and _says_more(connection):
+                        return CiUnreadable.of(
+                            "gh_unreadable", f"a page of {name} says more and gives no cursor"
+                        )
+        except (_Unreadable, KeyError, IndexError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
+        return answer, (_whole(commit, nodes) if nodes and isinstance(commit, dict) else commit)
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]
@@ -1152,15 +1306,15 @@ class GhTracker:
                 key: _text(item[key])
                 for key in ("event", "displayTitle", "status", "createdAt", "url")
             }
-        except (KeyError, _Unreadable):
-            return CiUnreadable("gh_unreadable")
+        except (KeyError, _Unreadable) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
         viewed = self._read_json("run", "view", str(run_id), "--json", "jobs")
         if isinstance(viewed, CiUnreadable):
             return viewed
         try:
             jobs = tuple(_dispatched_job(job) for job in viewed["jobs"])
-        except (_Unreadable, KeyError, TypeError):
-            return CiUnreadable("gh_unreadable")
+        except (_Unreadable, KeyError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
         return DispatchedRun(
             run_id=run_id,
             event=fields["event"],
@@ -1175,20 +1329,23 @@ class GhTracker:
         """One `gh` read, its parsed JSON or the class of its failure."""
         try:
             raw = self._gh_read(*args)
-        except ValueError as exc:  # `_gh`'s own failure
+        except ValueError as exc:  # `_gh`'s own failure: the first line of its message is quoted
             missing = isinstance(exc.__cause__, FileNotFoundError)
-            return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
-        except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
-            return CiUnreadable("gh_unavailable")
+            first_line = next(iter(str(exc).splitlines()), "")
+            return CiUnreadable.of("gh_unavailable" if missing else "gh_unreadable", first_line)
+        except OSError as exc:  # a `gh` that cannot be run at all (not executable, no permission)
+            return CiUnreadable.of("gh_unavailable", str(exc))
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            return CiUnreadable("gh_unreadable")
+            return CiUnreadable.of("gh_unreadable", raw)  # the class is the step that failed
 
     def graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
         """One `gh api graphql` call, its JSON object or the class of its failure."""
         answer = self._read_json("api", "graphql", "-f", f"query={query}", *fields)
-        return answer if isinstance(answer, dict | CiUnreadable) else CiUnreadable("gh_unreadable")
+        if isinstance(answer, dict | CiUnreadable):
+            return answer
+        return CiUnreadable.of("gh_unreadable", f"not a JSON object: {type(answer).__name__}")
 
     def merge(
         self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
@@ -1269,6 +1426,7 @@ class GhTracker:
             retry_timeouts=retry_timeouts,
             access=self._access,
             call=call,
+            calls=self._calls,
         )
 
     def _gh_read(

@@ -21,6 +21,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.gh_calls import GhCallKind
 from ..domain.github_access import Turn as Turn
 from ..domain.github_access import WriteGate as WriteGate
 from ..domain.github_budget import Budget
@@ -54,7 +55,7 @@ from ..domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
 )
-from ..domain.stall import ChildActivity
+from ..domain.stall import ChildActivity, Stall
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
@@ -207,6 +208,7 @@ class AttemptFailed(Exception):
         detail: str = "",
         repairs: Sequence[RefusalRepair] = (),
         value_len: int | None = None,
+        stall: Stall | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -266,6 +268,10 @@ class AttemptFailed(Exception):
         # The refusals this attempt repaired before the one that failed it (GH-1016): its own
         # record, never another attempt's; empty at every other site.
         self.repairs = list(repairs)
+        # How the stall was told (GH-978): the silence, the last event's kind and whether a
+        # hook was in flight, set only where `reason` is `stall` (the runner's watchdog);
+        # `None` at every other site.
+        self.stall = stall
         # The size of the refused value, measured by `run_role._refused` on the raw structured
         # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
         # at every other site and when the size is unknown.
@@ -361,6 +367,7 @@ class RoleRunner(Protocol):
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult: ...
 
 
@@ -680,6 +687,13 @@ class ProductStack(Protocol):
         file names. Raises `ValueError` when the key is there with any other value."""
         ...
 
+    def stacking(self, revision: str) -> bool:
+        """Whether the product lets a part start on its Ready same-split parent's branch
+        (`core.knowledge`, GH-858, ADR-0103), as the commit `revision` declares it. Opt-in:
+        `False` when the key is absent, the launch of today byte for byte. Raises `ValueError`
+        when the key is there but not a boolean."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
@@ -774,6 +788,12 @@ class RunStopped(BaseException):
     rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
 
 
+class CheckAbandoned(BaseException):
+    """The attempt that asked for a share or a check was abandoned (a stall, or any exit of
+    the attempt). Not an `Exception`, for the reason `RunStopped` is not one. It is never a
+    verdict: no row, no flake, no refusal and no stored pass comes of it."""
+
+
 class StopFlag(Protocol):
     """Whether the run was told to stop. Only `run` and `resume` own one that can be set;
     every other verb gets one that never is."""
@@ -781,6 +801,24 @@ class StopFlag(Protocol):
     def is_set(self) -> bool: ...
 
     def set(self) -> None: ...
+
+
+class GhCallLog(Protocol):
+    """How many times the system launched `gh`, by kind (GH-990).
+
+    `record` counts one attempted launch: once per attempt, before the process starts, so a
+    missing `gh` counts too. It is not a GitHub request: a launch may make none, or several
+    (a GraphQL call, a paginated read).
+
+    `drain` returns the counts since the last drain, all six kinds present and zeros
+    included, and resets them. Exactly one consumer drains (the poller round, in a later
+    part): a second would take counts the first never sees.
+
+    The log is per process: it does not see the `gh` another process launches."""
+
+    def record(self, kind: GhCallKind) -> None: ...
+
+    def drain(self) -> Mapping[GhCallKind, int]: ...
 
 
 class Commands(Protocol):
@@ -1131,7 +1169,10 @@ class Workspace(Protocol):
         of it included. None when `path` is in no repository, or when git is not there."""
         ...
 
-    def task_checkout(self, task_id: str) -> Checkout: ...
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
+        """The task's worktree on its branch. `start` is asked only when the branch does not
+        exist and returns the sha it starts at; without it, the fetched upstream."""
+        ...
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...
 
@@ -1350,11 +1391,15 @@ class Workspace(Protocol):
         sha, and it never decides whether a replace is warranted: its caller does."""
         ...
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         """The full sha `origin` holds for `branch`, whose object is local afterwards (it
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
         remote has no such branch. A failed read, an unreachable origin or a remote that
-        moved between the read and the fetch raises `GitError`: it is never "absent"."""
+        moved between the read and the fetch raises `GitError`: it is never "absent".
+        `bounded=True` (the stacking judgement, GH-858) runs each git step under
+        `FETCH_TIMEOUT_S`, a timeout being a `GitError` too, and fetches into
+        `refs/agentic/stacking-tips/<branch>` instead of `refs/agentic/remote-tips/<branch>`;
+        the default is the call every other caller makes."""
         ...
 
     def publish_ci_ref(self, path: Path, ref: str) -> None:
@@ -2204,6 +2249,16 @@ class RunRegistration:
 
 
 @dataclass(frozen=True)
+class StackHint:
+    """The Ready parent a stacked launch was judged to build on (GH-858, ADR-0103): its issue
+    and the approved head the judgement saw. It only names the parent: the start gate reads
+    the parent's facts afresh, so a hint never decides a base."""
+
+    parent: int
+    head: str
+
+
+@dataclass(frozen=True)
 class LaunchAttempt:
     """What a launch left behind when it tried but did not reach a registered run
     (GH-137, `launches/<product>-<issue>.json`): `since` and `prior` feed
@@ -2216,6 +2271,9 @@ class LaunchAttempt:
     # record, so a relaunch of the same issue keeps it and it counts until a document
     # exists. `None` for a launch with no experiment, which is every launch of today.
     arm: str | None = None
+    # The stacked-start hint of the launch (GH-858): rewritten by every `record_launch`, never
+    # inherited, so a launch that is not stacked leaves none.
+    stack_hint: StackHint | None = None
 
 
 class CheckResults(Protocol):
@@ -2280,12 +2338,19 @@ class RunRegistry(Protocol):
         ...
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
         clock, never read here): `prior` grows by one, `since` becomes `when`. `arm` (GH-470)
         is the arm assigned to this launch; `None` keeps the one the record already has, and a
-        record that never had one stays `{since, prior}` exactly."""
+        record that never had one stays `{since, prior}` exactly. `stack_hint` (GH-858) is the
+        parent of a stacked launch; unlike the arm it is rewritten every time: `None` clears
+        an old one."""
         ...
 
     def clear_launch(self, product: str, issue: int) -> None:
@@ -2611,13 +2676,16 @@ class CheckRequest:
     and `token` are `None` on the gate's first call and are the grant's on every later one,
     so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
     may wait; `expires_after_s` is how long the share may be held before the ledger drops
-    it, whatever its holder says."""
+    it, whatever its holder says. `cancelled` is the abandonment flag of the attempt that
+    asks, or `None`: read on every pass of the wait, a set one leaves the queue by raising
+    `CheckAbandoned` instead of booking. It is no part of what the request says."""
 
     priority: CheckPriority
     wait_max_s: float
     expires_after_s: float
     enqueued_at: float | None = None
     token: str | None = None
+    cancelled: Callable[[], bool] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
