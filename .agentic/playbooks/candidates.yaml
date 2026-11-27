@@ -2538,3 +2538,21 @@ candidates:
   - finding
   - return
   added_at: '2026-11-27T13:06:25.196+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: 'When a loop reads paged or partial data, check every exit path against the documented contract: a page missing its cursor or an early stop must mark the result incomplete, never whole.'
+  confidence: medium
+  seen_in:
+  - GH-1151
+  sources:
+  - finding
+  added_at: '2026-11-27T15:21:30.184+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: At integration, re-read the docstrings and ADR addenda of the code you merge and test each loop exit path against them, especially paths where a partial result could be reported as complete.
+  confidence: low
+  seen_in:
+  - GH-1151
+  sources:
+  - finding
+  added_at: '2026-11-27T15:21:30.184+00:00'

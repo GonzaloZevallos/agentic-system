@@ -1732,3 +1732,5 @@ tasks:
     cost_usd: 0.0385
   GH-1159@review:
     cost_usd: 0.0362
+  GH-1151@review:
+    cost_usd: 0.047
