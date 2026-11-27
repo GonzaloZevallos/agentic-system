@@ -57,4 +57,3 @@ classDiagram
 - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
   - `task.TaskState` hereda de `task.TaskInput`
-  - `task.TaskState` se asocia con `task.StackParent`

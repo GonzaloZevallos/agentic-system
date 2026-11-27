@@ -30,6 +30,8 @@ classDiagram
     class presubmit__Reuse["Reuse"]
     class run_check__RunCheck["RunCheck"]
     class schema_guard__RoleSchemaGuard["RoleSchemaGuard"]
+    class stacked_start__Decision["Decision"]
+    class stacked_start__StackWait["StackWait"]
     run_check__RunCheck o-- presubmit__CheckoutPresubmit
 ```
 
