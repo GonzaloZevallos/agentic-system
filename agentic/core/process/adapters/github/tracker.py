@@ -1079,9 +1079,8 @@ class GhTracker:
         """See `Tracker.ci_report`. `gh` resolves the repository from `product_dir`. Never
         raises. It quotes what `gh` said (`CiUnreadable.of`) and never classifies by it: the
         class of an unreadable answer is the step that failed (ADR-0029). `base_sha` is always None:
-        the gate that would have filled it from the
-        Actions runs failed (ADR-0045, GH-216 amendment), `pull_requests` being empty on
-        every run of this product's CI."""
+        the gate that would have filled it from the Actions runs failed (ADR-0045, GH-216
+        amendment), `pull_requests` being empty on every run of this product's CI."""
         try:
             number = pull_request_number(reference)
         except ValueError:
