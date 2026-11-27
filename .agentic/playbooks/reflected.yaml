@@ -1716,3 +1716,13 @@ tasks:
     cost_usd: 0.0516
   GH-1158@review:
     cost_usd: 0.0413
+  GH-1161@review:
+    cost_usd: 0.0418
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1161
