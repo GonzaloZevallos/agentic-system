@@ -11,6 +11,8 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,8 +33,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class performance__Limit["Limit"]
-    class performance__Measurement["Measurement"]
     class performance__MetricResult["MetricResult"]
     class performance__Result["Result"]
     class performance__Run["Run"]
@@ -43,5 +43,12 @@ classDiagram
     class presubmit__CheckResult["CheckResult"]
     class presubmit__CiCover["CiCover"]
     class presubmit__CiDispatch["CiDispatch"]
-    performance__MetricResult --> performance__Limit
+    class presubmit__GateForm["GateForm"]
+    class presubmit__PlannedForm["PlannedForm"]
+    class presubmit__RedCheck["RedCheck"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - `performance.MetricResult` se asocia con `performance.Limit`

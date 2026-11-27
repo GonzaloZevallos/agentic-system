@@ -179,7 +179,7 @@ def test_open_issue_refs_lists_every_open_issue_with_its_title_in_one_unfiltered
     assert refs == [IssueRef("https://x/1", "T", "b"), IssueRef("https://x/2", "", "")]
     [call] = run.calls
     assert call[:3] == ["gh", "issue", "list"]
-    assert call[call.index("--json") + 1] == "url,title,body"
+    assert call[call.index("--json") + 1] == "url,title,body,labels"
     assert call[call.index("--limit") + 1] == "1000"
     assert "--label" not in call and "--search" not in call
     assert landing.flake_issue_for(refs, "tests") is None

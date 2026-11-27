@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from agentic import cli, composition
+from agentic.core.process.adapters.offline import GithubCalled
 from agentic.core.process.adapters.shell import stage0_candidate
 from agentic.core.process.domain.stage0_rotation import Unreadable
 from agentic.shared import stage0
@@ -313,7 +314,7 @@ def smoking(
     yield runner, config_home, smoked
 
 
-def test_rotate_smokes_help_and_one_dry_poll_per_installed_product(
+def test_rotate_smokes_help_and_one_local_product_smoke_per_installed_product(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     smoking: tuple[RecordingRunner, Path, list[str]],
@@ -335,8 +336,8 @@ def test_rotate_smokes_help_and_one_dry_poll_per_installed_product(
     assert smoked == ["Green"]
     assert runner.calls == [
         ((agentic, "--help"), stage),
-        ((agentic, "poll", "--product-dir", "/srv/a", "--dry-run", "--once"), stage),
-        ((agentic, "poll", "--product-dir", "/srv/b", "--dry-run", "--once"), stage),
+        ((agentic, "stage0", "smoke", "--product-dir", "/srv/a"), stage),
+        ((agentic, "stage0", "smoke", "--product-dir", "/srv/b"), stage),
     ]
     assert capsys.readouterr().out == ""
 
@@ -386,3 +387,100 @@ def test_rotate_with_an_unreadable_unit_prints_keep_unreadable_and_builds_nothin
     assert runner.calls == []
     assert smoked == []
     assert not (tmp_path / "stages").exists()
+
+
+# --- `agentic stage0 smoke` (GH-1152): the local product smoke ---------------------------------
+
+
+STACK = "product: p\nchecks:\n  tests: pytest\nsetup:\n  deps: uv sync\n"
+
+
+def git_product(tmp_path: Path, stack: str | None = STACK) -> Path:
+    """A product as the preflight needs one: a repo whose HEAD declares a stack."""
+    root = tmp_path / "product"
+    (root / ".agentic").mkdir(parents=True)
+    if stack is not None:
+        (root / ".agentic" / "stack.yaml").write_text(stack)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", "-b", "master", str(root)], check=True)
+    subprocess.run([*git, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "v0", "--allow-empty"], cwd=root, check=True)
+    return root
+
+
+def smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, product: Path) -> int | str | None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AGENTIC_PRODUCT_DIR", raising=False)
+    monkeypatch.setattr("sys.argv", ["agentic", "stage0", "smoke", "--product-dir", str(product)])
+    with pytest.raises(SystemExit) as exit_:
+        cli.main()
+    return exit_.value.code
+
+
+def test_the_parser_accepts_stage0_smoke_with_a_product_dir() -> None:
+    args = cli.build_parser().root.parse_args(["stage0", "smoke", "--product-dir", "/srv/a"])
+
+    assert (args.command, args.stage0_command, args.product_dir) == ("stage0", "smoke", "/srv/a")
+
+
+def test_the_smoke_runs_the_real_preflight_over_a_product_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = smoke(monkeypatch, tmp_path, git_product(tmp_path))
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert (captured.out, captured.err) == ("", "")
+
+
+@pytest.mark.parametrize("port", ["tracker", "inbox", "board"])
+def test_the_smoke_fails_when_a_github_port_is_called(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    port: str,
+) -> None:
+    def preflight_that_calls_github(cfg: Any, ports: Any) -> None:
+        getattr(ports, port).anything("1")
+
+    monkeypatch.setattr(cli, "preflight", preflight_that_calls_github)
+
+    code = smoke(monkeypatch, tmp_path, git_product(tmp_path))
+
+    assert code == 1
+    assert capsys.readouterr().err == "agentic: stage0 smoke failed: GithubCalled\n"
+
+
+def test_the_smoke_replaces_only_the_github_ports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    product = git_product(tmp_path)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(product))
+    cfg = cli.Configuration.from_sources({}, {"AGENTIC_PRODUCT_DIR": str(product)})
+
+    ports = composition.offline_ports(cfg)
+
+    for name in ("tracker", "inbox", "board"):
+        with pytest.raises(GithubCalled):
+            getattr(getattr(ports, name), "list_pull_requests")
+    assert ports.stack.product() == "p"
+
+
+@pytest.mark.parametrize("broken", ["no .agentic directory", "bad flags overlay"])
+def test_the_smoke_exits_non_zero_on_a_product_the_preflight_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    broken: str,
+) -> None:
+    if broken == "no .agentic directory":
+        product = tmp_path / "bare"
+        product.mkdir()
+    else:
+        product = git_product(tmp_path)
+        (product / ".agentic" / "flags.yaml").write_text("- touches_ui\n")
+
+    code = smoke(monkeypatch, tmp_path, product)
+
+    assert code == 1
+    assert capsys.readouterr().err == "agentic: stage0 smoke failed: ValueError\n"

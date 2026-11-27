@@ -19,6 +19,9 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class run_role__EstimateCapReached["EstimateCapReached"]
+    class run_role__EstimateStop["EstimateStop"]
+    class run_role__GuardChain["GuardChain"]
     class run_role__Output["Output"]
     class run_role__PromptFailure["PromptFailure"]
     class run_role__RoleFailure["RoleFailure"]
@@ -36,7 +39,10 @@ classDiagram
   - `plan_carve_out.Judged` se asocia con `run_role.Output`
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
+- [application: support (parte 6)](classes-process-application-support-6.md)
+  - `run_role.GuardChain` agrega a `ports.SchemaGuard`
 - [application: support (parte 7)](classes-process-application-support-7.md)
+  - `run_role.EstimateCapReached` hereda de `run_role.Escalating`
   - `run_role.PromptFailure` hereda de `run_role.Escalating`
   - `run_role.RoleFailure` hereda de `run_role.Escalating`
   - `run_role.TaskCapReached` hereda de `run_role.Escalating`

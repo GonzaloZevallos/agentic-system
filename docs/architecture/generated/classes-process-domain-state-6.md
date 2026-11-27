@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__EarlySplitRow["EarlySplitRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -42,20 +45,19 @@ classDiagram
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
-    class task__FullCheckEntry["FullCheckEntry"]
-    class task__FullChecksJob["FullChecksJob"]
-    class task__FullChecksRead["FullChecksRead"]
-    class task__FullChecksRecord["FullChecksRecord"]
+    class task__FormatHold["FormatHold"]
+    class task__FormatIssueRecord["FormatIssueRecord"]
+    class task__FormatReleased["FormatReleased"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: state (parte 10)](classes-process-domain-state-10.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
-  - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.PlanHeld` se asocia con `task.EstimateRecord`

@@ -292,7 +292,12 @@ async def test_a_spec_plan_with_a_human_item_is_refused_and_the_same_plan_withou
 ):
     plan_result = planned_tracker_only([HUMAN_ITEM])
     runner, patch = await _route(
-        tmp_path, "skip", plan_result, plan_result, **({"spec": SPEC} if has_spec else {})
+        tmp_path,
+        "skip",
+        plan_result,
+        plan_result,
+        plan_result,
+        **({"spec": SPEC} if has_spec else {}),
     )
 
     if has_spec:

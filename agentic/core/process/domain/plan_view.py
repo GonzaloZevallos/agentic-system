@@ -45,6 +45,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from .task import INTEGRATION, PartRecord, Subtask
 from .task_path import TEXT_MAX
@@ -205,23 +206,37 @@ def with_system_items_block(section: str, items: Sequence[TrackerItem]) -> str:
 _BLOCKED_BY_PREFIX = "blocked by:"
 
 
-def part_line_refusal(number: int, field: str, text: str, *, may_be_empty: bool) -> str | None:
-    """Why `text`, a part's reason or `overlap_risk`, cannot be written into its issue, or
-    `None`. The one place that holds their limits: one line of at most `TEXT_MAX` characters,
-    no placeholder, and never a `Blocked by:` line, which would block the issue for real."""
+PartLineCause = Literal["empty", "newline", "too_long", "placeholder", "blocked_by"]
+
+
+def part_line_cause(
+    number: int, field: str, text: str, *, may_be_empty: bool
+) -> tuple[PartLineCause, str] | None:
+    """Why `text`, a part's reason or `overlap_risk`, cannot be written into its issue, as
+    the cause and the words, or `None`. The one place that holds their limits: one line of at
+    most `TEXT_MAX` characters, no placeholder, and never a `Blocked by:` line, which would
+    block the issue for real. The cause is data for the caller that maps it to a rule."""
+    cause: PartLineCause
     if "\n" in text or "\r" in text:
-        broken = "has a newline"
+        cause, broken = "newline", "has a newline"
     elif not text.strip():
-        return None if may_be_empty else f"part {number} {field} is empty"
+        return None if may_be_empty else ("empty", f"part {number} {field} is empty")
     elif len(text) > TEXT_MAX:
-        broken = f"has {len(text)} characters, over {TEXT_MAX}"
+        cause, broken = "too_long", f"has {len(text)} characters, over {TEXT_MAX}"
     elif "{{" in text or "}}" in text:
-        broken = "has `{{` or `}}`"
+        cause, broken = "placeholder", "has `{{` or `}}`"
     elif text.strip().lower().startswith(_BLOCKED_BY_PREFIX):
-        broken = "starts with `Blocked by:`"
+        cause, broken = "blocked_by", "starts with `Blocked by:`"
     else:
         return None
-    return f"part {number} {field} {broken}"
+    return cause, f"part {number} {field} {broken}"
+
+
+def part_line_refusal(number: int, field: str, text: str, *, may_be_empty: bool) -> str | None:
+    """Why `text` cannot be written into its issue, in words, or `None`: `part_line_cause`
+    without the cause."""
+    found = part_line_cause(number, field, text, may_be_empty=may_be_empty)
+    return None if found is None else found[1]
 
 
 @dataclass(frozen=True)

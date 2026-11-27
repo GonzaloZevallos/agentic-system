@@ -10,6 +10,7 @@ from agentic.core.measurement.domain import cycle
 from agentic.core.process.application import resume
 from agentic.core.process.domain import (
     document,
+    format_retakes,
     legacy_names,
     presubmit,
     roles,
@@ -2480,7 +2481,9 @@ def test_a_document_with_a_spec_records_the_spec_delivery_and_without_one_does_n
 
 
 def test_the_spec_delivery_record_survives_a_rebuild_without_the_spec():
-    text = document.render(_SPEC_STATE)
+    # A state that holds the mark and no spec: the spec itself now round-trips
+    # (`test_document_state_keys`), so the record is shown alone.
+    text = document.render({**_base_state(), "spec_delivery": True})
     rebuilt = resume.state_from(document.parse(text))
     assert rebuilt["spec_delivery"] is True
     assert "spec" not in rebuilt
@@ -2572,3 +2575,296 @@ def test_an_owner_decision_restart_settled_row_round_trips():
         "restart_settled": [row],
     }
     assert _round_trip(state)["restart_settled"] == [row]
+
+
+def _held() -> dict[str, object]:
+    # Two equal rows, never one object twice: yaml would write the second as an anchor.
+    return {
+        "plan": {
+            "estimated_cost_usd": 12.5,
+            "summary": "Plan ñandú",
+            "drawing_departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        },
+        "departures": [{"key": "hero", "reason": "añadí un héroe"}],
+        "round": 2,
+        "estimate": {"cost_usd": 12.5, "files": 3, "declared_usd": 8.25},
+    }
+
+
+def test_a_held_plan_renders_after_the_escalation_and_round_trips():
+    state = {
+        **_departure_base(),
+        "drawing_escalation": {"round": 2, "numbers": [1], "cause": "drawing_departure"},
+        "plan_held": _held(),
+    }
+    text = document.render(state)
+    assert text.split("drawing_escalation:\n", 1)[1].split("subtasks: {}", 1)[0] == (
+        "  round: 2\n  numbers:\n  - 1\n  cause: drawing_departure\n"
+        "plan_held:\n"
+        "  plan:\n"
+        "    estimated_cost_usd: 12.5\n"
+        "    summary: Plan ñandú\n"
+        "    drawing_departures:\n"
+        "    - key: hero\n"
+        "      reason: añadí un héroe\n"
+        "  departures:\n"
+        "  - key: hero\n"
+        "    reason: añadí un héroe\n"
+        "  round: 2\n"
+        "  estimate:\n"
+        "    cost_usd: 12.5\n"
+        "    files: 3\n"
+        "    declared_usd: 8.25\n"
+    )
+    parsed = document.parse(text)
+    assert parsed["plan_held"] == _held()
+    assert document.render({**_departure_base(), **parsed}) == text
+
+
+@pytest.mark.parametrize("extra", [{}, {"plan_held": None}])
+def test_a_state_without_a_held_plan_writes_the_frontmatter_it_always_did(extra):
+    text = document.render({**_departure_base(), **extra})
+    assert text == document.render(_departure_base())
+    assert "plan_held" not in text
+    assert "plan_held" not in document.parse(text)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "text",
+        {**_held(), "plan": "x"},
+        {**_held(), "departures": "x"},
+        {**_held(), "departures": ["x"]},
+        {**_held(), "round": "2"},
+        {**_held(), "round": True},
+        {**_held(), "estimate": {"files": 3}},
+        {**_held(), "estimate": {"cost_usd": "9", "files": 3}},
+        {**_held(), "estimate": 9},
+    ],
+)
+def test_a_malformed_held_plan_loads_as_absent_and_never_raises(bad):
+    stored = document.render(_departure_base()).replace(
+        "\n---\n", "\nplan_held: " + json.dumps(bad) + "\n---\n", 1
+    )
+    assert "plan_held" in stored
+    assert "plan_held" not in document.parse(stored)
+
+
+@pytest.mark.parametrize("stored", ["not a list", 7, None, {"rule": "unmapped"}, ["x", 3]])
+def test_a_format_issue_value_that_is_not_a_list_of_records_reads_as_none(stored):
+    """GH-1011: a hand-edited `format_issue` never fails the load; it reads as no records."""
+    assert document.from_frontmatter({"format_issue": stored})["format_issue"] == []
+
+
+def test_failure_repairs_survive_the_document_round_trip_and_are_counted():
+    from agentic.core.measurement.domain import metrics
+
+    repairs = [{"rule": "depends_on_reason_too_long", "field": "parts[1].depends_on_reasons[0]"}]
+    failure = {
+        "role": "Tech Lead",
+        "attempt": 1,
+        "error": "structured output invalid: too big",
+        "cost_usd": 0.5,
+        "session_id": "s",
+        "reason": "check",
+        "rule": "part_over_budget",
+        "field": "parts",
+        "repairs": repairs,
+    }
+    loaded = document.parse(document.render(golden_state(failures=[failure])))
+
+    assert loaded["failures"][0]["repairs"] == repairs
+    assert metrics.refusals_by_rule(loaded["failures"], loaded.get("runs", [])) == {
+        "depends_on_reason_too_long": {"refused": 0, "repaired": 1},
+        "part_over_budget": {"refused": 1, "repaired": 0},
+    }
+
+
+HOLD = {
+    "rule": "schema_invalid",
+    "cause": "rule_spent",
+    "at": "2026-11-21T10:00:00Z",
+    "issue_url": "https://example.test/issues/9",
+    "noted_at": "2026-11-21T11:00:00Z",
+}
+
+
+def _stored(**extra):
+    """The state a document of `golden_state` reads back as, with `extra` written raw."""
+    text = document.render(golden_state())
+    head, _, rest = text.partition("\n---\n")
+    frontmatter = yaml.safe_load(head.removeprefix("---\n"))
+    frontmatter.update(extra)
+    return document.parse(f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n{rest}")
+
+
+def test_format_retakes_and_the_hold_round_trip_through_the_frontmatter():
+    state = golden_state(
+        format_retakes={"schema_invalid": 2, "part_over_budget": 1}, format_hold=HOLD
+    )
+    parsed = document.parse(document.render(state))
+    assert parsed["format_retakes"] == {"schema_invalid": 2, "part_over_budget": 1}
+    assert parsed["format_hold"] == HOLD
+
+
+def test_format_retakes_render_in_the_declaration_order_of_the_rules():
+    state = golden_state(
+        format_retakes={"unmapped": 1, "part_over_budget": 2, "parts_when_fits": 1}
+    )
+    rendered = document.render(state)
+    assert rendered.index("  parts_when_fits") < rendered.index("  part_over_budget")
+    assert rendered.index("  part_over_budget") < rendered.index("  unmapped")
+
+
+def test_an_absent_or_none_key_renders_nothing_and_a_legacy_document_is_unchanged():
+    legacy = document.render(golden_state())
+    assert document.render(golden_state(format_retakes=None, format_hold=None)) == legacy
+    assert document.render(golden_state(format_retakes={})) == legacy
+    assert "format_" not in legacy
+    parsed = document.parse(legacy)
+    assert "format_retakes" not in parsed
+    assert "format_hold" not in parsed
+    assert document.render(parsed | {"id": "GH-9"}) == legacy
+
+
+RELEASED_URL = "https://github.com/acme/shop/issues/9"
+RELEASED_SHA = "c" * 40
+
+
+def _released(url: str = RELEASED_URL, commit: object = None, at: str = "2026-11-22T10:00:00Z"):
+    return {"issue_url": url, "closing_commit": commit, "at": at}
+
+
+def test_format_released_round_trips_with_a_null_closing_commit_in_order():
+    entries = [_released(), _released(commit=RELEASED_SHA, at="2026-11-22T11:00:00Z")]
+    text = document.render(golden_state(format_released=entries))
+    assert "closing_commit: null" in text
+    assert text.index("issue_url") < text.index("closing_commit") < text.index("at: ")
+    assert document.parse(text)["format_released"] == entries
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        _released(commit=5),
+        _released(commit=""),
+        _released(url=""),
+        {"issue_url": RELEASED_URL, "closing_commit": None},
+        "not a map",
+    ],
+)
+def test_a_corrupt_format_released_entry_is_dropped_between_two_valid_ones(corrupt):
+    first, last = _released(), _released(commit=RELEASED_SHA, at="2026-11-22T11:00:00Z")
+    parsed = _stored(format_released=[first, corrupt, last])
+    assert parsed["format_released"] == [first, last]
+
+
+@pytest.mark.parametrize("raw", ["x", {"issue_url": RELEASED_URL}, 3, [], ["x"]])
+def test_a_format_released_that_is_not_a_list_with_a_whole_entry_reads_as_no_key(raw):
+    assert "format_released" not in _stored(format_released=raw)
+
+
+def test_a_format_released_entry_without_a_closing_commit_key_reads_as_null():
+    parsed = _stored(format_released=[{"issue_url": RELEASED_URL, "at": "2026-11-22T10:00:00Z"}])
+    assert parsed["format_released"] == [_released()]
+
+
+def test_no_format_released_leaves_a_document_byte_identical():
+    legacy = document.render(golden_state())
+    assert document.render(golden_state(format_released=[])) == legacy
+    assert document.render(golden_state(format_released=None)) == legacy
+    assert "format_released" not in legacy
+
+
+def test_a_release_saved_and_reloaded_still_blocks_the_same_pair():
+    hold = {**HOLD, "issue_url": RELEASED_URL}
+    state = golden_state(format_hold=hold, format_retakes={"schema_invalid": 2})
+    patch = format_retakes.fixed_release_patch(state, "2026-11-22T10:00:00Z", RELEASED_SHA)
+    reloaded = document.parse(document.render(task.apply(state, patch)))
+    assert "format_hold" not in reloaded
+    assert format_retakes.released_before(reloaded, RELEASED_URL, RELEASED_SHA)
+    assert not format_retakes.released_before(reloaded, RELEASED_URL, None)
+
+
+LEGACY_FAILURE = [
+    {"kind": "failure", "value": "schema", "section": "Developer", "at": "2026-11-21T10:00:00Z"},
+    {"kind": "escalation", "value": "failure", "at": "2026-11-21T10:00:00Z"},
+]
+
+
+def test_a_legacy_schema_failure_with_no_rule_round_trips_byte_for_byte():
+    rendered = document.render(golden_state(pause_log=LEGACY_FAILURE))
+    assert "rule" not in rendered
+    parsed = document.parse(rendered)
+    assert parsed["pause_log"] == LEGACY_FAILURE
+    assert document.render(parsed) == rendered
+
+
+def test_a_rule_on_a_failure_pause_entry_round_trips():
+    log = [{**LEGACY_FAILURE[0], "rule": "part_over_budget"}, LEGACY_FAILURE[1]]
+    parsed = document.parse(document.render(golden_state(pause_log=log)))
+    assert parsed["pause_log"] == log
+
+
+def test_a_bad_rule_on_a_pause_entry_is_dropped_from_that_entry_only():
+    good = {**LEGACY_FAILURE[0], "rule": "unmapped"}
+    for bad_rule in ("not_a_rule", 7, None, ["unmapped"]):
+        stored = _stored(
+            pause_log=[{**LEGACY_FAILURE[0], "rule": bad_rule}, good, LEGACY_FAILURE[1]]
+        )
+        assert stored["pause_log"] == [LEGACY_FAILURE[0], good, LEGACY_FAILURE[1]]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"not_a_rule": 1},
+        {"unmapped": True},
+        {"unmapped": "1"},
+        {"unmapped": 1.5},
+        {"unmapped": -1},
+        {},
+        ["unmapped"],
+        "unmapped",
+        None,
+    ],
+)
+def test_a_malformed_retake_count_is_dropped_and_an_empty_map_reads_as_absent(stored):
+    assert "format_retakes" not in _stored(format_retakes=stored)
+
+
+def test_a_retake_map_keeps_its_good_counts_when_one_is_bad():
+    stored = _stored(format_retakes={"unmapped": 1, "bogus": 2, "part_over_budget": -3, "x": True})
+    assert stored["format_retakes"] == {"unmapped": 1}
+    assert _stored(format_retakes={"unmapped": 0})["format_retakes"] == {"unmapped": 0}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "held",
+        ["rule"],
+        None,
+        {},
+        {**HOLD, "rule": "not_a_rule"},
+        {**HOLD, "rule": None},
+        {**HOLD, "cause": "other"},
+        {k: v for k, v in HOLD.items() if k != "cause"},
+        {k: v for k, v in HOLD.items() if k != "at"},
+        {**HOLD, "at": ""},
+        {**HOLD, "at": 5},
+    ],
+)
+def test_a_malformed_hold_reads_as_absent(bad):
+    assert "format_hold" not in _stored(format_hold=bad)
+
+
+def test_a_hold_keeps_its_optional_fields_only_when_they_are_non_empty_strings():
+    base = {k: HOLD[k] for k in ("rule", "cause", "at")}
+    assert _stored(format_hold={**base, "noted_at": HOLD["noted_at"]})["format_hold"] == {
+        **base,
+        "noted_at": HOLD["noted_at"],
+    }
+    assert _stored(format_hold={**base, "issue_url": "", "noted_at": 3})["format_hold"] == base
+    assert _stored(format_hold={**base, "extra": "x"})["format_hold"] == base

@@ -156,6 +156,10 @@ STAGE_PRECEDENCE: tuple[CycleStage, ...] = (
 )
 OTHER_ORDER: tuple[OtherCause, ...] = get_args(OtherCause)
 
+# The failure reasons whose external pause waits on a limit, not on an outage: the account's and
+# GitHub's rate limit (GH-989). The one list of limit reasons measurement keeps.
+ACCOUNT_LIMIT_REASONS: frozenset[str] = frozenset({"account_limit", "github_rate_limit"})
+
 # The causes of a mechanical escalation that wait on CI (`CiCause`, prefixed `ci_`).
 _CI_CAUSES = frozenset({"ci_gh_unavailable", "ci_gh_unreadable", "ci_run_unfinished"})
 
@@ -188,7 +192,7 @@ def _pause_claim(pause: cycle.Pause) -> tuple[int, CycleStage, OtherCause | None
     if pause.kind == "human":
         return RANK_HUMAN, "human_wait", None
     reasons = pause.failure_reasons
-    if reasons and all(reason == "account_limit" for reason in reasons):
+    if reasons and all(reason in ACCOUNT_LIMIT_REASONS for reason in reasons):
         return RANK_ACCOUNT, "account_limit", None
     if pause.cause in _CI_CAUSES:
         return RANK_PAUSE, "checks", None
@@ -313,9 +317,10 @@ def claims(
     unpaired (`hold_unknown`, read by `hold_record.read`, last, so a document that gave another
     cause before still gives it).
 
-    The ranks: 1 a human pause, 2 an account-limit pause, 3 the other closed pauses (CI ones to
-    `checks`, the rest to `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to
-    `landing`, 5 CI waits, 6 runs and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
+    The ranks: 1 a human pause, 2 an account-limit or GitHub rate-limit pause
+    (`ACCOUNT_LIMIT_REASONS`), 3 the other closed pauses (CI ones to `checks`, the rest to
+    `other`/`outage_pause`), 4 `[pr_created_at, pr_merged_at]` to `landing`, 5 CI waits, 6 runs
+    and failures by `ROLE_STAGES`, 7 the holds to `held`, 8 the queue.
 
     `parallel_factor.clip` drops the empty claims silently. The inputs that would invert a range
     are caught first by the validation above, so no claim is ever inverted. The later sweep must

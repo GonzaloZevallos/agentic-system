@@ -39,6 +39,13 @@ test files for what you changed and the tests you wrote, and the declared type-c
 lint and format checks. The full declared suite is the delivery gate's, not yours: its
 refusal returns any failure to you in the same turn.
 
+While you work, run targeted tests: the single test file or test id, or a check's
+affected command when the product declares one. Then deliver, and the delivery gate runs
+the suites. Do not run a full suite by hand. When the gate or the full tier failed on a
+check, reproduce it with Bash on the failing test ids or files its output named, fix,
+and deliver; `run_check` runs that check in full only to confirm once, when the output
+names no ids.
+
 Run every one of those in the foreground. During the loop, only the single test file
 you are working on; the checks of that last step once, at the end, with the shell tool's
 own `timeout` parameter raised high enough to cover them. Starting a check in the

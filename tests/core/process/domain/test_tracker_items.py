@@ -222,7 +222,7 @@ def test_a_later_ci_escalation_keeps_the_items_pending_and_the_pause_a_humans():
     state = task.apply(state, ci)
     assert state["tracker_human"] == [H]
     assert rules.tracker_item_pause(state)
-    assert rules.pause_kind(rules._current_epoch(state)) == "human"
+    assert rules.pause_kind(rules.current_epoch(state)) == "human"
     assert rules.auto_resumable(state) is None
     resumed = rules.resumed(state, "Ship it.", at="2026-11-13T11:00:00+00:00")
     state = task.apply(state, resumed)

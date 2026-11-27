@@ -19,18 +19,20 @@ from pathlib import Path
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
-from ..domain import presubmit, run_check
+from ..domain import presubmit, rules, run_check
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.docs import Docs
 from ..domain.presubmit import (
     AffectedPlan,
     CheckResult,
     FlakeGate,
+    GateForm,
     Mode,
+    PlannedForm,
     RerunForm,
     WitnessResult,
 )
-from ..domain.task import FlakeRecord, GateRecord, TaskState
+from ..domain.task import FlakeRecord, GateRecord, TaskState, TimeoutFact
 from . import docs_settlement
 from .checkouts import task_base
 from .ports import CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
@@ -192,7 +194,7 @@ class CheckoutPresubmit:
         # The wall of the checks and verifications whose product declared one, by name, already
         # resolved by `run_check.resolve_wall` (ADR-0065 addendum, GH-451); every other command
         # gets `check_timeout_s`. Empty is the presubmit of before, byte for byte.
-        self.timeouts: Mapping[str, float] = timeouts or {}
+        self.walls: Mapping[str, float] = timeouts or {}
         # The exit that means "not ready" and the load that excuses it, or None: no command is
         # classified and none reads the load (GH-451). Keyword-only, so every site compiles.
         self.readiness = readiness
@@ -239,9 +241,15 @@ class CheckoutPresubmit:
         # The wait and the run of each of those invocations, apart (GH-361): one record per
         # entry of `invocations`, in the same order.
         self.gates: list[GateRecord] = []
+        # The form each check of every such invocation ran and why, one list per invocation in
+        # the same order (`settle_form`): what the Developer's `RoleRun.forms` records.
+        self.forms: list[list[GateForm]] = []
         # The declared command behind each command a row ran, `{workers}` still in it: what
         # a stored pass is keyed by, so the share never splits the store.
         self._declared: dict[tuple[str, str], str] = {}
+        # The head the last call checked, set only on a moved, clean tree (GH-1075): a timeout
+        # fact is recorded for a delivery only when `head` is that very commit.
+        self._checked_head: str | None = None
 
     @property
     def timeout_s(self) -> float:
@@ -251,7 +259,7 @@ class CheckoutPresubmit:
         declared = max(
             (
                 wall * presubmit.check_runs(name in self.rerun_forms)
-                for name, wall in self.timeouts.items()
+                for name, wall in self.walls.items()
             ),
             default=0.0,
         )
@@ -286,6 +294,11 @@ class CheckoutPresubmit:
         """The record of the last invocation that ran the checks, or None when none did."""
         return self.gates[-1] if self.gates else None
 
+    @property
+    def last_forms(self) -> list[GateForm]:
+        """The forms of the last invocation that ran the checks, `[]` when none did."""
+        return self.forms[-1] if self.forms else []
+
     def __call__(self) -> str | None:
         workspace = self.ports.workspace
         head = workspace.head(self.path)
@@ -298,6 +311,7 @@ class CheckoutPresubmit:
         if moved and clean and self.docs is not None:
             head = self._restore_owned_docs(head)
             moved, clean = head != self.before, workspace.is_clean(self.path)
+        self._checked_head = head if moved and clean else None
         if moved and clean and self.before:
             # Before the witness and the checks: a delivery that is not one yet costs no run.
             if (refused := self._refuse_unstageable(head)) is not None:
@@ -311,6 +325,15 @@ class CheckoutPresubmit:
         if witness_reason is not None and self.witness_refusals < presubmit.WITNESS_REFUSALS:
             self.witness_refusals += 1
             return presubmit.witness_refused(witness_reason)
+        # A timeout with no failing test is no refusal and spends none (GH-1075): the delivery
+        # passes unverified, and `timeouts()` says so.
+        if (
+            moved
+            and clean
+            and not self.regressions
+            and presubmit.check_timeout(presubmit.final_results(self.results or []))
+        ):
+            return None
         # A check that ran twice is decided by its last row, never by the affected one
         # the full rerun superseded.
         reason = presubmit.refusal(
@@ -398,10 +421,13 @@ class CheckoutPresubmit:
                 witness_reason = self._run_witness(self.witness)
             plan = self.affected
             if plan is None:
+                planned = dict.fromkeys(self.checks, presubmit.UNPLANNED)
                 results = self._run_unplanned()
             else:
-                results = self._run_under_plan(plan, self._modes(plan, head))
+                planned = self._planned(plan, head)
+                results = self._run_under_plan(plan, planned)
             self.head, self.results = head, results
+            self.forms.append(self._settled(planned, results))
             self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
             self.gates.append(
@@ -467,14 +493,30 @@ class CheckoutPresubmit:
             ids.extend(presubmit.failed_ids(first[-1]["output"], form.test_id))
         return tuple(ids)
 
-    def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
-        """Which form each check runs under the plan. A changed-paths lookup that fails
-        is `None` for the domain, which runs everything full."""
+    def _paths(self, plan: AffectedPlan, head: str) -> tuple[str, ...] | None:
+        """The paths the branch changed against the plan's base, the one source every plan
+        reads. A lookup that fails is `None` for the domain, which runs everything full."""
         try:
-            paths: tuple[str, ...] | None = self.ports.workspace.changed_paths(plan.base, head)
+            return self.ports.workspace.changed_paths(plan.base, head)
         except (GitError, OSError):
-            paths = None
-        return presubmit.check_modes(list(self.checks), plan, paths)
+            return None
+
+    def _planned(self, plan: AffectedPlan, head: str) -> dict[str, PlannedForm]:
+        """The form each check is planned to run, with the checks that already failed in full
+        on this instance taken before anything runs."""
+        paths, stuck = self._paths(plan, head), frozenset(self.stuck_full)
+        return {
+            name: presubmit.plan_form(name, paths, plan.fallback, plan.commands, stuck)
+            for name in self.checks
+        }
+
+    @staticmethod
+    def _settled(planned: Mapping[str, PlannedForm], results: list[CheckResult]) -> list[GateForm]:
+        """What each check ran, read from its rows and its plan, in declared order."""
+        return [
+            presubmit.settle_form(form, [r for r in results if r["name"] == name], "gate")
+            for name, form in planned.items()
+        ]
 
     def _run_unplanned(self) -> list[CheckResult]:
         if not self.parallel:
@@ -486,28 +528,28 @@ class CheckoutPresubmit:
             per_check = pool.map(lambda item: self._run_once(*item), self.checks.items())
             return [row for rows in per_check for row in rows]
 
-    def _run_under_plan(self, plan: AffectedPlan, modes: dict[str, Mode]) -> list[CheckResult]:
-        if not self.parallel:
-            return [
-                row
-                for name, command in self.checks.items()
-                for row in self._run_planned(name, command, modes[name], plan)
-            ]
-        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            per_check = pool.map(
-                lambda item: self._run_planned(item[0], item[1], modes[item[0]], plan),
-                self.checks.items(),
+    def _run_under_plan(
+        self, plan: AffectedPlan, planned: Mapping[str, PlannedForm]
+    ) -> list[CheckResult]:
+        def run(name: str, command: str) -> list[CheckResult]:
+            return self._with_rerun(
+                name, command, self._planned_rows(name, command, planned[name], plan)
             )
+
+        if not self.parallel:
+            return [row for name, command in self.checks.items() for row in run(name, command)]
+        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
+            per_check = pool.map(lambda item: run(*item), self.checks.items())
             return [row for rows in per_check for row in rows]
 
-    def _run_planned(
-        self, name: str, command: str, mode: Mode, plan: AffectedPlan
+    def _planned_rows(
+        self, name: str, command: str, planned: PlannedForm, plan: AffectedPlan
     ) -> list[CheckResult]:
-        """One check under a plan: its affected form, then the full one when the
-        affected one did not pass; the full form alone when the mode says so or the
-        check already failed in full on this instance."""
+        """One check under a plan: its affected form when it is planned, then the full one
+        when the affected one did not pass; the full form alone otherwise. A full red makes
+        the check stuck on this instance."""
         rows: list[CheckResult] = []
-        if mode == "affected-only" and name not in self.stuck_full:
+        if planned.mode == "affected-only":
             # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
             first = self._run(name, form, "affected-only")
@@ -518,7 +560,7 @@ class CheckoutPresubmit:
         rows.append(full)
         if not full["passed"]:
             self.stuck_full.add(name)
-        return self._with_rerun(name, command, rows)
+        return rows
 
     def _run_once(self, name: str, command: str) -> list[CheckResult]:
         """One check without a plan: its row, and its one rerun when it went red."""
@@ -570,6 +612,15 @@ class CheckoutPresubmit:
             )
         return records
 
+    def timeouts(self) -> list[TimeoutFact]:
+        """The checks of the last call that timed out with no failing test (GH-1075), `[]` unless
+        that call checked the commit `head` holds. Derived from `results` on each call."""
+        checked, head = self._checked_head, self.head
+        if checked is None or head is None or not rules.same_commit(checked, head):
+            return []
+        results = self.results or []
+        return presubmit.timeout_facts(results, head) if presubmit.check_timeout(results) else []
+
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran. The
         witness's own line, when one ran, is in this same block whether it agreed or
@@ -581,8 +632,9 @@ class CheckoutPresubmit:
         text = presubmit.checks_markdown(
             self.head, self.results, self.witness_result, base=base, regressions=self.regressions
         )
+        lines = [presubmit.timeout_line(fact) for fact in self.timeouts()]
         notes = [note for note in (self.unstageable_note, self.docs_note) if note]
-        return "\n\n".join([text, *notes])
+        return "\n\n".join([text, *lines, *notes])
 
     def _criteria_regressions(self, head: str) -> list[str]:
         """What this head adds past the criteria caps, against the base this gate was given.
@@ -618,8 +670,11 @@ class CheckoutPresubmit:
 
     def _sized(self, command: str) -> str:
         """`{workers}` in a declared command, sized to the share held; the command as it is
-        without a grant or without the placeholder."""
+        without the placeholder. Without a grant a command that still holds the placeholder
+        raises `UngrantedWorkers`: the shell would take the token as text (GH-979)."""
         if self.grant is None:
+            if presubmit.WORKERS_TOKEN in command:
+                raise presubmit.UngrantedWorkers(command)
             return command
         return presubmit.workers_command(command, self.grant.share)
 
@@ -668,6 +723,8 @@ class CheckoutPresubmit:
         if row is None or row["passed"] is not True:
             return None
         row.pop("mode", None)
+        # A reused row did not run: the share it was stored under is not this run's (GH-1075).
+        row.pop("workers", None)
         if mode is not None:
             row["mode"] = mode
         row["reused"] = True
@@ -682,7 +739,7 @@ class CheckoutPresubmit:
             # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
             declared = self._declared.get((row["name"], row["command"]), row["command"])
             key = self._key(row["name"], declared)
-            if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
+            if key is None or not presubmit.storable(row) or row.get("reused") or row.get("rerun"):
                 continue
             try:
                 store.put(key, row, time.time())
@@ -699,7 +756,7 @@ class CheckoutPresubmit:
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
-        wall = self.timeouts.get(name, self.check_timeout_s)
+        wall = self.walls.get(name, self.check_timeout_s)
         code = self.readiness.exits.get(name) if self.readiness is not None else None
         before = self.readiness.load.one_minute() if self.readiness and code is not None else None
         result = self.ports.commands.run(self.path, command, wall, env=self._grant_env())
@@ -712,6 +769,8 @@ class CheckoutPresubmit:
             "output": output,
             "duration_s": duration_s,
         }
+        if self.grant is not None:
+            row["workers"] = self.grant.share
         if result.timed_out:
             row["timed_out"] = True
         # A timed-out command with nothing captured gives no proof of any test: the note
@@ -720,6 +779,9 @@ class CheckoutPresubmit:
             row["truncated"] = True
         if mode is not None:
             row["mode"] = mode
+        if mode == "affected-only":
+            # The affected form's exit, for the cause of the full form that follows a red one.
+            row["exit_code"] = result.exit_code
         if self.readiness is not None and code is not None:
             self._classify(row, result, code, before, self.readiness)
         return row

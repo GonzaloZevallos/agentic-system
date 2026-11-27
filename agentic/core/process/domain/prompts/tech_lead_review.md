@@ -241,6 +241,9 @@ Record each finding with:
     the working tree.
   - `process-suite-red`: a product check fails on the head, e.g. `### Checks` in the
     Developer's section shows it failed.
+  - `process-check-timeout`: a check ran out of time with no failing test. Only the
+    system writes it, as an observation of scope `plan`: never raise it again, never turn
+    it into `process-suite-red`, and never treat it as a return.
   - `plan-calibration`: a threshold, limit or parameter the plan set is wrong for the
     data, e.g. a numeric cap that rejects valid cases.
   - `plan-invariant`: one of the plan's invariants broken, e.g. a query over

@@ -26,7 +26,11 @@ AskedCause = Literal["api_break_missing", "drawing_departure", "drawing_cap"]
 `MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer.
 `drawing_departure` and `drawing_cap` (GH-766) are answered by number: `drawing_answer.prompt_cause`
 selects their rows and `drawing_answer.prompt_lines` builds the per-number `--drawing` commands."""
-PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause
+FormatCause = Literal["format_refusal", "format_hold"]
+"""The cause of a `failure` escalation that a format failure raised (GH-1019): `format_refusal`
+while the poller retakes it or when it escalates, `format_hold` once the task is held. Picked by
+`escalate`, never stored: it is not a `MechanicalCause`."""
+PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause | FormatCause
 
 _RETRY: Final[Prompt] = (
     "Should the task try again now?",
@@ -116,7 +120,27 @@ ESCALATION_PROMPTS[("questions", "spec_owned")] = (
     RESUME,
     (RESUME, CLOSE_UNPLANNED),
 )
+ESCALATION_PROMPTS[("failure", "format_refusal")] = (
+    "A role's output was refused by a format rule and the retakes did not fix it. Resume the task "
+    "once the rule or the brief is fixed, or close it?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("failure", "format_hold")] = (
+    "The task is held: its format retakes are spent. Resume it once the refused rule is fixed, "
+    "or close it?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("ci", "check_timeout")] = (
+    "A check timed out twice with no failing test, on the same head and with the same workers. "
+    "Is the machine at fault, or does the check need a longer timeout? Resume once decided.",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
 for _cause in get_args(MechanicalCause):
+    if _cause == "check_timeout":
+        continue
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY
 for _spec_cause in get_args(SpecRouteCause):
     ESCALATION_PROMPTS[("classification", _spec_cause)] = (

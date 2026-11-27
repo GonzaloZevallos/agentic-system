@@ -226,11 +226,11 @@ async def test_a_task_that_is_not_closed_backs_no_lesson(cfg):
 
 async def test_a_role_failure_is_a_failed_result_not_an_exception(cfg):
     broken = RawResult(None, 0.2, 1, "r")
-    runner = ScriptedRunner(reflector=[broken, broken])
+    runner = ScriptedRunner(reflector=[broken, broken, broken])
     result = await run(cfg, runner)
     assert result.failed and result.error
     assert result.applied == () and result.playbooks == {}
-    assert result.cost_usd == pytest.approx(0.4)  # the paid attempts count
+    assert result.cost_usd == pytest.approx(0.6)  # the paid attempts count
 
 
 async def test_an_exception_from_the_runner_is_a_failed_result(cfg):

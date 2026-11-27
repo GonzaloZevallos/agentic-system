@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__CiCancelRerun["CiCancelRerun"]
     class task__CiGhostDispatch["CiGhostDispatch"]
     class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
@@ -45,7 +48,6 @@ classDiagram
     class task__DrawingEscalation["DrawingEscalation"]
     class task__DrawingEscalationPatch["DrawingEscalationPatch"]
     class task__DrawingRow["DrawingRow"]
-    class task__EarlySplitRow["EarlySplitRow"]
     task__DrawingEscalationPatch --> task__DrawingEscalation
 ```
 
@@ -53,4 +55,5 @@ classDiagram
 
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.DrawingEscalationPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`

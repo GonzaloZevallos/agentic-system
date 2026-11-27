@@ -1,0 +1,16 @@
+{
+  "note": "DERIVED, not captured: the 422 of a second POST /repos/{owner}/{repo}/pulls for a head that already has an open pull request. The body follows GitHub's REST docs (validation failed, resource PullRequest, code custom); the stderr follows the pinned gh's pkg/cmd/api/api.go, which prints `gh: <message> (HTTP <status>)` followed by one line per entry of `errors`. Replace with a capture from the pinned gh when one exists.",
+  "status": 422,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-ratelimit-remaining",
+      "4989"
+    ]
+  ],
+  "body": "{\"message\": \"Validation Failed\", \"errors\": [{\"resource\": \"PullRequest\", \"code\": \"custom\", \"message\": \"A pull request already exists for o:agentic/GH-12.\"}], \"documentation_url\": \"https://docs.github.com/rest/pulls/pulls#create-a-pull-request\", \"status\": \"422\"}",
+  "stderr": "gh: Validation Failed (HTTP 422)\nPullRequest: A pull request already exists for o:agentic/GH-12."
+}

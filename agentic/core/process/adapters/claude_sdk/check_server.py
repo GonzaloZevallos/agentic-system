@@ -35,7 +35,7 @@ def run_check_tool(check: CheckTool, activity: HookActivity | None = None) -> Sd
 
     @tool(TOOL, description(verifications), {"name": str})
     async def run_check(args: dict[str, Any]) -> dict[str, Any]:
-        with activity.running() if activity is not None else nullcontext():
+        with activity.running(ceiling_s=check.timeout_s) if activity is not None else nullcontext():
             try:
                 text = await anyio.to_thread.run_sync(check, str(args.get("name", "")))
             except RunStopped:

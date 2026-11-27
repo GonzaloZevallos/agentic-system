@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import pytest
 import yaml
@@ -14,6 +15,7 @@ from agentic.core.process.domain.schemas import (
     TechPlan,
     Verdict,
 )
+from agentic.core.process.domain.task import SYSTEM_CATEGORIES, FindingCategory, OutputRefusal
 from tests.fakes import PART_DEFAULTS
 
 ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}
@@ -190,6 +192,25 @@ def test_review_findings_are_typed_and_the_categories_closed():
         "plan-invariant",
         "integration-crosscut",
     }
+
+
+def test_a_reviewer_finding_with_a_system_category_is_refused_with_its_rule_and_field():
+    raw = {
+        "markdown": "x",
+        "reason": "r",
+        "findings": [finding(), finding(category="process-check-timeout")],
+    }
+    with pytest.raises(OutputRefusal) as refused:
+        schemas.validate(schemas.Review, raw, VOCAB)
+    assert (refused.value.rule, refused.value.field) == ("system_category", "findings[1].category")
+
+
+def test_the_reviewer_is_never_offered_a_system_category():
+    out = schemas.json_schema(schemas.Review, VOCAB)
+    offered = json.dumps(out)
+    assert "process-check-timeout" not in offered
+    assert set(schemas.CATEGORIES) == set(get_args(FindingCategory)) - SYSTEM_CATEGORIES
+    assert set(get_args(schemas.ReviewerCategory)) == set(schemas.CATEGORIES)
 
 
 def test_plan_check_accepts_a_plan_with_no_subtasks_heading():

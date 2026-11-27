@@ -39,6 +39,9 @@ from .task import (
     LandingEntry,
     MergeCiRecord,
     OutOfBoundsLine,
+    ReintegrationCause,
+    ReintegrationMode,
+    ReintegrationRecord,
     ReleasePatch,
     RenumberCause,
     RenumberMode,
@@ -2607,6 +2610,37 @@ def restack_row(
     return row
 
 
+def reintegration_row(
+    *,
+    at: str,
+    upstream: str,
+    mode: ReintegrationMode,
+    cause: ReintegrationCause,
+    attempt_s: float,
+    resumed: bool,
+    generate_s: float | None = None,
+    regeneration: str | None = None,
+) -> ReintegrationRecord:
+    """The `ReintegrationRecord` of one reintegration attempt (GH-994). A `mechanical` attempt
+    never continues a session, so `mechanical` with `resumed` raises `ValueError`. `generate_s`
+    and `regeneration` are left out of the row when `None` (not measured / no commit made)."""
+    if mode == "mechanical" and resumed:
+        raise ValueError("a mechanical reintegration cannot be resumed")
+    row: ReintegrationRecord = {
+        "at": at,
+        "upstream": upstream,
+        "mode": mode,
+        "cause": cause,
+        "attempt_s": attempt_s,
+        "resumed": resumed,
+    }
+    if generate_s is not None:
+        row["generate_s"] = generate_s
+    if regeneration is not None:
+        row["regeneration"] = regeneration
+    return row
+
+
 def restack_close(
     before: Sequence[Mapping[str, object]],
     after: Sequence[Mapping[str, object]],
@@ -2795,11 +2829,14 @@ FLAKE_LOCK_WAIT_S = 10
 
 @dataclass(frozen=True)
 class IssueRef:
-    """An open tracker issue as the flake path reads it: its URL, title and body."""
+    """An open tracker issue as the flake path reads it: its URL, title and body. `labels` is the
+    names of its labels (GH-1019: the poller's `needs-human` safety net reads them off the same
+    read), `None` when the tracker did not say."""
 
     url: str
     title: str
     body: str
+    labels: tuple[str, ...] | None = None
 
 
 def flake_issue_for(issues: Sequence[IssueRef], check: str) -> IssueRef | None:

@@ -25,6 +25,8 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
+from .refusal import OutputRefusal
+
 SPEC_FENCE = "=== spec data ==="
 SPEC_MAX_BYTES = 65536
 
@@ -415,6 +417,16 @@ DRAFT_REFUSAL_REASONS: dict[DraftCause, str] = {
 
 def draft_refusal_message(cause: DraftCause) -> str:
     return f"draft Spec refused: {cause}: {DRAFT_REFUSAL_REASONS[cause]}"
+
+
+def draft_refusal(cause: DraftCause) -> OutputRefusal:
+    """The refusal of a draft Spec as the check raises it: its text is `draft_refusal_message`.
+    The one cause the table names, `preview_slice_missing`, carries its rule and the field the
+    body is in (`spec_draft`); every other cause is `unmapped` with no field."""
+    detail = draft_refusal_message(cause)
+    if cause == "preview_slice_missing":
+        return OutputRefusal("preview_slice_missing", "spec_draft", detail)
+    return OutputRefusal("unmapped", "", detail)
 
 
 def draft_retry(cause: DraftCause, calls_before: int) -> Literal["refuse", "propose_split"]:

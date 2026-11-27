@@ -5,9 +5,11 @@ config, and an error that is not a lock error is not retried."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,50 @@ def git(*args: str, cwd: Path) -> str:
         text=True,
         check=True,
     ).stdout.strip()
+
+
+# The test's own wait for its own commit inside the race below. Literals of this file: the
+# system's lock constants are not read here, so the system's calls stay the only ones under test.
+COMMIT_LOCK_PATTERN = re.compile(r"Unable to create '.*\.lock': File exists|cannot lock ref")
+COMMIT_LOCK_OPTIONS = (
+    "-c",
+    "core.filesRefLockTimeout=5000",
+    "-c",
+    "core.packedRefsTimeout=5000",
+)
+COMMIT_ATTEMPTS = 5
+
+
+def run_commit(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+
+
+def pause(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def commit_waiting(*args: str, cwd: Path) -> str:
+    """The test's own `git commit` while sibling committers hold the same locks: waits
+    on a lock error and raises at once on any other, with git's stderr in the message."""
+    argv = [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        *COMMIT_LOCK_OPTIONS,
+        "commit",
+        *args,
+    ]
+    for attempt in range(COMMIT_ATTEMPTS):
+        result = run_commit(argv, cwd)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        failure = f"{' '.join(argv)} failed ({result.returncode}): {result.stderr}"
+        if not COMMIT_LOCK_PATTERN.search(result.stderr) or attempt == COMMIT_ATTEMPTS - 1:
+            raise RuntimeError(failure)
+        pause(0.05 * 2**attempt)
+    raise AssertionError("unreachable")
 
 
 def completed(code: int, stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -172,6 +218,7 @@ def test_the_systems_git_calls_hold_up_against_a_developer_committing_in_a_sibli
     task = ws.task_checkout("GH-9")
     busy = ws.subtask_checkout("GH-9", "busy")
     rounds = 15
+    commits_before = int(git("rev-list", "--count", busy.branch, cwd=repo))
 
     # Several processes, so that the locks `commit` and `pack-refs` take overlap the ones
     # the system's calls need often enough for a call without the wait to fail.
@@ -184,12 +231,55 @@ def test_the_systems_git_calls_hold_up_against_a_developer_committing_in_a_sibli
             made = ws.subtask_checkout("GH-9", f"s{i}")
             (made.path / f"f{i}.txt").write_text(f"{i}\n")
             git("add", "-A", cwd=made.path)
-            git("commit", "-q", "-m", f"s{i}", cwd=made.path)
+            commit_waiting("-q", "-m", f"s{i}", cwd=made.path)
             assert ws.merge(task.path, made.branch) is None
     finally:
         for committer in committers:
-            committer.wait(timeout=120)
+            try:
+                committer.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                committer.kill()
+                committer.wait()
 
+    # The committers did create pressure: their exit codes are not the point (they fail
+    # against each other), the commits they landed on the busy branch are.
+    assert int(git("rev-list", "--count", busy.branch, cwd=repo)) > commits_before
     assert all((task.path / f"f{i}.txt").is_file() for i in range(rounds))
     config = (repo / ".git" / "config").read_text()
     assert "RefLockTimeout" not in config and "packedRefsTimeout" not in config
+
+
+@pytest.mark.parametrize(
+    ("results", "calls", "outcome"),
+    [
+        ([completed(128, LOCK_ERROR), completed(128, REF_LOCK_ERROR), completed(0)], 3, "returns"),
+        ([completed(1, "fatal: nothing to commit")] * 5, 1, "raises"),
+        ([completed(128, LOCK_ERROR)] * 5, COMMIT_ATTEMPTS, "raises"),
+    ],
+    ids=["lock-twice-then-ok", "non-lock-error", "lock-every-time"],
+)
+def test_the_commit_helper_waits_on_lock_errors_only_and_gives_up_after_five(
+    tmp_path, monkeypatch, results, calls, outcome
+):
+    script = list(results)
+    seen: list[list[str]] = []
+    waited: list[float] = []
+
+    def fake_run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        result = script.pop(0)
+        result.stdout = "committed" if result.returncode == 0 else ""
+        return result
+
+    monkeypatch.setattr(sys.modules[__name__], "run_commit", fake_run)
+    monkeypatch.setattr(sys.modules[__name__], "pause", waited.append)
+
+    if outcome == "returns":
+        assert commit_waiting("-m", "x", cwd=tmp_path) == "committed"
+        assert len(waited) == 2 and waited[0] < waited[1]
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            commit_waiting("-m", "x", cwd=tmp_path)
+        assert results[0].stderr in str(raised.value)
+    assert len(seen) == calls
+    assert all(argv[-3:] == ["commit", "-m", "x"] for argv in seen)

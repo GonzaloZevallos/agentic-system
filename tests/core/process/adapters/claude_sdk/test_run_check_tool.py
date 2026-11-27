@@ -290,3 +290,22 @@ def test_the_description_names_the_verifications_and_is_todays_for_a_product_wit
     with_one, _ = long_tool(monkeypatch)
     assert run_check_tool(with_one).description.endswith("compare.")
     assert run_check_tool(SlowTool()).description == DESCRIPTION
+
+
+def test_the_ceiling_the_watchdog_gets_is_the_deadline_the_tool_timeout_declares(monkeypatch):
+    handler, _ = long_tool(monkeypatch)  # declares walls: its timeout is past the default
+    clock_value = 500.0
+    activity = HookActivity(lambda: clock_value)
+    seen: list[float | None] = []
+
+    class Spy:
+        names = handler.names
+        timeout_s = handler.timeout_s
+        verification_names = handler.verification_names
+
+        def __call__(self, name: str) -> str:
+            seen.append(activity.expires)
+            return "check: compare\npassed: yes"
+
+    asyncio.run(run_check_tool(Spy(), activity).handler({"name": "compare"}))
+    assert seen == [clock_value + int(tool_timeout_ms(handler)) / 1000]

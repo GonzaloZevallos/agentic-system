@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 3, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 5, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -11,6 +11,8 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,22 +33,22 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
-    class stage0_rotation__Prepared["Prepared"]
-    class stage0_rotation__Proceed["Proceed"]
-    class stage0_rotation__Red["Red"]
-    class stage0_rotation__Stop["Stop"]
-    class stage0_rotation__SwitchRecord["SwitchRecord"]
-    class stage0_rotation__Target["Target"]
-    class stage0_rotation__Unavailable["Unavailable"]
-    class stage0_rotation__Unreadable["Unreadable"]
-    class stage0_rotation__WindowEntry["WindowEntry"]
-    class stall__ChildActivity["ChildActivity"]
-    class stall__Stall["Stall"]
-    class stall__StallSnapshot["StallSnapshot"]
-    class stall__Verdict["Verdict"]
+    class notify_message__WindowedSection["WindowedSection"]
+    class output_repair__RepairContext["RepairContext"]
+    class reaping__ParsedMark["ParsedMark"]
+    class reaping__ReapScope["ReapScope"]
+    class reaping__ReapedProcess["ReapedProcess"]
+    class refusal__OutputRefusal["OutputRefusal"]
+    class retakes__Budget["Budget"]
+    class scratch__KeptFolder["KeptFolder"]
+    class scratch__Leftover["Leftover"]
+    class scratch__Orphans["Orphans"]
+    class scratch__Owner["Owner"]
+    class scratch__OwnerEntry["OwnerEntry"]
+    class scratch__OwnerRecord["OwnerRecord"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
-  - `stage0_rotation.Proceed` se asocia con `stage0_rotation.Green`
+  - `notify_message.DigestView` se asocia con `notify_message.WindowedSection`

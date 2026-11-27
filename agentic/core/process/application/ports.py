@@ -21,9 +21,14 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.gh_calls import GhCallKind
+from ..domain.github_access import Turn as Turn
+from ..domain.github_access import WriteGate as WriteGate
+from ..domain.github_budget import Budget
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.playbook_land import LandAttempt
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
@@ -55,15 +60,20 @@ from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
     DependencyState,
+    Failure,
     FailureReason,
     FlakeRecord,
+    FormatIssueRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
+    RefusalRepair,
     RefusalRule,
     TaskInput,
     TaskState,
     TrackerFailure,
+    TrackerFailureClass,
+    TrackerFailureRecord,
 )
 from .limits import RunLimits
 
@@ -194,6 +204,10 @@ class AttemptFailed(Exception):
         check_runs: CheckRuns | None = None,
         rule: RefusalRule | None = None,
         field: str = "",
+        value: str | None = None,
+        detail: str = "",
+        repairs: Sequence[RefusalRepair] = (),
+        value_len: int | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -246,6 +260,17 @@ class AttemptFailed(Exception):
         # site in `run_role._attempt` and nowhere else; `None` and `""` at every other site.
         self.rule = rule
         self.field = field
+        # What the role wrote in `field` and the refusal's own motive, both already cleaned by
+        # `refusal_retry` (GH-1017), for the retry message; `None` and `""` at every other site.
+        self.value = value
+        self.detail = detail
+        # The refusals this attempt repaired before the one that failed it (GH-1016): its own
+        # record, never another attempt's; empty at every other site.
+        self.repairs = list(repairs)
+        # The size of the refused value, measured by `run_role._refused` on the raw structured
+        # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
+        # at every other site and when the size is unknown.
+        self.value_len = value_len
 
 
 class Presubmit(Protocol):
@@ -337,7 +362,18 @@ class RoleRunner(Protocol):
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult: ...
+
+
+class LandRecord(Protocol):
+    """The last landing attempt of a product's playbook PR, kept outside every checkout so it
+    survives a stage0 rotation. A record that is missing, unreadable or of another version
+    loads as `None`."""
+
+    def load(self, product: str) -> LandAttempt | None: ...
+
+    def save(self, product: str, attempt: LandAttempt) -> None: ...
 
 
 class TaskDocuments(Protocol):
@@ -646,6 +682,13 @@ class ProductStack(Protocol):
         file names. Raises `ValueError` when the key is there with any other value."""
         ...
 
+    def stacking(self, revision: str) -> bool:
+        """Whether the product lets a part start on its Ready same-split parent's branch
+        (`core.knowledge`, GH-858, ADR-0103), as the commit `revision` declares it. Opt-in:
+        `False` when the key is absent, the launch of today byte for byte. Raises `ValueError`
+        when the key is there but not a boolean."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
@@ -747,6 +790,24 @@ class StopFlag(Protocol):
     def is_set(self) -> bool: ...
 
     def set(self) -> None: ...
+
+
+class GhCallLog(Protocol):
+    """How many times the system launched `gh`, by kind (GH-990).
+
+    `record` counts one attempted launch: once per attempt, before the process starts, so a
+    missing `gh` counts too. It is not a GitHub request: a launch may make none, or several
+    (a GraphQL call, a paginated read).
+
+    `drain` returns the counts since the last drain, all six kinds present and zeros
+    included, and resets them. Exactly one consumer drains (the poller round, in a later
+    part): a second would take counts the first never sees.
+
+    The log is per process: it does not see the `gh` another process launches."""
+
+    def record(self, kind: GhCallKind) -> None: ...
+
+    def drain(self) -> Mapping[GhCallKind, int]: ...
 
 
 class Commands(Protocol):
@@ -911,10 +972,25 @@ class TrackerTransient(TrackerCallFailed):
     stderr."""
 
 
+class TrackerTurnRefused(TrackerTransient):
+    """A write's turn was refused (its wait was over the bound) or its wait was stopped, so
+    `gh` never launched and nothing reached GitHub. A `TrackerTransient`, so a caller that
+    treats a transient failure as a call to retry later absorbs it unchanged. The message
+    names the call and the bound, never stderr."""
+
+
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
-    bound, never stderr."""
+    bound, never stderr.
+
+    `resets_at` is the aware UTC instant `gh api rate_limit` stated (GH-1031): set when the
+    reset was over the cap or the attempts ran out after a reset was read, `None` when no
+    reset was read or the wait was stopped."""
+
+    def __init__(self, *args: object, status: int | None = None, resets_at: datetime | None = None):
+        super().__init__(*args, status=status)
+        self.resets_at = resets_at
 
 
 class TrackerRefused(ValueError):
@@ -983,6 +1059,10 @@ class Upstream:
     # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
     # left out), for the run's log and the poll round's output. None when nothing to say.
     note: str | None
+    # GH-1142: the short shas of the product checkout's commits the upstream lacks, and whether
+    # the fetch failed; the data behind `note`, so no caller ever parses the note's text.
+    left_out: tuple[str, ...] = ()
+    fetch_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1052,6 +1132,18 @@ class AddedLine:
     path: str
     commit: str
     text: str
+
+
+class PendingPaths(Protocol):
+    """What a working tree has pending against its HEAD, read apart from `Workspace` so no
+    existing implementation or fake gains a member."""
+
+    def pending_paths(self, path: Path) -> tuple[str, ...]:
+        """The paths the working tree at `path` has pending against HEAD: staged, unstaged,
+        untracked and deleted ones, and both sides of a rename or copy; ignored files never.
+        Names are raw, in first-seen order, with no duplicates. Raises `GitError` when git
+        cannot say."""
+        ...
 
 
 class Workspace(Protocol):
@@ -1285,11 +1377,15 @@ class Workspace(Protocol):
         sha, and it never decides whether a replace is warranted: its caller does."""
         ...
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         """The full sha `origin` holds for `branch`, whose object is local afterwards (it
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
         remote has no such branch. A failed read, an unreachable origin or a remote that
-        moved between the read and the fetch raises `GitError`: it is never "absent"."""
+        moved between the read and the fetch raises `GitError`: it is never "absent".
+        `bounded=True` (the stacking judgement, GH-858) runs each git step under
+        `FETCH_TIMEOUT_S`, a timeout being a `GitError` too, and fetches into
+        `refs/agentic/stacking-tips/<branch>` instead of `refs/agentic/remote-tips/<branch>`;
+        the default is the call every other caller makes."""
         ...
 
     def publish_ci_ref(self, path: Path, ref: str) -> None:
@@ -1662,6 +1758,9 @@ class ListedPullRequest:
     body: str
     merge_commit: str
     branch: str
+    cross_repository: bool | None = None
+    """`True` for a pull request from a fork, `False` for one from this repository, `None`
+    when the tracker did not say (or an older caller built the value without it)."""
 
 
 @dataclass(frozen=True)
@@ -1788,6 +1887,11 @@ class Tracker(Protocol):
         """`unlabel`, best effort: returns the failure instead of raising, as `note`."""
         ...
 
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        """`label`, best effort: returns the failure (target `label`) instead of raising, as
+        `drop_label` does for `unlabel`. `None` when it landed or the task has no issue."""
+        ...
+
     def ensure_label(self, name: str) -> None:
         """Makes sure the repository has a label called `name` (GH-294), so `open_issue`
         can pass it. Creates it when missing and never touches an existing one, its color
@@ -1907,14 +2011,80 @@ class Tracker(Protocol):
         cannot answer raises `ValueError` (`TrackerTimedOut` included), as every read."""
         ...
 
-    def merge(self, reference: str, head_sha: str) -> str:
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
         """Merges the pull request at `reference`, the URL `deliver` stored (the same key
         `pull_request` takes), only if its head is still `head_sha` (GH-178: the sha the
         automatic-merge decision was taken on, never "whatever is there now"), and returns
         the method used. Raises `MergeCallFailed` (a `ValueError`) when the tracker refuses
         -- the head moved, a check or a rule blocks it, the pull request is not open, the
-        reference is unreadable -- carrying the class of the step that failed."""
+        reference is unreadable -- carrying the class of the step that failed. `method`
+        `None` takes the first method the repository allows, as always; `"merge"` takes a
+        merge commit or nothing: a repository without them raises
+        `MergeCallFailed("no_merge_method")` and merges nothing."""
         ...
+
+
+@dataclass(frozen=True)
+class SystemRepo:
+    """The system's own repo as two reads and one write the verb needs: the `tracker` that
+    opens the issue and the `inbox` that lists the open ones. Built by the composition
+    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
+
+    tracker: Tracker
+    inbox: Inbox
+
+
+def tracker_failure_class(error: ValueError) -> TrackerFailureClass | None:
+    """The closed class of a `gh` failure by the type of the error, never by its text;
+    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
+    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
+    does not absorb."""
+    if isinstance(error, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(error, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(error, TrackerTransient):
+        return "transient"
+    if isinstance(error, TrackerRateLimited):
+        return "rate_limited"
+    if isinstance(error, TrackerRefused):
+        return "refused"
+    return None
+
+
+class FormatFiler(Protocol):
+    """Files, or comments on, the system's issue of a format refusal (GH-1011): the shape
+    `run_role` calls, declared here so `ports.py` never imports the class that implements it.
+    Never raises. Returns the record to keep (`None` when nothing was written) and the
+    `tracker_failures` rows of a write that did not land."""
+
+    def file(
+        self,
+        *,
+        task_id: str,
+        issue_number: int,
+        product: str,
+        role: str,
+        failures: Sequence[Failure],
+        existing: Sequence[FormatIssueRecord],
+    ) -> tuple[FormatIssueRecord | None, list[TrackerFailureRecord]]: ...
+
+
+class FormatFixReads(Protocol):
+    """What the release of a format hold reads (GH-1067): the system's issue of a refusal and
+    whether its fix runs. Reads only, never raises, never fetches and never writes.
+
+    `closing` is the state of the issue at `issue_url`, or `None` when the URL is not an issue
+    of the system's own repo or the read failed. `contains` is `True` when the commit is
+    present and an ancestor of the commit this system runs (HEAD of the stage0 checkout),
+    `False` when it is present and not an ancestor (never read it as 'the fix is absent'),
+    and `None` when unknown: a missing object, a git error or an invalid sha."""
+
+    def closing(self, issue_url: str) -> IssueState | None: ...
+
+    def contains(self, sha: str) -> bool | None: ...
 
 
 class LabelTimeline(Protocol):
@@ -2639,6 +2809,15 @@ class Ports:
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now
+    # Files or comments the issue of a format refusal in the system's repo (GH-1011). `None`
+    # files nothing, which is how every run went before it existed (dry-run, evaluation).
+    format_filing: FormatFiler | None = None
+    # What the release of a format hold reads (GH-1067). `None` releases nothing and makes no
+    # call, which is how every run went before it existed (dry-run, evaluation).
+    format_fixes: FormatFixReads | None = None
+    # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
+    # run went before it existed; nothing reads it yet.
+    pending_paths: PendingPaths | None = None
 
 
 class Stage0Store(Protocol):
@@ -2855,4 +3034,27 @@ class FailurePolicy(Protocol):
     def succeeded(self, sha: str) -> None:
         """`sha` is current and healthy. Idempotent: it is called again by every run that
         finds the rotation up to date."""
+        ...
+
+
+class BudgetStore(Protocol):
+    """The GitHub account's budget, shared by every process of this machine. Keyed by the
+    account key (`github.com-` and 16 hex), never by the token. Nothing raises past it but a
+    `ValueError` for a key of another shape: whatever cannot be read or written is unknown."""
+
+    def load(self, key: str) -> Budget | None:
+        """The stored budget; `None` when the file is missing, torn, foreign or of another
+        version, or the store is disabled."""
+        ...
+
+    def claim(self, key: str, now: datetime) -> datetime | None:
+        """Under the lock: `None` when the stored `read_at` is under `BUDGET_TTL` old.
+        Otherwise it writes `read_at=now` (whole seconds), keeps the stored resources and
+        `fetched_at`, and returns that instant: the caller may read `rate_limit` once."""
+        ...
+
+    def put(self, key: str, claim: datetime, budget: Budget) -> None:
+        """Under the lock, re-reads the file and drops the write when the stored `read_at`
+        is later than `claim` (a later claim already took the read). Otherwise writes
+        `read_at=claim`, `fetched_at` and the resources."""
         ...

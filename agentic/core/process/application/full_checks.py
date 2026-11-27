@@ -65,6 +65,7 @@ from ..domain.ci_push import PushKind, push_failure_markdown
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
+    INTEGRATION,
     WAITING_ON_HUMAN,
     CiCancelRerun,
     CiCause,
@@ -75,6 +76,7 @@ from ..domain.task import (
     FullChecksRead,
     FullChecksRecord,
     TaskState,
+    TimeoutFact,
     apply,
 )
 from . import ci_excerpt, ci_flakes, ci_push, ci_trust
@@ -490,6 +492,19 @@ async def _local_full_checks(
             await anyio.to_thread.run_sync(workspace.restore_clean, task.path)
     covers = ports.stack.ci_covers(base) if fallback is not None else {}
     rows, deferred = _deferrals(gate.results, fallback, covers)
+    remaining = [row for row in rows or [] if row["name"] not in deferred]
+    if presubmit.check_timeout(remaining):
+        timed_out = _timeout_escalation(
+            state,
+            ports,
+            cfg,
+            presubmit.timeout_facts(remaining, head),
+            [_deferred_line(name, covers[name], cfg.check_timeout_s) for name in deferred],
+            f"CI not used ({fallback}){detail}: ran locally.\n\n" if fallback is not None else "",
+        )
+        if flakes := gate.flakes():
+            timed_out["flakes"] = ci_flakes.dated(flakes, ci_flakes.now())
+        return finish(state, timed_out, ports)
     merged = presubmit.merge_checks_record(
         head=head,
         master=base,
@@ -537,6 +552,25 @@ async def _local_full_checks(
     if flakes := gate.flakes():
         patch["flakes"] = ci_flakes.dated(flakes, ci_flakes.now())
     return finish(state, patch, ports)
+
+
+def _timeout_escalation(
+    state: TaskState,
+    ports: Ports,
+    cfg: Configuration,
+    facts: list[TimeoutFact],
+    deferred_lines: list[str],
+    prefix: str,
+) -> dict[str, Any]:
+    """A suite that timed out with no failing test (GH-1075): the escalation the domain composes,
+    and no `full_checks` record and no return, since a timeout says nothing about the branch. The
+    section carries the fixed `timeout_line` of each check, never a pass, then the deferred lines
+    of the checks a `ci_covers` job covers."""
+    unit = rules.reviewed_unit_name(state) or INTEGRATION
+    patch = rules.check_timeout_escalation(state, facts, unit, at=ports.now())
+    lines = [*(presubmit.timeout_line(fact) for fact in facts), *deferred_lines]
+    patch["sections"] = _section(state, _next_version(state), prefix + "\n".join(lines))
+    return patch
 
 
 async def _ci_full_checks(

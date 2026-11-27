@@ -58,9 +58,11 @@ from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
 from ...domain.ci import Containment
 from ...domain.docs import Ancestry
-from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
+from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR, kept_path_for
 from ...domain.size_budget import NumstatRow
 from ...domain.task import DependencyState, MergeOutcome
+from ...domain.worktree_sweep import task_of
+from .guard import ForeignCheckout, require_checkout
 
 WORKTREES = Path(".agentic/worktrees")
 # The glob covers SQLite's journal next to the file. `LOGS_DIR`: every invocation's log
@@ -98,6 +100,9 @@ EXCLUDES = (
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
 # network blinking must cost a run a fallback and a note, never a hang.
 FETCH_TIMEOUT_S: float = 30
+# Where the stacking judgement fetches a parent's task branch (GH-858): a namespace of its own,
+# apart from the `refs/agentic/remote-tips/` ref `deliver` reads, and never under `refs/heads/`.
+STACKING_TIPS_REF = "refs/agentic/stacking-tips/"
 # How long one `git merge-tree` may take (GH-255). Declared, not measured: it bounds one
 # serial poll round, so a hung probe costs a conflict left unread, never a hung poller.
 MERGE_TREE_TIMEOUT_S: float = 30
@@ -124,8 +129,6 @@ _LOCK_ERROR = re.compile(r"Unable to create '[^']*\.lock': File exists|cannot lo
 _C_LOCALE = {"LC_ALL": "C"}
 # What git says of a `push --delete` whose ref a racing delete already removed: nothing left to do.
 _REMOTE_REF_GONE = "remote ref does not exist"
-# At most this many left-out local commits are named in a note.
-_LEFT_OUT_SHOWN = 10
 
 
 # Prefix of the line that names a commit in `git log --format`: a control character no
@@ -141,6 +144,27 @@ _GIT_VERSION = re.compile(r"git version (\d+)\.(\d+)")
 # (ADR-0065); the Bash denial of the run-check tool names it.
 SETUP_TREE_FILE = "agentic-setup-tree"
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def parse_pending_paths(stdout: str) -> tuple[str, ...]:
+    """The paths of `git status --porcelain=v1 -z` output, unstripped: records are
+    `XY<space><path>`, and a rename or copy is followed by a record holding the original
+    path. Anything else is a `GitError`."""
+    records = stdout.split("\0")
+    if records and records[-1] == "":
+        records.pop()
+    found: dict[str, None] = {}
+    pending = iter(records)
+    for record in pending:
+        if len(record) < 4 or record[2] != " ":
+            raise GitError(f"git status gave a malformed record: {record!r}")
+        found[record[3:]] = None
+        if "R" in record[:2] or "C" in record[:2]:
+            original = next(pending, "")
+            if not original:
+                raise GitError(f"git status gave no original path for {record!r}")
+            found[original] = None
+    return tuple(found)
 
 
 class GitWorkspace:
@@ -159,6 +183,7 @@ class GitWorkspace:
         # Absolute before anything: `-C` is read from the process's directory, and so
         # would a relative answer be, which are not the same place.
         target = path.resolve()
+        require_checkout(target, self.product_dir / WORKTREES)
         try:
             result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
         except OSError:
@@ -197,12 +222,46 @@ class GitWorkspace:
             self._note_base(branch, base)
         # The worktree on disk and not the branch decides `created`: the directory is
         # what the product's setup prepares, and a branch may exist with no worktree
-        # after a `cleanup` or a resume.
+        # after a `cleanup` or a resume. A folder that is not a valid checkout (its `.git`
+        # file lost, GH-1142) is no worktree: it is moved aside and rebuilt.
         created = not path.is_dir()
+        rebuilt = False
+        if not created and not self._is_checkout(path):
+            self._move_aside(path)
+            created = rebuilt = True
         if created:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if rebuilt:
+                # The admin entry of the folder just moved still names its branch.
+                self._git_locked("worktree", "prune")
             self._git_locked("worktree", "add", str(path), branch)
+            if rebuilt and not self._is_checkout(path):
+                raise ForeignCheckout(path, "missing")
         return Checkout(branch=branch, path=path, base=self._base_of(branch), created=created)
+
+    def _is_checkout(self, path: Path) -> bool:
+        """The folder has a gitfile and git, run from it, reports it as its own toplevel."""
+        try:
+            top = self._run("rev-parse", "--show-toplevel", cwd=path)
+        except ForeignCheckout:
+            return False
+        return top.returncode == 0 and Path(top.stdout.strip()).resolve() == path.resolve()
+
+    def _move_aside(self, path: Path) -> None:
+        """Move an invalid task folder to `.agentic/kept/<task>/orphaned-<name>-<stamp>`:
+        nothing in it is deleted (ADR-0011, GH-1142). A move that cannot be made leaves the
+        folder where it is and raises `ForeignCheckout`: no git runs from it."""
+        name = path.name
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        task = task_of(name) or name
+        destination = self.product_dir / kept_path_for(task) / f"orphaned-{name}-{stamp}"
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(path, destination)
+        except OSError as error:
+            reason = "not_a_file" if (path / ".git").exists() else "missing"
+            raise ForeignCheckout(path, reason) from error
+        print(f"agentic: moved invalid worktree {path} to {destination}", file=sys.stderr)
 
     def head(self, path: Path) -> str:
         return self._git("rev-parse", "--short", "HEAD", cwd=path)
@@ -248,6 +307,14 @@ class GitWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
+
+    def pending_paths(self, path: Path) -> tuple[str, ...]:
+        # `_run`, never `_git`: `_git` strips, and the first record of an unstaged edit starts
+        # with a space (` M path`), which would then read as malformed.
+        result = self._run("status", "--porcelain=v1", "-z", "--untracked-files=all", cwd=path)
+        if result.returncode != 0:
+            raise GitError(f"git status failed: {result.stderr.strip()}")
+        return parse_pending_paths(result.stdout)
 
     def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
         result = self._run("diff", "--quiet", verified, head, "--", ".", f":!{excluded}", cwd=path)
@@ -586,7 +653,9 @@ class GitWorkspace:
         # the lease to whatever the remote holds now and defeat it.
         self._git("push", "-u", f"--force-with-lease=refs/heads/{branch}:{lease}", "origin", branch)
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
+        if bounded:
+            return self._remote_tip_bounded(path, branch)
         listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path)
         if not listed:
             return None
@@ -594,6 +663,25 @@ class GitWorkspace:
         private = f"refs/agentic/remote-tips/{branch}"
         self._git("fetch", "origin", f"+refs/heads/{branch}:{private}", cwd=path)
         fetched = self._git("rev-parse", private, cwd=path)
+        if fetched != observed:
+            raise GitError(
+                f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
+            )
+        return fetched
+
+    def _remote_tip_bounded(self, path: Path, branch: str) -> str | None:
+        """`remote_tip` for the stacking judgement (GH-858): the same read, each git step under
+        `FETCH_TIMEOUT_S` (a hang is a `GitError`, never a wait without end) and the fetch into
+        `refs/agentic/stacking-tips/`, so it never rewrites the ref `deliver` keeps."""
+        listed = self._git_bounded(
+            "ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path
+        )
+        if not listed:
+            return None
+        observed = listed.split()[0]
+        private = f"{STACKING_TIPS_REF}{branch}"
+        self._git_bounded("fetch", "origin", f"+refs/heads/{branch}:{private}", cwd=path)
+        fetched = self._git_bounded("rev-parse", private, cwd=path)
         if fetched != observed:
             raise GitError(
                 f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
@@ -1111,14 +1199,20 @@ class GitWorkspace:
         failure = self._fetch(remote)
         tip = self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").stdout.strip()
         if failure is None and tip:
-            return Upstream(ref, tip, _left_out_note(self._left_out(ref), None))
+            left_out = self._left_out(ref)
+            return Upstream(ref, tip, _left_out_note(left_out, None), tuple(left_out))
         reason = failure or f"{ref} is not there after the fetch"
         # A failed fetch learnt nothing new about the remote: the last one we did is used
         # only when HEAD is behind it or diverged from it; a HEAD ahead of it, or no last
         # fetch at all, stays as it is today.
         if tip and self._run("merge-base", "--is-ancestor", tip, head).returncode != 0:
+            left_out = self._left_out(ref)
             return Upstream(
-                ref, tip, _left_out_note(self._left_out(ref), f"fetch failed: {reason}")
+                ref,
+                tip,
+                _left_out_note(left_out, f"fetch failed: {reason}"),
+                tuple(left_out),
+                fetch_failed=True,
             )
         return Upstream("HEAD", head, f"fetch failed ({reason}): starting from HEAD")
 
@@ -1247,14 +1341,23 @@ class GitWorkspace:
         return self._run_with_env({}, *args, cwd=cwd)
 
     def _run_with_env(
-        self, env: Mapping[str, str], *args: str, cwd: Path | None = None
+        self,
+        env: Mapping[str, str],
+        *args: str,
+        cwd: Path | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        if cwd is not None:
+            # Before any git runs: a task folder without its `.git` would walk up to the
+            # product checkout (GH-1142, ADR-0002).
+            require_checkout(cwd, self.product_dir / WORKTREES)
         return subprocess.run(
             ["git", *args],
             cwd=cwd or self.product_dir,
             env={**os.environ, **self.identity, **env},
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
 
     def _run_locked(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -1283,6 +1386,18 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout
+
+    def _git_bounded(self, *args: str, cwd: Path | None = None) -> str:
+        """`_git` under `FETCH_TIMEOUT_S`: a timeout is a `GitError`, like any failed step."""
+        try:
+            result = self._run_with_env({}, *args, cwd=cwd, timeout=FETCH_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise GitError(f"git {' '.join(args)} timed out after {FETCH_TIMEOUT_S:g} s") from exc
+        if result.returncode != 0:
+            raise GitError(
+                f"git {' '.join(args)} failed: {result.stderr.strip()}", stderr=result.stderr
+            )
+        return result.stdout.strip()
 
     def _git(
         self, *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None
@@ -1341,10 +1456,7 @@ def _left_out_note(left_out: list[str], failure: str | None) -> str | None:
     where a local commit went finds it named; None when there is nothing to say."""
     parts = [failure] if failure else []
     if left_out:
-        shown = ", ".join(left_out[:_LEFT_OUT_SHOWN])
-        more = len(left_out) - _LEFT_OUT_SHOWN
-        extra = f" and {more} more" if more > 0 else ""
-        parts.append(f"local commits not on the upstream are left out of the base: {shown}{extra}")
+        parts.append(rules.local_commits_note(left_out))
     return "; ".join(parts) or None
 
 

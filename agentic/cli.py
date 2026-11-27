@@ -80,7 +80,7 @@ from .core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
-from .core.process.adapters.shell import EventStopFlag, inhibitor
+from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
 from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
@@ -89,6 +89,7 @@ from .core.process.application import stop as stopmod
 from .core.process.application.delivered import files_patch, size_patch
 from .core.process.application.dry_run import DryRunRefused, read_only_ports
 from .core.process.application.escalate import NEEDS_HUMAN
+from .core.process.application.format_release import FormatReleaseCarry
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
@@ -594,6 +595,16 @@ def build_parser() -> CommandTree:
         metavar="DIR",
         help="the rotation root (default ~/.agentic-stage0s)",
     )
+    stage0_smoke = add(
+        ("stage0", "smoke"),
+        stage0_sub,
+        "smoke",
+        help="prove this stage starts and can read a product: the real preflight over ports that "
+        "make no tracker, inbox or board call; exits 0, or non-zero on any failure",
+    )
+    stage0_smoke.add_argument(
+        "--product-dir", required=True, help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
     scores = add(("scores",), sub, "scores", help="a task's numbers as Langfuse scores (GH-273)")
     scores_sub = scores.add_subparsers(dest="scores_command", required=True)
     scores_backfill = add(
@@ -752,6 +763,8 @@ def main() -> None:
     if args.command == "perf":
         sys.exit(_perf_main(args))
     if args.command == "stage0":
+        if args.stage0_command == "smoke":
+            sys.exit(_stage0_smoke(args.product_dir))
         sys.exit(_stage0_rotate(args.root))
     if args.command == "run":
         if args.issue_input is not None:
@@ -1161,6 +1174,25 @@ def _stage0_rotate(root: Path) -> int:
         prune=rotation.prune,
         out=print,
     )
+    return 0
+
+
+def _stage0_smoke(product_dir: str) -> int:
+    """`agentic stage0 smoke`: what a rotation asks of a candidate stage for one product (GH-1152).
+    The product's configuration and ports are `poll`'s, with the tracker, the inbox and the board
+    replaced by ports that raise, and the real `preflight` runs over them: the stage's code
+    starts, and the product's stack, flags and prompts read. No GitHub call, so the time is a
+    constant and not the length of a queue. Exits 0, or 1 on any exception; the exception type is
+    the only thing said, never a port's text."""
+    os.environ[ENV_PREFIX + "PRODUCT_DIR"] = product_dir
+    try:
+        cfg = Configuration.from_sources({}, os.environ)
+        if not cfg.agentic_dir.is_dir():
+            raise ValueError("not a product repo: no .agentic/ directory")
+        preflight(cfg, composition.offline_ports(cfg))
+    except Exception as exc:
+        print(f"agentic: stage0 smoke failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1776,6 +1808,7 @@ async def _poll(
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
+        release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
         try:
             while True:
                 if stage0 is not None:
@@ -1801,6 +1834,7 @@ async def _poll(
                         eval_set=_round_eval_set(ports, upstream),
                         system_version=telemetry.fresh_system_version,
                         sweep_carry=sweep_carry,
+                        format_release_carry=release_carry,
                     ):
                         print(line, flush=True)
                 except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
@@ -2302,6 +2336,7 @@ async def _resume(
                     estimate=estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
@@ -2330,6 +2365,7 @@ async def _resume(
                     estimate=estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             elif not snapshot.interrupts and (
                 rules.resume_source(snapshot.next, crashed=True) == "document"
@@ -2348,6 +2384,7 @@ async def _resume(
                     estimate,
                     increment=seeded.increment,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
@@ -2362,6 +2399,7 @@ async def _resume(
                     pending,
                     estimate,
                     drawing_flags=drawing,
+                    by_poller=by_poller,
                 )
         except resuming.WaitingOnHuman as exc:
             raise CannotStart(str(exc), code=1) from exc
@@ -3161,7 +3199,12 @@ async def _reflect(
                 summarise=_window_summary,
                 since=since,
                 task_id=task_id,
-                system=system if system is not None else composition.system_repo(),
+                system=system
+                if system is not None
+                else composition.system_repo(
+                    composition.write_access(cfg, None, NullStopFlag()),
+                    composition.process_call_log(),
+                ),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc

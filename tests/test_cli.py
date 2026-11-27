@@ -159,7 +159,11 @@ def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(composition, "GhInbox", lambda product_dir: GhInbox(product_dir, run=run))
+    monkeypatch.setattr(
+        composition,
+        "GhInbox",
+        lambda product_dir, calls=None: GhInbox(product_dir, run=run, calls=calls),
+    )
     return calls
 
 
@@ -6368,6 +6372,7 @@ COMMAND_PATHS = [
     ("stack", "review"),
     ("stage0",),
     ("stage0", "rotate"),
+    ("stage0", "smoke"),
     ("scores",),
     ("scores", "backfill"),
     ("dashboards",),

@@ -168,8 +168,8 @@ def test_a_failure_is_not_stored_and_the_next_call_runs_again():
 def test_a_timeout_is_not_stored():
     commands = MemoryCommands(pytest=[CommandResult(0, "ok", timed_out=True)])
     store = MemoryCheckResults()
-    assert build(commands=commands, store=store)() is not None
-    assert store.puts == []
+    assert build(commands=commands, store=store)() is None  # GH-1075: unverified, not refused
+    assert "tests" not in [row["name"] for _, row, _ in store.puts]
 
 
 def test_an_affected_form_never_satisfies_the_full_form():
