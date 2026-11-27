@@ -7243,6 +7243,33 @@ async def test_a_wait_at_the_gate_leaves_no_document_branch_worktree_or_spend(
 
 
 @pytest.mark.anyio
+async def test_a_wait_in_fresh_over_a_stacked_document_moves_nothing(monkeypatch, tmp_path, capsys):
+    old = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": "b" * 40,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch,
+        tmp_path,
+        hint=False,
+        carried=False,
+        document=_previous_child(stack_parent=old),
+    )
+    ports.workspace.existing_branches["agentic/GH-6"] = ("h1", "b0")
+    before = list(ports.documents.saved)
+    with pytest.raises(SystemExit) as info:
+        await _run_child(cfg, ports, registry, fresh=True)
+    assert info.value.code == cli.STACK_WAIT_EXIT
+    assert capsys.readouterr().err == "agentic: stack: GH-6 waits on #5 (head_not_carried)\n"
+    assert graph.entered is None
+    assert ports.workspace.renamed == [] and ports.workspace.checkouts_made == []
+    assert ports.documents.saved == before and ports.documents.written_into == []
+    assert ports.tracker.comments == [] and ports.tracker.labels == []
+
+
+@pytest.mark.anyio
 async def test_fresh_over_a_stacked_document_follows_its_record_and_recreates_at_the_parent_head(
     monkeypatch, tmp_path
 ):
