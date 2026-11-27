@@ -251,6 +251,21 @@ async def test_a_ci_that_cannot_be_read_up_to_the_bound_escalates_with_its_cause
     assert cause in patch["escalated"]
 
 
+@pytest.mark.parametrize("cause", ["gh_unavailable", "gh_unreadable"])
+async def test_an_unreadable_ci_escalation_quotes_what_gh_said_of_the_last_read(cause):
+    """GH-1151: the quote is the detail of the read the wait ended on; the cause stays closed."""
+    ports = ports_of(CiUnreadable.of(cause, "HTTP 502: Bad Gateway {braces}"))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert cause in patch["escalated"]
+    assert "; gh answered: HTTP 502: Bad Gateway {braces}" in patch["escalated"]
+
+
+async def test_an_unreadable_ci_with_nothing_to_quote_says_no_gh_answered():
+    patch = await run(state_of(), ports_of(CiUnreadable("gh_unreadable")))
+    assert "gh answered" not in patch["escalated"]
+
+
 async def test_a_timed_out_ci_fails_and_names_the_pending_jobs_never_passes():
     ports = ports_of(report(job("unit"), job("web", None, "IN_PROGRESS")))
     patch = await run(state_of(), ports)
