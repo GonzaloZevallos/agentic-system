@@ -59,8 +59,7 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.Ports` se asocia con `ports.TaskDocuments`
 - [application: support (parte 7)](classes-process-application-support-7.md)
+  - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
   - `ports.Ports` se asocia con `ports.Workspace`
