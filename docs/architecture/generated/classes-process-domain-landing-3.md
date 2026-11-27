@@ -43,6 +43,7 @@ classDiagram
     class pull_request__BoundedBody["BoundedBody"]
     class stacking__Absent["Absent"]
     class stacking__ParentLink["ParentLink"]
+    class stacking__ParentMemo["ParentMemo"]
     class stacking__StackFacts["StackFacts"]
     class stacking__Unreadable["Unreadable"]
     landing_order__Yield --> landing_order__Member
