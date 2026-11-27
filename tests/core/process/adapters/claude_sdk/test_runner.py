@@ -30,7 +30,7 @@ from claude_agent_sdk import (
 
 from agentic.core.process.adapters.claude_sdk import check_run_log
 from agentic.core.process.adapters.claude_sdk import runner as module
-from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL
+from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL, GUARD_TIMEOUT_S
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
 from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
 from agentic.core.process.adapters.shell import ShellReaper
@@ -1948,7 +1948,7 @@ async def test_a_long_delivery_hook_holds_the_attempt_and_the_whole_threshold_re
         hook = options.hooks["PreToolUse"][0].hooks[0]
         running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
         await until(lambda: reaper.scans >= 1)
-        clock.now += 3 * 1500  # a hook thrice the check timeout, with no message
+        clock.now += 1000  # a hook silent past the threshold but inside its 1530 s ceiling
         scans = reaper.scans
         await until(lambda: reaper.scans >= scans + 3)
         reaped_at.append(len(reaper.calls))  # during the hook: no reap
@@ -1978,6 +1978,54 @@ async def test_a_long_delivery_hook_holds_the_attempt_and_the_whole_threshold_re
     assert reaped_at == [0, 0]
 
 
+async def test_a_hook_past_its_ceiling_is_killed_as_a_stall_one_threshold_after_the_last_renewal(
+    monkeypatch, tmp_path, clock
+):
+    presubmit = SlowPresubmit()  # ceiling: GUARD_TIMEOUT_S + 1500 s, from the clock at entry
+    ceiling = GUARD_TIMEOUT_S + presubmit.timeout_s
+    killed = threading.Event()
+    # No pending tool and a child that never moves: nothing but the hook clause could hold it.
+    reaper = HungReaper(on_reap=killed.set, ticks=lambda scan: 7, running=False)
+    reaped_at: list[int] = []
+
+    async def query(prompt, options):
+        yield INIT
+        hook = options.hooks["PreToolUse"][0].hooks[0]
+        running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
+        await until(presubmit.entered.is_set)
+        entered_at = clock.now
+        clock.now = entered_at + ceiling  # exactly at the expiry: still inside it
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        renewed = clock.now  # the last tick that renewed
+        clock.now = renewed + TIMEOUT_S  # a whole threshold after it, not past it
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        reaped_at.append(len(reaper.calls))  # no reap yet
+        clock.now += 1  # the first tick over the threshold fires
+        await until(killed.is_set)
+        presubmit.release.set()
+        await running
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await stalling_runner(clock, reaper, buffer).run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            presubmit=presubmit,
+            owner_task="GH-1",
+        )
+    assert caught.value.reason == "stall"
+    assert reaped_at == [0]
+    written = buffer.getvalue()
+    assert f"stalled {int(TIMEOUT_S) + 1}s, last event system, in_hook True" in written
+
+
 async def test_the_hook_counter_is_per_attempt_not_shared_between_sessions(
     monkeypatch, tmp_path, clock
 ):
@@ -1998,7 +2046,7 @@ async def test_the_hook_counter_is_per_attempt_not_shared_between_sessions(
             yield result()
         else:
             await until(presubmit.entered.is_set)  # the other attempt's hook is in flight
-            clock.now += 5 * TIMEOUT_S
+            clock.now += 2 * TIMEOUT_S  # past the threshold, inside the hook's ceiling
             while not killed.is_set():
                 await anyio.sleep(0.005)
 

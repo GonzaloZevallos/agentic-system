@@ -297,7 +297,7 @@ class ClaudeSdkRunner:
         *,
         reaper: ProcessReaper,
         product_key: str,
-        stall_timeout_s: float = 2400.0,
+        stall_timeout_s: float = 1800.0,
         clock: Callable[[], float] = time.monotonic,
         check_results_dir: Path | None = None,
         scratch: Scratch | None = None,
@@ -561,8 +561,8 @@ class ClaudeSdkRunner:
             usage = _usage(main_usage)
             self._warn(
                 f"[{role.name}] stalled {stalled.seconds}s, last event {stalled.last_event}, "
-                f"{calls} turns, {usage['input']} input / {usage['output']} output tokens "
-                "seen on the main thread, cost unknown\n"
+                f"in_hook {stalled.in_hook}, {calls} turns, {usage['input']} input / "
+                f"{usage['output']} output tokens seen on the main thread, cost unknown\n"
             )
             return AttemptFailed(
                 f"stalled: no sign of life for {stalled.seconds}s, last event {stalled.last_event}",
@@ -594,6 +594,7 @@ class ClaudeSdkRunner:
                         pending_tools=len(pulse.pending),
                         hooks_in_flight=hooks.in_flight,
                         last_hook_exit=hooks.last_exit,
+                        hook_expires=hooks.expires,
                         child=child,
                         previous_child=previous,
                         timeout_s=self.stall_timeout_s,
@@ -601,7 +602,11 @@ class ClaudeSdkRunner:
                 )
                 pulse.last_activity, previous = verdict.last_activity, child
                 if verdict.stalled:
-                    stalled = Stall(int(now - verdict.last_activity), pulse.last_event)
+                    stalled = Stall(
+                        int(now - verdict.last_activity),
+                        pulse.last_event,
+                        in_hook=hooks.in_flight > 0,
+                    )
                     left = await asyncio.to_thread(
                         self.reaper.reap_attempt, owner_task, os.getpid(), token
                     )
