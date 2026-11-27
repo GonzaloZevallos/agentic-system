@@ -490,6 +490,10 @@ class RoleRun(Run):
             )
             if any(f.get("cold_fallback", False) for f in failures):
                 attributes["agentic.role.cold_fallback"] = True
+            # The silence of the last stalled attempt (GH-978); absent, never 0, when no
+            # failure carries a record.
+            if stalls := [s for f in failures if (s := f.get("stall")) is not None]:
+                attributes["agentic.role.stall_s"] = stalls[-1]["seconds"]
         # Per rule, from the entries' own `rule` and the runs' `repairs`; never a field.
         refusals = system_metrics.refusals_by_rule(patch.get("failures", []), runs)
         refused: dict[str, int] = {

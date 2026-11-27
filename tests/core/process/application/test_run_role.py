@@ -76,6 +76,7 @@ from agentic.core.process.domain.schemas import (
 )
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.spec_brief import fenced_section, protected_line
+from agentic.core.process.domain.stall import Stall
 from agentic.core.process.domain.task import FailureReason, OutputRefusal, apply, delta
 from agentic.core.process.domain.task_path import TEXT_MAX
 from agentic.shared.configuration import Configuration
@@ -306,6 +307,51 @@ async def test_a_second_stall_is_a_role_failure_like_any_other():
     with pytest.raises(RoleFailure) as caught:
         await run_pjm(ScriptedRunner(pjm=[hung, hung]), resume="live-id", cold_prompt="COLD")
     assert caught.value.failures[-1]["reason"] == "stall"
+
+
+async def test_a_stall_then_a_delivery_leaves_the_record_on_the_runs_first_failure():
+    hung = AttemptFailed(
+        "stalled", session_id="s-1", reason="stall", stall=Stall(3000, "assistant", in_hook=False)
+    )
+    out = await run_pjm(ScriptedRunner(pjm=[hung, OK]))
+    record = out.failures[0]["stall"]
+    assert record == {"seconds": 3000, "last_event": "assistant", "in_hook": False}
+    assert type(record["seconds"]) is int and type(record["in_hook"]) is bool
+
+
+async def test_two_stalls_in_the_hook_leave_two_records_no_third_attempt_and_one_session():
+    def hung(session: str) -> AttemptFailed:
+        return AttemptFailed(
+            "stalled", session_id=session, reason="stall", stall=Stall(1801, "system", True)
+        )
+
+    runner = ScriptedRunner(pjm=[hung("s-1"), hung("s-1"), OK])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    assert len(runner.calls) == 2
+    assert runner.calls[1]["resume"] == "s-1"
+    assert [f["stall"] for f in caught.value.failures] == [
+        {"seconds": 1801, "last_event": "system", "in_hook": True}
+    ] * 2
+
+
+async def test_a_stall_narrowed_to_a_full_disk_carries_no_record():
+    cut = AttemptFailed(
+        "stalled",
+        reason="stall",
+        stall=Stall(3000, "none", in_hook=False),
+        space=LOW,
+    )
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(ScriptedRunner(pjm=[cut, OK]), floor_bytes=2 * 1024**3)
+    assert [f["reason"] for f in caught.value.failures] == ["disk_full"]
+    assert "stall" not in caught.value.failures[0]
+
+
+async def test_a_failure_that_is_not_a_stall_has_no_record():
+    cut = AttemptFailed("boom", reason="sdk", session_id="s")
+    out = await run_pjm(ScriptedRunner(pjm=[cut, OK]))
+    assert "stall" not in out.failures[0]
 
 
 async def test_a_resumed_attempt_that_delivers_records_what_it_resumed():

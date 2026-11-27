@@ -891,6 +891,38 @@ def test_failures_leave_one_array_entry_per_reason_with_the_count_and_the_cost(s
     assert reason == "schema" and float(cost) == pytest.approx(0.03)
 
 
+def _stalled(seconds, in_hook=False):
+    return _refused("stall") | {
+        "stall": {"seconds": seconds, "last_event": "none", "in_hook": in_hook}
+    }
+
+
+def test_a_retried_stall_and_an_escalated_one_both_stamp_the_silence_as_an_int(spans):
+    retried = {
+        "runs": [_run("PjM", "pjm", "PjM", 0.1)],
+        "failures": [_stalled(3000)],
+        "cost_usd": 0.1,
+    }
+    escalated = {
+        "failures": [_stalled(1801, in_hook=True), _stalled(2400, in_hook=True)],
+        "cost_usd": 0.0,
+        "escalated": "PjM failed 2 times: stalled",
+        "status": "waiting_on_human",
+    }
+    for patch, seconds in ((retried, 3000), (escalated, 2400)):
+        with telemetry.role_span("PjM", "pjm", "gym-saas", arm="default") as run:
+            run.finish(patch)
+        value = spans.get_finished_spans()[-1].attributes["agentic.role.stall_s"]
+        assert value == seconds and type(value) is int
+
+
+def test_a_patch_with_no_stall_record_stamps_no_silence(spans):
+    patch = {"failures": [_refused("schema"), _refused("sdk")], "cost_usd": 0.0}
+    with telemetry.role_span("PjM", "pjm", "gym-saas", arm="default") as run:
+        run.finish(patch)
+    assert "agentic.role.stall_s" not in spans.get_finished_spans()[-1].attributes
+
+
 def test_review_findings_group_by_severity_category_and_status_with_the_count(spans):
     """Two findings landing in the same cell (`important`/`spec-behaviour`/`open`) are
     one array entry with the count `2`."""

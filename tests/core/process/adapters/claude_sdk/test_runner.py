@@ -39,6 +39,7 @@ from agentic.core.process.domain import reaping
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
 from agentic.core.process.domain.scratch import SpaceReading
+from agentic.core.process.domain.stall import Stall
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
 from tests.fakes import FakeFreeSpace, FakeReaper
 
@@ -1806,6 +1807,9 @@ async def test_a_silent_attempt_is_reaped_and_fails_as_a_stall_on_the_eof_path(
     assert written.count("stalled") == 1
     assert "stalled 3000s, last event system" in written
     assert "cost unknown" in written
+    # The record travels on the exception: ints, the closed event kind and a bool only.
+    assert failure.stall == Stall(3000, "system", in_hook=False)
+    assert type(failure.stall.seconds) is int
 
 
 async def test_the_attempt_is_reaped_before_any_scope_is_cancelled_when_the_cli_survives(
@@ -2021,6 +2025,7 @@ async def test_a_hook_past_its_ceiling_is_killed_as_a_stall_one_threshold_after_
             owner_task="GH-1",
         )
     assert caught.value.reason == "stall"
+    assert caught.value.stall == Stall(int(TIMEOUT_S) + 1, "system", in_hook=True)
     assert reaped_at == [0]
     written = buffer.getvalue()
     assert f"stalled {int(TIMEOUT_S) + 1}s, last event system, in_hook True" in written
