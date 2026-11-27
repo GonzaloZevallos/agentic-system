@@ -55,7 +55,7 @@ from ..domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
 )
-from ..domain.stall import ChildActivity
+from ..domain.stall import ChildActivity, Stall
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
@@ -208,6 +208,7 @@ class AttemptFailed(Exception):
         detail: str = "",
         repairs: Sequence[RefusalRepair] = (),
         value_len: int | None = None,
+        stall: Stall | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -267,6 +268,10 @@ class AttemptFailed(Exception):
         # The refusals this attempt repaired before the one that failed it (GH-1016): its own
         # record, never another attempt's; empty at every other site.
         self.repairs = list(repairs)
+        # How the stall was told (GH-978): the silence, the last event's kind and whether a
+        # hook was in flight, set only where `reason` is `stall` (the runner's watchdog);
+        # `None` at every other site.
+        self.stall = stall
         # The size of the refused value, measured by `run_role._refused` on the raw structured
         # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
         # at every other site and when the size is unknown.

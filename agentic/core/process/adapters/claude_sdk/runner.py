@@ -574,6 +574,7 @@ class ClaudeSdkRunner:
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
                 main_thread_turns=turns.value,
+                stall=stalled,
             )
 
         async def watch() -> None:

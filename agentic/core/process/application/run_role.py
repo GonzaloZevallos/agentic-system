@@ -732,6 +732,19 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    # Written only on the reason the record says (the narrowed one), so a
+                    # stall narrowed to `disk_full` carries none.
+                    **(
+                        {
+                            "stall": {
+                                "seconds": exc.stall.seconds,
+                                "last_event": exc.stall.last_event,
+                                "in_hook": exc.stall.in_hook,
+                            }
+                        }
+                        if exc.stall is not None and reason == "stall"
+                        else {}
+                    ),
                     **({"rule": exc.rule} if refused else {}),
                     **({"field": exc.field} if refused and exc.field else {}),
                     **({"value": exc.value} if refused and exc.value is not None else {}),

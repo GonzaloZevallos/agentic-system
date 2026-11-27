@@ -53,6 +53,7 @@ from .refusal import OutputRefusal as OutputRefusal
 from .refusal import RefusalRule as RefusalRule
 from .size_budget import ActualSize, PlanSize
 from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
+from .stall import LastEvent
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -1165,6 +1166,16 @@ class LandedSlice(TypedDict, total=False):
     at: str
 
 
+class StallRecord(TypedDict):
+    """How a stalled attempt is told on its `Failure` (GH-978, ADR-0057): the silence in
+    whole seconds, the closed kind of the last event seen and whether a delivery hook was
+    in flight. Only these three, never a message or a log line."""
+
+    seconds: int
+    last_event: LastEvent
+    in_hook: bool
+
+
 class Failure(TypedDict):
     role: str
     attempt: int
@@ -1242,6 +1253,11 @@ class Failure(TypedDict):
     # Written only when something was reaped, so a document with no leak renders as it
     # always did; read with `.get("reaped", [])`.
     reaped: NotRequired[list[ReapedProcess]]
+    # How the stall was told (GH-978), off `AttemptFailed.stall`: written only when the
+    # recorded (narrowed) reason is `stall`; read with `.get("stall")`. Absent on any other
+    # failure and on one recorded before this field existed, which reads as unknown, never
+    # as 0.
+    stall: NotRequired[StallRecord]
     # When this attempt began and when its `AttemptFailed` was caught, ISO-8601 UTC, stamped
     # by `run_role` from its injected clock. Absent on a failure recorded before these fields
     # existed, which reads as unknown (`None`), never as 0.

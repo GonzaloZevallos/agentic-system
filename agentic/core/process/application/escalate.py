@@ -45,13 +45,15 @@ async def escalate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
 
 def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
     reason = state.get("escalated")
-    lines = [f"{ESCALATED}{reason}"]
+    cls = state.get("escalation_class")
+    # The one evaluation of the stall picker: the first line and the block both read it.
+    stalled = _session_stalled(state) if cls == "failure" else None
+    lines = [f"{ESCALATED}{reason}" + (f" ({stalled})" if stalled else "")]
     questions = state.get("questions_for_human", [])
     number = ports.inbox.issue_of(state["id"])
-    cls = state.get("escalation_class")
     if cls is not None:
         usd = rules.suggested_budget(state, cfg.max_budget_usd) if cls == "cap" else None
-        lines.extend(_prompt_block(state, cls, number, questions, usd))
+        lines.extend(_prompt_block(state, cls, number, questions, usd, stalled))
     if questions and cls != "questions":
         lines.append("\nQuestions for you:\n")
         lines.extend(f"{n}. {q}" for n, q in enumerate(questions, 1))
@@ -116,12 +118,21 @@ def _format_cause(state: TaskState) -> escalation_prompts.FormatCause | None:
     return "format_refusal" if rules.format_epoch(state) else None
 
 
+def _session_stalled(state: TaskState) -> escalation_prompts.StallCause | None:
+    """The prompt cause of two stalled attempts in a row (GH-978): `session_stalled` when the
+    failures just before the closing escalation say so, `None` otherwise. Never stored."""
+    return (
+        "session_stalled" if escalation_prompts.stalled_batch(state.get("pause_log", [])) else None
+    )
+
+
 def _prompt_block(
     state: TaskState,
     cls: EscalationClass,
     number: int | None,
     questions: list[str],
     usd: float | None,
+    stalled: escalation_prompts.StallCause | None,
 ) -> list[str]:
     """The one-word block (GH-593): a question, the recommended answer and the options, from
     `escalation_prompts` and closed by the escalation's class and cause. A `returns` escalation of
@@ -139,7 +150,7 @@ def _prompt_block(
         cause = refusal["cause"] if cls == "classification" and refusal else None
         asked: escalation_prompts.PromptCause | None = cause or state.get("escalation_cause")
         if cls == "failure":
-            asked = _format_cause(state) or asked
+            asked = _format_cause(state) or stalled or asked
         question, recommended, options = escalation_prompts.prompt_for(cls, asked)
     fill = {
         "issue": "<issue>" if number is None else str(number),
