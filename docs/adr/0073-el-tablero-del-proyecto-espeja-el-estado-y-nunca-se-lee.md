@@ -147,8 +147,8 @@ escriben son Etapa, Motivo (antes Bloqueo), Costo USD, Inicio y Fin.
   9. bloqueos propios: `Próximo`, `espera #N, #M`;
   10. el resto: `Próximo`, `esperando lugar`.
 
-  El paso 7 se evalúa antes del 8 pero después de 5 y 6 para una etiqueta de `En pausa`; un issue
-  en vuelo con `agentic-hold` sigue mostrando lo que mostraba antes de la pila.
+  El paso 7 solo actúa si ningún paso 1 a 6 aplicó: una etiqueta de pausa (paso 6) lo apaga, y
+  entonces un issue en vuelo con `agentic-hold` muestra lo mismo que antes de la pila.
 - **Tabla de Motivo** (los textos están en `domain/board.py` y se copian literalmente):
 
   | Situación | Etapa | Motivo |
