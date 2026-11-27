@@ -46,8 +46,8 @@ classDiagram
     class task__StackPause["StackPause"]
     class task__StackRestack["StackRestack"]
     class task__StackUnfetchable["StackUnfetchable"]
+    class task__StallRecord["StallRecord"]
     class task__Subtask["Subtask"]
-    class task__TaskInput["TaskInput"]
 ```
 
 ## Relaciones con otras páginas
@@ -56,5 +56,4 @@ classDiagram
   - `stacking.ParentLink` se asocia con `task.StackParent`
 - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` hereda de `task.TaskInput`
   - `task.TaskState` se asocia con `task.StackParent`
