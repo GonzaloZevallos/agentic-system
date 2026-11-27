@@ -9,12 +9,13 @@ Developer's word."""
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from agentic.shared.stage0 import CHECKOUT
 
@@ -35,13 +36,21 @@ from ..domain.presubmit import (
 from ..domain.task import FlakeRecord, GateRecord, TaskState, TimeoutFact
 from . import docs_settlement
 from .checkouts import task_base
-from .ports import CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
+from .ports import CheckAbandoned, CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
 from .preflight import criteria_regressed, product_name
 
 # The delivery hook's own guard budget (`hooks.GUARD_TIMEOUT_S`, pinned equal by a test): a
 # share is held that much past the checks' timeout, so the ledger never drops it before the
 # hook gives up.
 HOLD_MARGIN_S = 30.0
+
+
+def stop_if_abandoned(abandoned: Callable[[], bool] | None) -> None:
+    """Raise `CheckAbandoned` when the attempt that asked has been abandoned (GH-1169). With no
+    flag, nothing: the gate of before. The flag is the caller's own, per attempt: it is passed
+    down the calls and never kept on the presubmit."""
+    if abandoned is not None and abandoned():
+        raise CheckAbandoned
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -299,7 +308,8 @@ class CheckoutPresubmit:
         """The forms of the last invocation that ran the checks, `[]` when none did."""
         return self.forms[-1] if self.forms else []
 
-    def __call__(self) -> str | None:
+    def __call__(self, *, abandoned: Callable[[], bool] | None = None) -> str | None:
+        stop_if_abandoned(abandoned)  # before the first write: a note, a refusal, a commit
         workspace = self.ports.workspace
         head = workspace.head(self.path)
         moved, clean = head != self.before, workspace.is_clean(self.path)
@@ -318,7 +328,8 @@ class CheckoutPresubmit:
                 return refused
         witness_reason = None
         if moved and clean:
-            witness_reason = self._run_holding_a_share(head)
+            witness_reason = self._run_holding_a_share(head, abandoned)
+        stop_if_abandoned(abandoned)  # an abandoned call never reaches the refusal budget
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
         # budget the working gate needs. The checks below still ran either way.
@@ -407,28 +418,38 @@ class CheckoutPresubmit:
         self._refused_ids.append(None)
         return presubmit.refused(reason, self.refusals)
 
-    def _run_holding_a_share(self, head: str) -> str | None:
+    def _run_holding_a_share(
+        self, head: str, abandoned: Callable[[], bool] | None = None
+    ) -> str | None:
         """The witness and the checks, under a share of the machine's cores. `__call__` is
         its only caller; the acquire itself is `_share`, the one place that asks the
         scheduler (ADR-0070). The time spent waiting for the share is over before any
         command starts, so it is never part of a check's timeout."""
         asked_at = datetime.now(UTC).isoformat(timespec="milliseconds")
-        with self._share() as grant:
+        stop_if_abandoned(abandoned)
+        with self._share(abandoned=abandoned) as grant:
+            stop_if_abandoned(abandoned)
             granted = time.monotonic()
             self._prepare_reuse()
             witness_reason = None
             if self.witness is not None:
-                witness_reason = self._run_witness(self.witness)
+                witness_reason = self._run_witness(self.witness, abandoned)
             plan = self.affected
             if plan is None:
                 planned = dict.fromkeys(self.checks, presubmit.UNPLANNED)
-                results = self._run_unplanned()
+                results = self._run_unplanned(abandoned)
             else:
                 planned = self._planned(plan, head)
-                results = self._run_under_plan(plan, planned)
+                results = self._run_under_plan(plan, planned, abandoned)
+            forms = self._settled(planned, results)
+            regressions = self._criteria_regressions(head)
+            # A check already launched ran to its own wall: its mark is CHECK_TASK, the system
+            # pid and its own token, so the attempt's reap never reached it. This look is what
+            # keeps its row, its flake and its pass from being kept for a call nobody awaits.
+            stop_if_abandoned(abandoned)
             self.head, self.results = head, results
-            self.forms.append(self._settled(planned, results))
-            self.regressions = self._criteria_regressions(head)
+            self.forms.append(forms)
+            self.regressions = regressions
             self.invocations.append(self.results)
             self.gates.append(
                 {
@@ -448,13 +469,21 @@ class CheckoutPresubmit:
             return witness_reason
 
     @contextmanager
-    def _share(self, *, fresh: bool = False) -> Iterator[Grant]:
+    def _share(
+        self, *, fresh: bool = False, abandoned: Callable[[], bool] | None = None
+    ) -> Iterator[Grant]:
         """Hold a share of the machine's cores, given back whatever happens inside. The only
         method that calls the `CheckScheduler` port. A gate keeps its first `enqueued_at`
         and token across the calls it is refused and retried in, and the seconds it already
         waited count against its ceiling. `fresh` is for a one-off check the Developer asked
         for through `run_check`: a new place in the queue (an old `enqueued_at` would age it
-        into `land`), its own full wait, and the gate's grant is back as it was afterwards."""
+        into `land`), its own full wait, and the gate's grant is back as it was afterwards.
+
+        `abandoned` is the flag of the attempt that asks (GH-1169): the request then carries it
+        and a token of its own on every call, never the previous grant's, because the previous
+        call may belong to an abandoned attempt whose thread is still leaving the ledger by that
+        token; the place in the queue (`enqueued_at`) is still the gate's. A grant that comes
+        back after the flag was set is released before it is kept."""
         previous = self.grant
         keep = previous is not None and not fresh
         request = CheckRequest(
@@ -462,10 +491,20 @@ class CheckoutPresubmit:
             wait_max_s=max(self._wait_max_s - (0.0 if fresh else self.waited_s), 0.0),
             expires_after_s=self.timeout_s + HOLD_MARGIN_S,
             enqueued_at=previous.enqueued_at if keep and previous else None,
-            token=previous.token if keep and previous else None,
+            token=(
+                uuid4().hex
+                if abandoned is not None
+                else previous.token
+                if keep and previous
+                else None
+            ),
+            cancelled=abandoned,
         )
         scheduler = self.ports.check_scheduler
         grant = scheduler.acquire(request)
+        if abandoned is not None and abandoned():
+            scheduler.release(grant)
+            raise CheckAbandoned
         self.grant = grant
         if not fresh:
             self.waited_s += grant.wait_s
@@ -473,7 +512,9 @@ class CheckoutPresubmit:
             yield grant
         finally:
             scheduler.release(grant)
-            if fresh:
+            # With a flag, undo only our own assignment: the retry of the next attempt may have
+            # set its own grant since, and that one is not ours to put back.
+            if fresh and (abandoned is None or self.grant is grant):
                 self.grant = previous
 
     def _failed_ids(self) -> tuple[str, ...] | None:
@@ -518,22 +559,28 @@ class CheckoutPresubmit:
             for name, form in planned.items()
         ]
 
-    def _run_unplanned(self) -> list[CheckResult]:
+    def _run_unplanned(self, abandoned: Callable[[], bool] | None = None) -> list[CheckResult]:
         if not self.parallel:
-            return [row for n, c in self.checks.items() for row in self._run_once(n, c)]
+            return [row for n, c in self.checks.items() for row in self._run_once(n, c, abandoned)]
         # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
         # the other started checks before the error propagates, so no check outlives
         # the call; nothing is recorded for it, the same as serial.
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            per_check = pool.map(lambda item: self._run_once(*item), self.checks.items())
+            per_check = pool.map(lambda item: self._run_once(*item, abandoned), self.checks.items())
             return [row for rows in per_check for row in rows]
 
     def _run_under_plan(
-        self, plan: AffectedPlan, planned: Mapping[str, PlannedForm]
+        self,
+        plan: AffectedPlan,
+        planned: Mapping[str, PlannedForm],
+        abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
         def run(name: str, command: str) -> list[CheckResult]:
             return self._with_rerun(
-                name, command, self._planned_rows(name, command, planned[name], plan)
+                name,
+                command,
+                self._planned_rows(name, command, planned[name], plan, abandoned),
+                abandoned,
             )
 
         if not self.parallel:
@@ -543,7 +590,12 @@ class CheckoutPresubmit:
             return [row for rows in per_check for row in rows]
 
     def _planned_rows(
-        self, name: str, command: str, planned: PlannedForm, plan: AffectedPlan
+        self,
+        name: str,
+        command: str,
+        planned: PlannedForm,
+        plan: AffectedPlan,
+        abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
         """One check under a plan: its affected form when it is planned, then the full one
         when the affected one did not pass; the full form alone otherwise. A full red makes
@@ -552,21 +604,32 @@ class CheckoutPresubmit:
         if planned.mode == "affected-only":
             # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
-            first = self._run(name, form, "affected-only")
+            first = self._run(name, form, "affected-only", abandoned)
             rows.append(first)
             if first["passed"]:
                 return rows
-        full = self._run(name, command, "full")
+        full = self._run(name, command, "full", abandoned)
         rows.append(full)
+        stop_if_abandoned(abandoned)  # before `stuck_full`, which the retry reads
         if not full["passed"]:
             self.stuck_full.add(name)
         return rows
 
-    def _run_once(self, name: str, command: str) -> list[CheckResult]:
+    def _run_once(
+        self, name: str, command: str, abandoned: Callable[[], bool] | None = None
+    ) -> list[CheckResult]:
         """One check without a plan: its row, and its one rerun when it went red."""
-        return self._with_rerun(name, command, [self._run(name, command)])
+        return self._with_rerun(
+            name, command, [self._run(name, command, None, abandoned)], abandoned
+        )
 
-    def _with_rerun(self, name: str, command: str, rows: list[CheckResult]) -> list[CheckResult]:
+    def _with_rerun(
+        self,
+        name: str,
+        command: str,
+        rows: list[CheckResult],
+        abandoned: Callable[[], bool] | None = None,
+    ) -> list[CheckResult]:
         """`rows` and, right after them, the one rerun of the check's last row when the
         domain says it reruns (ADR-0066): a red row that did not time out. Never the stored
         pass: a rerun is a run, and the row says so."""
@@ -576,20 +639,22 @@ class CheckoutPresubmit:
         if rerun_as is None:
             return rows
         if form is None or rerun_as != form.command:
-            again = self._execute(name, rerun_as, last.get("mode"))
+            again = self._execute(name, rerun_as, last.get("mode"), abandoned)
             again["rerun"] = True
             return [*rows, again]
         # The form branch compares the unexpanded text above. The ids are read once and serve
         # both the expansion and the verdict. Substitution order: `{failed_ids}` here, then
         # `{workers}` in `_execute` (via `_sized`); `{base}` never applies to a form.
         ids = presubmit.failed_ids(last["output"], form.test_id)
-        again = self._execute(name, presubmit.rerun_form_command(form, ids), last.get("mode"))
+        again = self._execute(
+            name, presubmit.rerun_form_command(form, ids), last.get("mode"), abandoned
+        )
         again["rerun"] = True
         if presubmit.rerun_resolved(again, ids, form):
             return [*rows, again]
         # The form went red without rerunning what it was asked to: once more, the whole
         # command, and its row stands for the rerun. The form row is dropped (invariant).
-        whole = self._execute(name, command, last.get("mode"))
+        whole = self._execute(name, command, last.get("mode"), abandoned)
         whole["rerun"] = True
         return [*rows, whole]
 
@@ -647,12 +712,14 @@ class CheckoutPresubmit:
         except GitError:
             return []
 
-    def _run_witness(self, command: str) -> str | None:
+    def _run_witness(self, command: str, abandoned: Callable[[], bool] | None = None) -> str | None:
+        stop_if_abandoned(abandoned)
         checkout = self.path.resolve()
         # The witness gets the grant's environment but its command is never substituted.
         result = self.ports.commands.run(
             self.path, command, self.check_timeout_s, env=self._grant_env()
         )
+        stop_if_abandoned(abandoned)  # before `witness_result`, which the retry's call writes
         reason = presubmit.witness_refusal(
             command, result.output, result.exit_code, result.timed_out, checkout
         )
@@ -747,12 +814,26 @@ class CheckoutPresubmit:
                 # A store that cannot be written is only a miss the next time.
                 return
 
-    def _run(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
+    def _run(
+        self,
+        name: str,
+        command: str,
+        mode: Mode | None = None,
+        abandoned: Callable[[], bool] | None = None,
+    ) -> CheckResult:
+        stop_if_abandoned(abandoned)
         if (stored := self._stored(name, command, mode)) is not None:
             return stored
-        return self._execute(name, command, mode)
+        return self._execute(name, command, mode, abandoned)
 
-    def _execute(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
+    def _execute(
+        self,
+        name: str,
+        command: str,
+        mode: Mode | None = None,
+        abandoned: Callable[[], bool] | None = None,
+    ) -> CheckResult:
+        stop_if_abandoned(abandoned)  # the one place a command is launched: none after the flag
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
