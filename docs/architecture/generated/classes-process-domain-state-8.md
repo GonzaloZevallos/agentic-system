@@ -47,13 +47,11 @@ classDiagram
     class task__PullRequestCommit["PullRequestCommit"]
     class task__RefusalNoted["RefusalNoted"]
     class task__RefusalRepair["RefusalRepair"]
-    class task__ReleasePatch["ReleasePatch"]
+    class task__ReintegrationRecord["ReintegrationRecord"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: landing (parte 2)](classes-process-domain-landing-2.md)
-  - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: state (parte 10)](classes-process-domain-state-10.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
