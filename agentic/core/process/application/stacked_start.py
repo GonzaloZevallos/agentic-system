@@ -15,13 +15,12 @@ from dataclasses import dataclass
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import board, rules, stacking
+from ..domain import stacking
 from ..domain.task import StackParent
-from .ports import GitError, IssueState, Ports
-from .resume import state_from
+from . import stack_facts
+from .ports import IssueState, Ports
 
-# What a failed read of the tracker, a document or git raises; each one is doubt.
-_DOUBT = (ValueError, OSError, KeyError, GitError)
+_DOUBT = stack_facts.DOUBT
 
 
 @dataclass(frozen=True)
@@ -59,64 +58,15 @@ def _issue(ports: Ports, number: int) -> IssueState | None:
         return None
 
 
-def _merged(
-    cfg: Configuration, ports: Ports, state: IssueState, document: dict[str, object] | None
-) -> bool | None:
-    """Whether the parent's closing merge is in the fetched upstream; `None` when it could not
-    be told. An open issue, or one not closed as completed, is not merged."""
-    if state.state != "CLOSED" or state.state_reason != "COMPLETED":
-        return False
-    recorded = document.get("merge_commit") if document else None
-    merge = str(recorded) if recorded else state.closing_merge_commit
-    if merge is None:
-        return False
-    try:
-        tip = ports.workspace.upstream().sha
-        if not tip or not ports.workspace.fetch_commit(merge):
-            return None
-        return ports.workspace.is_ancestor(cfg.product_dir, merge, ref=tip)
-    except _DOUBT:
-        return None
-
-
 def _carried(cfg: Configuration, ports: Ports, parent_id: str, head: str) -> bool | None:
-    """Whether the parent's remote task branch carries `head`; `None` when git could not tell."""
-    try:
-        branch = rules.task_branch(parent_id)
-        tip = ports.workspace.remote_tip(cfg.product_dir, branch, bounded=True)
-        if tip is None:
-            return False
-        return ports.workspace.is_ancestor(cfg.product_dir, head, ref=tip)
-    except _DOUBT:
-        return None
+    """Whether the parent's remote task branch carries `head`: `stack_facts.carried`."""
+    return stack_facts.carried(cfg, ports, parent_id, head)
 
 
 def _facts(cfg: Configuration, ports: Ports, parent_issue: int) -> stacking.ParentFacts:
-    """The parent's facts, read lazily and in the order `start_ref` decides on them: nothing
-    past a merged or abandoned parent is read. A failed read leaves its fact `None`."""
-    unread = stacking.ParentFacts(None, None, None, None, None, None)
-    state = _issue(ports, parent_issue)
-    try:
-        parent_id = ports.inbox.task_id(parent_issue)
-        document = ports.documents.load(parent_id)
-    except _DOUBT:
-        return unread
-    if state is None:
-        return unread
-    merged = _merged(cfg, ports, state, document)
-    abandoned = state.state == "CLOSED" and state.state_reason == "NOT_PLANNED"
-    if merged is not False or abandoned or document is None:
-        return stacking.ParentFacts(merged, abandoned, None, None, None, None)
-    labels = state.labels
-    paused = (
-        None
-        if labels is None
-        else bool(document.get("escalated")) or board.NEEDS_HUMAN_LABEL in labels
-    )
-    ready = state.state == "OPEN" and document.get("status") == "ready_for_review"
-    head = rules.approved_head(state_from(document))
-    carried = _carried(cfg, ports, parent_id, head) if ready and head else None
-    return stacking.ParentFacts(merged, abandoned, paused, ready, head, carried)
+    """The parent's facts at its current approved head: `stack_facts.parent_facts`, the one
+    computation the hold shares."""
+    return stack_facts.parent_facts(cfg, ports, parent_issue)
 
 
 def decide(

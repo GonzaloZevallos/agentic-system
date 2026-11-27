@@ -13,6 +13,7 @@ import pytest
 
 from agentic.core.process.application import stack_hold
 from agentic.core.process.application.ports import (
+    GitError,
     IssueComment,
     IssueState,
     LockRecord,
@@ -45,6 +46,24 @@ class _Workspace:
     def __init__(self) -> None:
         self.ancestors: set[tuple[str, str]] = set()
         self.upstream_calls = 0
+        self.branches: set[str] = set()
+        self.branch_reads = 0
+        self.branch_error = False
+        self.remote_tips: dict[str, str] = {}
+        self.remote_tip_calls = 0
+        self.remote_error = False
+
+    def branch_head(self, branch: str) -> str | None:
+        self.branch_reads += 1
+        if self.branch_error:
+            raise GitError("rev-parse failed")
+        return "abc1234" if branch in self.branches else None
+
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
+        self.remote_tip_calls += 1
+        if self.remote_error:
+            raise GitError("ls-remote failed")
+        return self.remote_tips.get(branch)
 
     def fetch_commit(self, sha: str) -> bool:
         return True
@@ -209,6 +228,81 @@ def test_a_parent_in_the_upstream_holds_nothing():
     world.child(20, parent)
     hold = world.compute(world.queued(20))
     assert (hold.held, hold.causes) == ({}, {20: "none"})
+
+
+# --- compute: the second step of a child with no task branch (GH-1163) -------------------------
+
+
+def _unstarted_world(**parent_doc: object) -> tuple[_World, StackParent]:
+    """A branchless child of an idle parent: the chain alone says `none`."""
+    world = _World()
+    parent = world.parent(7, **parent_doc)
+    world.child(20, parent)
+    return world, parent
+
+
+def test_a_branchless_child_of_a_parent_that_is_not_ready_is_held_as_parent_not_ready():
+    world, _ = _unstarted_world(status="planning")
+    hold = world.compute(world.queued(20))
+    assert hold.held == {20: "parent_not_ready"}
+
+
+def test_a_ready_parent_whose_branch_no_longer_carries_the_recorded_head_holds_the_child():
+    world, parent = _unstarted_world(
+        status="ready_for_review", subtasks={"a": {"reviewed_head": _head(9)}}
+    )
+    world.workspace.remote_tips["agentic/GH-7"] = "f" * 40
+    assert world.compute(world.queued(20)).held == {20: "parent_not_ready"}  # not carried
+    world.workspace.ancestors.add((parent["head"], "f" * 40))
+    world.memo = StackMemo()  # the next round
+    assert world.compute(world.queued(20)).held == {}  # carried: the child starts
+
+
+def test_a_child_with_a_branch_makes_no_remote_read_and_is_never_parent_not_ready():
+    world, _ = _unstarted_world(status="planning")
+    world.workspace.branches.add("agentic/GH-20")
+    hold = world.compute(world.queued(20))
+    assert (hold.held, hold.causes) == ({}, {20: "none"})
+    assert world.workspace.remote_tip_calls == 0
+    assert world.tracker.issue_state_calls[7] == 1  # the chain's read only
+
+
+def test_the_second_step_is_not_made_for_a_paused_parent_or_one_in_the_upstream():
+    world, _ = _escalated_world()
+    assert world.compute(world.queued(20)).held == {20: "parent_escalated"}
+    world, parent = _unstarted_world(status="planning")
+    world.workspace.ancestors.add((parent["head"], TIP))
+    assert world.compute(world.queued(20)).held == {}
+    assert world.workspace.branch_reads == 0
+
+
+def test_sibling_children_read_the_parent_facts_once():
+    world, parent = _unstarted_world(status="planning")
+    world.child(21, parent)
+    hold = world.compute(world.queued(20, 21))
+    assert hold.held == dict.fromkeys((20, 21), "parent_not_ready")
+    assert world.tracker.issue_state_calls[7] == 1
+
+
+def test_a_failed_read_of_the_second_step_is_unreadable_never_none_and_leaves_no_note():
+    world, _ = _unstarted_world(status="planning")
+    world.workspace.branch_error = True
+    assert world.compute(world.queued(20)).held == {20: "unreadable"}
+    world, _ = _unstarted_world(status="ready_for_review")
+    world.workspace.remote_error = True  # the remote branch cannot be read
+    assert world.compute(world.queued(20)).held == {20: "unreadable"}
+    assert world.episodes(world.queued(20)) == []
+    assert (world.tracker.noted, world.documents.closures) == ([], {})
+
+
+def test_the_not_ready_cause_opens_one_note_with_its_marker_and_one_row_per_episode():
+    world, _ = _unstarted_world(status="planning")
+    assert world.episodes(world.queued(20)) == []
+    world.episodes(world.queued(20), LATER)
+    assert world.tracker.noted == [("GH-20", _text(7, "parent_not_ready", 1))]
+    assert [(r["cause"], r["resumed_at"]) for r in world.rows("GH-20")] == [
+        ("parent_not_ready", None)
+    ]
 
 
 # --- free_writer --------------------------------------------------------------------------------

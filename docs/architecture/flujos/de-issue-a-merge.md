@@ -66,6 +66,12 @@ sequenceDiagram
    `Wait` en la puerta termina la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr,
    sin invocar el grafo. Un `Wait` al crear la rama (`StackWait` atrapada en
    `agentic/cli.py:_invoke`, ya iniciado el grafo) termina igual. Ninguno escala.
+   Con `stacking: true` (agentic-system), una parte cuyo único bloqueante es un padre listo
+   para revisión arranca sobre la cabeza del padre (ADR-0104, profundidad 1). Si ese hijo ya
+   tiene `stack_parent` pero todavía no rama, y el padre dejó de estar listo, el poller lo
+   retiene como `parent_not_ready` (`agentic/core/process/application/stack_hold.py`, ADR-0103):
+   no se lanza ni se retoma, no gasta retomas y deja una sola nota por episodio. La retención no
+   lee el interruptor.
 4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
    (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
    `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del

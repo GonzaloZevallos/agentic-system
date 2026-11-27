@@ -49,7 +49,6 @@ graph TD
     m_application__stack_review --> g_application__support
     m_application__stack_review --> g_pkg__agentic__shared
     m_application__stack_review --> g_pkg__domain
-    m_application__stacked_start --> g_application__lifecycle
     m_application__stacked_start --> g_application__support
     m_application__stacked_start --> g_pkg__agentic__shared
     m_application__stacked_start --> g_pkg__domain
