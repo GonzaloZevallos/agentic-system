@@ -73,6 +73,7 @@ from agentic.core.process.application.ports import (
     SpecReader,
     SpecUnreadable,
     SpecValidator,
+    StackHint,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -2261,12 +2262,17 @@ class MemoryRunRegistry:
         return self.attempts.get((product, issue))
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
         kept = arm if arm is not None else (existing.arm if existing is not None else None)
-        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept)
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept, stack_hint)
 
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)
