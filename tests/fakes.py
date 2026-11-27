@@ -495,6 +495,7 @@ class MemoryStack:
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
         adr_naming: Literal["numbered", "dated"] = "numbered",
+        stacking: bool = False,
         prototype: PrototypeListing | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
@@ -574,6 +575,7 @@ class MemoryStack:
         # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
         # default for one), and each revision asked: a test counts the reads.
         self.declared_adr_naming = adr_naming
+        self.declared_stacking = stacking
         self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
         self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
@@ -654,6 +656,10 @@ class MemoryStack:
     def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
         self.adr_naming_reads.append(revision)
         return self.adr_naming_at.get(revision, self.declared_adr_naming)
+
+    def stacking(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_stacking
 
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1032,6 +1038,8 @@ class MemoryWorkspace:
         self.remote_tips: dict[str, str] = {}
         self.remote_tip_error: str | None = None
         self.remote_tip_calls: list[tuple[Path, str]] = []
+        # The `bounded` flag of each `remote_tip` ask, in the same order as `remote_tip_calls`.
+        self.remote_tip_bounded: list[bool] = []
         # GH-376: `ci_refs` is the sha each `agentic-ci/` ref holds on the fake remote;
         # `ci_ref_calls` is every `publish_ci_ref` / `remote_refs` / `delete_remote_ref`
         # as `(verb, argument)`, and `ci_ref_error` makes each of them raise `GitError`.
@@ -1429,8 +1437,9 @@ class MemoryWorkspace:
         self.pushed.append(branch)
         self.pushes.append((branch, lease))
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         self.remote_tip_calls.append((path, branch))
+        self.remote_tip_bounded.append(bounded)
         if self.remote_tip_error is not None:
             raise GitError(self.remote_tip_error)
         return self.remote_tips.get(branch)

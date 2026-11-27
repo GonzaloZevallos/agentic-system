@@ -47,6 +47,7 @@ from ..domain import (
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
+from ..domain import stacking as stacking_rules
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
@@ -2457,6 +2458,7 @@ def _blocked(
     number: int,
     upstream: Callable[[], Upstream],
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    stacking: stacking_rules.ParentMemo | None = None,
 ) -> rules.BlockerReport:
     """What `number`'s blockers come to; the launch predicate is `bool(report)`. Any
     doubt -- an unknown git object, a `gh` failure, a blocker whose own `stateReason` this
@@ -2468,7 +2470,11 @@ def _blocked(
     candidate's git trouble must cost that candidate's own launch, never the round, and
     never the process. When the blockers themselves cannot be read the candidate is its
     own `unknown` entry, so the report still blocks. The numbers it read (GH-836) are set in
-    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none."""
+    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none.
+    `stacking` (GH-858, ADR-0103) is the round's `ParentMemo`; without it the report is the one
+    above, byte for byte. With it, the one `open` blocker of a candidate that has no other
+    unresolved one may be read as its stacked parent (`_stacked_parent`) and move to
+    `stacked_on`; any doubt leaves it in `open`."""
     try:
         blockers = _blocker_numbers(ports, number)
     except (ValueError, OSError, KeyError, GitError):
@@ -2492,7 +2498,62 @@ def _blocked(
                 unknown.append(blocker)
             case reason:
                 closed.append((blocker, reason))
+    if stacking is not None and len(open_) == 1 and not closed and not unknown:
+        if _stacked_parent(cfg, ports, number, open_[0], stacking):
+            return rules.BlockerReport(stacked_on=open_[0])
     return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
+
+
+def _stacked_parent(
+    cfg: Configuration, ports: Ports, child: int, parent: int, memo: stacking_rules.ParentMemo
+) -> bool:
+    """Whether `parent`, the child's only unresolved blocker, is the Ready same-split parent
+    a stacked start would build on (GH-858, ADR-0103, ADR-0104). Positive only when every
+    condition reads positive: the parent's document is `ready_for_review` with an approved
+    head and no `stack_parent` of its own (depth 1: an unreadable record excludes too); both
+    bodies carry exactly one `agentic-split` marker and the same id; and the parent's task
+    branch on the remote carries that head (`remote_tip`, bounded and fetched once per
+    `(parent, head)` and round, then `is_ancestor`; a tip that descends from the head counts).
+    Any exception, a failed or rate-limited `gh`, a failed fetch, is doubt: not stacked, so
+    the blocker stays `open`. After the first failed remote read of the round no other one
+    is made. The marker is read per child; the memo holds what only the parent decides."""
+    try:
+        parent_id = ports.inbox.task_id(parent)
+        parent_document = ports.documents.load(parent_id)
+        if parent_document is None or parent_document.get("status") != "ready_for_review":
+            return False
+        if stacking.stacked(parent_document):
+            return False
+        head = rules.approved_head(parent_document)
+        if head is None:
+            return False
+        ours = rules.split_marker_ids(ports.inbox.task(child)["description"])
+        theirs = rules.split_marker_ids(ports.inbox.task(parent)["description"])
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+    if len(ours) != 1 or ours != theirs:
+        return False
+    known = memo.outcome(parent, head)
+    if known is not None:
+        return known == "stacked"
+    if memo.origin_failed:
+        return memo.record(parent, head, "doubt") == "stacked"
+    try:
+        tip = ports.workspace.remote_tip(
+            cfg.product_dir, rules.task_branch(parent_id), bounded=True
+        )
+    except GitError:
+        memo.fail_origin()
+        return memo.record(parent, head, "doubt") == "stacked"
+    except (ValueError, OSError, KeyError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    if tip is None:
+        return memo.record(parent, head, "not_stacked") == "stacked"
+    try:
+        carried = ports.workspace.is_ancestor(cfg.product_dir, head, ref=tip)
+    except (ValueError, OSError, KeyError, GitError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    return memo.record(parent, head, "stacked" if carried else "not_stacked") == "stacked"
 
 
 # A budget with nothing used: what the cheap, fields-only verdicts are asked with.
@@ -2759,7 +2820,12 @@ def gather_orphans(
             continue
         if record is not None:
             continue
-        report = _blocked(cfg, ports, number, upstream)
+        if stacking.stacked_on(raw) is not None:
+            # A stacked child waits for its parent through `stacking.held` and `pause_cause`
+            # (ADR-0103), not through its blockers (GH-858): no judgement, and no memo ever.
+            report = rules.BlockerReport()
+        else:
+            report = _blocked(cfg, ports, number, upstream)
         reports.append(report)
         by_issue[number] = report
         if report:
