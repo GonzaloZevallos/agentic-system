@@ -18,7 +18,7 @@ import anyio
 from agentic.shared.configuration import Configuration
 
 from ..domain import check_results as reuse_rules
-from ..domain import check_runs, coverage, presubmit, restart, rules, run_check
+from ..domain import check_runs, coverage, presubmit, restart, rules, run_check, task
 from ..domain.gate_priority import gate_priority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
@@ -353,6 +353,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         if dropped:
             recorded["forms_dropped"] = dropped
         patch["runs"] = [*patch["runs"][:-1], recorded]
+    if (timeouts := task.capped_timeouts(delivery_presubmit.timeouts())) and patch.get("runs"):
+        # The checks that timed out with no failing test on the head this gate checked
+        # (GH-1075): the review turns them into observation rows.
+        patch["runs"] = [*patch["runs"][:-1], {**patch["runs"][-1], "timeouts": timeouts}]
     if flakes := delivery_presubmit.flakes():
         # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
         # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head

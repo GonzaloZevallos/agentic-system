@@ -73,7 +73,7 @@ class RunCheck:
         self._base = base
         self._red = red
         # The product's declared verifications (ADR-0065 addendum): run on demand like a check
-        # but under their own wall, and never stored. Their walls travel in `gate.timeouts`.
+        # but under their own wall, and never stored. Their walls travel in `gate.walls`.
         self.verifications: Mapping[str, Verification] = verifications or {}
         self.clock = clock
         # The machine's load and core count around a verification, for the evidence line only
@@ -104,10 +104,10 @@ class RunCheck:
         gate = self.gate
         checks = len(gate.checks)
         legacy = gate.check_timeout_s * (checks + 1 + checks) + gate.wait_max_s
-        if not gate.timeouts:
+        if not gate.walls:
             return legacy
         witness_s = gate.check_timeout_s if gate.witness else 0.0
-        walls = list(gate.timeouts.values())
+        walls = list(gate.walls.values())
         return max(legacy, run_check.call_timeout_s(walls, gate.wait_max_s, witness_s))
 
     def __call__(self, name: str) -> str:
