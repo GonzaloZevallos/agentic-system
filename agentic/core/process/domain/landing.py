@@ -39,6 +39,9 @@ from .task import (
     LandingEntry,
     MergeCiRecord,
     OutOfBoundsLine,
+    ReintegrationCause,
+    ReintegrationMode,
+    ReintegrationRecord,
     ReleasePatch,
     RenumberCause,
     RenumberMode,
@@ -2604,6 +2607,37 @@ def restack_row(
             for key, count in counted.items() if isinstance(counted, Mapping) else ():
                 tokens[key] = tokens.get(key, 0) + count
         row["tokens"] = tokens
+    return row
+
+
+def reintegration_row(
+    *,
+    at: str,
+    upstream: str,
+    mode: ReintegrationMode,
+    cause: ReintegrationCause,
+    attempt_s: float,
+    resumed: bool,
+    generate_s: float | None = None,
+    regeneration: str | None = None,
+) -> ReintegrationRecord:
+    """The `ReintegrationRecord` of one reintegration attempt (GH-994). A `mechanical` attempt
+    never continues a session, so `mechanical` with `resumed` raises `ValueError`. `generate_s`
+    and `regeneration` are left out of the row when `None` (not measured / no commit made)."""
+    if mode == "mechanical" and resumed:
+        raise ValueError("a mechanical reintegration cannot be resumed")
+    row: ReintegrationRecord = {
+        "at": at,
+        "upstream": upstream,
+        "mode": mode,
+        "cause": cause,
+        "attempt_s": attempt_s,
+        "resumed": resumed,
+    }
+    if generate_s is not None:
+        row["generate_s"] = generate_s
+    if regeneration is not None:
+        row["regeneration"] = regeneration
     return row
 
 

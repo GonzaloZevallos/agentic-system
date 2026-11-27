@@ -992,6 +992,54 @@ def add_stack_restacks(existing: list[StackRestack], new: list[StackRestack]) ->
     return list(joined.values())
 
 
+ReintegrationMode = Literal["mechanical", "session"]
+ReintegrationCause = Literal[
+    "clean", "regenerated", "foreign_conflict", "generate_failed", "checks_red"
+]
+
+
+class ReintegrationRecord(TypedDict):
+    """One attempt to bring a task up to date with its upstream (GH-994): `at` the ISO 8601 UTC
+    instant, `upstream` the master sha it was for, `mode` who did it, `cause` how it ended,
+    `attempt_s` how long the attempt took, `generate_s` how long the generation step took (absent
+    when none ran), `regeneration` the sha of the system regeneration commit it made (absent when
+    it made none) and `resumed` whether it continued an earlier session. `landing.reintegration_row`
+    guards writers against `mechanical` with `resumed`; the loader (`from_frontmatter`) does not
+    validate, so a reader must not assume that pair is impossible. Written only through
+    `add_reintegrations`; never a metric, a label or a span attribute."""
+
+    at: str
+    upstream: str
+    mode: ReintegrationMode
+    cause: ReintegrationCause
+    attempt_s: float
+    generate_s: NotRequired[float]
+    regeneration: NotRequired[str]
+    resumed: bool
+
+
+def _reintegration_key(row: ReintegrationRecord) -> tuple[str, str, str]:
+    """The identity of a reintegration row, shared by the reducer and the patch computation:
+    the `mechanical` and the `session` attempt for one `(at, upstream)` are two rows."""
+    return (row["at"], row["upstream"], row["mode"])
+
+
+def add_reintegrations(
+    existing: list[ReintegrationRecord], new: list[ReintegrationRecord]
+) -> list[ReintegrationRecord]:
+    """The reintegration rows of `existing` and `new` as one list: append-only, one row per
+    `_reintegration_key` (a retried write adds nothing), the first seen kept whole, in arrival
+    order. The only way `reintegrations` is ever written.
+
+    There is no cap, on purpose: a row with `regeneration` is the provenance of that commit, and
+    dropping it would make the commit count as a Developer's own commit. Any later cap must keep
+    every row with `regeneration`."""
+    joined: dict[tuple[str, str, str], ReintegrationRecord] = {}
+    for row in (*existing, *new):
+        joined.setdefault(_reintegration_key(row), row)
+    return list(joined.values())
+
+
 class StackPause(TypedDict):
     """One stretch a stacked task waited on its parent (GH-897): `parent` the parent's issue,
     `cause` why it waited, `at` when it began and `resumed_at` when it ended (`None` while it
@@ -2870,6 +2918,11 @@ class TaskState(TaskInput, total=False):
     # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
     stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
+    # The attempts to bring the task up to date with its upstream (GH-994,
+    # `ReintegrationRecord`), `add_reintegrations`: append-only, no cap. Read with
+    # `.get("reintegrations", [])`: a document written before it has none. Only
+    # `add_reintegrations` writes it; never a metric, a label or a span attribute.
+    reintegrations: Annotated[list[ReintegrationRecord], add_reintegrations]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
     # `rules.early_measured`; a document written before it has none. The figures are read by no
@@ -3040,6 +3093,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 r for r in value if (r["at"], r["upstream"]) not in held_restacks
             ]:
                 patch[key] = fresh_restacks
+        elif reducer is add_reintegrations:
+            held_reintegrations = {_reintegration_key(r) for r in old}
+            if fresh_reintegrations := [
+                r for r in value if _reintegration_key(r) not in held_reintegrations
+            ]:
+                patch[key] = fresh_reintegrations
         elif reducer is add_stack_pauses:
             held_pauses = {(r["parent"], r["cause"], r["at"]): r for r in old}
             if changed_pauses := [

@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__ReleasePatch["ReleasePatch"]
     class task__RestartPending["RestartPending"]
     class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
@@ -52,6 +53,8 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [domain: landing (parte 2)](classes-process-domain-landing-2.md)
+  - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`
 - [domain: state (parte 10)](classes-process-domain-state-10.md)

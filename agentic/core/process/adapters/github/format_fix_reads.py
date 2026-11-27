@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from ...application.ports import IssueState, Tracker, TrackerCallFailed
+from ...application.ports import GhCallLog, IssueState, Tracker, TrackerCallFailed
 from .run import Run, bounded_run, run_gh
 
 _ISSUE_URL = re.compile(r"https://github\.com/([^/?#\s]+)/([^/?#\s]+)/issues/(\d+)/?")
@@ -29,7 +29,11 @@ class GhFormatFixReads:
         tracker: Tracker,
         slug: Callable[[], str | None],
         ancestry: Callable[[str], bool | None],
+        calls: GhCallLog | None = None,
     ) -> None:
+        # The log of the `gh` launches behind `tracker` and `slug`, which are built with it. This
+        # class launches none itself; it holds the log so a construction names it (GH-990).
+        self._calls = calls
         self._tracker = tracker
         self._slug = slug
         self._ancestry = ancestry
@@ -56,8 +60,9 @@ class GhRepoSlug:
     repo there. Remembers a successful read only: a failure is `None` and the next call retries.
     Not thread-safe: two racing first calls each read once."""
 
-    def __init__(self, cwd: Path, run: Run = bounded_run) -> None:
+    def __init__(self, cwd: Path, run: Run = bounded_run, calls: GhCallLog | None = None) -> None:
         self._cwd = cwd
+        self._calls = calls
         self._run = run
         self._slug: str | None = None
 
@@ -75,6 +80,7 @@ class GhRepoSlug:
                 not_installed="gh is not installed",
                 failed=lambda stderr: "gh repo view failed",
                 log=lambda _line: None,
+                calls=self._calls,
             )
             name = json.loads(raw)["nameWithOwner"]
         except (ValueError, KeyError, TypeError):
