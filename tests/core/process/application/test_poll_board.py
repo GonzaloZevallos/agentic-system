@@ -73,9 +73,9 @@ def test_a_board_adds_no_line_when_it_succeeds_and_writes_the_rounds_facts(tmp_p
     lines = _round(tmp_path, ports, launcher)
     assert lines == ["agentic: poll: launch #6 -> pid 4242"]
     # 6 is launched this round (the registry does not show it yet), 5 waits on the open 3.
-    assert _etapas(board)[6] == "Corriendo"
-    assert _etapas(board)[5] == "Trabada"
-    assert {w.value for w in board.written if w.field == "bloqueo" and w.issue == 5} == {"#3"}
+    assert _etapas(board)[6] == "En curso"
+    assert _etapas(board)[5] == "Próximo"
+    assert {w.value for w in board.written if w.field == "motivo" and w.issue == 5} == {"espera #3"}
 
 
 def test_an_idle_second_round_reads_the_open_issues_and_calls_nothing_else(tmp_path):
@@ -102,9 +102,9 @@ def test_a_failing_board_does_not_fail_the_round(tmp_path, failure):
     assert not any("board" in line for line in again)
 
 
-def test_a_closed_issue_is_hecha_with_its_day(tmp_path):
+def test_a_closed_issue_is_hecho_with_its_day(tmp_path):
     board = FakeBoard(closed=[IssueRow(9, "closed", AGENTIC, date(2026, 10, 20))])
     ports = memory_ports(board=board, board_sent=FakeBoardSent())
     lines = _round(tmp_path, ports)
     assert lines == ["agentic: poll: nothing to do this round"]
-    assert _etapas(board) == {9: "Hecha"}
+    assert _etapas(board) == {9: "Hecho"}

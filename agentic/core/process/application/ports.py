@@ -2536,10 +2536,14 @@ class IssueRow:
 @dataclass(frozen=True)
 class SentEntry:
     """What was last sent for one issue: the card's fingerprint and the fields that carried
-    a value, so a field that later has none knows there is something to clear."""
+    a value, so a field that later has none knows there is something to clear. `hecho_until` is
+    the last day it is a Hecho card (`None` for any other card) and `unread` counts the reads of
+    it that failed in a row."""
 
     fingerprint: str
     present: frozenset[Field]
+    hecho_until: date | None = None
+    unread: int = 0
 
 
 @dataclass(frozen=True)

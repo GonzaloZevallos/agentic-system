@@ -3,6 +3,7 @@ the stage a Project card shows; `fingerprint`, `due`, `writes` and `retry_due` d
 sent and when."""
 
 import itertools
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import get_args
 
@@ -13,6 +14,7 @@ from agentic.core.process.domain.board import Card, IssueFacts
 from agentic.core.process.domain.task import Status
 
 AGENTIC = frozenset({"agentic"})
+TODAY = date(2026, 11, 27)
 
 
 def _facts(**kwargs) -> IssueFacts:
@@ -24,7 +26,8 @@ def _facts(**kwargs) -> IssueFacts:
         "live": False,
         "blocker": None,
         "document": None,
-        "in_eval_set": False,
+        "today": TODAY,
+        "resumes_itself": False,
     }
     return IssueFacts(**{**base, **kwargs})
 
@@ -33,169 +36,168 @@ def _doc(status, **extra) -> dict:
     return {"status": status, **extra}
 
 
+def _got(**kwargs) -> tuple[str | None, str | None]:
+    got = board.card(_facts(**kwargs))
+    return got.etapa, got.motivo
+
+
+BLOCKED = rules.BlockerReport(
+    open=(12,), unknown=(5,), closed_unresolved=((9, "no_merge_recorded"),)
+)
+NEEDS_HUMAN = AGENTIC | {"needs-human"}
+WAITING = _doc("waiting_on_human", escalated="needs a decision\nsecond line")
+
 # -- the request's table, one row each ---------------------------------------------------
 
-
-def test_a_live_process_is_corriendo():
-    assert board.card(_facts(live=True)).etapa == "Corriendo"
-
-
-def test_waiting_on_human_is_necesita_humano_with_the_first_line_of_the_reason():
-    reason = "needs a decision\nsecond line\nthird"
-    got = board.card(_facts(document=_doc("waiting_on_human", escalated=reason)))
-    assert (got.etapa, got.bloqueo) == ("Necesita humano", "needs a decision")
-
-
-def test_the_needs_human_label_is_necesita_humano_without_a_reason_to_assert():
-    got = board.card(_facts(labels=AGENTIC | {"needs-human"}))
-    assert (got.etapa, got.bloqueo) == ("Necesita humano", None)
-
-
-def test_the_precedence_puts_closed_over_live_over_the_needs_human_label():
-    labels = AGENTIC | {"needs-human"}
-    assert board.card(_facts(labels=labels, live=True)).etapa == "Corriendo"
-    assert board.card(_facts(labels=labels, live=True, closed=True)).etapa == "Hecha"
-
-
-def test_the_needs_human_label_takes_the_reason_the_document_holds():
-    doc = _doc("developing", escalated="stuck on a choice\nmore")
-    got = board.card(_facts(labels=AGENTIC | {"needs-human"}, document=doc))
-    assert (got.etapa, got.bloqueo) == ("Necesita humano", "stuck on a choice")
-
-
-def test_a_paused_task_with_no_live_process_is_trabada_with_a_neutral_text():
-    got = board.card(_facts(document=_doc("developing")))
-    assert (got.etapa, got.bloqueo) == ("Trabada", "sin proceso vivo: retomar o esperar cupo")
-
-
-def test_open_agentic_nothing_live_not_blocked_is_en_cola():
-    got = board.card(_facts())
-    assert (got.etapa, got.bloqueo) == ("En cola", None)
-
-
-def test_an_issue_without_agentic_is_fuera_del_sistema():
-    assert board.card(_facts(labels=frozenset())).etapa == "Fuera del sistema"
-
-
-def test_ready_for_human_is_fuera_del_sistema():
-    got = board.card(_facts(labels=AGENTIC | {"ready-for-human"}))
-    assert got.etapa == "Fuera del sistema"
+ROWS = [
+    ({"live": True}, ("En curso", "corriendo")),
+    ({"document": _doc("ready_for_review")}, ("En curso", "en PR: espera CI y merge")),
+    (
+        {"document": WAITING},
+        ("Te necesita", "esperando tu respuesta: needs a decision"),
+    ),
+    ({"document": WAITING, "resumes_itself": True}, ("Te necesita", "se retoma sola")),
+    ({"document": _doc("waiting_on_human")}, ("Te necesita", "necesita tu atención")),
+    ({"labels": NEEDS_HUMAN}, ("Te necesita", "necesita tu atención")),
+    (
+        {"labels": NEEDS_HUMAN, "document": _doc("developing", escalated="stuck\nmore")},
+        ("Te necesita", "esperando tu respuesta: stuck"),
+    ),
+    (
+        {"labels": NEEDS_HUMAN, "resumes_itself": True},
+        ("Te necesita", "se retoma sola"),
+    ),
+    ({"labels": AGENTIC | {"ready-for-human"}}, ("Te necesita", "lista para tu revisión")),
+    ({"document": _doc("discarded")}, ("Te necesita", "descartada: cerrar el issue")),
+    ({"document": _doc("tracker_only")}, ("Te necesita", "lista de tracker pendiente")),
+    ({"document": _doc("from-the-future")}, ("Te necesita", "documento con estado desconocido")),
+    ({"document": _doc("evaluated")}, ("Te necesita", "documento con estado desconocido")),
+    ({"document": _doc("developing")}, ("Te necesita", "sin proceso vivo")),
+    ({"blocker": BLOCKED}, ("Próximo", "espera #5, #9, #12")),
+    (
+        {"document": _doc("definition_ready"), "blocker": rules.BlockerReport(open=(12,))},
+        ("Próximo", "espera #12"),
+    ),
+    ({}, ("Próximo", "esperando lugar")),
+    ({"blocker": rules.BlockerReport()}, ("Próximo", "esperando lugar")),
+    ({"labels": AGENTIC | {"agentic-hold"}}, ("En pausa", "retenida: agentic-hold")),
+    ({"labels": AGENTIC | {"needs-triage"}}, ("En pausa", "sin triage")),
+    ({"labels": frozenset()}, ("En pausa", "fuera de la bandeja")),
+    ({"closed": True, "closed_at": TODAY - timedelta(days=7)}, ("Hecho", None)),
+    ({"closed": True}, ("Hecho", None)),
+    ({"closed": True, "closed_at": TODAY - timedelta(days=8)}, (None, None)),
+    ({"document": _doc("split")}, (None, None)),
+]
 
 
-def test_a_closed_issue_is_hecha_with_its_close_day_as_fin():
-    got = board.card(_facts(closed=True, closed_at=date(2026, 10, 20)))
-    assert (got.etapa, got.finished) == ("Hecha", date(2026, 10, 20))
-
-
-# -- the map for an open agentic issue with nothing live ---------------------------------
-
-
-def test_a_blocked_issue_with_no_document_lists_every_blocker_it_waits_on():
-    report = rules.BlockerReport(
-        open=(12,), unknown=(5,), closed_unresolved=((9, "no_merge_recorded"),)
-    )
-    got = board.card(_facts(blocker=report))
-    assert (got.etapa, got.bloqueo) == ("Trabada", "#5, #9, #12")
-
-
-def test_an_empty_blocker_report_does_not_block():
-    assert board.card(_facts(blocker=rules.BlockerReport())).etapa == "En cola"
+@pytest.mark.parametrize(("kwargs", "expected"), ROWS)
+def test_each_row_of_the_table_has_the_facts_that_put_a_card_there(kwargs, expected):
+    assert _got(**kwargs) == expected
 
 
 @pytest.mark.parametrize(
-    "status", ["open", "defined", "returned", "definition_ready", "planned", "developing"]
+    ("kwargs", "expected"),
+    [
+        # cleared > Hecho
+        ({"closed": True, "closed_at": TODAY, "document": _doc("split")}, (None, None)),
+        # Hecho > En curso
+        ({"closed": True, "live": True, "labels": NEEDS_HUMAN}, ("Hecho", None)),
+        # En curso > Te necesita
+        ({"live": True, "labels": NEEDS_HUMAN}, ("En curso", "corriendo")),
+        ({"document": _doc("ready_for_review"), "labels": NEEDS_HUMAN}, ("En curso", board.IN_PR)),
+        # Te necesita > En pausa
+        ({"labels": NEEDS_HUMAN | {"agentic-hold"}}, ("Te necesita", "necesita tu atención")),
+        ({"document": _doc("discarded"), "labels": frozenset()}, ("Te necesita", board.DISCARDED)),
+        # En pausa > Próximo
+        ({"labels": AGENTIC | {"agentic-hold"}, "blocker": BLOCKED}, ("En pausa", board.HELD)),
+        ({"labels": frozenset(), "blocker": BLOCKED}, ("En pausa", board.OUTSIDE)),
+    ],
 )
-def test_every_in_flight_status_with_no_process_is_trabada(status):
-    got = board.card(_facts(document=_doc(status)))
-    assert (got.etapa, got.bloqueo) == ("Trabada", board.NO_LIVE_PROCESS)
+def test_the_precedence_is_cleared_hecho_en_curso_te_necesita_en_pausa_proximo(kwargs, expected):
+    assert _got(**kwargs) == expected
+
+
+def test_a_closed_issue_is_hecho_with_its_close_day_as_fin():
+    got = board.card(_facts(closed=True, closed_at=date(2026, 11, 20)))
+    assert (got.etapa, got.finished) == ("Hecho", date(2026, 11, 20))
 
 
 def test_the_reason_is_cut_to_200_characters_and_one_line():
     got = board.card(_facts(document=_doc("waiting_on_human", escalated="\n" + "x" * 500)))
-    assert got.bloqueo == "x" * 200
+    assert got.motivo == "esperando tu respuesta: " + "x" * 200
 
 
-@pytest.mark.parametrize("in_eval", [True, False, None])
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {},
-        {"merge_failures": {"head": "a", "count": 1, "failure": "x"}},
-        {"landing": [{"head": "a"}]},
-    ],
-)
-def test_ready_for_review_is_en_pr_whoever_merges_and_whatever_was_refused(in_eval, extra):
-    """Human decision 1: approved and waiting on CI and merge is `En PR`, never `Corriendo`."""
-    got = board.card(_facts(document=_doc("ready_for_review", **extra), in_eval_set=in_eval))
-    assert (got.etapa, got.bloqueo) == ("En PR", None)
+def test_every_status_is_handled_by_the_tables_or_by_name():
+    named = {"waiting_on_human", "ready_for_review", "split"}
+    assert set(get_args(Status)) == named | board._IN_FLIGHT | set(board._ENDS)
 
 
-def test_a_live_process_on_a_ready_for_review_task_is_corriendo_not_en_pr():
-    assert board.card(_facts(document=_doc("ready_for_review"), live=True)).etapa == "Corriendo"
+def test_the_hecho_day_is_the_last_one_inclusive_and_expiry_has_one_comparison():
+    until = board.hecho_until(date(2026, 11, 20))
+    assert until == date(2026, 11, 27)
+    assert not board.hecho_expired(until, until)
+    assert board.hecho_expired(until, until + timedelta(days=1))
 
 
-def test_the_needs_human_label_wins_over_en_pr():
-    labels = AGENTIC | {"needs-human"}
-    got = board.card(_facts(document=_doc("ready_for_review"), labels=labels))
-    assert got.etapa == "Necesita humano"
+def test_the_motivo_fallbacks_are_non_empty_and_cover_every_etapa_but_hecho():
+    assert set(board.FALLBACK_MOTIVO) == set(get_args(board.Etapa)) - {"Hecho"}
+    assert all(board.FALLBACK_MOTIVO.values())
 
 
-@pytest.mark.parametrize(
-    ("status", "text"),
-    [
-        ("discarded", "descartada: cerrar el issue"),
-        ("split", "partida: cerrar el issue"),
-        ("tracker_only", "lista de tracker pendiente"),
-    ],
-)
-def test_the_ends_without_a_pull_request_wait_for_the_human_to_close_the_issue(status, text):
-    got = board.card(_facts(document=_doc(status)))
-    assert (got.etapa, got.bloqueo) == ("Necesita humano", text)
+# -- one Etapa and a Motivo on every card that is not Hecho ---------------------------------
 
 
-def test_a_status_the_map_does_not_know_asks_a_human_rather_than_guessing():
-    got = board.card(_facts(document=_doc("from-the-future")))
-    assert got.etapa == "Necesita humano"
-
-
-def test_every_status_has_an_explicit_etapa():
-    seen = {}
-    for status in get_args(Status):
-        seen[status] = board.card(_facts(document=_doc(status), in_eval_set=False)).etapa
-    assert set(seen) == set(get_args(Status))
-    assert set(seen.values()) <= set(get_args(board.Etapa))
-
-
-# -- one Etapa and a Bloqueo only where it means something --------------------------------
-
-
-def test_every_combination_of_facts_gives_one_etapa_and_bloqueo_only_where_it_applies():
-    labels = [AGENTIC, frozenset(), AGENTIC | {"needs-human"}, AGENTIC | {"ready-for-human"}]
-    reports = [None, rules.BlockerReport(open=(3,))]
-    documents = [None, *(_doc(s, escalated="why") for s in get_args(Status))]
+def test_every_combination_of_facts_gives_an_etapa_or_none_and_a_motivo_unless_hecho():
+    labels = [
+        AGENTIC,
+        frozenset(),
+        NEEDS_HUMAN,
+        AGENTIC | {"ready-for-human"},
+        AGENTIC | {"agentic-hold"},
+        AGENTIC | {"needs-triage"},
+    ]
+    reports = [None, rules.BlockerReport(), rules.BlockerReport(open=(3,))]
+    documents = [
+        None,
+        _doc("from-the-future"),
+        *(_doc(s, escalated="why") for s in get_args(Status)),
+    ]
+    closings = [
+        (False, None),
+        (True, None),
+        (True, TODAY - timedelta(days=7)),
+        (True, TODAY - timedelta(days=8)),
+    ]
     count = 0
-    for closed, live, label, report, document, in_eval in itertools.product(
-        [False, True], [False, True], labels, reports, documents, [True, False, None]
+    for (closed, closed_at), live, label, report, document, resumes in itertools.product(
+        closings, [False, True], labels, reports, documents, [False, True]
     ):
         got = board.card(
             _facts(
                 closed=closed,
+                closed_at=closed_at,
                 live=live,
                 labels=label,
                 blocker=report,
                 document=document,
-                in_eval_set=in_eval,
+                resumes_itself=resumes,
             )
         )
-        assert got.etapa in get_args(board.Etapa)
-        if got.etapa not in ("Trabada", "Necesita humano"):
-            assert got.bloqueo is None
-        if closed:
-            assert got.etapa == "Hecha"
-        elif live:
-            assert got.etapa == "Corriendo"
+        assert got.etapa in (*get_args(board.Etapa), None)
+        if got.etapa not in ("Hecho", None):
+            assert got.motivo
+        else:
+            assert got.motivo is None
+        if closed and got.etapa is not None:
+            assert got.etapa == "Hecho"
         count += 1
-    assert count == 2 * 2 * 4 * 2 * len(documents) * 3
+    assert count == 4 * 2 * len(labels) * len(reports) * len(documents) * 2
+
+
+def test_identical_facts_give_an_identical_card_and_fingerprint():
+    facts = _facts(document=_doc("developing", cost_usd=1.0), blocker=BLOCKED)
+    first, again = board.card(facts), board.card(facts)
+    assert first == again and board.fingerprint(first) == board.fingerprint(again)
 
 
 # -- cost, start, finish -----------------------------------------------------------------
@@ -236,8 +238,8 @@ def test_inicio_is_none_when_no_run_has_a_start():
 def _card(**kwargs) -> Card:
     base = {
         "number": 7,
-        "etapa": "En cola",
-        "bloqueo": None,
+        "etapa": "Próximo",
+        "motivo": None,
         "cost_usd": None,
         "started": None,
         "finished": None,
@@ -249,17 +251,18 @@ def test_the_fingerprint_is_stable_and_changes_with_any_of_the_five_fields():
     base = _card()
     assert board.fingerprint(base) == board.fingerprint(_card())
     changed = [
-        _card(etapa="Trabada"),
-        _card(bloqueo="x"),
+        _card(etapa="En pausa"),
+        _card(motivo="x"),
         _card(cost_usd=0.01),
         _card(started=date(2026, 1, 1)),
         _card(finished=date(2026, 1, 1)),
+        _card(etapa=None),
     ]
-    assert len({board.fingerprint(c) for c in [base, *changed]}) == 6
+    assert len({board.fingerprint(c) for c in [base, *changed]}) == 7
 
 
 def test_due_returns_only_the_cards_that_differ_from_what_was_sent():
-    same, different, new = _card(number=1), _card(number=2, etapa="Hecha"), _card(number=3)
+    same, different, new = _card(number=1), _card(number=2, etapa="Hecho"), _card(number=3)
     sent = {1: board.fingerprint(same), 2: board.fingerprint(_card(number=2))}
     assert board.due([same, different, new], sent) == [different, new]
 
@@ -269,25 +272,45 @@ def test_nothing_is_due_when_everything_was_sent():
     assert board.due(cards, {c.number: board.fingerprint(c) for c in cards}) == []
 
 
+def test_present_reports_etapa_only_when_there_is_one():
+    assert "etapa" in board.present(_card())
+    assert "etapa" not in board.present(_card(etapa=None, finished=date(2026, 1, 1)))
+
+
 def test_a_new_card_sets_only_the_fields_it_has_and_clears_nothing():
     got = board.writes(_card(cost_usd=1.5), None)
-    assert [(w.field, w.value) for w in got] == [("etapa", "En cola"), ("costo", 1.5)]
+    assert [(w.field, w.value) for w in got] == [("etapa", "Próximo"), ("costo", 1.5)]
 
 
 def test_a_field_that_lost_its_value_is_cleared_only_if_the_last_send_had_one():
-    now = _card(etapa="En cola")
-    had = board.present(_card(etapa="Trabada", bloqueo="x"))
+    now = _card(etapa="Próximo")
+    had = board.present(_card(etapa="En pausa", motivo="x"))
     assert [(w.field, w.value) for w in board.writes(now, had)] == [
-        ("etapa", "En cola"),
-        ("bloqueo", None),
+        ("etapa", "Próximo"),
+        ("motivo", None),
     ]
     assert [w.field for w in board.writes(now, board.present(now))] == ["etapa"]
 
 
+def test_a_card_with_no_etapa_never_adds_an_item():
+    cleared = _card(etapa=None, finished=date(2026, 1, 1), cost_usd=2.0)
+    assert board.writes(cleared, None) == []
+    assert board.writes(cleared, frozenset({"costo", "fin"})) == []
+
+
+def test_a_hecho_that_expires_clears_only_etapa_and_what_the_card_no_longer_carries():
+    cleared = _card(etapa=None, finished=date(2026, 1, 1), cost_usd=2.0)
+    previous = frozenset({"etapa", "motivo", "costo", "fin"})
+    assert [(w.field, w.value) for w in board.writes(cleared, previous)] == [
+        ("etapa", None),
+        ("motivo", None),
+    ]
+
+
 def test_the_system_writes_no_field_outside_the_five():
-    assert set(board.FIELDS) == {"etapa", "bloqueo", "costo", "inicio", "fin"}
+    assert set(board.FIELDS) == {"etapa", "motivo", "costo", "inicio", "fin"}
     everything = _card(
-        bloqueo="b", cost_usd=1.0, started=date(2026, 1, 1), finished=date(2026, 1, 2)
+        motivo="b", cost_usd=1.0, started=date(2026, 1, 1), finished=date(2026, 1, 2)
     )
     assert {w.field for w in board.writes(everything, None)} == set(board.FIELDS)
 
@@ -300,24 +323,49 @@ def test_the_retry_wait_is_fifteen_minutes_after_a_whole_failure():
     assert not board.retry_due(now + timedelta(minutes=1), now)
 
 
-def test_an_orphan_document_with_open_blockers_is_trabada_with_the_blockers():
-    report = rules.BlockerReport(open=(12,), unknown=(5,))
-    got = board.card(_facts(document=_doc("definition_ready"), blocker=report))
-    assert (got.etapa, got.bloqueo) == ("Trabada", "#5, #12")
-
-
-@pytest.mark.parametrize("report", [rules.BlockerReport(), None])
-def test_an_orphan_document_with_no_blocking_report_keeps_the_neutral_text(report):
-    got = board.card(_facts(document=_doc("definition_ready"), blocker=report))
-    assert (got.etapa, got.bloqueo) == ("Trabada", board.NO_LIVE_PROCESS)
-
-
-def test_the_document_deliver_leaves_with_one_human_item_is_necesita_humano_with_its_bloqueo():
+def test_the_document_deliver_leaves_with_one_human_item_needs_you_with_its_motivo():
     from agentic.core.process.domain import tracker_items
 
     item = {"kind": "human", "question": "Ship the flag?", "recommendation": "Yes"}
     state = {"id": "GH-12", "tracker_items": [item], "status": "ready_for_review"}
     patch = tracker_items.escalate_human(state, "2026-11-13T00:00:00+00:00")
     got = board.card(_facts(document={**state, **patch, "pull_request": "https://x/pull/7"}))
-    assert got.etapa == "Necesita humano"
-    assert got.bloqueo == "the plan leaves 1 decision(s) to the owner"
+    assert got.etapa == "Te necesita"
+    assert got.motivo == "esperando tu respuesta: the plan leaves 1 decision(s) to the owner"
+
+
+# -- the remembered Hecho cards that expire ----------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Entry:
+    hecho_until: date | None
+    unread: int = 0
+
+
+def test_expiry_due_lists_only_the_expired_oldest_first_then_by_number():
+    entries = {
+        5: _Entry(TODAY - timedelta(days=1)),
+        3: _Entry(TODAY - timedelta(days=1)),
+        9: _Entry(TODAY - timedelta(days=4)),
+        1: _Entry(TODAY),  # last day: not due yet
+        2: _Entry(None),  # not a Hecho card
+    }
+    assert board.expiry_due(entries, TODAY) == [9, 3, 5]
+
+
+def test_fifteen_due_entries_are_read_ten_then_the_other_five():
+    entries = {n: _Entry(TODAY - timedelta(days=n)) for n in range(1, 16)}
+    first = board.expiry_due(entries, TODAY)
+    assert first == list(range(15, 5, -1)) and len(first) == board.EXPIRY_READS_MAX
+    rest = {n: e for n, e in entries.items() if n not in first}
+    assert board.expiry_due(rest, TODAY) == [5, 4, 3, 2, 1]
+
+
+def test_an_entry_that_failed_to_read_goes_last():
+    entries = {1: _Entry(TODAY - timedelta(days=9), unread=1), 2: _Entry(TODAY - timedelta(days=1))}
+    assert board.expiry_due(entries, TODAY) == [2, 1]
+
+
+def test_an_issue_leaves_the_memory_at_three_failed_reads():
+    assert [board.dropped(n) for n in (0, 1, 2, 3, 4)] == [False, False, False, True, True]
