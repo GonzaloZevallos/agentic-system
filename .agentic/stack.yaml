@@ -53,18 +53,33 @@ parallel_checks: true
 # passes them to the pytest it runs, on a selection as well as on its way to a verdict.
 affected_checks:
   tests: uv run python scripts/affected_tests.py {base} -n {workers} --dist load
+# Each entry is kept for a reason and a measurement in ADR-0047, adenda GH-1068 (the fraction
+# and the base sha it was measured at are there, not here). `scripts/*` left the list: the
+# scripts a test runs have a Row in the script's table, the rest are refused with 9.
 affected_fallback:
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - pyproject.toml
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - uv.lock
+  # ADR-0047, adenda GH-1068: always full, it changes what every test sees
   - "*conftest.py"
+  # ADR-0047, adenda GH-1068: closure at or above 50 %
   - "agentic/shared/*"
+  # ADR-0047, adenda GH-1068: closure under 50 %, kept: reads by a built path cannot be ruled out
   - agentic/composition.py
+  # ADR-0047, adenda GH-1068: closure under 50 %, kept: reads by a built path cannot be ruled out
   - agentic/cli.py
+  # ADR-0047, adenda GH-1068: no Row: tests read the prompts by paths the guard cannot see
   - "agentic/*/prompts/*"
+  # ADR-0047, adenda GH-1068: always full, a pinned submodule outside the graph
   - "agentic/plugins/*"
+  # ADR-0047, adenda GH-1068: no Row: the glossaries are read by paths the guard cannot see
   - "*CONTEXT*.md"
+  # ADR-0047, adenda GH-1068: no Row: too many tests read the workflow
   - ".github/*"
-  - "scripts/*"
+  # ADR-0047, adenda GH-1068: always full, it is the check runner
+  - scripts/affected_tests.py
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - .env.example
 # `delivery_checks`: the fast tier, the checks every subtask delivery runs. All four names are
 # listed, so the tier is the whole of `checks` and what changes is the form: the delivery gate
