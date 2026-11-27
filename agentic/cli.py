@@ -169,6 +169,7 @@ from .core.process.domain.task import (
     TrackerFailure,
     TrackerFailureRecord,
 )
+from .core.process.domain.terminal_states import TerminalMemo
 from .core.process.domain.tracker_refs import issue_number
 from .shared import stage0 as stage0_paths
 from .shared.configuration import (
@@ -1832,6 +1833,7 @@ async def _poll(
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
+        terminal_memo = TerminalMemo()  # GH-992: determinate blocker closures, per process
         release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
         try:
             while True:
@@ -1861,6 +1863,7 @@ async def _poll(
                             system_version=telemetry.fresh_system_version,
                             sweep_carry=sweep_carry,
                             format_release_carry=release_carry,
+                            terminal_memo=terminal_memo,
                         ):
                             print(line, flush=True)
                     except TrackerCallFailed as exc:  # a stalled `gh` ends this round
