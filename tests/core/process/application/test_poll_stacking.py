@@ -4,12 +4,9 @@ pair is landable, memoised per window. In-memory ports with counting wrappers: n
 from __future__ import annotations
 
 import dataclasses
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
-
-import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.application import (
@@ -25,6 +22,7 @@ from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import landing_order, rules, stacking
 from agentic.core.process.domain.task import VERDICT_UNLANDABLE, StackParent
 from agentic.shared.configuration import Configuration
+from tests.core.process.adapters.git import test_workspace
 from tests.core.process.application.test_poll import _cfg, _Locks
 from tests.core.process.application.test_poll_merge import (
     HEAD,
@@ -34,6 +32,10 @@ from tests.core.process.application.test_poll_merge import (
     _ports,
     _pr,
 )
+
+# the product fixture of the git adapter's tests, reused as it is (a fixture is found by its name)
+product = test_workspace.product
+git = test_workspace.git
 
 PARENT = "c" * 40
 CLOSING = "f" * 40
@@ -446,40 +448,18 @@ def test_every_lane_reason_has_poller_text():
 REPO_NOW = datetime(2026, 11, 27, 12, 0, tzinfo=UTC)
 
 
-def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
-@pytest.fixture
-def product(tmp_path):
-    remote = tmp_path / "remote.git"
-    _git("init", "--bare", "-q", str(remote), cwd=tmp_path)
-    repo = tmp_path / "product"
-    repo.mkdir()
-    _git("init", "-q", "-b", "master", cwd=repo)
-    (repo / "README.md").write_text("v0\n")
-    _git("add", "-A", cwd=repo)
-    _git("commit", "-q", "-m", "v0", cwd=repo)
-    _git("remote", "add", "origin", str(remote), cwd=repo)
-    _git("push", "-q", "-u", "origin", "master", cwd=repo)
-    return repo
-
-
 def _ready_parent(repo: Path) -> str:
     """Parent GH-5: a pushed task branch with one commit, which is the head its review approved."""
-    _git("checkout", "-q", "-b", "agentic/GH-5", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    git("config", "user.email", "t@t", cwd=repo)
+    git("push", "-q", "-u", "origin", "master", cwd=repo)
+    git("checkout", "-q", "-b", "agentic/GH-5", cwd=repo)
     (repo / "parent.txt").write_text("parent\n")
-    _git("add", "-A", cwd=repo)
-    _git("commit", "-q", "-m", "parent", cwd=repo)
-    head = _git("rev-parse", "HEAD", cwd=repo)
-    _git("push", "-q", "origin", "agentic/GH-5", cwd=repo)
-    _git("checkout", "-q", "master", cwd=repo)
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", "parent", cwd=repo)
+    head = git("rev-parse", "HEAD", cwd=repo)
+    git("push", "-q", "origin", "agentic/GH-5", cwd=repo)
+    git("checkout", "-q", "master", cwd=repo)
     return head
 
 
@@ -532,7 +512,7 @@ def test_a_stacked_child_launches_on_the_ready_parent_and_lands_through_a_restac
     record = decision.patch["stack_parent"]
     child = checkouts.task_checkout({"id": "GH-6", "stack_parent": record}, cfg, ports)
     base = ports.workspace.base_of(rules.task_branch("GH-6"))
-    assert base is not None and _git("rev-parse", base, cwd=product) == parent_head
+    assert base is not None and git("rev-parse", base, cwd=product) == parent_head
 
     (child.path / "child.txt").write_text("child\n")
     ports.workspace.commit_all(child.path, "child")
@@ -543,9 +523,9 @@ def test_a_stacked_child_launches_on_the_ready_parent_and_lands_through_a_restac
     assert assessed.decision.reason == "stack_parent_unmerged"
 
     before = master
-    _git("merge", "-q", "--no-ff", "-m", "Merge parent", "agentic/GH-5", cwd=product)
-    _git("push", "-q", "origin", "master", cwd=product)
-    landed = _git("rev-parse", "HEAD", cwd=product)
+    git("merge", "-q", "--no-ff", "-m", "Merge parent", "agentic/GH-5", cwd=product)
+    git("push", "-q", "origin", "master", cwd=product)
+    landed = git("rev-parse", "HEAD", cwd=product)
     ports.tracker.states[5] = IssueState("CLOSED", "COMPLETED", (), landed, ())
     master = ports.workspace.upstream().sha
     assert master == landed
@@ -553,9 +533,9 @@ def test_a_stacked_child_launches_on_the_ready_parent_and_lands_through_a_restac
     assert _deliver_child(ports, record, head, master).decision.kind == "merge"
 
     # a child whose history lost the recorded head (rebuilt on the old master) is due a restack
-    tree = _git("rev-parse", f"{head}^{{tree}}", cwd=product)
-    rebuilt = _git("commit-tree", tree, "-p", before, "-m", "child rebuilt", cwd=product)
-    _git("reset", "-q", "--hard", rebuilt, cwd=child.path)
+    tree = git("rev-parse", f"{head}^{{tree}}", cwd=product)
+    rebuilt = git("commit-tree", tree, "-p", before, "-m", "child rebuilt", cwd=product)
+    git("reset", "-q", "--hard", rebuilt, cwd=child.path)
     assessed = _deliver_child(ports, record, rebuilt, master)
     assert assessed.decision.reason == "stack_restack_due"
 
