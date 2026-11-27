@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class notify_message__WindowedSection["WindowedSection"]
     class output_repair__RepairContext["RepairContext"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
@@ -45,5 +46,9 @@ classDiagram
     class scratch__Owner["Owner"]
     class scratch__OwnerEntry["OwnerEntry"]
     class scratch__OwnerRecord["OwnerRecord"]
-    class scratch__PartitionFolder["PartitionFolder"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - `notify_message.DigestView` se asocia con `notify_message.WindowedSection`

@@ -34,6 +34,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 ```mermaid
 classDiagram
     class github_budget__Wait["Wait"]
+    class notify__DigestEvent["DigestEvent"]
     class notify__DigestKey["DigestKey"]
     class notify__EventKey["EventKey"]
     class notify__NotifiedRecord["NotifiedRecord"]
@@ -45,8 +46,12 @@ classDiagram
     class notify_message__DigestRow["DigestRow"]
     class notify_message__DigestView["DigestView"]
     class notify_message__Message["Message"]
-    class notify_message__WindowedSection["WindowedSection"]
+    notify__DigestEvent --> notify__DigestKey
     notify__ReleaseEvent --> notify__EventKey
     notify__WaitingEvent --> notify__EventKey
-    notify_message__DigestView --> notify_message__WindowedSection
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - `notify_message.DigestView` se asocia con `notify_message.WindowedSection`
