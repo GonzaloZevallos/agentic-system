@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
+    class cost_history__Pair["Pair"]
     class cost_history__Raise["Raise"]
     class landing__ApiBreakAnswer["ApiBreakAnswer"]
     class landing__Commented["Commented"]
@@ -47,12 +48,9 @@ classDiagram
     class landing__Slice["Slice"]
     class landing__SliceInputs["SliceInputs"]
     class landing__SliceUnit["SliceUnit"]
-    class landing_order__Member["Member"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
-  - `landing_order.Yield` se asocia con `landing_order.Member`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

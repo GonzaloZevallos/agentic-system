@@ -10,7 +10,8 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
-  - [application: reflection](packages-process-application-reflection.md)
+  - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+  - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
   - [application: support (parte 1)](packages-process-application-support-1.md)
   - [application: support (parte 2)](packages-process-application-support-2.md)
 
