@@ -5,6 +5,8 @@ covers, now that the system's regeneration commits are recorded in `reintegratio
 
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.application import review_scope
 from agentic.core.process.application.ports import GitError
 from agentic.core.process.domain.docs import Docs
@@ -35,6 +37,32 @@ class StackAt(MemoryStack):
         return answer
 
 
+class ChainWorkspace(MemoryWorkspace):
+    """The fake workspace of one chain: it answers only what the chain scripts and fails
+    loudly (`AssertionError`, never `GitError`, which `scope_of` would swallow as unreadable)
+    on any other ask, so a read the test did not plan cannot pass on a default."""
+
+    def served(self, line: tuple[Commit, ...]) -> None:
+        self.line = line
+        self.parent_pairs = {(c.parents[0], c.sha) for c in line if len(c.parents) == 1}
+
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        assert (base, head) in self.parent_pairs, f"unserved touched_paths({base}, {head})"
+        return super().touched_paths(base, head)
+
+    def merge_resolution(self, merge: str) -> str:
+        assert merge in {c.sha for c in self.line}, f"unserved merge_resolution({merge})"
+        return super().merge_resolution(merge)
+
+    def first_parent_commits(self, older: str, newer: str) -> tuple[Commit, ...]:
+        assert (older, newer) == (TIP, HEAD), f"unserved first_parent_commits({older}, {newer})"
+        return super().first_parent_commits(older, newer)
+
+    def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
+        assert ref in (HEAD, MASTER), f"unserved is_ancestor({sha}, {ref})"
+        return super().is_ancestor(path, sha, ref)
+
+
 def chain(
     *line: Commit,
     reintegrations: tuple[str, ...] = (),
@@ -44,7 +72,8 @@ def chain(
     touched_fails: str | None = None,
 ):
     """`scope_of` over `line` (the first-parent commits after the accepted tip `TIP`)."""
-    workspace = MemoryWorkspace()
+    workspace = ChainWorkspace()
+    workspace.served(line)
     workspace.first_parent_line = line
     workspace.ancestors_by_ref = {HEAD: {TIP}, MASTER: {BROUGHT}}
     workspace.merge_resolutions = resolutions or {}
@@ -66,6 +95,18 @@ def chain(
 
 MERGE_STEP = Commit(MERGE, (TIP, BROUGHT))
 REGEN_STEP = Commit(REGEN, (MERGE,))
+
+
+def test_the_chain_workspace_refuses_an_unplanned_read_loudly():
+    _, workspace, _ = chain(MERGE_STEP)
+    for ask in (
+        lambda: workspace.touched_paths("x", "y"),
+        lambda: workspace.merge_resolution("z" * 40),
+        lambda: workspace.first_parent_commits("x", "y"),
+        lambda: workspace.is_ancestor(Path("/co"), TIP, "other"),
+    ):
+        with pytest.raises(AssertionError, match="unserved"):
+            ask()
 
 
 def test_a_recorded_one_parent_commit_with_owned_paths_is_carried_regenerated():
