@@ -2584,3 +2584,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-27T20:01:18.148+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief says to reuse an existing fixture or helper, search the test tree for it and import it before writing any new one; add only the small extra step the scenario needs, at the call site.
+  confidence: medium
+  seen_in:
+  - GH-1163
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T22:19:34.099+00:00'
