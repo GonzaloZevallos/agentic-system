@@ -21,6 +21,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 classDiagram
     class ports__FormatFixReads["FormatFixReads"]
     class ports__FreeSpace["FreeSpace"]
+    class ports__GhCallLog["GhCallLog"]
     class ports__GitError["GitError"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__LabelTimeline["LabelTimeline"]
     class ports__LandRecord["LandRecord"]
     class ports__LaunchAttempt["LaunchAttempt"]
-    class ports__Launcher["Launcher"]
 ```
 
 ## Relaciones con otras páginas
