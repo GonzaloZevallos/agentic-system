@@ -2528,3 +2528,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-27T08:30:22.372+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters what a component does or how it is wired, grep the hand-written docs (architecture tables, component notes) for its names and update every stale statement in the same change.
+  confidence: medium
+  seen_in:
+  - GH-1159
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T13:06:25.196+00:00'
