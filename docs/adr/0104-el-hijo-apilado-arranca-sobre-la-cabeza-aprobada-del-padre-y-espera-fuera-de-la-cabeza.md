@@ -73,3 +73,22 @@ unmerged`; ninguna métrica, atributo de span ni etiqueta de medición cambia. U
 no es Cabeza sale en la línea del poller como `waiting (…, stacked parent unmerged)`. Un fallo
 persistente de lectura del tracker mantiene retenido al hijo: solo la cabeza no traíble tiene
 vencimiento, y se acepta aquí porque la guarda es inerte hasta el lanzamiento.
+
+## Adenda (GH-858, parte 4c): el interruptor encendido y sus límites
+
+`stacking: true` en `.agentic/stack.yaml` de agentic-system; apostrophe lo deja ausente y apagado.
+
+- **Apagarlo** detiene el apilado nuevo y no reubica a los hijos vivos. La retención del hijo
+  sigue cubriéndolos porque no lee el interruptor.
+- **Profundidad 1.** Un bloqueante con `stack_parent` propio, legible o no, nunca es padre
+  apilado.
+- **El repositorio debe permitir commits de merge.** Con squash solamente, cada hijo queda
+  huérfano y retenido por `stack_base_orphaned`. Este repositorio mergea con commits de merge,
+  como muestra su historia (commit 6049dbe5, Merge pull request 950).
+- **Quién gasta retomas** es el criterio: un hijo sin documento espera en el calendario del
+  lanzamiento; uno con documento y sin rama queda retenido (`parent_not_ready`) y no gasta
+  retomas ni termina en `Retakes spent:`.
+- **Ventana conocida.** El interruptor solo protege con un stage0 que contenga esta parte:
+  antes de llevar stage0 a un commit anterior, o de fijarlo ahí, hay que apagar el interruptor.
+  Entre el merge y la rotación de stage0, un hijo sin rama puede gastar retomas hasta
+  `needs-human`; se recupera con `agentic resume`.
