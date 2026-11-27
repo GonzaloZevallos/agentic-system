@@ -352,7 +352,7 @@ _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
 **Veredicto sostenido**:
-Lo que la Puerta de entrega del Developer da por bueno de un chequeo con forma afectada cuando esa forma, medida contra G (la última cabeza en que el chequeo pasó, en la misma instancia), no elige ningún test (salida 8) y `G..cabeza` cambió algo: una sola fila que pasó sin correr nada y nombra a G, sin completo ni reintento (ADR-0108). Solo lo decide `forward_base`; ninguna otra decisión lee la fila, que nunca se guarda en el almacén ni mueve G. Un timeout, la salida 9 o cualquier otra salida no sostienen nada: sigue el completo.
+Lo que la Puerta de entrega del Developer da por bueno de un chequeo con forma afectada cuando esa forma, medida contra G (la última cabeza en que el chequeo pasó, en la misma instancia), no elige ningún test (salida 8) y `G..cabeza` cambió algo: una sola fila que pasó sin correr nada y nombra a G, sin completo ni reintento (ADR-0110). Solo lo decide `forward_base`; ninguna otra decisión lee la fila, que nunca se guarda en el almacén ni mueve G. Un timeout, la salida 9 o cualquier otra salida no sostienen nada: sigue el completo.
 En el código se llama `reused_from` y `affected_base` (los campos de la fila), `kept_green` (la causa en `RoleRun.forms`), `green_source` y `advance_greens` (qué fila mueve G) y `forward_base` (el módulo).
 _Avoid_: carried (es un alcance de revisión, `ReviewScope`), reutilizado (ese es el pase guardado por contenido, ADR-0065)
 _Campo_: sin término de arte
