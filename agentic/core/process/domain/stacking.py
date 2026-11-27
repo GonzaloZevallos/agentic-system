@@ -39,6 +39,9 @@ text; they gate nothing. `refusal` stays the only gate on merging. Where the not
 a paused child is skipped and the rule that no merge runs while `pause_cause` is not `none` belong
 to the poller hold part, whose ADR lives with it. "Moves again" means the parent leaves the cause:
 it is reopened, resumed, or its escalation is released.
+
+`unstarted_cause` (GH-1163) is the cause of a child that has no task branch yet, read off
+`start_ref`: `pause_cause(chain)` only sees a parent that is paused, never one that left Ready.
 """
 
 from __future__ import annotations
@@ -207,8 +210,15 @@ def refusal(stack: StackFacts, conflicts: bool | None) -> rules.MergeRefusal | N
     return "stack_parent_unmerged"
 
 
-PauseCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned", "unreadable", "none"]
-NotedCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned"]
+PauseCause = Literal[
+    "parent_escalated",
+    "parent_stopped",
+    "parent_abandoned",
+    "parent_not_ready",
+    "unreadable",
+    "none",
+]
+NotedCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned", "parent_not_ready"]
 
 PAUSE_DEPTH = 10
 """The most links of a parent chain `pause_cause` reads: a longer one is `unreadable`."""
@@ -217,6 +227,7 @@ _NOTE_TEXT: Mapping[NotedCause, str] = {
     "parent_escalated": "escalated",
     "parent_stopped": "was stopped",
     "parent_abandoned": "was closed as not planned",
+    "parent_not_ready": "is no longer ready for review",
 }
 
 
@@ -485,3 +496,18 @@ def start_ref(parent_issue: int, facts: ParentFacts) -> Upstream | Parent | Wait
     if not facts.carried:
         return Wait(cause="head_not_carried")
     return Parent(head=facts.head)
+
+
+def unstarted_cause(ref: Upstream | Parent | Wait) -> PauseCause:
+    """Why a stacked child that has no task branch yet cannot start (GH-1163), read off
+    `start_ref`'s answer for it: a parent that is not Ready, or whose remote branch no longer
+    carries the recorded head, is `parent_not_ready`; a parent that is paused (the chain already
+    says so) or a read that failed is `unreadable`, which holds without a note; `Parent` and
+    `Upstream` start the child, so `none`. Pure; a `Wait` writes nothing and never escalates."""
+    match ref:
+        case Wait(cause="parent_not_ready" | "head_not_carried"):
+            return "parent_not_ready"
+        case Wait():
+            return "unreadable"
+        case Parent() | Upstream():
+            return "none"

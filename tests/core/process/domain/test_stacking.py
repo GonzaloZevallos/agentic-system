@@ -675,3 +675,27 @@ def test_start_ref_anything_else_waits_and_names_why(
 def test_start_ref_a_merged_parent_wins_over_an_unreadable_later_fact():
     facts = _parent_facts(merged=True, paused=None, ready=None, carried=None)
     assert stacking.start_ref(7, facts) == stacking.Upstream()
+
+
+# -- unstarted_cause (GH-1163): why a child with no branch cannot start ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("ref", "cause"),
+    [
+        (stacking.Wait("parent_not_ready"), "parent_not_ready"),
+        (stacking.Wait("head_not_carried"), "parent_not_ready"),
+        (stacking.Wait("parent_paused"), "unreadable"),
+        (stacking.Wait("unreadable"), "unreadable"),
+        (stacking.Parent(HEAD), "none"),
+        (stacking.Upstream(), "none"),
+    ],
+)
+def test_unstarted_cause_reads_the_start_ref_answer(ref, cause):
+    assert stacking.unstarted_cause(ref) == cause
+
+
+def test_the_not_ready_note_says_the_parent_left_ready_and_when_it_ends():
+    assert stacking.pause_note(5, "parent_not_ready") == (
+        "Paused: stacked on #5, which is no longer ready for review. Resumes when #5 moves again."
+    )

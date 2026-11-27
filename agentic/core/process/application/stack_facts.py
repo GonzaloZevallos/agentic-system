@@ -28,7 +28,7 @@ from typing import cast
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import landing, stacking
+from ..domain import board, landing, rules, stacking
 from ..domain.task import StackParent, TaskState
 from . import escalate, landing_plan
 from .ports import (
@@ -57,8 +57,8 @@ class StackMemo:
     sha; `issue` is the parent issue's whole state; `docs` and `locks` are the parent's document
     and run lock by parent issue; `comments` are the parent issue's comments, read only for a
     document of the stranded shape, by parent issue; `links` is `parent_link` by `(issue,
-    recorded head)`, never by issue alone: two chains can name one issue at different heads. The
-    three ancestry maps are
+    recorded head)`, never by issue alone: two chains can name one issue at different heads;
+    `parents` is `parent_facts` by `(parent issue, head asked)`. The three ancestry maps are
     keyed `(parent_head, ref)` and hold `None` when git could not tell."""
 
     exists: dict[str, bool] = field(default_factory=dict)
@@ -67,6 +67,7 @@ class StackMemo:
     locks: dict[int, LockRecord | None | _Unread] = field(default_factory=dict)
     comments: dict[int, list[IssueComment] | _Unread] = field(default_factory=dict)
     links: dict[tuple[int, str], stacking.ParentLink] = field(default_factory=dict)
+    parents: dict[tuple[int, str | None], stacking.ParentFacts] = field(default_factory=dict)
     in_tip: dict[tuple[str, str], bool | None] = field(default_factory=dict)
     in_head: dict[tuple[str, str], bool | None] = field(default_factory=dict)
     in_merge: dict[tuple[str, str], bool | None] = field(default_factory=dict)
@@ -172,17 +173,24 @@ def stack_facts(
     )
 
 
-def _document(ports: Ports, memo: StackMemo, record: StackParent) -> dict[str, object] | _Unread:
-    """The parent's document, read once per parent issue; a missing or unreadable one is
+def _document_of(
+    ports: Ports, memo: StackMemo, number: int, task_id: str
+) -> dict[str, object] | _Unread:
+    """The document of issue `number`, read once per issue; a missing or unreadable one is
     `_UNREAD`."""
-    number = record["issue"]
     if number not in memo.docs:
         try:
-            loaded = ports.documents.load(record["task_id"])
+            loaded = ports.documents.load(task_id)
         except (OSError, ValueError):
             loaded = None
         memo.docs[number] = _UNREAD if loaded is None else loaded
     return memo.docs[number]
+
+
+def _document(ports: Ports, memo: StackMemo, record: StackParent) -> dict[str, object] | _Unread:
+    """The parent's document, read once per parent issue; a missing or unreadable one is
+    `_UNREAD`."""
+    return _document_of(ports, memo, record["issue"], record["task_id"])
 
 
 def _lock(lock: RunLock, memo: StackMemo, record: StackParent) -> LockRecord | None | _Unread:
@@ -323,3 +331,115 @@ def parent_chain(
         if isinstance(following, stacking.Absent | stacking.Unreadable):
             return chain
         current = following
+
+
+# What a failed read of the tracker, a document or git raises; each one is doubt.
+DOUBT = (ValueError, OSError, KeyError, GitError)
+
+
+def _merged(
+    cfg: Configuration, ports: Ports, state: IssueState, document: dict[str, object] | None
+) -> bool | None:
+    """Whether the parent's closing merge is in the fetched upstream; `None` when it could not
+    be told. An open issue, or one not closed as completed, is not merged."""
+    if state.state != "CLOSED" or state.state_reason != "COMPLETED":
+        return False
+    recorded = document.get("merge_commit") if document else None
+    merge = str(recorded) if recorded else state.closing_merge_commit
+    if merge is None:
+        return False
+    try:
+        tip = ports.workspace.upstream().sha
+        if not tip or not ports.workspace.fetch_commit(merge):
+            return None
+        return ports.workspace.is_ancestor(cfg.product_dir, merge, ref=tip)
+    except DOUBT:
+        return None
+
+
+def carried(cfg: Configuration, ports: Ports, parent_id: str, head: str) -> bool | None:
+    """Whether the parent's remote task branch carries `head`; `None` when git could not tell."""
+    try:
+        branch = rules.task_branch(parent_id)
+        tip = ports.workspace.remote_tip(cfg.product_dir, branch, bounded=True)
+        if tip is None:
+            return False
+        return ports.workspace.is_ancestor(cfg.product_dir, head, ref=tip)
+    except DOUBT:
+        return None
+
+
+def _approved_head(document: dict[str, object]) -> str | None:
+    """`rules.approved_head` of the parent's document, narrowed as `resume.state_from` does for
+    the keys it reads (a key without a value is a missing key); `resume` imports this module, so
+    the narrowing is not borrowed from it."""
+    narrowed = {k: v for k, v in document.items() if v is not None}
+    return rules.approved_head(cast(TaskState, narrowed))
+
+
+def _read_parent_facts(
+    cfg: Configuration,
+    ports: Ports,
+    parent_issue: int,
+    head: str | None,
+    paused: bool | None,
+    memo: StackMemo | None,
+) -> stacking.ParentFacts:
+    unread = stacking.ParentFacts(None, None, None, None, None, None)
+    state: IssueState | None
+    document: dict[str, object] | None
+    try:
+        parent_id = ports.inbox.task_id(parent_issue)
+        if memo is None:
+            state = ports.tracker.issue_state(parent_issue)
+            document = ports.documents.load(parent_id)
+        else:
+            read = _issue_state(ports, memo, parent_issue)
+            state = None if isinstance(read, _Unread) else read
+            loaded = _document_of(ports, memo, parent_issue, parent_id)
+            if isinstance(loaded, _Unread):
+                # a memo cannot tell a missing document from a failed read: doubt
+                return unread
+            document = loaded
+    except DOUBT:
+        return unread
+    if state is None:
+        return unread
+    merged = _merged(cfg, ports, state, document)
+    abandoned = state.state == "CLOSED" and state.state_reason == "NOT_PLANNED"
+    if merged is not False or abandoned or document is None:
+        return stacking.ParentFacts(merged, abandoned, None, None, None, None)
+    labels = state.labels
+    if paused is None:
+        paused = (
+            None
+            if labels is None
+            else bool(document.get("escalated")) or board.NEEDS_HUMAN_LABEL in labels
+        )
+    ready = state.state == "OPEN" and document.get("status") == "ready_for_review"
+    checked = head if head is not None else _approved_head(document)
+    is_carried = carried(cfg, ports, parent_id, checked) if ready and checked else None
+    return stacking.ParentFacts(merged, abandoned, paused, ready, checked, is_carried)
+
+
+def parent_facts(
+    cfg: Configuration,
+    ports: Ports,
+    parent_issue: int,
+    head: str | None = None,
+    paused: bool | None = None,
+    memo: StackMemo | None = None,
+) -> stacking.ParentFacts:
+    """The one computation of the parent-ready facts `stacking.start_ref` decides on (GH-858,
+    GH-1163), read lazily and in the order it decides: nothing past a merged or abandoned parent
+    is read, and a failed read leaves its fact `None`. `head=None` is the parent's current
+    approved head, as the start reads it; a given `head` is the one whose carry by the parent's
+    remote branch is checked (the hold passes the child's recorded head). `paused`, when given,
+    replaces the derivation from the document's `escalated` and the issue's labels. With a memo
+    the issue and document reads are the window's and the result is kept per `(parent, head)`."""
+    if memo is None:
+        return _read_parent_facts(cfg, ports, parent_issue, head, paused, None)
+    key = (parent_issue, head)
+    if key not in memo.parents:
+        memo.parents[key] = _read_parent_facts(cfg, ports, parent_issue, head, paused, memo)
+    return memo.parents[key]
