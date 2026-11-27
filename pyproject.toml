@@ -108,6 +108,7 @@ files = [
     "agentic/core/process/application/playbook_land.py",
     "agentic/core/process/application/stack_facts.py",
     "agentic/core/process/application/stack_hold.py",
+    "agentic/core/process/application/stacked_start.py",
     "agentic/core/process/application/refusal_note.py",
     "agentic/core/process/application/format_issue.py",
     "agentic/core/process/application/format_hold.py",
