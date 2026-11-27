@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from agentic import cli, composition
+from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application.ports import TrackerCallFailed
@@ -295,7 +296,7 @@ def fresh_process_log() -> Iterator[None]:
     composition.process_call_log.cache_clear()
 
 
-def test_main_wires_the_real_read_the_process_log_and_a_no_op_telemetry(
+def test_main_wires_the_real_read_the_process_log_and_the_otel_telemetry(
     monkeypatch, tmp_path, fresh_process_log
 ):
     (tmp_path / ".agentic").mkdir()
@@ -314,5 +315,5 @@ def test_main_wires_the_real_read_the_process_log_and_a_no_op_telemetry(
     read = seen["budget_read"]
     assert callable(read)
     assert seen["gh_calls"] is composition.process_call_log()
-    assert type(seen["budget_telemetry"]) is NoTelemetry
+    assert seen["budget_telemetry"] is telemetry
     assert set(GH_CALL_KINDS) == set(composition.process_call_log().drain())
