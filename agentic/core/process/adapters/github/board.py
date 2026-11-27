@@ -3,7 +3,7 @@
 Write-only as far as state goes. The one thing read from the Project is its identity: the
 node ids of the project, its fields and its Etapa options, looked up once per process. The
 fields are found by name and type; Etapa is the SINGLE_SELECT `Etapa` or, absent it, the
-built-in `Status` carrying the seven options (`_etapa_field`). Cards are added with
+built-in `Status` carrying the five options (`_etapa_field`). Cards are added with
 `addProjectV2ItemById` (idempotent) and their fields written with
 `updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`.
 
@@ -79,14 +79,14 @@ ERRORS_SHOWN = 2
 
 _FIELD_NAMES: dict[Field, str] = {
     "etapa": "Etapa",
-    "bloqueo": "Bloqueo",
+    "motivo": "Motivo",
     "costo": "Costo USD",
     "inicio": "Inicio",
     "fin": "Fin",
 }
 _FIELD_TYPES: dict[Field, str] = {
     "etapa": "SINGLE_SELECT",
-    "bloqueo": "TEXT",
+    "motivo": "TEXT",
     "costo": "NUMBER",
     "inicio": "DATE",
     "fin": "DATE",
@@ -96,7 +96,7 @@ _FIELD_TYPES: dict[Field, str] = {
 # `singleSelectOptionId` takes `String`, so the option id travels as `String!`.
 _VALUE: dict[Field, tuple[str, str]] = {
     "etapa": ("String!", "singleSelectOptionId"),
-    "bloqueo": ("String!", "text"),
+    "motivo": ("String!", "text"),
     "costo": ("Float!", "number"),
     "inicio": ("Date!", "date"),
     "fin": ("Date!", "date"),
@@ -580,7 +580,7 @@ def _first_missing_etapa(node: Mapping[str, Any]) -> str | None:
 
 def _etapa_field(nodes: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
     """The field node that carries the Etapa options: the SINGLE_SELECT `Etapa`, even when it
-    is incomplete (no fallback then), else the built-in `Status` when it has all seven."""
+    is incomplete (no fallback then), else the built-in `Status` when it has all five."""
     etapa_node = _single_select(nodes, "Etapa")
     if etapa_node is not None:
         missing = _first_missing_etapa(etapa_node)

@@ -4106,7 +4106,6 @@ def run_once(
             now,
             live_issues=_live_issues(ports, registry, plan.actions),
             blockers=blockers_by_issue,
-            eval_set=eval_set,
         )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
