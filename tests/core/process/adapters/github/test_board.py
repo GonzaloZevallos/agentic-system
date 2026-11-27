@@ -22,8 +22,11 @@ from agentic.core.process.application.ports import (
     TrackerTurnRefused,
     TrackerUnreachable,
 )
+from agentic.core.process.domain import board
 from agentic.core.process.domain.board import Etapa, FieldWrite
 from agentic.core.process.domain.github_access import GithubAccess, Turn
+
+TE_NECESITA, EN_CURSO, PROXIMO, EN_PAUSA, HECHO = get_args(board.Etapa)
 
 ETAPAS = list(get_args(Etapa))
 ISSUE_FIELDS = "number,id,labels,state,closedAt"
@@ -117,7 +120,7 @@ def prime(gh: FakeGh, b: GhBoard, *numbers: int) -> None:
 
 
 WRITES = [
-    FieldWrite(7, "etapa", "En pausa"),
+    FieldWrite(7, "etapa", EN_PAUSA),
     FieldWrite(7, "motivo", "#3"),
     FieldWrite(7, "costo", 1.5),
     FieldWrite(7, "inicio", date(2026, 10, 20)),
@@ -140,7 +143,7 @@ def test_a_missing_field_is_a_value_error_naming_it(name):
 
 
 def test_a_missing_etapa_option_is_a_value_error_naming_it():
-    with pytest.raises(ValueError, match="Hecho"):
+    with pytest.raises(ValueError, match=HECHO):
         board(FakeGh([identity(options=ETAPAS[:-1])])).project_id()
 
 
@@ -184,7 +187,7 @@ def test_a_complete_etapa_wins_over_a_status_that_is_also_there():
 
 
 def test_an_incomplete_etapa_does_not_fall_back_to_a_complete_status():
-    with pytest.raises(ValueError, match="has no Etapa option 'Hecho'") as raised:
+    with pytest.raises(ValueError, match=f"has no Etapa option '{HECHO}'") as raised:
         resolve(select("F_etapa", "Etapa", ETAPAS[:-1]), select("F_status", "Status", ETAPAS))
     assert "Status" not in str(raised.value)
 
@@ -199,7 +202,8 @@ def test_a_status_missing_an_option_names_it_and_the_field():
     with pytest.raises(ValueError) as raised:
         resolve(select("F_status", "Status", ETAPAS[:-1]))
     assert (
-        str(raised.value) == "the board project o/3 has no Etapa option 'Hecho' on its Status field"
+        str(raised.value)
+        == f"the board project o/3 has no Etapa option '{HECHO}' on its Status field"
     )
 
 
@@ -241,9 +245,7 @@ def test_project_three_resolves_all_five_fields_and_five_options():
 
 def test_an_etapa_write_on_project_three_goes_to_the_status_field_with_the_option_id():
     ids = board_module._identity_of(project_three(), "GonzaloZevallos/3")
-    _, variables = board_module._fields(
-        ids, {7: [FieldWrite(7, "etapa", "En curso")]}, {7: "PVTI_7"}
-    )
+    _, variables = board_module._fields(ids, {7: [FieldWrite(7, "etapa", EN_CURSO)]}, {7: "PVTI_7"})
     status = "PVTSSF_lAHOAuV6bM4Bo5rQzhnXo0o"
     assert variables["f_etapa"] == status
     assert variables["i7_etapa"] == f"{status}_1"
@@ -266,19 +268,17 @@ def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
     assert "$i7_motivo: String!" in query and variables["i7_motivo"] == "#3"
     assert "$i7_costo: Float!" in query and variables["i7_costo"] == 1.5
     assert "$i7_inicio: Date!" in query and variables["i7_inicio"] == "2026-10-20"
-    assert (
-        "$i7_etapa: String!" in query and variables["i7_etapa"] == f"O_{ETAPAS.index('En pausa')}"
-    )
+    assert "$i7_etapa: String!" in query and variables["i7_etapa"] == f"O_{ETAPAS.index(EN_PAUSA)}"
     assert "i7_fin: clearProjectV2ItemFieldValue" in query and "i7_fin" not in variables
     assert variables["i7_item"] == "PVTI_7" and variables["f_etapa"] == "F_etapa"
     assert not any(k in variables for k in ("f_bloque", "f_hito"))
 
 
 def test_a_batch_declares_only_the_field_ids_its_writes_use():
-    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "Próximo")])])
+    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", PROXIMO)])])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write([FieldWrite(7, "etapa", "Próximo")]).written == frozenset({7})
+    assert b.write([FieldWrite(7, "etapa", PROXIMO)]).written == frozenset({7})
     fields = gh.bodies[-1]
     assert "$f_etapa: ID!" in fields["query"] and "$f_motivo" not in fields["query"]
     assert set(fields["variables"]) == {"project", "f_etapa", "i7_item", "i7_etapa"}
@@ -291,13 +291,13 @@ def test_only_aliases_of_the_fixed_form_are_in_the_query_text():
     b.write(WRITES)
     for body in gh.bodies[1:]:
         text = re.sub(r"\$?\bi\d+_[a-z]+\b", "", body["query"])
-        for value in ("En pausa", "#3", "1.5", "2026-10-20", "PVTI_7", "I_7", "PVT_1"):
+        for value in (EN_PAUSA, "#3", "1.5", "2026-10-20", "PVTI_7", "I_7", "PVT_1"):
             assert value not in text
 
 
 def test_a_reason_that_looks_like_graphql_arrives_intact_as_a_variable():
     reason = '"} mutation { x'
-    writes = [FieldWrite(7, "etapa", "En pausa"), FieldWrite(7, "motivo", reason)]
+    writes = [FieldWrite(7, "etapa", EN_PAUSA), FieldWrite(7, "motivo", reason)]
     gh = FakeGh([identity(), added(7), wrote(writes)])
     b = board(gh)
     prime(gh, b, 7)
@@ -307,7 +307,7 @@ def test_a_reason_that_looks_like_graphql_arrives_intact_as_a_variable():
 
 
 def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
-    ok = wrote([FieldWrite(n, "etapa", "Próximo") for n in (7, 9)])["data"]
+    ok = wrote([FieldWrite(n, "etapa", PROXIMO) for n in (7, 9)])["data"]
     fail = {
         "errors": [{"message": "boom", "path": ["i8_motivo"]}],
         "data": {**ok, "i8_motivo": None},
@@ -315,7 +315,7 @@ def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
     gh = FakeGh([identity(), added(7, 8, 9), fail])
     b = board(gh)
     prime(gh, b, 7, 8, 9)
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in (7, 8, 9)]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in (7, 8, 9)]
     writes.append(FieldWrite(8, "motivo", "x"))
     assert b.write(writes).written == frozenset({7, 9})
 
@@ -323,16 +323,16 @@ def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
 def test_an_error_on_an_add_keeps_that_issue_out_of_the_field_request():
     data = {"i8_add": None, **added(7)["data"]}
     err = {"errors": [{"message": "nope", "path": ["i8_add"]}], "data": data}
-    gh = FakeGh([identity(), err, wrote([FieldWrite(7, "etapa", "Próximo")])])
+    gh = FakeGh([identity(), err, wrote([FieldWrite(7, "etapa", PROXIMO)])])
     b = board(gh)
     prime(gh, b, 7, 8)
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in (7, 8)]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in (7, 8)]
     assert b.write(writes).written == frozenset({7})
     assert "i8_etapa" not in gh.bodies[2]["query"]
 
 
 def test_the_body_gh_prints_with_exit_one_still_attributes_the_error():
-    ok = wrote([FieldWrite(7, "etapa", "Próximo")])["data"]
+    ok = wrote([FieldWrite(7, "etapa", PROXIMO)])["data"]
     fail = {"errors": [{"message": "boom", "path": ["i8_etapa"]}], "data": ok}
     gh = FakeGh([identity(), added(7, 8), fail])
     b = board(gh)
@@ -345,7 +345,7 @@ def test_the_body_gh_prints_with_exit_one_still_attributes_the_error():
         return result
 
     b.run = exit_one
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in (7, 8)]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in (7, 8)]
     assert b.write(writes).written == frozenset({7})
 
 
@@ -377,7 +377,7 @@ def test_a_transport_failure_ends_the_write_with_nothing_recorded():
 def test_thirty_issues_with_one_write_each_go_in_one_add_and_two_field_requests():
     numbers = list(range(1, 31))
     first, rest = numbers[:20], numbers[20:]
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in numbers]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in numbers]
     gh = FakeGh(
         [
             identity(),
@@ -394,10 +394,10 @@ def test_thirty_issues_with_one_write_each_go_in_one_add_and_two_field_requests(
 
 
 def test_an_issue_not_read_this_process_has_its_node_looked_up():
-    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "Próximo")])])
+    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", PROXIMO)])])
     b = board(gh)
     gh.listing = json.dumps(issue_node(7))
-    assert b.write([FieldWrite(7, "etapa", "Próximo")]).written == frozenset({7})
+    assert b.write([FieldWrite(7, "etapa", PROXIMO)]).written == frozenset({7})
     assert ["gh", "issue", "view", "7", "--json", ISSUE_FIELDS] in gh.calls
 
 
@@ -444,7 +444,7 @@ ISSUE_ERROR = {
     "extensions": {"code": "variableMismatch"},
 }
 ALL_FIVE = [
-    FieldWrite(7, "etapa", "En pausa"),
+    FieldWrite(7, "etapa", EN_PAUSA),
     FieldWrite(7, "motivo", "#3"),
     FieldWrite(7, "costo", 1.5),
     FieldWrite(7, "inicio", date(2026, 10, 20)),
@@ -571,12 +571,12 @@ def test_a_validation_response_records_no_issue_as_sent():
     gh = FakeGh([identity(), added(406, 407), error_response(ISSUE_ERROR)])
     b = board(gh)
     prime(gh, b, 406, 407)
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in (406, 407)]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in (406, 407)]
     assert b.write(writes).written == frozenset()
 
 
 def test_an_issue_whose_alias_is_missing_or_null_in_data_is_not_sent():
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in (7, 8, 9)]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in (7, 8, 9)]
     data = {"i7_etapa": {"clientMutationId": None}, "i8_etapa": None}
     gh = FakeGh([identity(), added(7, 8, 9), {"data": data}])
     b = board(gh)
@@ -585,7 +585,7 @@ def test_an_issue_whose_alias_is_missing_or_null_in_data_is_not_sent():
 
 
 def test_an_issue_is_sent_only_when_each_alias_it_wrote_is_in_data():
-    writes = [FieldWrite(7, "etapa", "Próximo"), FieldWrite(7, "fin", None)]
+    writes = [FieldWrite(7, "etapa", PROXIMO), FieldWrite(7, "fin", None)]
     short = {"data": {"i7_etapa": {"clientMutationId": None}}}
     gh = FakeGh([identity(), added(7), short])
     b = board(gh)
@@ -598,7 +598,7 @@ def logged_write(response, writes=None):
     gh = FakeGh([identity(), added(7), response])
     b = board(gh, log=lines.append)
     prime(gh, b, 7)
-    done = b.write(writes or [FieldWrite(7, "etapa", "Próximo")]).written
+    done = b.write(writes or [FieldWrite(7, "etapa", PROXIMO)]).written
     return done, lines, gh
 
 
@@ -627,7 +627,7 @@ def test_a_request_variable_and_other_body_keys_never_reach_the_log(path):
     leak = "SENTINEL-body-field"
     error = {"message": "boom", "path": path, "extensions": {"code": "X", "leak": leak}}
     response = error_response(error, data=None, leak=leak, extensions={"leak": leak})
-    writes = [FieldWrite(7, "etapa", "Próximo"), FieldWrite(7, "motivo", sentinel)]
+    writes = [FieldWrite(7, "etapa", PROXIMO), FieldWrite(7, "motivo", sentinel)]
     done, lines, gh = logged_write(response, writes)
     assert gh.bodies[2]["variables"]["i7_motivo"] == sentinel
     text = "\n".join(lines)
@@ -644,7 +644,7 @@ def test_a_summary_has_two_errors_a_count_of_the_rest_and_at_most_300_characters
 
 def test_a_chunk_with_an_error_naming_no_issue_does_not_block_the_next_one():
     numbers = list(range(1, 42))
-    writes = [FieldWrite(n, "etapa", "Próximo") for n in numbers]
+    writes = [FieldWrite(n, "etapa", PROXIMO) for n in numbers]
     gh = FakeGh(
         [
             identity(),
@@ -1037,6 +1037,6 @@ def test_a_refused_turn_is_not_split_under_a_retry_policy():
     )
     prime(gh, b, 7, 8)
     with pytest.raises(TrackerTurnRefused):
-        b.write([FieldWrite(7, "etapa", "En pausa"), FieldWrite(8, "etapa", "En pausa")])
+        b.write([FieldWrite(7, "etapa", EN_PAUSA), FieldWrite(8, "etapa", EN_PAUSA)])
     assert gate.asked == 1  # not halved: one turn refused is the whole write
     assert len([line for line in lines if "write stopped:" in line]) == 1

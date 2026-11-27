@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, timedelta, timezone
+from typing import get_args
 
 import pytest
 
@@ -16,8 +17,11 @@ from agentic.core.process.application.ports import (
     TrackerCallFailed,
     TrackerTurnRefused,
 )
+from agentic.core.process.domain import board as domain
 from agentic.core.process.domain import rules
 from tests.fakes import FakeBoard, FakeBoardSent, MemoryDocuments, memory_ports
+
+TE_NECESITA, EN_CURSO, PROXIMO, EN_PAUSA, HECHO = get_args(domain.Etapa)
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 DAY = date(2026, 10, 27)
@@ -78,20 +82,23 @@ def test_each_row_of_the_table_gets_its_etapa() -> None:
     blockers = {9: rules.BlockerReport(open=(3,)), 10: rules.BlockerReport()}
     mirror(ports, live=frozenset({4}), blockers=blockers)
     assert etapas(board) == {
-        1: "En curso",
-        2: "En curso",
-        3: "Te necesita",
-        4: "En curso",
-        5: "Te necesita",
-        6: "Te necesita",
-        7: "Te necesita",
-        8: "En pausa",
-        9: "Próximo",
-        10: "Próximo",
-        11: "Hecho",
+        1: EN_CURSO,
+        2: EN_CURSO,
+        3: TE_NECESITA,
+        4: EN_CURSO,
+        5: TE_NECESITA,
+        6: TE_NECESITA,
+        7: TE_NECESITA,
+        8: EN_PAUSA,
+        9: PROXIMO,
+        10: PROXIMO,
+        11: HECHO,
     }
     motivo = {w.issue: w.value for w in board.written if w.field == "motivo"}
-    assert motivo[9] == "espera #3" and motivo[5] == "esperando tu respuesta: Which scope?"
+    assert (
+        motivo[9] == f"{domain.BLOCKER_PREFIX}#3"
+        and motivo[5] == f"{domain.WAITING_ANSWER}: Which scope?"
+    )
     assert {w.value for w in board.written if w.field == "fin"} == {date(2026, 10, 20)}
 
 
@@ -130,7 +137,7 @@ def test_a_launch_this_round_is_corriendo() -> None:
     board = FakeBoard(open=[row(1)])
     ports, _ = ports_with(board)
     mirror(ports, live=frozenset({1}))
-    assert etapas(board) == {1: "En curso"}
+    assert etapas(board) == {1: EN_CURSO}
 
 
 @pytest.mark.parametrize("failure", [TrackerCallFailed("x"), ValueError("x"), OSError("x")])
@@ -146,7 +153,7 @@ def test_a_failing_board_is_one_line_and_rests_fifteen_minutes(failure: Exceptio
     assert board.calls == []
     board.fail = None
     mirror(ports, now=NOW + timedelta(minutes=16))
-    assert etapas(board) == {1: "Próximo"}
+    assert etapas(board) == {1: PROXIMO}
     assert sent.memory.failed_at is None
 
 
@@ -155,10 +162,10 @@ def failure_line(failure: Exception) -> str:
 
 
 def test_a_multi_line_value_error_shows_on_one_line() -> None:
-    line = failure_line(ValueError("the board project o/3\n  has no\tEtapa option 'Hecho'"))
+    line = failure_line(ValueError(f"the board project o/3\n  has no\tEtapa option '{HECHO}'"))
     assert line == (
         "agentic: poll: board: not updated "
-        "(ValueError: the board project o/3 has no Etapa option 'Hecho'), next try in 15 min"
+        f"(ValueError: the board project o/3 has no Etapa option '{HECHO}'), next try in 15 min"
     )
 
 
@@ -226,7 +233,7 @@ def test_a_new_project_discards_the_memory() -> None:
     board.written.clear()
     board.project = "PVT_2"
     mirror(ports)
-    assert etapas(board) == {1: "Próximo"}
+    assert etapas(board) == {1: PROXIMO}
     assert sent.memory.project_id == "PVT_2"
 
 
@@ -235,7 +242,7 @@ def test_an_unreadable_memory_says_so_once_and_sends_everything() -> None:
     ports, _ = ports_with(board, sent=FakeBoardSent(SentMemory(unreadable=True)))
     lines = mirror(ports)
     assert lines == ["agentic: poll: board: memory unreadable, sending everything again"]
-    assert etapas(board) == {1: "Próximo"}
+    assert etapas(board) == {1: PROXIMO}
 
 
 def test_a_remembered_issue_that_closed_is_read_one_by_one_and_goes_hecho() -> None:
@@ -244,7 +251,7 @@ def test_a_remembered_issue_that_closed_is_read_one_by_one_and_goes_hecho() -> N
     mirror(ports)
     board.open, board.closed, board.written = [], [row(1, closed=date(2026, 10, 27))], []
     mirror(ports)
-    assert etapas(board) == {1: "Hecho"}
+    assert etapas(board) == {1: HECHO}
     assert ("issue", 1) in board.calls
     board.calls.clear()
     mirror(ports)
@@ -259,7 +266,7 @@ def test_a_board_that_writes_nothing_keeps_the_cards_out_of_board_sent_and_the_n
     board.unwritten = set()
     board.calls.clear()
     mirror(ports, now=NOW + timedelta(minutes=16))
-    assert etapas(board) == {1: "Próximo"}
+    assert etapas(board) == {1: PROXIMO}
     assert 1 in sent.memory.issues
 
 
@@ -300,7 +307,7 @@ def test_an_issue_remembered_open_and_closed_between_rounds_ends_hecho() -> None
     mirror(ports)
     board.open, board.closed, board.written = [], [closed_row(1, 0)], []
     mirror(ports)
-    assert etapas(board) == {1: "Hecho"}
+    assert etapas(board) == {1: HECHO}
     assert sent.memory.issues[1].hecho_until == DAY + timedelta(days=7)
 
 
@@ -405,7 +412,7 @@ def test_a_memory_of_an_older_version_is_resent_in_full(tmp_path) -> None:
     board = FakeBoard(open=[row(1)])
     ports = memory_ports(board=board, board_sent=FilesystemBoardSent(path))
     assert mirror(ports) == ["agentic: poll: board: memory unreadable, sending everything again"]
-    assert etapas(board) == {1: "Próximo"}
+    assert etapas(board) == {1: PROXIMO}
     assert FilesystemBoardSent(path).load().issues[1].fingerprint != "x"
 
 
@@ -421,4 +428,4 @@ def test_a_pause_the_poller_retakes_itself_reads_se_retoma_sola_through_the_docu
     ports, _ = ports_with(board, docs)
     mirror(ports)
     by_field = {w.field: w.value for w in board.written}
-    assert (by_field["etapa"], by_field["motivo"]) == ("Te necesita", "se retoma sola")
+    assert (by_field["etapa"], by_field["motivo"]) == (TE_NECESITA, domain.RETAKES_ITSELF)

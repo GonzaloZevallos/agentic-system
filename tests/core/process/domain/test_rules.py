@@ -5824,7 +5824,7 @@ def test_escalation_at_none_unreadable_offset_to_utc_and_last_of_several():
     assert rules.escalation_at(last_unreadable) is None
 
 
-# -- poller_retakes: the board's "se retoma sola" (GH-877) ----------------------------------
+# -- poller_retakes: what the board says retakes itself (GH-877) ----------------------------------
 
 
 def _delivery_transient() -> dict:
@@ -5857,8 +5857,9 @@ def test_poller_retakes_is_false_for_a_format_pause_whose_hold_is_due():
 def test_spent_mechanical_retakes_still_read_resumes_itself_known_limit():
     """Known limit (GH-877): the `Auto-resumed:` count (`MECHANICAL_RETAKE_MAX`) lives in the
     issue's comments, which the mirror does not read, so a mechanical pause after three spent
-    retakes still says "se retoma sola". The outside follow-up issue ("Board mirror: record spent
-    mechanical retakes in the task document") closes it: whoever does inverts this test."""
+    retakes still says it retakes itself (`board.RETAKES_ITSELF`). The outside follow-up issue
+    ("Board mirror: record spent mechanical retakes in the task document") closes it: whoever
+    does inverts this test."""
     epochs = [_delivery_transient(), {"kind": "resumed"}] * 3 + [_delivery_transient()]
     state = {"pause_log": epochs, "escalated": "delivery failed"}
     assert rules.poller_retakes(cast(Any, state))

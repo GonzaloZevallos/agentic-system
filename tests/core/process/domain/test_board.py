@@ -13,6 +13,8 @@ from agentic.core.process.domain import board, rules
 from agentic.core.process.domain.board import Card, IssueFacts
 from agentic.core.process.domain.task import Status
 
+TE_NECESITA, EN_CURSO, PROXIMO, EN_PAUSA, HECHO = get_args(board.Etapa)
+
 AGENTIC = frozenset({"agentic"})
 TODAY = date(2026, 11, 27)
 
@@ -50,41 +52,41 @@ WAITING = _doc("waiting_on_human", escalated="needs a decision\nsecond line")
 # -- the request's table, one row each ---------------------------------------------------
 
 ROWS = [
-    ({"live": True}, ("En curso", "corriendo")),
-    ({"document": _doc("ready_for_review")}, ("En curso", "en PR: espera CI y merge")),
+    ({"live": True}, (EN_CURSO, board.RUNNING)),
+    ({"document": _doc("ready_for_review")}, (EN_CURSO, board.IN_PR)),
     (
         {"document": WAITING},
-        ("Te necesita", "esperando tu respuesta: needs a decision"),
+        (TE_NECESITA, f"{board.WAITING_ANSWER}: needs a decision"),
     ),
-    ({"document": WAITING, "resumes_itself": True}, ("Te necesita", "se retoma sola")),
-    ({"document": _doc("waiting_on_human")}, ("Te necesita", "necesita tu atención")),
-    ({"labels": NEEDS_HUMAN}, ("Te necesita", "necesita tu atención")),
+    ({"document": WAITING, "resumes_itself": True}, (TE_NECESITA, board.RETAKES_ITSELF)),
+    ({"document": _doc("waiting_on_human")}, (TE_NECESITA, board.NEEDS_ATTENTION)),
+    ({"labels": NEEDS_HUMAN}, (TE_NECESITA, board.NEEDS_ATTENTION)),
     (
         {"labels": NEEDS_HUMAN, "document": _doc("developing", escalated="stuck\nmore")},
-        ("Te necesita", "esperando tu respuesta: stuck"),
+        (TE_NECESITA, f"{board.WAITING_ANSWER}: stuck"),
     ),
     (
         {"labels": NEEDS_HUMAN, "resumes_itself": True},
-        ("Te necesita", "se retoma sola"),
+        (TE_NECESITA, board.RETAKES_ITSELF),
     ),
-    ({"labels": AGENTIC | {"ready-for-human"}}, ("Te necesita", "lista para tu revisión")),
-    ({"document": _doc("discarded")}, ("Te necesita", "descartada: cerrar el issue")),
-    ({"document": _doc("tracker_only")}, ("Te necesita", "lista de tracker pendiente")),
-    ({"document": _doc("from-the-future")}, ("Te necesita", "documento con estado desconocido")),
-    ({"document": _doc("evaluated")}, ("Te necesita", "documento con estado desconocido")),
-    ({"document": _doc("developing")}, ("Te necesita", "sin proceso vivo")),
-    ({"blocker": BLOCKED}, ("Próximo", "espera #5, #9, #12")),
+    ({"labels": AGENTIC | {"ready-for-human"}}, (TE_NECESITA, board.READY_FOR_REVIEW)),
+    ({"document": _doc("discarded")}, (TE_NECESITA, board.DISCARDED)),
+    ({"document": _doc("tracker_only")}, (TE_NECESITA, board.TRACKER_ONLY)),
+    ({"document": _doc("from-the-future")}, (TE_NECESITA, board.UNKNOWN_STATUS)),
+    ({"document": _doc("evaluated")}, (TE_NECESITA, board.UNKNOWN_STATUS)),
+    ({"document": _doc("developing")}, (TE_NECESITA, board.NO_LIVE_PROCESS)),
+    ({"blocker": BLOCKED}, (PROXIMO, f"{board.BLOCKER_PREFIX}#5, #9, #12")),
     (
         {"document": _doc("definition_ready"), "blocker": rules.BlockerReport(open=(12,))},
-        ("Próximo", "espera #12"),
+        (PROXIMO, f"{board.BLOCKER_PREFIX}#12"),
     ),
-    ({}, ("Próximo", "esperando lugar")),
-    ({"blocker": rules.BlockerReport()}, ("Próximo", "esperando lugar")),
-    ({"labels": AGENTIC | {"agentic-hold"}}, ("En pausa", "retenida: agentic-hold")),
-    ({"labels": AGENTIC | {"needs-triage"}}, ("En pausa", "sin triage")),
-    ({"labels": frozenset()}, ("En pausa", "fuera de la bandeja")),
-    ({"closed": True, "closed_at": TODAY - timedelta(days=7)}, ("Hecho", None)),
-    ({"closed": True}, ("Hecho", None)),
+    ({}, (PROXIMO, board.WAITING_PLACE)),
+    ({"blocker": rules.BlockerReport()}, (PROXIMO, board.WAITING_PLACE)),
+    ({"labels": AGENTIC | {"agentic-hold"}}, (EN_PAUSA, board.HELD)),
+    ({"labels": AGENTIC | {"needs-triage"}}, (EN_PAUSA, board.NEEDS_TRIAGE)),
+    ({"labels": frozenset()}, (EN_PAUSA, board.OUTSIDE)),
+    ({"closed": True, "closed_at": TODAY - timedelta(days=7)}, (HECHO, None)),
+    ({"closed": True}, (HECHO, None)),
     ({"closed": True, "closed_at": TODAY - timedelta(days=8)}, (None, None)),
     ({"document": _doc("split")}, (None, None)),
 ]
@@ -100,17 +102,17 @@ def test_each_row_of_the_table_has_the_facts_that_put_a_card_there(kwargs, expec
     [
         # cleared > Hecho
         ({"closed": True, "closed_at": TODAY, "document": _doc("split")}, (None, None)),
-        # Hecho > En curso
-        ({"closed": True, "live": True, "labels": NEEDS_HUMAN}, ("Hecho", None)),
-        # En curso > Te necesita
-        ({"live": True, "labels": NEEDS_HUMAN}, ("En curso", "corriendo")),
-        ({"document": _doc("ready_for_review"), "labels": NEEDS_HUMAN}, ("En curso", board.IN_PR)),
-        # Te necesita > En pausa
-        ({"labels": NEEDS_HUMAN | {"agentic-hold"}}, ("Te necesita", "necesita tu atención")),
-        ({"document": _doc("discarded"), "labels": frozenset()}, ("Te necesita", board.DISCARDED)),
-        # En pausa > Próximo
-        ({"labels": AGENTIC | {"agentic-hold"}, "blocker": BLOCKED}, ("En pausa", board.HELD)),
-        ({"labels": frozenset(), "blocker": BLOCKED}, ("En pausa", board.OUTSIDE)),
+        # Hecho outranks live
+        ({"closed": True, "live": True, "labels": NEEDS_HUMAN}, (HECHO, None)),
+        # live outranks needs-human
+        ({"live": True, "labels": NEEDS_HUMAN}, (EN_CURSO, board.RUNNING)),
+        ({"document": _doc("ready_for_review"), "labels": NEEDS_HUMAN}, (EN_CURSO, board.IN_PR)),
+        # needs-human outranks paused
+        ({"labels": NEEDS_HUMAN | {"agentic-hold"}}, (TE_NECESITA, board.NEEDS_ATTENTION)),
+        ({"document": _doc("discarded"), "labels": frozenset()}, (TE_NECESITA, board.DISCARDED)),
+        # paused outranks queued
+        ({"labels": AGENTIC | {"agentic-hold"}, "blocker": BLOCKED}, (EN_PAUSA, board.HELD)),
+        ({"labels": frozenset(), "blocker": BLOCKED}, (EN_PAUSA, board.OUTSIDE)),
     ],
 )
 def test_the_precedence_is_cleared_hecho_en_curso_te_necesita_en_pausa_proximo(kwargs, expected):
@@ -119,12 +121,12 @@ def test_the_precedence_is_cleared_hecho_en_curso_te_necesita_en_pausa_proximo(k
 
 def test_a_closed_issue_is_hecho_with_its_close_day_as_fin():
     got = board.card(_facts(closed=True, closed_at=date(2026, 11, 20)))
-    assert (got.etapa, got.finished) == ("Hecho", date(2026, 11, 20))
+    assert (got.etapa, got.finished) == (HECHO, date(2026, 11, 20))
 
 
 def test_the_reason_is_cut_to_200_characters_and_one_line():
     got = board.card(_facts(document=_doc("waiting_on_human", escalated="\n" + "x" * 500)))
-    assert got.motivo == "esperando tu respuesta: " + "x" * 200
+    assert got.motivo == f"{board.WAITING_ANSWER}: " + "x" * 200
 
 
 def test_every_status_is_handled_by_the_tables_or_by_name():
@@ -140,7 +142,7 @@ def test_the_hecho_day_is_the_last_one_inclusive_and_expiry_has_one_comparison()
 
 
 def test_the_motivo_fallbacks_are_non_empty_and_cover_every_etapa_but_hecho():
-    assert set(board.FALLBACK_MOTIVO) == set(get_args(board.Etapa)) - {"Hecho"}
+    assert set(board.FALLBACK_MOTIVO) == set(get_args(board.Etapa)) - {HECHO}
     assert all(board.FALLBACK_MOTIVO.values())
 
 
@@ -184,12 +186,12 @@ def test_every_combination_of_facts_gives_an_etapa_or_none_and_a_motivo_unless_h
             )
         )
         assert got.etapa in (*get_args(board.Etapa), None)
-        if got.etapa not in ("Hecho", None):
+        if got.etapa not in (HECHO, None):
             assert got.motivo
         else:
             assert got.motivo is None
         if closed and got.etapa is not None:
-            assert got.etapa == "Hecho"
+            assert got.etapa == HECHO
         count += 1
     assert count == 4 * 2 * len(labels) * len(reports) * len(documents) * 2
 
@@ -238,7 +240,7 @@ def test_inicio_is_none_when_no_run_has_a_start():
 def _card(**kwargs) -> Card:
     base = {
         "number": 7,
-        "etapa": "Próximo",
+        "etapa": PROXIMO,
         "motivo": None,
         "cost_usd": None,
         "started": None,
@@ -251,7 +253,7 @@ def test_the_fingerprint_is_stable_and_changes_with_any_of_the_five_fields():
     base = _card()
     assert board.fingerprint(base) == board.fingerprint(_card())
     changed = [
-        _card(etapa="En pausa"),
+        _card(etapa=EN_PAUSA),
         _card(motivo="x"),
         _card(cost_usd=0.01),
         _card(started=date(2026, 1, 1)),
@@ -262,7 +264,7 @@ def test_the_fingerprint_is_stable_and_changes_with_any_of_the_five_fields():
 
 
 def test_due_returns_only_the_cards_that_differ_from_what_was_sent():
-    same, different, new = _card(number=1), _card(number=2, etapa="Hecho"), _card(number=3)
+    same, different, new = _card(number=1), _card(number=2, etapa=HECHO), _card(number=3)
     sent = {1: board.fingerprint(same), 2: board.fingerprint(_card(number=2))}
     assert board.due([same, different, new], sent) == [different, new]
 
@@ -279,14 +281,14 @@ def test_present_reports_etapa_only_when_there_is_one():
 
 def test_a_new_card_sets_only_the_fields_it_has_and_clears_nothing():
     got = board.writes(_card(cost_usd=1.5), None)
-    assert [(w.field, w.value) for w in got] == [("etapa", "Próximo"), ("costo", 1.5)]
+    assert [(w.field, w.value) for w in got] == [("etapa", PROXIMO), ("costo", 1.5)]
 
 
 def test_a_field_that_lost_its_value_is_cleared_only_if_the_last_send_had_one():
-    now = _card(etapa="Próximo")
-    had = board.present(_card(etapa="En pausa", motivo="x"))
+    now = _card(etapa=PROXIMO)
+    had = board.present(_card(etapa=EN_PAUSA, motivo="x"))
     assert [(w.field, w.value) for w in board.writes(now, had)] == [
-        ("etapa", "Próximo"),
+        ("etapa", PROXIMO),
         ("motivo", None),
     ]
     assert [w.field for w in board.writes(now, board.present(now))] == ["etapa"]
@@ -330,8 +332,8 @@ def test_the_document_deliver_leaves_with_one_human_item_needs_you_with_its_moti
     state = {"id": "GH-12", "tracker_items": [item], "status": "ready_for_review"}
     patch = tracker_items.escalate_human(state, "2026-11-13T00:00:00+00:00")
     got = board.card(_facts(document={**state, **patch, "pull_request": "https://x/pull/7"}))
-    assert got.etapa == "Te necesita"
-    assert got.motivo == "esperando tu respuesta: the plan leaves 1 decision(s) to the owner"
+    assert got.etapa == TE_NECESITA
+    assert got.motivo == f"{board.WAITING_ANSWER}: the plan leaves 1 decision(s) to the owner"
 
 
 # -- the remembered Hecho cards that expire ----------------------------------------------

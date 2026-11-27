@@ -136,7 +136,10 @@ def _settle(issues: Mapping[int, SentEntry], read: _Read, lines: list[str]) -> d
         settled[number] = replace(entry, unread=entry.unread + 1)
     for number in [n for n, entry in settled.items() if domain.dropped(entry.unread)]:
         del settled[number]
-        lines.append(f"agentic: poll: board: #{number} dropped from memory after 3 failed reads")
+        lines.append(
+            f"agentic: poll: board: #{number} dropped from memory "
+            f"after {domain.UNREAD_MAX} failed reads"
+        )
     return settled
 
 
