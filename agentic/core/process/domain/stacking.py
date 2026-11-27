@@ -415,3 +415,73 @@ class ParentMemo:
 
     def fail_origin(self) -> None:
         self.origin_failed = True
+
+
+StackWaitCause = Literal["parent_not_ready", "head_not_carried", "parent_paused", "unreadable"]
+"""Why a stacked start waits (GH-858): the closed set the log line `agentic: stack: GH-N waits on
+#P (<cause>)` takes its cause from."""
+
+
+@dataclass(frozen=True)
+class Upstream:
+    """Start at the fetched upstream: the parent's work is merged or abandoned, so nothing is
+    left to stack on and the child's record is cleared."""
+
+
+@dataclass(frozen=True)
+class Parent:
+    """Start at `head`, the parent's approved head carried by its remote branch."""
+
+    head: str
+
+
+@dataclass(frozen=True)
+class Wait:
+    """Do nothing yet: no document, branch or worktree is written, and nothing escalates."""
+
+    cause: StackWaitCause
+
+
+@dataclass(frozen=True)
+class ParentFacts:
+    """What the application layer read about a stacked child's parent, for `start_ref`. Each
+    fact is `None` when its read failed. `merged`: the parent's work is in the upstream;
+    `abandoned`: its issue is closed as not planned; `paused`: its run escalated or was
+    stopped; `ready`: its document is `ready_for_review`; `head`: its approved
+    head (`None` if it has none); `carried`: its remote branch carries `head`."""
+
+    merged: bool | None
+    abandoned: bool | None
+    paused: bool | None
+    ready: bool | None
+    head: str | None
+    carried: bool | None
+
+
+def start_ref(parent_issue: int, facts: ParentFacts) -> Upstream | Parent | Wait:
+    """Where the child of `parent_issue` starts (GH-858, ADR-0104), the first row that applies:
+
+    1. the parent merged: `Upstream`; closed as not planned: `Upstream`;
+    2. the parent paused: `Wait(parent_paused)`;
+    3. the parent not Ready, or Ready with no approved head: `Wait(parent_not_ready)`;
+    4. the head not on the remote branch: `Wait(head_not_carried)`;
+    5. otherwise `Parent(head)`.
+
+    A fact that was not read decides nothing: it is `Wait(unreadable)`, never a stacked start.
+    Pure; `parent_issue` only names whose facts these are."""
+    del parent_issue
+    if facts.merged is True or (facts.merged is False and facts.abandoned is True):
+        return Upstream()
+    if facts.merged is None or facts.abandoned is None or facts.paused is None:
+        return Wait(cause="unreadable")
+    if facts.paused:
+        return Wait(cause="parent_paused")
+    if facts.ready is None:
+        return Wait(cause="unreadable")
+    if not facts.ready or facts.head is None:
+        return Wait(cause="parent_not_ready")
+    if facts.carried is None:
+        return Wait(cause="unreadable")
+    if not facts.carried:
+        return Wait(cause="head_not_carried")
+    return Parent(head=facts.head)

@@ -24,6 +24,8 @@ classDiagram
     class reflect_run__Known["Known"]
     class reflect_run__Outcome["Outcome"]
     class stack_review__StackReview["StackReview"]
+    class stacked_start__Decision["Decision"]
+    class stacked_start__StackWait["StackWait"]
     class stage0_escalation__Stage0Escalation["Stage0Escalation"]
     class stage0_failure__SmokeFailurePolicy["SmokeFailurePolicy"]
 ```

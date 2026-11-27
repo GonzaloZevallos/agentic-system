@@ -19,6 +19,7 @@ graph TD
     g_application__checks["checks (grupo)"]
     g_application__landing["landing (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
+    g_application__reflection["reflection (grupo)"]
     g_application__support__2["support parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
@@ -32,6 +33,7 @@ graph TD
     m_application__format_release["application.format_release"]
     m_application__github_budget["application.github_budget"]
     m_application__landing_body["application.landing_body"]
+    m_application__checkouts --> g_application__reflection
     m_application__checkouts --> g_application__support__2
     m_application__checkouts --> g_pkg__agentic__shared
     m_application__checkouts --> g_pkg__domain

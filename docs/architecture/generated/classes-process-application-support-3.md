@@ -43,8 +43,7 @@ classDiagram
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.Inbox`
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
+  - `ports.SystemRepo` se asocia con `ports.Inbox`
   - `ports.UnstageablePath` hereda de `ports.GitError`

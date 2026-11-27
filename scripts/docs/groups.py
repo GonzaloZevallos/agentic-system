@@ -149,6 +149,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.stack_facts": "support",
     "application.stack_hold": "support",
     "application.stack_review": "reflection",
+    "application.stacked_start": "reflection",
     "application.stage0_escalation": "reflection",
     "application.stage0_failure": "reflection",
     "application.stage0_prune": "reflection",

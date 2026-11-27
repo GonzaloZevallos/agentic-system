@@ -2691,7 +2691,9 @@ class TaskState(TaskInput, total=False):
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The parent a stacked task was started on (GH-855). Absent for every task that was not
     # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
-    stack_parent: StackParent
+    # `None` (GH-858, written only by `stacked_start`) is the form that clears the record: the
+    # document never writes the key for it.
+    stack_parent: StackParent | None
     # The wait on an unfetchable stacked head (GH-885); `None` (written by `record_closure`, which
     # cannot delete a key) reads as no record. Written only by `stacking.unfetchable_patch` and
     # read only through `stacking.parse_unfetchable`.

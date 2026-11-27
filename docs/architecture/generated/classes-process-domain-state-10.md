@@ -64,5 +64,3 @@ classDiagram
   - `task.TaskState` se asocia con `task.InterviewStats`
 - [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.StackParent`

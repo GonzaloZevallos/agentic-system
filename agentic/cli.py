@@ -82,7 +82,7 @@ from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
 from .core.process.adapters.telemetry import NoTelemetry, Telemetry
-from .core.process.application import archive, close_issues, reflect_run, release
+from .core.process.application import archive, close_issues, reflect_run, release, stacked_start
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
@@ -141,6 +141,7 @@ from .core.process.domain import (
     rules,
     size_budget,
     stack_signals,
+    stacking,
 )
 from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
@@ -181,6 +182,9 @@ from .shared.errors import CannotStart as CannotStart
 # The eval commands moved to `eval_commands`; the old names stay here as the same objects.
 # `_eval_score` and `_read_eval_set` are imported above and used
 # here; the rest are only re-exported. `_eval_compare` is the wrapper below.
+# The exit code of a stacked start that waits on its parent (GH-858): no document, branch or
+# escalation is left behind, and the poller's launch schedule spaces the next try.
+STACK_WAIT_EXIT = 3
 UNKNOWN_SYSTEM_VERSION = eval_commands.UNKNOWN_SYSTEM_VERSION
 _fmt_figure = eval_commands._fmt_figure
 _bucket_documents = eval_commands._bucket_documents
@@ -2188,6 +2192,9 @@ async def _run(
                 )
             if diagnosis:
                 task = {**task, "description": f"{task['description']}\n\n{diagnosis}"}
+            # The one stacked-start decision of a launch, before the archive moves anything and
+            # before any document is written: a `Wait` leaves the previous run exactly as it was.
+            stack_patch = _stack_gate(task["id"], fresh, ports, cfg, registry)
             archive_failures = _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -2199,7 +2206,10 @@ async def _run(
                 migrated_app = graph.compile(checkpointer=migrated_saver)
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
-                entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
+                entered = {
+                    **rules.entering(task, cap=cfg.decided_cap, carried=carried),
+                    **stack_patch,
+                }
                 if assignment is not None:
                     entered = {**entered, "assignment": assignment}
                 if archive_failures:
@@ -2210,6 +2220,38 @@ async def _run(
                     migrated_app, entered, config, entered, ports, cfg, "run", stop=stop
                 )
     _report(final, task["id"], ports)
+
+
+def _stack_gate(
+    task_id: str, fresh: bool, ports: Ports, cfg: Configuration, registry: RunRegistry
+) -> dict[str, object]:
+    """The document fragment a stacked start owes the run's first write (GH-858): empty when the
+    launch has no parent to ask about -- the poller left no hint and, under `--fresh`, the
+    previous document holds no legible `stack_parent` (which a task already stacked is followed
+    by, without reading the switch). Otherwise `stacked_start.decide` and its patch, unchanged.
+    A `Wait` ends the invocation here with `STACK_WAIT_EXIT` and one line: nothing was archived,
+    written or spent, and nothing escalates."""
+    previous = _previous_document(task_id, ports)
+    record = stacking.parse_stack_parent(previous) if previous else stacking.Absent()
+    number = issue_number(task_id)
+    attempt = registry.launch_attempts(product_name(ports), number) if number else None
+    parent = attempt.stack_hint.parent if attempt and attempt.stack_hint else None
+    if parent is None and fresh and isinstance(record, dict):
+        parent = record["issue"]
+    if parent is None:
+        return {}
+    decision = stacked_start.decide(
+        task_id,
+        parent,
+        record if isinstance(record, dict) else None,
+        ports,
+        datetime.now(UTC).isoformat(),
+        cfg=cfg,
+    )
+    if isinstance(decision.ref, stacking.Wait):
+        stacked_start.log_wait(task_id, parent, decision.ref.cause)
+        sys.exit(STACK_WAIT_EXIT)
+    return decision.patch
 
 
 def _previous_document(task_id: str, ports: Ports) -> dict | None:
@@ -3744,6 +3786,11 @@ async def _invoke(
         with telemetry.task_span(task["id"], task["title"], product_name(ports), arm=arm) as run:
             try:
                 final = await app.ainvoke(graph_input, config=config)
+            except stacked_start.StackWait as wait:
+                # A branch that could not be started at its recorded head: not a crash, and
+                # nothing escalates -- no branch was made, so the next start tries again.
+                stacked_start.log_wait(task["id"], wait.parent, wait.cause)
+                sys.exit(STACK_WAIT_EXIT)
             except Exception:
                 # The run broke outside any use case; the task span still closes with a
                 # status, so the trace carries it (`crashed` is telemetry-only, never state).

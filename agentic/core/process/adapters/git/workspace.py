@@ -200,9 +200,12 @@ class GitWorkspace:
 
     # -- checkouts --------------------------------------------------------------
 
-    def task_checkout(self, task_id: str) -> Checkout:
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
+        """`start`, when given, is asked only for a branch that does not exist yet and returns
+        the sha it starts at (GH-858): already decided, so nothing slow runs under git's lock.
+        Without it the branch starts at the fetched upstream, as always."""
         return self._checkout(
-            rules.task_branch(task_id), WORKTREES / task_id, start=self._new_task_base
+            rules.task_branch(task_id), WORKTREES / task_id, start=start or self._new_task_base
         )
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:

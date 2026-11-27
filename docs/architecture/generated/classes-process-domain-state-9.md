@@ -56,5 +56,3 @@ classDiagram
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
-  - `task.TaskState` se asocia con `task.StackParent`

@@ -73,6 +73,7 @@ from agentic.core.process.application.ports import (
     SpecReader,
     SpecUnreadable,
     SpecValidator,
+    StackHint,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -1123,6 +1124,9 @@ class MemoryWorkspace:
         self.checkouts_made: list[str] = []
         self.pruned = 0
         self.fetched_commits: list[str] = []
+        # Shas `fetch_commit` cannot bring in, and where each stacked branch started (GH-858).
+        self.unfetchable: set[str] = set()
+        self.started: dict[str, str] = {}
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
         # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
@@ -1162,9 +1166,17 @@ class MemoryWorkspace:
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
 
-    def task_checkout(self, task_id: str) -> Checkout:
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
         branch = rules.task_branch(task_id)
-        return self._made(branch, self.ROOT / task_id, "base0")
+        path = self.ROOT / task_id
+        # As the real one: the start is asked only for a branch not made yet, and its sha is
+        # the base. Without one, the default base.
+        if start is not None and branch not in self.checkouts_made:
+            self.started[branch] = start()
+            return self._made(branch, path, self.started[branch])
+        if branch in self.started:
+            return self._made(branch, path, self.started[branch])
+        return self._made(branch, path, "base0")
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
         branch = rules.subtask_branch(task_id, subtask_id)
@@ -1519,6 +1531,8 @@ class MemoryWorkspace:
         self.cleaned.append(task_id)
 
     def branch_head(self, branch: str) -> str | None:
+        if branch in self.started:
+            return self.started[branch]
         return self.existing_branches[branch][0] if branch in self.existing_branches else None
 
     def base_of(self, branch: str) -> str | None:
@@ -1535,7 +1549,7 @@ class MemoryWorkspace:
     # `diff_paths`, and every worktree it asks for or removes is kept by name.
     def fetch_commit(self, sha: str) -> bool:
         self.fetched_commits.append(sha)
-        return True
+        return sha not in self.unfetchable
 
     # GH-229: the two-phase reads of a branch's own ADRs, over `branch_commits`.
     def advance_master(self, *files: str) -> str:
@@ -2261,12 +2275,17 @@ class MemoryRunRegistry:
         return self.attempts.get((product, issue))
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
         kept = arm if arm is not None else (existing.arm if existing is not None else None)
-        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept)
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept, stack_hint)
 
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)

@@ -1169,7 +1169,10 @@ class Workspace(Protocol):
         of it included. None when `path` is in no repository, or when git is not there."""
         ...
 
-    def task_checkout(self, task_id: str) -> Checkout: ...
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
+        """The task's worktree on its branch. `start` is asked only when the branch does not
+        exist and returns the sha it starts at; without it, the fetched upstream."""
+        ...
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...
 
@@ -2246,6 +2249,16 @@ class RunRegistration:
 
 
 @dataclass(frozen=True)
+class StackHint:
+    """The Ready parent a stacked launch was judged to build on (GH-858, ADR-0103): its issue
+    and the approved head the judgement saw. It only names the parent: the start gate reads
+    the parent's facts afresh, so a hint never decides a base."""
+
+    parent: int
+    head: str
+
+
+@dataclass(frozen=True)
 class LaunchAttempt:
     """What a launch left behind when it tried but did not reach a registered run
     (GH-137, `launches/<product>-<issue>.json`): `since` and `prior` feed
@@ -2258,6 +2271,9 @@ class LaunchAttempt:
     # record, so a relaunch of the same issue keeps it and it counts until a document
     # exists. `None` for a launch with no experiment, which is every launch of today.
     arm: str | None = None
+    # The stacked-start hint of the launch (GH-858): rewritten by every `record_launch`, never
+    # inherited, so a launch that is not stacked leaves none.
+    stack_hint: StackHint | None = None
 
 
 class CheckResults(Protocol):
@@ -2322,12 +2338,19 @@ class RunRegistry(Protocol):
         ...
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
         clock, never read here): `prior` grows by one, `since` becomes `when`. `arm` (GH-470)
         is the arm assigned to this launch; `None` keeps the one the record already has, and a
-        record that never had one stays `{since, prior}` exactly."""
+        record that never had one stays `{since, prior}` exactly. `stack_hint` (GH-858) is the
+        parent of a stacked launch; unlike the arm it is rewritten every time: `None` clears
+        an old one."""
         ...
 
     def clear_launch(self, product: str, issue: int) -> None:

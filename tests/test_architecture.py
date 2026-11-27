@@ -324,6 +324,76 @@ def test_the_hold_literal_guard_rejects_a_module_that_writes_the_label(tmp_path)
     assert _outside_the_hold_home(package) == ["core/process/domain/copy.py"]
 
 
+# GH-858: only `stacked_start` writes `stack_parent`; the other two homes read it.
+STACK_PARENT_HOMES = frozenset(
+    {
+        Path("core/process/domain/document.py"),
+        Path("core/process/domain/stacking.py"),
+        Path("core/process/application/stacked_start.py"),
+    }
+)
+STACK_WRITER = Path("core/process/application/stacked_start.py")
+# `stacking` also builds the value, as a parser of what a document says and as a placeholder: it
+# reads a record, it never writes one.
+STACK_BUILDERS = frozenset({STACK_WRITER, Path("core/process/domain/stacking.py")})
+
+
+def _callee_name(func: ast.expr) -> str | None:
+    """The name a call goes by, bare (`StackParent(...)`) or qualified (`task.StackParent(...)`)."""
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else None
+
+
+def _stack_parent_leaks(package: Path) -> list[str]:
+    """The files outside their home that hold the quoted `stack_parent` key, or call
+    `StackParent(` outside the writer."""
+    found: list[str] = []
+    for path in sorted(package.rglob("*.py")):
+        relative = path.relative_to(package)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        quoted = relative not in STACK_PARENT_HOMES and any(
+            (isinstance(n, ast.Constant) and n.value == "stack_parent")
+            or (isinstance(n, ast.keyword) and n.arg == "stack_parent")
+            for n in ast.walk(tree)
+        )
+        built = relative not in STACK_BUILDERS and any(
+            isinstance(n, ast.Call) and _callee_name(n.func) == "StackParent"
+            for n in ast.walk(tree)
+        )
+        if quoted or built:
+            found.append(str(relative))
+    return found
+
+
+def test_only_stacked_start_writes_the_stack_parent_record():
+    assert _stack_parent_leaks(PACKAGE) == []
+
+
+def test_the_stack_parent_guard_rejects_a_module_that_writes_or_builds_it(tmp_path):
+    package = tmp_path / "agentic"
+    for relative, source in (
+        (
+            "core/process/application/stacked_start.py",
+            'X = {"stack_parent": 1}\nStackParent(a=1)\n',
+        ),
+        ("core/process/application/other.py", 'patch = {"stack_parent": None}\n'),
+        ("core/process/application/builds.py", "r = StackParent(issue=1)\n"),
+        ("core/process/application/qualified.py", "r = task.StackParent(issue=1)\n"),
+        ("core/process/application/keyword.py", "patch = dict(stack_parent=None)\n"),
+        ("core/process/application/prose.py", '"""The stack_parent key, in prose."""\n'),
+    ):
+        target = package / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source)
+    assert _stack_parent_leaks(package) == [
+        "core/process/application/builds.py",
+        "core/process/application/keyword.py",
+        "core/process/application/other.py",
+        "core/process/application/qualified.py",
+    ]
+
+
 # GH-990: every `gh` launch of this process counts into the one `GhCallLog`, so a call site that
 # leaves the log out is a launch nobody sees. Four scans over `agentic/**`, each with a self-test.
 GH_HOME = "core/process/adapters/github/run.py"
