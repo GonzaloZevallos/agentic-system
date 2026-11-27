@@ -9,11 +9,18 @@ from typing import get_args
 
 import pytest
 
-from agentic.core.process.application import poll
+from agentic.core.process.application import board_sync, poll, stack_hold
 from agentic.core.process.application.ports import IssueRow, IssueState, TrackerCallFailed
 from agentic.core.process.domain import board as domain
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeBoard, FakeBoardSent, FakeLauncher, MemoryRunRegistry, memory_ports
+from tests.fakes import (
+    FakeBoard,
+    FakeBoardSent,
+    FakeLauncher,
+    MemoryDocuments,
+    MemoryRunRegistry,
+    memory_ports,
+)
 
 TE_NECESITA, EN_CURSO, PROXIMO, EN_PAUSA, HECHO = get_args(domain.Etapa)
 
@@ -114,3 +121,45 @@ def test_a_closed_issue_is_hecho_with_its_day(tmp_path):
     lines = _round(tmp_path, ports)
     assert lines == ["agentic: poll: nothing to do this round"]
     assert _etapas(board) == {9: HECHO}
+
+
+def test_the_mirror_gets_the_stack_pauses_the_round_held_its_children_with(tmp_path, monkeypatch):
+    held = stack_hold.StackHold(
+        held={5: "parent_stopped", 6: "unreadable"},
+        causes={5: "parent_stopped", 6: "unreadable"},
+        culprits={5: 40},
+    )
+    monkeypatch.setattr(stack_hold, "compute", lambda *args, **kwargs: held)
+    monkeypatch.setattr(stack_hold, "write_episodes", lambda *args, **kwargs: [])
+    seen: list[dict] = []
+    real = board_sync.mirror
+
+    def spy(*args, **kwargs):
+        seen.append(dict(kwargs["stack_pauses"]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(board_sync, "mirror", spy)
+    board = FakeBoard(open=_rows())
+    docs = MemoryDocuments()
+    for number in (5, 6):
+        docs.save({"id": f"GH-{number}", "status": "developing"})
+    ports = memory_ports(documents=docs, board=board, board_sent=FakeBoardSent())
+    ports.tracker._queue = [5, 6]
+    _round(tmp_path, ports)
+    assert seen == [{5: ("parent_stopped", 40), 6: ("unreadable", None)}]
+    motivo = {w.issue: w.value for w in board.written if w.field == "motivo"}
+    assert motivo[5] == "padre #40 detenido"
+    assert motivo[6] == domain.STACK_UNREADABLE
+
+
+def test_a_round_with_no_held_child_gives_the_mirror_no_pauses(tmp_path, monkeypatch):
+    seen: list[dict] = []
+    real = board_sync.mirror
+
+    def spy(*args, **kwargs):
+        seen.append(dict(kwargs["stack_pauses"]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(board_sync, "mirror", spy)
+    _round(tmp_path, _queued(FakeBoard(open=_rows()), FakeBoardSent()))
+    assert seen == [{}]

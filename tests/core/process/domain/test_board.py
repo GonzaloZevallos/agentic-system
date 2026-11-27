@@ -383,3 +383,94 @@ def test_an_entry_that_failed_to_read_goes_last():
 
 def test_an_issue_leaves_the_memory_at_three_failed_reads():
     assert [board.dropped(n) for n in (0, 1, 2, 3, 4)] == [False, False, False, True, True]
+
+
+# -- a stacked child held by its parent (ADR-0103) -------------------------------------------
+
+PAUSED_ROWS = [
+    ("parent_escalated", (PROXIMO, f"{board.BLOCKER_PREFIX}#40")),
+    ("parent_not_ready", (PROXIMO, f"{board.BLOCKER_PREFIX}#40")),
+    ("parent_stopped", (TE_NECESITA, board.STACK_STOPPED.format(40))),
+    ("parent_abandoned", (TE_NECESITA, board.STACK_ABANDONED.format(40))),
+    ("unreadable", (TE_NECESITA, board.STACK_UNREADABLE)),
+]
+
+
+def _stacked(cause, parent=40, **kwargs):
+    return _got(document=_doc("developing"), stack_pause=(cause, parent), **kwargs)
+
+
+@pytest.mark.parametrize(("cause", "expected"), PAUSED_ROWS)
+def test_each_stack_cause_puts_the_child_on_its_row(cause, expected):
+    assert _stacked(cause) == expected
+
+
+def test_the_stack_causes_tested_are_every_cause_but_none():
+    from agentic.core.process.domain.stacking import PauseCause
+
+    assert {cause for cause, _ in PAUSED_ROWS} == set(get_args(PauseCause)) - {"none"}
+
+
+def test_the_motivo_names_the_link_that_caused_the_hold_not_the_direct_parent():
+    # the chain is 7 -> 30 -> 40: the culprit is the grandparent #40
+    assert _stacked("parent_stopped", 40) == (TE_NECESITA, "padre #40 detenido")
+    assert _stacked("parent_escalated", 31) == (PROXIMO, "espera #31")
+
+
+@pytest.mark.parametrize(
+    "cause", ["parent_escalated", "parent_not_ready", "parent_stopped", "parent_abandoned"]
+)
+def test_a_cause_that_needs_a_number_and_has_none_reads_as_unreadable(cause):
+    assert _stacked(cause, None) == (TE_NECESITA, board.STACK_UNREADABLE)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"live": True},
+        {"closed": True, "closed_at": TODAY},
+        {"labels": NEEDS_HUMAN},
+        {"labels": AGENTIC | {"ready-for-human"}},
+        {"labels": AGENTIC | {"agentic-hold"}},
+        {"labels": AGENTIC | {"needs-triage"}},
+        {"labels": frozenset()},
+    ],
+)
+def test_a_live_process_a_label_or_a_closed_issue_beats_a_stack_pause(kwargs):
+    for cause, _ in PAUSED_ROWS:
+        paused = board.card(_facts(document=_doc("developing"), stack_pause=(cause, 40), **kwargs))
+        plain = board.card(_facts(document=_doc("developing"), **kwargs))
+        assert paused == plain
+
+
+@pytest.mark.parametrize("status", get_args(Status))
+def test_only_the_in_flight_statuses_show_the_stack_pause(status):
+    document = _doc(status, escalated="why")
+    paused = board.card(_facts(document=document, stack_pause=("parent_stopped", 40)))
+    plain = board.card(_facts(document=document))
+    if status in board._IN_FLIGHT:
+        assert (paused.etapa, paused.motivo) == (TE_NECESITA, "padre #40 detenido")
+    else:
+        assert paused == plain
+
+
+def test_a_child_without_a_document_ignores_the_stack_pause():
+    assert _got(stack_pause=("parent_stopped", 40)) == (PROXIMO, board.WAITING_PLACE)
+
+
+def test_a_stack_pause_beats_the_childs_own_open_blockers():
+    got = _stacked("parent_stopped", blocker=rules.BlockerReport(open=(12,)))
+    assert got == (TE_NECESITA, "padre #40 detenido")
+
+
+def test_a_pause_that_ends_leaves_no_residue_on_the_card():
+    document = _doc("developing")
+    before = board.card(_facts(document=document, blocker=BLOCKED))
+    board.card(_facts(document=document, blocker=BLOCKED, stack_pause=("unreadable", None)))
+    after = board.card(_facts(document=document, blocker=BLOCKED, stack_pause=None))
+    assert after == before
+
+
+@pytest.mark.parametrize("row", [kwargs for kwargs, _ in ROWS], ids=range(len(ROWS)))
+def test_no_stack_pause_gives_every_card_it_had_before(row):
+    assert board.card(_facts(**row)) == board.card(_facts(**row, stack_pause=None))

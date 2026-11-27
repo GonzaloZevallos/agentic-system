@@ -3346,6 +3346,12 @@ def _recent_spend(ports: Ports, now: datetime) -> tuple[list[rules.SpendRun], in
     return fresh, skipped
 
 
+def _stack_pauses(view: stack_hold.StackHold) -> dict[int, tuple[stacking.PauseCause, int | None]]:
+    """The round's held children as the board mirror's issue-level fact: the cause and the chain
+    link that caused it, from what `stack_hold.compute` already read. No read of its own."""
+    return {number: (cause, view.culprits.get(number)) for number, cause in view.held.items()}
+
+
 def eval_set_unread_of(
     upstream: Upstream, eval_set: frozenset[int] | None
 ) -> rules.EvalSetUnread | None:
@@ -4106,6 +4112,7 @@ def run_once(
             now,
             live_issues=_live_issues(ports, registry, plan.actions),
             blockers=blockers_by_issue,
+            stack_pauses=_stack_pauses(stack_view),
         )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.

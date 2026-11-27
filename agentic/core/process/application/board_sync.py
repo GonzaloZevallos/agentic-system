@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime
 
 from ..domain import board as domain
 from ..domain import rules
+from ..domain.stacking import PauseCause
 from .ports import Board, BoardSent, IssueRow, Ports, SentEntry, SentMemory, TrackerCallFailed
 
 _FAILURES = (TrackerCallFailed, ValueError, OSError)
@@ -93,6 +94,7 @@ def _facts(
     live_issues: frozenset[int],
     blockers: Mapping[int, rules.BlockerReport],
     today: date,
+    stack_pauses: Mapping[int, tuple[PauseCause, int | None]],
 ) -> list[domain.IssueFacts]:
     from .resume import state_from  # at call time: `resume` reaches `poll`, which imports this
 
@@ -110,6 +112,7 @@ def _facts(
                 document=document,
                 today=today,
                 resumes_itself=document is not None and rules.poller_retakes(state_from(document)),
+                stack_pause=stack_pauses.get(row.number),
             )
         )
     return facts
@@ -159,6 +162,7 @@ def mirror(
     *,
     live_issues: frozenset[int],
     blockers: Mapping[int, rules.BlockerReport],
+    stack_pauses: Mapping[int, tuple[PauseCause, int | None]],
 ) -> list[str]:
     """One round of the mirror: the log lines it has to say (none when idle). No board
     configured, or a recent whole failure still resting, makes no call at all."""
@@ -189,7 +193,9 @@ def mirror(
     if read.limit_reached:
         lines.append("agentic: poll: board: issue list reached its limit, older ones not mirrored")
     issues = _settle(memory.issues, read, lines)
-    cards = [domain.card(f) for f in _facts(ports, read.rows, live_issues, blockers, today)]
+    cards = [
+        domain.card(f) for f in _facts(ports, read.rows, live_issues, blockers, today, stack_pauses)
+    ]
     pending = domain.due(cards, {n: e.fingerprint for n, e in issues.items()})
     writes: dict[int, list[domain.FieldWrite]] = {}
     for card in pending:

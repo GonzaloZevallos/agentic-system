@@ -32,8 +32,10 @@ def row(number: int, labels: frozenset[str] = AGENTIC, closed: date | None = Non
     return IssueRow(number, "closed" if closed else "open", labels, closed)
 
 
-def mirror(ports, *, live=frozenset(), blockers=None, now=NOW):
-    return board_sync.mirror(ports, now, live_issues=live, blockers=blockers or {})
+def mirror(ports, *, live=frozenset(), blockers=None, now=NOW, stack_pauses=None):
+    return board_sync.mirror(
+        ports, now, live_issues=live, blockers=blockers or {}, stack_pauses=stack_pauses or {}
+    )
 
 
 def documents(**by_issue: dict) -> MemoryDocuments:
@@ -131,6 +133,31 @@ def test_unchanged_issue_makes_no_write_and_only_the_open_read() -> None:
     board.calls.clear()
     assert mirror(ports) == []
     assert [name for name, _ in board.calls] == ["project_id", "open_issues"]
+
+
+def test_a_stack_pause_reaches_the_written_card_and_costs_no_new_call() -> None:
+    docs = documents(i1={"status": "developing"}, i2={"status": "developing"})
+    board = FakeBoard(open=[row(1), row(2)])
+    ports, _ = ports_with(board, docs)
+    mirror(ports, stack_pauses={1: ("parent_stopped", 40)})
+    assert etapas(board) == {1: TE_NECESITA, 2: TE_NECESITA}
+    motivo = {w.issue: w.value for w in board.written if w.field == "motivo"}
+    assert motivo == {1: "padre #40 detenido", 2: domain.NO_LIVE_PROCESS}
+    # the same round with no pause reads the same things: the pause is not a read
+    free_board = FakeBoard(open=[row(1), row(2)])
+    free_ports, _ = ports_with(free_board, docs)
+    mirror(free_ports)
+    assert [name for name, _ in board.calls] == [name for name, _ in free_board.calls]
+
+
+def test_a_stack_pause_that_ends_puts_the_card_back() -> None:
+    docs = documents(i1={"status": "developing"})
+    board = FakeBoard(open=[row(1)])
+    ports, _ = ports_with(board, docs)
+    mirror(ports, stack_pauses={1: ("parent_escalated", 40)})
+    mirror(ports)
+    motivos = [w.value for w in board.written if w.field == "motivo"]
+    assert motivos == [f"{domain.BLOCKER_PREFIX}#40", domain.NO_LIVE_PROCESS]
 
 
 def test_a_launch_this_round_is_corriendo() -> None:

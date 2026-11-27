@@ -15,9 +15,10 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal, Protocol, get_args
+from typing import Literal, Protocol, assert_never, get_args
 
 from . import hold, rules, tracker_items
+from .stacking import PauseCause
 from .task import Status
 
 Etapa = Literal["Te necesita", "En curso", "Próximo", "En pausa", "Hecho"]
@@ -57,6 +58,9 @@ HELD = "retenida: agentic-hold"
 NEEDS_TRIAGE = "sin triage"
 OUTSIDE = "fuera de la bandeja"
 BLOCKER_PREFIX = "espera "
+STACK_STOPPED = "padre #{} detenido"
+STACK_ABANDONED = "padre #{} abandonado"
+STACK_UNREADABLE = "pila ilegible"
 FALLBACK_MOTIVO: dict[Etapa, str] = {
     "Te necesita": NEEDS_ATTENTION,
     "En curso": RUNNING,
@@ -81,7 +85,9 @@ _ENDS: dict[Status, str] = {
 class IssueFacts:
     """Everything `card` reads about one issue: its own state and `today`. `blocker` is only
     meaningful for an issue without a document; `resumes_itself` says the poller retakes this
-    pause on its own (`rules.poller_retakes`)."""
+    pause on its own (`rules.poller_retakes`). `stack_pause` is why the round holds this stacked
+    child, as the cause and the issue of the chain link that caused it (`None` for none): a
+    fact about this issue the round already computed, never a scheduling result."""
 
     number: int
     closed: bool
@@ -92,6 +98,7 @@ class IssueFacts:
     document: Mapping[str, object] | None
     today: date
     resumes_itself: bool
+    stack_pause: tuple[PauseCause, int | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -151,7 +158,8 @@ def _needs_you(facts: IssueFacts) -> str:
 
 
 def _attention(facts: IssueFacts, status: Status | None) -> str | None:
-    """The Motivo of a Te necesita card, `None` when the issue does not need the person."""
+    """The Motivo of a Te necesita card that no other rule outranks, `None` when the issue
+    does not need the person (or is in flight, which `_stalled` says)."""
     if status == "waiting_on_human" or NEEDS_HUMAN_LABEL in facts.labels:
         return _needs_you(facts)
     if READY_FOR_HUMAN_LABEL in facts.labels:
@@ -162,7 +170,12 @@ def _attention(facts: IssueFacts, status: Status | None) -> str | None:
         return UNKNOWN_STATUS
     if status in _ENDS:
         return _ENDS[status]
-    if status in _IN_FLIGHT and not facts.blocker:
+    return None
+
+
+def _stalled(facts: IssueFacts, status: Status | None) -> str | None:
+    """An in-flight document with no live process and no blocker of its own."""
+    if facts.document is not None and status in _IN_FLIGHT and not facts.blocker:
         return NO_LIVE_PROCESS
     return None
 
@@ -175,6 +188,37 @@ def _paused(facts: IssueFacts) -> str | None:
     if AGENTIC_LABEL not in facts.labels:
         return OUTSIDE
     return None
+
+
+def _stack_row(pause: tuple[PauseCause, int | None]) -> tuple[Etapa, str]:
+    """The row of a stacked child its parents hold. The Motivo names the link that caused the
+    hold; a cause that needs one and has none is `unreadable`. `none` is no pause: the caller
+    never passes it."""
+    cause, link = pause
+    if link is None:
+        return "Te necesita", STACK_UNREADABLE
+    match cause:
+        case "parent_escalated" | "parent_not_ready":
+            return "Próximo", f"{BLOCKER_PREFIX}#{link}"
+        case "parent_stopped":
+            return "Te necesita", STACK_STOPPED.format(link)
+        case "parent_abandoned":
+            return "Te necesita", STACK_ABANDONED.format(link)
+        case "unreadable":
+            return "Te necesita", STACK_UNREADABLE
+        case "none":
+            return "Te necesita", STACK_UNREADABLE
+        case _:
+            assert_never(cause)
+
+
+def _stack_paused(facts: IssueFacts, status: Status | None) -> tuple[Etapa, str] | None:
+    """The stack row, only for a document in flight (ADR-0103: a task with no document yet or
+    past `developing` has nothing to hold)."""
+    pause = facts.stack_pause
+    if pause is None or pause[0] == "none" or facts.document is None or status not in _IN_FLIGHT:
+        return None
+    return _stack_row(pause)
 
 
 def _stage(facts: IssueFacts) -> tuple[Etapa | None, str | None]:
@@ -191,6 +235,10 @@ def _stage(facts: IssueFacts) -> tuple[Etapa | None, str | None]:
         return "En curso", IN_PR
     if (attention := _attention(facts, status)) is not None:
         return "Te necesita", attention
+    if _paused(facts) is None and (row := _stack_paused(facts, status)) is not None:
+        return row
+    if (stalled := _stalled(facts, status)) is not None:
+        return "Te necesita", stalled
     if (paused := _paused(facts)) is not None:
         return "En pausa", paused
     if facts.blocker:
