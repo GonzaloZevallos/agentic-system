@@ -21,6 +21,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.gh_calls import GhCallKind
 from ..domain.github_access import Turn as Turn
 from ..domain.github_access import WriteGate as WriteGate
 from ..domain.github_budget import Budget
@@ -782,6 +783,24 @@ class StopFlag(Protocol):
     def is_set(self) -> bool: ...
 
     def set(self) -> None: ...
+
+
+class GhCallLog(Protocol):
+    """How many times the system launched `gh`, by kind (GH-990).
+
+    `record` counts one attempted launch: once per attempt, before the process starts, so a
+    missing `gh` counts too. It is not a GitHub request: a launch may make none, or several
+    (a GraphQL call, a paginated read).
+
+    `drain` returns the counts since the last drain, all six kinds present and zeros
+    included, and resets them. Exactly one consumer drains (the poller round, in a later
+    part): a second would take counts the first never sees.
+
+    The log is per process: it does not see the `gh` another process launches."""
+
+    def record(self, kind: GhCallKind) -> None: ...
+
+    def drain(self) -> Mapping[GhCallKind, int]: ...
 
 
 class Commands(Protocol):
