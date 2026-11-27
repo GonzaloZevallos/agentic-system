@@ -925,6 +925,7 @@ ScopeCause = Literal[
     "first",
     "no_merge",
     "clean",
+    "regenerated",
     "resolved",
     "rewritten",
     "own_before_merge",
