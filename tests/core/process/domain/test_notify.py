@@ -8,7 +8,13 @@ import pytest
 
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.domain import notify, rules
-from agentic.core.process.domain.notify import DigestKey, EventKey, NotifiedRecord, WaitingEvent
+from agentic.core.process.domain.notify import (
+    DigestEvent,
+    DigestKey,
+    EventKey,
+    NotifiedRecord,
+    WaitingEvent,
+)
 
 NOW = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 AT = "2026-11-20T11:00:00+00:00"
@@ -269,8 +275,7 @@ def test_the_slug_pattern_restates_the_knowledge_one():
     assert notify._PRODUCT_SLUG.pattern == stack.SLUG.pattern
 
 
-def test_notify_defines_no_digest_computation_and_is_inert():
-    assert not hasattr(notify, "digest_hour") and not hasattr(notify, "digest_event")
+def test_notify_constants_are_the_agreed_ones():
     assert notify.SENDS_PER_ROUND == 5 and notify.DEFAULT_DIGEST_HOUR == 20
 
 
@@ -540,3 +545,120 @@ def test_every_small_input_matches_the_oracle_in_any_order():
                 assert all(got is None or got < i for i in unkeyed)
                 for order in itertools.permutations(rows):
                     assert notify.advance_read_at(read_at, list(order), cut_at=cut_at) == got
+
+
+NY = ZoneInfo("America/New_York")
+
+
+def _utc(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=UTC)
+
+
+def _started(at: datetime) -> NotifiedRecord:
+    return NotifiedRecord(started_at=at, failed_at=None, activity_read_at=None, keys={})
+
+
+def _digest(now: datetime, record: NotifiedRecord, hour: int = 20) -> DigestEvent | None:
+    return notify.digest_event(now, NY, hour, record, "apostrophe")
+
+
+def test_an_activation_at_21_local_with_hour_20_gives_no_digest():
+    # Replaces the GH-1056 invariant "never due on the local date of started_at": due() alone
+    # keeps an instant at or before the activation from being owed.
+    started = datetime(2026, 11, 20, 21, tzinfo=NY).astimezone(UTC)
+    record = _started(started)
+    assert _digest(started + timedelta(minutes=1), record) is None
+    assert _digest(started + timedelta(hours=2), record) is None
+
+
+def test_an_activation_at_19_local_gives_a_digest_due_at_20_local_the_same_day():
+    # Replaces the GH-1056 invariant "never due on the local date of started_at".
+    started = datetime(2026, 11, 20, 19, tzinfo=NY).astimezone(UTC)
+    record = _started(started)
+    assert _digest(started + timedelta(minutes=59), record) is None
+    event = _digest(started + timedelta(hours=1), record)
+    assert event == DigestEvent(DigestKey("apostrophe", date(2026, 11, 20)), _utc(2026, 11, 21, 1))
+
+
+def test_spring_forward_reads_the_missing_hour_as_the_pre_transition_instant():
+    record = _started(_utc(2026, 3, 1, 0))
+    assert _digest(_utc(2026, 3, 8, 6, 59), record, hour=2) is None
+    event = _digest(_utc(2026, 3, 8, 7), record, hour=2)
+    assert event == DigestEvent(DigestKey("apostrophe", date(2026, 3, 8)), _utc(2026, 3, 8, 7))
+
+
+def test_fall_back_uses_the_first_occurrence_and_not_the_second_one_again():
+    record = _started(_utc(2026, 10, 25, 0))
+    key = DigestKey("apostrophe", date(2026, 11, 1))
+    assert _digest(_utc(2026, 11, 1, 4, 59), record, hour=1) is None
+    assert _digest(_utc(2026, 11, 1, 5), record, hour=1) == DigestEvent(key, _utc(2026, 11, 1, 5))
+    sent = replace(record, keys={key: "sent"})
+    assert _digest(_utc(2026, 11, 1, 6), sent, hour=1) is None
+
+
+@pytest.mark.parametrize("outcome", ["sent", "covered", "superseded", "unbuildable"])
+def test_a_second_digest_for_the_same_local_date_is_not_due(outcome: Any):
+    record = _started(_utc(2026, 11, 1, 0))
+    key = DigestKey("apostrophe", date(2026, 11, 20))
+    assert _digest(_utc(2026, 11, 21, 2), record) is not None
+    assert _digest(_utc(2026, 11, 21, 2), replace(record, keys={key: outcome})) is None
+
+
+def test_a_digest_of_another_product_or_date_does_not_settle_this_one():
+    record = _started(_utc(2026, 11, 1, 0))
+    keys: Any = {
+        DigestKey("other", date(2026, 11, 20)): "sent",
+        DigestKey("apostrophe", date(2026, 11, 19)): "sent",
+    }
+    assert _digest(_utc(2026, 11, 21, 2), replace(record, keys=keys)) is not None
+
+
+def test_without_an_activation_no_digest_is_due():
+    assert _digest(_utc(2026, 11, 21, 2), EMPTY) is None
+
+
+def test_only_the_local_date_of_now_is_considered_so_yesterdays_digest_is_lost():
+    record = _started(_utc(2026, 11, 1, 0))
+    now = datetime(2026, 11, 21, 0, 10, tzinfo=NY).astimezone(UTC)
+    assert _digest(now, record) is None
+    event = _digest(now, record, hour=0)
+    assert event is not None and event.key.local_date == date(2026, 11, 21)
+
+
+def test_the_key_date_is_the_local_date_of_now_not_that_of_the_instant():
+    record = _started(_utc(2026, 11, 1, 0))
+    now = datetime(2026, 11, 20, 23, 30, tzinfo=NY).astimezone(UTC)
+    event = _digest(now, record, hour=23)
+    assert event is not None
+    assert event.key.local_date == date(2026, 11, 20)
+    assert event.instant == datetime(2026, 11, 20, 23, tzinfo=NY).astimezone(UTC)
+    assert event.instant.utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize(
+    ("now", "hour"),
+    [
+        (datetime(2026, 11, 21, 2), 20),
+        (datetime(2026, 11, 21, 2, tzinfo=NY), 20),
+        (datetime(2026, 11, 21, 3, tzinfo=timezone(timedelta(hours=1))), 20),
+        (_utc(2026, 11, 21, 2), 24),
+        (_utc(2026, 11, 21, 2), -1),
+    ],
+)
+def test_digest_event_rejects_a_naive_or_non_utc_now_and_an_hour_out_of_range(
+    now: datetime, hour: int
+):
+    with pytest.raises(ValueError):
+        _digest(now, _started(_utc(2026, 11, 1, 0)), hour=hour)
+
+
+@pytest.mark.parametrize("raw", [0, "0", 23, "23", "7", 7])
+def test_digest_hour_reads_a_valid_hour(raw: object):
+    assert notify.digest_hour(raw) == int(str(raw))
+
+
+@pytest.mark.parametrize(
+    "raw", [True, False, 20.5, "20.5", " 20 ", "24", -1, 24, "", None, "+5", "٣"]
+)
+def test_digest_hour_reads_anything_else_as_the_default(raw: object):
+    assert notify.digest_hour(raw) == 20

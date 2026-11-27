@@ -24,6 +24,7 @@ from ..domain.stage0_rotation import (
     partial_name,
     rollback_due,
     target,
+    unavailable_line,
 )
 from .ports import (
     FailurePolicy,
@@ -61,13 +62,13 @@ class DefaultFailurePolicy:
 
     def prepare_failed(self, sha: str, outcome: Unavailable) -> Stop:
         self._store.remove_partial(sha)
-        return Stop("keep: unavailable")
+        return Stop(unavailable_line(outcome.cause))
 
     def smoke_failed(self, sha: str, stage: str, outcome: Red | Unavailable) -> Proceed | Stop:
         self._store.remove_partial(sha)
         if isinstance(outcome, Red):
             return Stop(f"smoke_failed: {sha}")
-        return Stop("keep: unavailable")
+        return Stop(unavailable_line(outcome.cause))
 
     def succeeded(self, sha: str) -> None:
         return None

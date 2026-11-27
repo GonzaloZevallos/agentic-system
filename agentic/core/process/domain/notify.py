@@ -1,13 +1,13 @@
 """The pure core of the email notifier (GH-1056): what is owed a notice, never how it is sent.
 
-Nothing calls this module yet: the poll use case that does is a later part of GH-1056, and the
-daily digest computation is a follow-up one. `advance_read_at` moves the activity window past what
-a digest consumed, never splitting a group of equal instants. `release_event` decides, from facts a
-caller loads (`SplitFacts`), who announces a landing: a task with a known parent is `covered`, and
-only a closed root lists its merged leaves (ADR-0106). It imports no clock, no mail and no
-environment: `now` and `tz` are parameters, and every instant it returns or keeps in a key is UTC.
-The epochs of a task's `pause_log` are read only through `rules` (`current_epoch`,
-`previous_epoch`, `escalation_at`, `pause_kind`), never directly.
+Nothing calls this module yet: the poll use case that does is a later part of GH-1056.
+`digest_event` decides the daily digest owed from `now`, `tz` and the record. `advance_read_at`
+moves the activity window past what a digest consumed, never splitting a group of equal instants.
+`release_event` decides, from facts a caller loads (`SplitFacts`), who announces a landing: a task
+with a known parent is `covered`, and only a closed root lists its merged leaves (ADR-0106). It
+imports no clock, no mail and no environment: `now` and `tz` are parameters, and every instant it
+returns or keeps in a key is UTC. The epochs of a task's `pause_log` are read only through `rules`
+(`current_epoch`, `previous_epoch`, `escalation_at`, `pause_kind`), never directly.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Literal
 
 from . import rules
@@ -26,6 +26,7 @@ __all__ = [
     "NOTIFY_HORIZON",
     "NOTIFY_RETRY_AFTER",
     "SENDS_PER_ROUND",
+    "DigestEvent",
     "DigestKey",
     "EventKey",
     "NotifiedRecord",
@@ -36,6 +37,8 @@ __all__ = [
     "SplitFacts",
     "WaitingEvent",
     "advance_read_at",
+    "digest_event",
+    "digest_hour",
     "due",
     "pending",
     "prune",
@@ -51,8 +54,11 @@ NOTIFY_HORIZON = timedelta(days=7)
 NOTIFY_RETRY_AFTER = timedelta(minutes=15)
 # The most notices one round sends.
 SENDS_PER_ROUND = 5
-# The local hour of the daily digest; read by the digest computation of the follow-up issue.
+# The local hour of the daily digest when the setting is missing or invalid (`digest_hour`).
 DEFAULT_DIGEST_HOUR = 20
+_LAST_HOUR = 23
+# One or two ASCII digits: a unicode digit or a sign is not an hour.
+_HOUR_TEXT = re.compile(r"[0-9]{1,2}")
 
 # Restates `knowledge.domain.stack.SLUG`, which this domain may not import; a test compares them.
 _PRODUCT_SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -95,8 +101,8 @@ class EventKey:
 
 @dataclass(frozen=True)
 class DigestKey:
-    """The daily digest of one product for one local date. Nothing builds it yet: the follow-up
-    issue does."""
+    """The daily digest of one product for one local date. `digest_event` builds it; nothing calls
+    that yet."""
 
     product: str
     local_date: date
@@ -231,6 +237,14 @@ def due(instant: datetime, record: NotifiedRecord, now: datetime) -> bool:
     if record.started_at is None:
         return False
     return instant > max(record.started_at, _cutoff(now))
+
+
+def _unrecorded_due(
+    key: NotifyKey, instant: datetime, record: NotifiedRecord, now: datetime
+) -> bool:
+    """The only composition of `due` and "its key is not yet recorded": `pending` and
+    `digest_event` both read it."""
+    return due(instant, record, now) and key not in record.keys
 
 
 def prune(record: NotifiedRecord, now: datetime, tz: tzinfo) -> tuple[NotifiedRecord, int]:
@@ -375,7 +389,56 @@ def pending(
     event: WaitingEvent | ReleaseEvent, record: NotifiedRecord, now: datetime
 ) -> Literal["send", "superseded", "covered"] | None:
     """What `event` still owes: its action when it is `due` and its key is not yet recorded, else
-    `None`. The only composition of these rules."""
-    if due(event.key.instant, record, now) and event.key not in record.keys:
+    `None`."""
+    if _unrecorded_due(event.key, event.key.instant, record, now):
         return event.action
+    return None
+
+
+def digest_hour(raw: object) -> int:
+    """The local hour of the digest from a raw setting: an `int` (not a bool) in 0..23, or a `str`
+    of one or two ASCII digits with that value. Anything else reads as `DEFAULT_DIGEST_HOUR`, never
+    normalized, and this never raises."""
+    if isinstance(raw, bool):
+        return DEFAULT_DIGEST_HOUR
+    if isinstance(raw, str):
+        if _HOUR_TEXT.fullmatch(raw) is None:
+            return DEFAULT_DIGEST_HOUR
+        raw = int(raw)
+    if isinstance(raw, int) and 0 <= raw <= _LAST_HOUR:
+        return raw
+    return DEFAULT_DIGEST_HOUR
+
+
+@dataclass(frozen=True)
+class DigestEvent:
+    """What `digest_event` found: the `key` of the digest and the UTC `instant` it is due.
+    `key.local_date` is the local date of the `now` the computation used, never the local date of
+    the resulting `instant`."""
+
+    key: DigestKey
+    instant: datetime
+
+
+def digest_event(
+    now: datetime, tz: tzinfo, hour: int, record: NotifiedRecord, product: str
+) -> DigestEvent | None:
+    """The digest of `product` owed at `now`: today's (the local date of `now` in `tz`) at `hour`
+    local, fold 0, converted to UTC before any comparison. `None` until that instant, when `due`
+    does not hold (the activation or the horizon is not behind it) or when any outcome is already
+    recorded for its key. Raises `ValueError` for a `now` that is not aware UTC or an `hour`
+    outside 0..23.
+
+    Only today's local date is considered: a poller down from the digest hour until past local
+    midnight loses that day's digest. A digest is never unbuildable, covered or superseded.
+    Nothing calls it yet."""
+    if now.utcoffset() != timedelta(0):
+        raise ValueError(f"now is not an aware UTC datetime: {now!r}")
+    if not 0 <= hour <= _LAST_HOUR:
+        raise ValueError(f"hour is not in 0..{_LAST_HOUR}: {hour!r}")
+    local_date = now.astimezone(tz).date()
+    instant = datetime.combine(local_date, time(hour), tzinfo=tz).replace(fold=0).astimezone(UTC)
+    key = DigestKey(product, local_date)
+    if instant <= now and _unrecorded_due(key, instant, record, now):
+        return DigestEvent(key, instant)
     return None
