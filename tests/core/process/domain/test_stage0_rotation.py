@@ -6,11 +6,13 @@ import ast
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from agentic.core.process.domain import stage0_rotation as sr
 from agentic.core.process.domain.stage0_rotation import (
+    CandidateCause,
     CiState,
     Heartbeat,
     Keep,
@@ -23,6 +25,7 @@ from agentic.core.process.domain.stage0_rotation import (
     reexec_due,
     rollback_due,
     target,
+    unavailable_line,
 )
 
 A = "a" * 40
@@ -448,3 +451,8 @@ def test_module_is_pure() -> None:
 )
 def test_purity_check_rejects_impure_sources(source: str) -> None:
     assert _violations(source) != []
+
+
+@pytest.mark.parametrize("cause", get_args(CandidateCause))
+def test_the_keep_line_of_an_unavailable_candidate_names_its_cause(cause: CandidateCause) -> None:
+    assert unavailable_line(cause) == f"keep: unavailable ({cause})"

@@ -12,7 +12,7 @@ of running the check again."""
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import replace
 
 from ..domain import presubmit, run_check
@@ -58,9 +58,20 @@ class RunCheck:
         clock: Callable[[], float] = time.time,
         load: Callable[[], float | None] | None = None,
         cores: int | None = None,
+        delivery: Collection[str] = (),
+        affected: Mapping[str, str] | None = None,
+        base: str = "",
+        red: Callable[[], frozenset[str]] = frozenset,
     ) -> None:
         assert gate.reuse is not None, "run_check needs a presubmit that carries a Reuse"
         self.gate = gate
+        # What decides a refusal (`run_check.suite_refusal`, ADR-0065 addendum 2026-11-25): the
+        # checks the delivery gate runs, their affected forms at `base`, and the checks the gate
+        # or the full tier failed on, read at every call. The defaults refuse nothing.
+        self._delivery = tuple(delivery)
+        self._affected: Mapping[str, str] = affected or {}
+        self._base = base
+        self._red = red
         # The product's declared verifications (ADR-0065 addendum): run on demand like a check
         # but under their own wall, and never stored. Their walls travel in `gate.walls`.
         self.verifications: Mapping[str, Verification] = verifications or {}
@@ -117,6 +128,20 @@ class RunCheck:
         workspace = gate.ports.workspace
         committed = workspace.head(gate.path) != gate.before
         clean = workspace.is_clean(gate.path)
+        # Before the share, the witness and every store access: a refused call takes none of
+        # them and leaves no `VerificationCall`, like an undeclared name.
+        if (
+            refused := run_check.suite_refusal(
+                name,
+                delivery=self._delivery,
+                affected=self._affected,
+                verifications=self.verifications,
+                red=self._red(),
+                base=self._base,
+                stores=committed and clean,
+            )
+        ) is not None:
+            return CheckRun(name, refused=refused)
         # What this tree may read and store is decided by the gate's own rule, here and
         # never again below; on a dirty or uncommitted tree it clears whatever an earlier
         # call left, so nothing is read or written for a tree that is not the head's.

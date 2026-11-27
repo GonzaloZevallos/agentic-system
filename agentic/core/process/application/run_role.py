@@ -560,6 +560,7 @@ async def run_with_retry(
     floor_bytes: int = 0,
     now: Callable[[], str] | None = None,
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     """`now` is the clock the attempts' instants come from (`Ports.now` in a run; this
@@ -694,6 +695,7 @@ async def run_with_retry(
                     max_turns=turns,
                     declared_checks=declared_checks,
                     now=clock,
+                    refuse=refuse,
                     repair=repair,
                 )
                 ended_at = clock()
@@ -1063,6 +1065,7 @@ async def _attempt(
     max_turns: int | None = None,
     declared_checks: Mapping[str, str] | None = None,
     now: Callable[[], str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     result = await runner.run_once(
@@ -1082,6 +1085,7 @@ async def _attempt(
         max_turns=max_turns,
         declared_checks=declared_checks,
         now=now,
+        refuse=refuse,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -1330,6 +1334,7 @@ async def run_role(
     tiers: str = "",
     extra_input: str = "",
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -1459,6 +1464,7 @@ async def run_role(
             floor_bytes=cfg.scratch_floor_bytes,
             now=ports.now,
             declared_checks=declared_checks,
+            refuse=refuse,
             repair=repair,
         )
     except Escalating as exc:

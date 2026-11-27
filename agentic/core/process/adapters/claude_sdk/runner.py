@@ -169,6 +169,7 @@ def options_for(
     writable: tuple[Path, ...] = (),
     max_turns: int | None = None,
     check_runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -224,6 +225,7 @@ def options_for(
             check_results_dir,
             writable,
             check_runs,
+            refuse,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -344,6 +346,7 @@ class ClaudeSdkRunner:
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
         token of its own, and reaped once its stream is closed, whichever way it ended.
@@ -380,6 +383,7 @@ class ClaudeSdkRunner:
                     check_tool=check_tool,
                     hooks=hooks,
                     runs=runs,
+                    refuse=refuse,
                     scratch_dir=scratch_dir,
                     kept=kept,
                 )
@@ -458,6 +462,7 @@ class ClaudeSdkRunner:
         check_tool: CheckTool | None,
         hooks: HookActivity,
         runs: CheckRunLog | None,
+        refuse: Callable[[str], str | None] | None,
         scratch_dir: Path | None,
         kept: Path | None,
     ) -> RawResult:
@@ -532,6 +537,7 @@ class ClaudeSdkRunner:
             owner_mark=owner_mark,
             hook_activity=hooks,
             check_runs=runs,
+            refuse=refuse,
             check_tool=check_tool,
             check_results_dir=self.check_results_dir,
             writable=tuple(p for p in (scratch_dir, kept) if p is not None),

@@ -27,10 +27,9 @@ from ..domain.stage0_rotation import (
     Red,
     Stop,
     Unavailable,
+    unavailable_line,
 )
 from .ports import Stage0Candidate, Stage0Store
-
-_KEEP_UNAVAILABLE = "keep: unavailable"
 
 
 class SmokeFailurePolicy:
@@ -78,4 +77,4 @@ class SmokeFailurePolicy:
         else:
             count = 1
         self._store.write_unavailable(sha, count, cause)
-        return Stop(_KEEP_UNAVAILABLE)
+        return Stop(unavailable_line(cause))
