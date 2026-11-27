@@ -11,7 +11,7 @@ import pytest
 
 from agentic.core.process.adapters.github import board as board_module
 from agentic.core.process.adapters.github.board import GhBoard
-from agentic.core.process.adapters.github.run import GhRetry
+from agentic.core.process.adapters.github.run import GhRetry, graphql_rate_limited
 from agentic.core.process.application.ports import (
     BoardWritten,
     TrackerRateLimited,
@@ -821,6 +821,71 @@ def test_a_403_a_429_and_a_rate_limited_error_stop_the_write_with_no_later_reque
     assert not any("<" in line or "slow" in line for line in lines)
 
 
+GRAPHQL_RATE_LIMITED = json.dumps({"errors": [{"type": "RATE_LIMITED", "message": "slow"}]})
+
+
+def test_a_rate_limited_body_raises_tracker_rate_limited_with_the_latch_set_and_stops(
+    monkeypatch,
+):
+    gh = SizedGh(refuse={1: (0, GRAPHQL_RATE_LIMITED, "")})
+    board = synced([1], gh)
+    seen: list[bool] = []
+    real = board_module._verdict
+
+    def peek(exc: BaseException):
+        seen.append(board._latch.take())
+        return real(exc)
+
+    monkeypatch.setattr(board_module, "_verdict", peek)
+    with pytest.raises(TrackerRateLimited, match="GraphQL rate limit was reached"):
+        board.write(sync_of([1]))
+    assert seen == [True]
+    assert len(gh.sizes) == 1
+
+
+def test_a_board_write_that_met_a_rate_limit_and_succeeded_on_retry_leaves_the_latch_clear():
+    clock = FakeClock()
+    reset = {"resources": {"graphql": {"remaining": 0, "reset": 10}}}
+    gh = SizedGh()
+    run = run_with_listing(gh, [1])
+    limited = [True]
+
+    def flaky(args, cwd, capture_output, text, check):
+        if args[1:3] == ["api", "rate_limit"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps(reset), "")
+        if args[1:3] == ["api", "graphql"] and limited and "mutation" in _query_of(args):
+            limited.pop()
+            err = "gh: GraphQL: API rate limit already exceeded for user ID 1."
+            return subprocess.CompletedProcess(args, 1, "", err)
+        return run(args, cwd, capture_output, text, check)
+
+    board = retrying_board(gh, clock=clock)
+    board.run = flaky
+    board.open_issues()
+    got = board.write(sync_of([1], fields=("etapa",)))
+    assert got == BoardWritten(frozenset({1}), True)
+    assert 0 < sum(clock.slept) <= board_module.BOARD_WRITE_WAIT_MAX_S
+    assert board._latch.take() is False
+
+
+def _query_of(args):
+    return json.loads(Path(args[args.index("--input") + 1]).read_text())["query"]
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected"),
+    [
+        ([{"type": "RATE_LIMITED"}], True),
+        ([{"extensions": {"code": "RATE_LIMITED"}}], True),
+        ([{"type": "NOT_FOUND"}, {"extensions": {"code": "RATE_LIMITED"}}], True),
+        ([{"type": "NOT_FOUND"}, {"extensions": "x"}, "text"], False),
+        ([], False),
+    ],
+)
+def test_graphql_rate_limited_reads_the_code_of_any_error(errors, expected):
+    assert graphql_rate_limited(errors) is expected
+
+
 def test_a_stop_with_nothing_sent_raises_its_cause():
     gh = SizedGh(refuse={1: (1, "", "gh: HTTP 429")})
     with pytest.raises(ValueError, match=r"\(HTTP 429\)"):
@@ -937,7 +1002,6 @@ def test_a_set_stop_flag_ends_the_write_before_any_request():
         (TrackerRefused("x", status=429), "stop"),
         (TrackerTransient("x", status=429), "stop"),
         (board_module._Unauthenticated("x"), "stop"),
-        (board_module._RateLimited("x"), "stop"),
         (OSError("disk"), "stop"),
         (TrackerTransient("x", status=502), "split"),
         (TrackerTimedOut("x"), "split"),

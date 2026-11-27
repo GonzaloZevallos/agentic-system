@@ -17,7 +17,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -105,6 +105,19 @@ class RateLimitLatch:
         with self._lock:
             marked, self._marked = self._marked, False
             return marked
+
+
+def graphql_rate_limited(errors: Iterable[object]) -> bool:
+    """Whether any error of a GraphQL response carries the `RATE_LIMITED` code: GitHub answers
+    it as HTTP 200, so no `gh` text says it."""
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        extensions = error.get("extensions")
+        code = extensions.get("code") if isinstance(extensions, dict) else None
+        if error.get("type") == "RATE_LIMITED" or code == "RATE_LIMITED":
+            return True
+    return False
 
 
 def print_line(line: str) -> None:
@@ -472,6 +485,7 @@ __all__ = [
     "StreamRead",
     "bounded_run",
     "bounded_stream",
+    "graphql_rate_limited",
     "http_status",
     "print_line",
     "run_gh",

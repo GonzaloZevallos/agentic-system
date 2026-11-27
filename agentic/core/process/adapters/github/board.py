@@ -56,6 +56,7 @@ from .run import (
     RateLimitLatch,
     Run,
     bounded_run,
+    graphql_rate_limited,
     http_status,
     print_line,
     run_gh,
@@ -433,12 +434,13 @@ class GhBoard:
         that names none, or a response that is not parseable, fails the whole request:
         `ValueError` carrying the summary, which `_attempt` logs. When every error blames an
         issue, the summary is logged here, once. A `RATE_LIMITED` error arrives as HTTP 200
-        and ends the write (`_RateLimited`)."""
+        and ends the write: the latch is marked, then `TrackerRateLimited` is raised."""
         body = self._graphql(query, variables, write=write)
         data = body.get("data")
         errors = body.get("errors") or []
-        if any(_rate_limited(error) for error in errors):
-            raise _RateLimited("GitHub's GraphQL rate limit was reached")
+        if graphql_rate_limited(errors):
+            self._latch.mark()
+            raise TrackerRateLimited("GitHub's GraphQL rate limit was reached")
         bad: set[int] = set()
         for error in errors:
             blamed = _blamed(error)
@@ -470,25 +472,13 @@ class _UnreadableBody(ValueError):
     """A write's answer was not a GraphQL response: nothing to attribute, the chunk is split."""
 
 
-class _RateLimited(ValueError):
-    """A GraphQL error of type `RATE_LIMITED`: GitHub's answer to everything that follows."""
-
-
 class _Unauthenticated(TrackerRefused):
     """`gh` exited 4: not signed in. No later request would be any different."""
 
 
-def _rate_limited(error: object) -> bool:
-    if not isinstance(error, dict):
-        return False
-    extensions = error.get("extensions")
-    code = extensions.get("code") if isinstance(extensions, dict) else None
-    return error.get("type") == "RATE_LIMITED" or code == "RATE_LIMITED"
-
-
 def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
     """What one failed chunk does to the write, from the exception alone."""
-    stopping = (TrackerUnreachable, TrackerRateLimited, _RateLimited, _Unauthenticated, OSError)
+    stopping = (TrackerUnreachable, TrackerRateLimited, _Unauthenticated, OSError)
     if isinstance(exc, stopping):
         return "stop"
     if isinstance(exc, TrackerCallFailed | TrackerRefused) and exc.status in BOARD_STOP_STATUSES:
