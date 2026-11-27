@@ -99,6 +99,7 @@ from .ports import (
     RunLock,
     RunRegistration,
     RunRegistry,
+    StackHint,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -2581,6 +2582,8 @@ def gather_launches(
     documents: Mapping[int, TaskState | None] | None = None,
     declaration: experiment.Experiment | None = None,
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    memo: stacking_rules.ParentMemo | None = None,
+    stack_hints: dict[int, StackHint] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -2597,16 +2600,41 @@ def gather_launches(
     new one: `_assign_arms` does that, after `rules.poll_plan`, for the launches that come out.
     Every other candidate arrives with no arm. Each candidate's blocker numbers, the ones
     `_blocked` already read (native or the body's), are set in `blockers_of` when given
-    (GH-836), the queue's edges of the launch order: no call is added."""
+    (GH-836), the queue's edges of the launch order: no call is added. The product's stacking
+    switch (GH-858, ADR-0103) is read here and nowhere else, once per round, at the fetched
+    upstream tip and only when a candidate has one open blocker and nothing else; any doubt reads
+    it as off. With it on,
+    `memo` (the round's `ParentMemo`) goes to `_blocked`, and a candidate whose only blocker
+    is the Ready parent it judged launches, its hint `{parent, approved head}` set in
+    `stack_hints` under its issue for the launch record; without the head the judgement saw,
+    it stays blocked."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
+    stacking_memo: stacking_rules.ParentMemo | None = None
+    switch_read = False
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
             continue
         report = _blocked(cfg, ports, number, upstream, blockers_of)
+        if len(report.open) == 1 and not report.closed_unresolved and not report.unknown:
+            # Only a candidate whose one unresolved blocker may be a stacked parent needs the
+            # switch, so a round without one never fetches the upstream for it.
+            if not switch_read:
+                switch_read = True
+                if _stacking_on(ports, upstream):
+                    stacking_memo = memo if memo is not None else stacking_rules.ParentMemo()
+            if stacking_memo is not None:
+                report = _blocked(cfg, ports, number, upstream, blockers_of, stacking_memo)
+        hint = None
+        if report.stacked_on is not None and stacking_memo is not None:
+            hint = _stack_hint(stacking_memo, report.stacked_on)
+            if hint is None:
+                report = rules.BlockerReport(open=(report.stacked_on,))
+            elif stack_hints is not None:
+                stack_hints[number] = hint
         if reports is not None:
             reports.append(report)
         if by_issue is not None:
@@ -2623,6 +2651,22 @@ def gather_launches(
             )
         )
     return launches
+
+
+def _stacking_on(ports: Ports, upstream: Callable[[], Upstream]) -> bool:
+    """The product's stacking switch at the fetched upstream tip (GH-858); the one read of it.
+    Off when the key is absent, and off on any doubt (no tip, a key that is not a boolean)."""
+    try:
+        return ports.stack.stacking(upstream().sha)
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+
+
+def _stack_hint(memo: stacking_rules.ParentMemo, parent: int) -> StackHint | None:
+    """The approved head the round's judgement found stacked for `parent`: the one head it
+    recorded as such, `None` when it recorded none or more than one."""
+    heads = {head for (p, head), seen in memo.outcomes.items() if p == parent and seen == "stacked"}
+    return StackHint(parent, next(iter(heads))) if len(heads) == 1 else None
 
 
 def _issue_number(url: str) -> int | None:
@@ -3128,6 +3172,7 @@ def execute(
     orphan_retakes: Mapping[int, int] | None = None,
     spent_notices: Mapping[int, RetakesSpent] | None = None,
     format_rules: Mapping[int, FormatCarried] | None = None,
+    stack_hints: Mapping[int, StackHint] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -3260,7 +3305,9 @@ def execute(
             await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
-            registry.record_launch(product, action.issue, now, action.arm)
+            registry.record_launch(
+                product, action.issue, now, action.arm, (stack_hints or {}).get(action.issue)
+            )
             fresh = ("--fresh",) if action.issue in reruns else ()
             arm = (experiment.ARM_FLAG, action.arm) if action.arm is not None else ()
             argv = _argv(argv0, "run", action.issue, product_dir, *fresh, *arm, "--detach")
@@ -3632,6 +3679,7 @@ def run_once(
     # and the sections under the registry's lock share them; nothing is asked until one is called.
     upstream = functools.cache(ports.workspace.upstream)
     stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
+    parent_memo = stacking_rules.ParentMemo()  # GH-858: the launch judgement's reads, same life
     if not dry_run:
         # The sweep's own memoised upstream (at most one fetch, and only when it has a merge
         # commit to judge); the one `registry.exclusive()` builds below is not shared with it.
@@ -3773,6 +3821,7 @@ def run_once(
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        stack_hints: dict[int, StackHint] = {}
         queue_blockers: dict[int, tuple[int, ...]] = {}
         experiment_notes: list[str] = []
         declaration = _declared_experiment(cfg, ports, experiment_notes)
@@ -3789,6 +3838,8 @@ def run_once(
             queued,
             declaration,
             queue_blockers,
+            parent_memo,
+            stack_hints,
         )
         dependents = launch_order.dependents(launch_edges(open_refs, queued_all, queue_blockers))
         merges: list[int] = []
@@ -3998,6 +4049,7 @@ def run_once(
                 orphans,
                 spent_notices,
                 format_rules,
+                stack_hints,
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.

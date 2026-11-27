@@ -1,21 +1,22 @@
 """GH-858: `poll._blocked` with the round's `ParentMemo` reads a Ready same-split parent as the
-stacked one, inert (nothing in production passes the memo); any doubt leaves it `open`."""
+stacked one, and `run_once` launches a child whose only blocker it is, with the switch on;
+any doubt leaves it `open`."""
 
 from __future__ import annotations
 
 import functools
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from agentic.core.process.application import poll, split_sweep
-from agentic.core.process.application.ports import IssueState, Upstream
+from agentic.core.process.application.ports import IssueState, StackHint, Upstream
 from agentic.core.process.domain import launch_order, rules, stacking
 from agentic.shared.configuration import Configuration
-from tests.core.process.application.test_poll import _Locks, _seed_body
+from tests.core.process.application.test_poll import _Locks, _round, _seed_body
 from tests.core.process.application.test_poll_orphaned import _Documents
-from tests.fakes import MemoryRunRegistry, memory_ports
+from tests.fakes import FakeLauncher, MemoryRunRegistry, memory_ports
 
 HEAD = "a" * 40
 TIP = "b" * 40
@@ -284,17 +285,63 @@ def test_a_non_stacked_orphan_or_one_with_an_illegible_record_stays_held_by_its_
         assert orphans == {} and by_issue[CHILD] == rules.BlockerReport(open=(PARENT,))
 
 
-# -- the launch seam ------------------------------------------------------------------------
+# -- the launch seam: run_once with port doubles ------------------------------------------
 
 
-def test_gather_launches_with_the_stacking_key_on_still_reports_the_blocker_as_today():
+def _launch_round(ports, registry, tmp_path):
+    launcher = FakeLauncher()
+    ports.tracker._queue = [CHILD]
+    lines = _round(Configuration(product_dir=tmp_path), ports, registry, launcher, NOW)
+    return lines, launcher
+
+
+def test_with_the_switch_absent_the_parent_stays_a_blocker_and_no_hint_is_made(tmp_path):
+    ports = _ports()
+    registry = MemoryRunRegistry()
+    lines, launcher = _launch_round(ports, registry, tmp_path)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == [] and registry.attempts == {}
+    assert ports.workspace.remote_tip_calls == []
+
+
+def test_with_the_switch_on_a_child_of_a_ready_parent_launches_and_records_the_hint(tmp_path):
     ports = _ports()
     ports.stack.declared_stacking = True
-    ports.tracker._queue = [CHILD]
-    by_issue: dict[int, rules.BlockerReport] = {}
-    launches = poll.gather_launches(
-        _cfg(), ports, MemoryRunRegistry(), _upstream, by_issue=by_issue
-    )
-    assert by_issue[CHILD] == rules.BlockerReport(open=(PARENT,))
-    assert [c.blocked for c in launches] == [True]
+    registry = MemoryRunRegistry()
+    lines, launcher = _launch_round(ports, registry, tmp_path)
+    assert lines == [f"agentic: poll: launch #{CHILD} -> pid 4242"]
+    attempt = registry.launch_attempts(ports.stack.product(), CHILD)
+    assert attempt is not None and attempt.prior == 1
+    assert attempt.stack_hint == StackHint(PARENT, HEAD)
+    assert len(launcher.spawned) == 1
+
+
+def test_a_relaunch_without_stacking_clears_the_old_hint(tmp_path):
+    ports = _ports()
+    ports.tracker.states[CHILD] = IssueState("OPEN", "", (), None)  # no blocker any more
+    registry = MemoryRunRegistry()
+    product = ports.stack.product()
+    registry.record_launch(product, CHILD, NOW - timedelta(days=2), stack_hint=StackHint(5, HEAD))
+    lines, _ = _launch_round(ports, registry, tmp_path)
+    assert lines == [f"agentic: poll: launch #{CHILD} -> pid 4242"]
+    attempt = registry.launch_attempts(product, CHILD)
+    assert attempt is not None and attempt.prior == 2 and attempt.stack_hint is None
+
+
+def test_a_parent_that_is_not_ready_leaves_the_child_blocked_with_no_attempt(tmp_path):
+    ports = _ports(parent=_ready() | {"status": "in_review"})
+    ports.stack.declared_stacking = True
+    registry = MemoryRunRegistry()
+    lines, launcher = _launch_round(ports, registry, tmp_path)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == [] and registry.attempts == {}
+
+
+def test_an_unreadable_switch_reads_as_off(tmp_path):
+    ports = _ports()
+    ports.stack.declared_stacking = True
+    ports.stack.stacking = lambda revision: (_ for _ in ()).throw(ValueError("not a boolean"))
+    registry = MemoryRunRegistry()
+    lines, launcher = _launch_round(ports, registry, tmp_path)
+    assert launcher.spawned == [] and registry.attempts == {}
     assert ports.workspace.remote_tip_calls == []
