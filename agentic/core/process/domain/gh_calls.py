@@ -14,6 +14,10 @@ GhCallKind = Literal["issue_list", "issue_view", "pr_list", "pr_view", "api", "o
 
 GH_CALL_KINDS: tuple[GhCallKind, ...] = get_args(GhCallKind)
 
+GhConsumer = Literal["poller", "run"]
+
+GH_CONSUMERS: tuple[GhConsumer, ...] = get_args(GhConsumer)
+
 _BY_COMMAND: dict[tuple[str, str], GhCallKind] = {
     ("issue", "list"): "issue_list",
     ("issue", "view"): "issue_view",
@@ -32,4 +36,4 @@ def kind_of(args: Sequence[str]) -> GhCallKind:
     return _BY_COMMAND.get(head, "other") if len(head) == 2 else "other"
 
 
-__all__ = ["GH_CALL_KINDS", "GhCallKind", "kind_of"]
+__all__ = ["GH_CALL_KINDS", "GH_CONSUMERS", "GhCallKind", "GhConsumer", "kind_of"]
