@@ -8,7 +8,7 @@ import anyio
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import check_run_log, hooks
-from agentic.core.process.application.ports import RunStopped
+from agentic.core.process.application.ports import CheckAbandoned, RunStopped
 from agentic.core.process.domain import check_runs, turn_notice
 from agentic.core.process.domain.roles import (
     DEVELOPER,
@@ -430,6 +430,36 @@ async def test_a_stop_in_the_gate_returns_no_decision_and_waits_for_the_cancella
     assert scope.cancelled_caught  # never returned: neither a deny nor an allow for the SDK
     assert outputs == []
     assert presubmit.calls == 1
+
+
+class AbandonedPresubmit(FakePresubmit):
+    """The attempt was abandoned while the gate waited for a share (GH-1169)."""
+
+    def __call__(self):
+        self.calls += 1
+        raise CheckAbandoned
+
+
+async def test_an_abandoned_gate_is_denied_with_the_fixed_text_and_is_neither_counted_nor_awaited():
+    presubmit, refusals = AbandonedPresubmit(), []
+    matchers = hooks.hooks_for(
+        DEVELOPER, CWD, presubmit, on_presubmit_denied=lambda: refusals.append(1)
+    )
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    with anyio.fail_after(5):  # it never waits for a cancellation, as a stop does
+        (output,) = await call(matchers, "PreToolUse", payload)
+    decision = output["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"] == "the attempt was abandoned; no check was run"
+    assert presubmit.calls == 1 and refusals == []
+
+
+def test_an_attempt_abandon_is_one_flag_per_instance_and_stays_set():
+    first, second = hooks.AttemptAbandon(), hooks.AttemptAbandon()
+    assert not first.is_set()
+    first.set()
+    first.set()
+    assert first.is_set() and not second.is_set()
 
 
 # -- the attempt's own scratch and its task's evidence folder (GH-391) -----------------

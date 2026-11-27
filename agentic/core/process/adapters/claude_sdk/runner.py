@@ -93,6 +93,8 @@ from ...application.ports import (
     SchemaGuard,
     Scratch,
 )
+from ...application.presubmit import CheckoutPresubmit
+from ...application.run_check import RunCheck
 from ...domain import reaping
 from ...domain.denials import denial_for
 from ...domain.roles import Role
@@ -117,7 +119,7 @@ from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
 from .check_run_log import CheckRunLog
 from .check_server import SERVER, TIMEOUT_ENV, check_server, tool_timeout_ms
-from .hooks import DELIVERY_TOOL, HookActivity, TurnCount, hooks_for
+from .hooks import DELIVERY_TOOL, AttemptAbandon, HookActivity, TurnCount, hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -355,6 +357,9 @@ class ClaudeSdkRunner:
         `now`; they leave on the result, or on the `AttemptFailed` of a failed attempt."""
         token = uuid.uuid4().hex
         hooks = HookActivity(self.clock)
+        # One flag per attempt (GH-1169), set on every exit before anything is reaped: the
+        # gate and `run_check` threads the reap cannot reach read it, and a retry gets its own.
+        abandon = AttemptAbandon()
         runs = (
             CheckRunLog(declared_checks, self.clock, now)
             if declared_checks and role.executes and now is not None
@@ -382,12 +387,14 @@ class ClaudeSdkRunner:
                     forbidden=forbidden,
                     check_tool=check_tool,
                     hooks=hooks,
+                    abandon=abandon,
                     runs=runs,
                     refuse=refuse,
                     scratch_dir=scratch_dir,
                     kept=kept,
                 )
             except AttemptFailed as exc:
+                abandon.set()
                 exc.reaped = list(await self._reap(owner_task, token))
                 # Only a failing attempt reads the disk, and before its directory is
                 # removed: the space the directory held is not the space it left.
@@ -400,8 +407,10 @@ class ClaudeSdkRunner:
                 # A cancellation, or the process being asked to die: nothing to record, and
                 # the reap still has to happen (`_reap` finishes it even if this is
                 # cancelled again).
+                abandon.set()
                 await self._reap(owner_task, token)
                 raise
+            abandon.set()
             reaped = await self._reap(owner_task, token)
         if runs is not None:
             raw = replace(raw, check_runs=runs.snapshot())
@@ -461,6 +470,7 @@ class ClaudeSdkRunner:
         forbidden: Sequence[Forbidden] | None,
         check_tool: CheckTool | None,
         hooks: HookActivity,
+        abandon: AttemptAbandon,
         runs: CheckRunLog | None,
         refuse: Callable[[str], str | None] | None,
         scratch_dir: Path | None,
@@ -527,7 +537,7 @@ class ClaudeSdkRunner:
             # is the one thing that actually has the ambient `OTEL_RESOURCE_ATTRIBUTES`
             # a spawned role's telemetry should be marked against (invariant 8).
             resource_attributes=os.environ.get("OTEL_RESOURCE_ATTRIBUTES"),
-            presubmit=presubmit,
+            presubmit=_bound_presubmit(presubmit, abandon),
             on_denied=_count_denial,
             on_notice=_mark_notice,
             turns=turns,
@@ -538,7 +548,7 @@ class ClaudeSdkRunner:
             hook_activity=hooks,
             check_runs=runs,
             refuse=refuse,
-            check_tool=check_tool,
+            check_tool=_bound_check_tool(check_tool, abandon),
             check_results_dir=self.check_results_dir,
             writable=tuple(p for p in (scratch_dir, kept) if p is not None),
         )
@@ -607,6 +617,10 @@ class ClaudeSdkRunner:
                         pulse.last_event,
                         in_hook=hooks.in_flight > 0,
                     )
+                    # Before the reap, whatever `in_hook` says: the gate thread is not the
+                    # CLI's and the reap does not reach it. A check it already launched ends
+                    # by its own wall (ADR-0108, addendum GH-1169).
+                    abandon.set()
                     left = await asyncio.to_thread(
                         self.reaper.reap_attempt, owner_task, os.getpid(), token
                     )
@@ -773,6 +787,67 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+class _AbandonablePresubmit:
+    """The attempt's view of a real `CheckoutPresubmit` (GH-1169): the same `Presubmit`, with
+    the attempt's `AttemptAbandon.is_set` passed on every call. Built per attempt by the
+    runner, so the flag is never stored in the presubmit and a retry gets its own; the real
+    object, which `develop.py` reads, is untouched."""
+
+    def __init__(self, target: CheckoutPresubmit, abandon: AttemptAbandon) -> None:
+        self._target = target
+        self._abandon = abandon
+
+    @property
+    def timeout_s(self) -> float:
+        return self._target.timeout_s
+
+    @property
+    def wait_max_s(self) -> float:
+        return self._target.wait_max_s
+
+    def __call__(self) -> str | None:
+        return self._target(abandoned=self._abandon.is_set)
+
+
+class _AbandonableCheck:
+    """The same for `RunCheck`, the Developer's `run_check` tool: `names`, `timeout_s` and
+    `verification_names` read through from the real object."""
+
+    def __init__(self, target: RunCheck, abandon: AttemptAbandon) -> None:
+        self._target = target
+        self._abandon = abandon
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return self._target.names
+
+    @property
+    def verification_names(self) -> tuple[str, ...]:
+        return self._target.verification_names
+
+    @property
+    def timeout_s(self) -> float:
+        return self._target.timeout_s
+
+    def __call__(self, name: str) -> str:
+        return self._target(name, abandoned=self._abandon.is_set)
+
+
+def _bound_presubmit(presubmit: Presubmit | None, abandon: AttemptAbandon) -> Presubmit | None:
+    """`presubmit` bound to the attempt's flag when it is the real one; a fake, or any other
+    implementation of the port, passes through unchanged and never sees the keyword."""
+    if isinstance(presubmit, CheckoutPresubmit):
+        return _AbandonablePresubmit(presubmit, abandon)
+    return presubmit
+
+
+def _bound_check_tool(check_tool: CheckTool | None, abandon: AttemptAbandon) -> CheckTool | None:
+    """The same for the `run_check` tool: only a real `RunCheck` is bound."""
+    if isinstance(check_tool, RunCheck):
+        return _AbandonableCheck(check_tool, abandon)
+    return check_tool
 
 
 def _opened(
