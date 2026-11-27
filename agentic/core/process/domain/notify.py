@@ -1,19 +1,19 @@
 """The pure core of the email notifier (GH-1056): what is owed a notice, never how it is sent.
 
 Nothing calls this module yet: the poll use case that does is a later part of GH-1056.
-`digest_event` decides the daily digest owed from `now`, `tz` and the record. `release_event`
-decides, from facts a caller loads (`SplitFacts`), who announces a landing: a task with a known
-parent is `covered`, and only a closed root lists its merged leaves (ADR-0106). It imports no
-clock, no mail and no environment:
-`now` and `tz` are parameters, and every instant it returns or keeps in a key is UTC. The epochs
-of a task's `pause_log` are read only through `rules` (`current_epoch`, `previous_epoch`,
-`escalation_at`, `pause_kind`), never directly.
+`digest_event` decides the daily digest owed from `now`, `tz` and the record. `advance_read_at`
+moves the activity window past what a digest consumed, never splitting a group of equal instants.
+`release_event` decides, from facts a caller loads (`SplitFacts`), who announces a landing: a task
+with a known parent is `covered`, and only a closed root lists its merged leaves (ADR-0106). It
+imports no clock, no mail and no environment: `now` and `tz` are parameters, and every instant it
+returns or keeps in a key is UTC. The epochs of a task's `pause_log` are read only through `rules`
+(`current_epoch`, `previous_epoch`, `escalation_at`, `pause_kind`), never directly.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Literal
@@ -36,6 +36,7 @@ __all__ = [
     "ReleaseEvent",
     "SplitFacts",
     "WaitingEvent",
+    "advance_read_at",
     "digest_event",
     "digest_hour",
     "due",
@@ -74,6 +75,11 @@ def _check_product(product: str) -> None:
         raise ValueError(f"product is not a slug: {product!r}")
 
 
+def _check_utc(name: str, instant: datetime) -> None:
+    if instant.utcoffset() != timedelta(0):
+        raise ValueError(f"{name} is not an aware UTC datetime: {instant!r}")
+
+
 @dataclass(frozen=True)
 class EventKey:
     """One event of one issue: `waiting` for a pause that needs a human, `release` for a landing,
@@ -90,8 +96,7 @@ class EventKey:
         _check_product(self.product)
         if isinstance(self.issue, bool) or not isinstance(self.issue, int) or self.issue <= 0:
             raise ValueError(f"issue is not a positive integer: {self.issue!r}")
-        if self.instant.utcoffset() != timedelta(0):
-            raise ValueError(f"instant is not an aware UTC datetime: {self.instant!r}")
+        _check_utc("instant", self.instant)
 
 
 @dataclass(frozen=True)
@@ -253,6 +258,51 @@ def prune(record: NotifiedRecord, now: datetime, tz: tzinfo) -> tuple[NotifiedRe
         if not old:
             kept[key] = outcome
     return replace(record, keys=kept), len(record.keys) - len(kept)
+
+
+def advance_read_at(
+    read_at: datetime | None,
+    candidates: Sequence[tuple[datetime, NotifyKey | None]],
+    *,
+    cut_at: datetime | None,
+) -> datetime | None:
+    """Where the activity read resumes after a digest consumed `candidates` (`(instant, key)`, at
+    most `limit` of them; a key means the row is settled in `record.keys`, for a digest only
+    `sent`). `cut_at` is the instant of the `limit + 1`-th row when the read returned one. The
+    result is the greatest keyed instant strictly before the earliest unkeyed one, else `read_at`;
+    it depends only on the set of candidates. A group of equal instants is advanced past whole or
+    not at all: a cut inside one leaves the whole group out, unless every remaining row shares
+    `cut_at` (a single group, counted as "50+"). Rows at or before `read_at` are stale
+    (`since` is exclusive). Rejects, never normalizes, a naive or non-UTC instant, a `cut_at` not
+    after `read_at` and a `cut_at` earlier than a candidate.
+
+    Caller precondition: a row older than `NOTIFY_HORIZON` (not `due`) is passed with a key or not
+    passed at all, otherwise an unkeyed row stops the window for good. Accepted loss: a single
+    group larger than the limit is consumed trimmed."""
+    if read_at is not None:
+        _check_utc("read_at", read_at)
+    if cut_at is not None:
+        _check_utc("cut_at", cut_at)
+    for instant, _ in candidates:
+        _check_utc("candidate instant", instant)
+    if read_at is not None and cut_at is not None and cut_at <= read_at:
+        raise ValueError(f"cut_at {cut_at!r} is not after read_at {read_at!r}")
+    rows = [row for row in candidates if read_at is None or row[0] > read_at]
+    if not rows:
+        return read_at
+    if cut_at is not None:
+        if cut_at < max(instant for instant, _ in rows):
+            raise ValueError(f"cut_at {cut_at!r} is earlier than a candidate")
+        if any(instant != cut_at for instant, _ in rows):
+            rows = [row for row in rows if row[0] < cut_at]
+    unsettled = [instant for instant, settled in rows if settled is None]
+    stop = min(unsettled) if unsettled else None
+    advanced = [
+        instant
+        for instant, settled in rows
+        if settled is not None and (stop is None or instant < stop)
+    ]
+    return max(advanced) if advanced else read_at
 
 
 def retry_due(record: NotifiedRecord, now: datetime) -> bool:
