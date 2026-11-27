@@ -336,18 +336,26 @@ def hooks_for(
                 )
             )
     if guard is not None or presubmit is not None:
+        # One value, two uses: the SDK's own deadline for the hook and the ceiling the
+        # watchdog gives its in-flight renewal. `CheckoutPresubmit.timeout_s` already
+        # covers the whole call (first runs, affected forms, flake reruns, witness), so
+        # nothing is recomputed here.
+        gate_timeout = GUARD_TIMEOUT_S + (
+            presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0
+        )
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied, activity)],
+                hooks=[
+                    _delivery_gate(guard, presubmit, on_presubmit_denied, activity, gate_timeout)
+                ],
                 # The presubmit runs the product's checks: its own budget, plus the
                 # answer. The guard is in-process and fast, so it adds nothing here:
                 # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
                 # before the guard existed, when this was the presubmit's own timeout).
                 # GH-361: plus the longest the gate may wait for a share of the machine's
                 # cores, which is no part of `timeout_s` (the checks' clock starts after).
-                timeout=GUARD_TIMEOUT_S
-                + (presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0),
+                timeout=gate_timeout,
             )
         )
     hooks: dict[str, list[HookMatcher]] = {}
@@ -517,6 +525,7 @@ def _delivery_gate(
     presubmit: Presubmit | None,
     on_presubmit_denied: Callable[[], None] | None = None,
     activity: HookActivity | None = None,
+    gate_timeout: float | None = None,
 ) -> HookCallback:
     """The one `PreToolUse` callback on the delivery tool: the schema guard first, the
     presubmit second, the order this module's docstring promises written here in code
@@ -526,12 +535,13 @@ def _delivery_gate(
     for `denials`: a presubmit refusal is the gate working, never the re-emission of an
     invalid shape a schema rejection is, and the two travel as separate counts.
     `activity`, when given, says the hook is in flight for the whole call, the guard
-    included (`HookActivity`)."""
+    included (`HookActivity`), with `gate_timeout` as its ceiling (None: unbounded, as
+    before): the same deadline the delivery `HookMatcher` carries."""
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        with activity.running() if activity is not None else nullcontext():
+        with activity.running(ceiling_s=gate_timeout) if activity is not None else nullcontext():
             return await _gate(data)
 
     async def _gate(data: HookInput) -> HookJSONOutput:

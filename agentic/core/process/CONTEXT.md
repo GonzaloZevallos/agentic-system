@@ -689,7 +689,7 @@ El estado en que el sondeo deja una tarea cuyas retomas de formato se agotaron: 
 _Avoid_: pausa humana (la tarea no pide una decisión de inmediato), needs-human (solo hasta que sale la Nota)
 
 **Intento estancado**:
-Intento de un rol que lleva más que `stall_timeout_s` sin señal de vida: ni mensaje del stream, ni salida o vuelo de un hook de entrega, ni, con una herramienta del hilo principal pendiente, CPU o estado R/D de un hijo marcado del intento. Un vigilante lo mata por la marca del intento y lo falla con el motivo `stall`, que se reintenta como cualquier fallo de rol (ADR-0057). Un dato ilegible cuenta como actividad.
+Intento de un rol que lleva más que `stall_timeout_s` sin señal de vida: ni mensaje del stream, ni salida de un hook de entrega, ni su vuelo (que renueva solo hasta el plazo de su llamador: el `timeout` del hook de entrega o `check.timeout_s` de `run_check`; pasado ese tope corre el umbral entero desde el último tic renovado), ni, con una herramienta del hilo principal pendiente, CPU o estado R/D de un hijo marcado del intento. Un vigilante lo mata por la marca del intento y lo falla con el motivo `stall`, que se reintenta como cualquier fallo de rol (ADR-0057). Un dato ilegible cuenta como actividad. El umbral por defecto es 1800 s (piso 600 s) y la línea de stderr del estancamiento dice si había un hook en vuelo (`in_hook`), nunca el texto de un mensaje (ADR-0057, ADR-0108).
 _Avoid_: colgado, timeout (el umbral es solo una parte)
 
 **Tope por intento**:

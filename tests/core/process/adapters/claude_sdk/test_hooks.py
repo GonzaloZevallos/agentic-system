@@ -906,3 +906,24 @@ def test_an_entry_that_raises_still_leaves():
     with pytest.raises(RuntimeError), activity.running(ceiling_s=10.0):
         raise RuntimeError
     assert activity.in_flight == 0 and activity.expires is None
+
+
+async def test_the_delivery_gate_is_in_flight_with_the_ceiling_its_own_matcher_timeout_carries():
+    """The reruns are already inside `FakePresubmit.timeout_s`: the ceiling is the SDK's own
+    deadline for the hook, never a second formula."""
+    clock = _Clock(2_000.0)
+    activity = hooks.HookActivity(clock)
+    seen: list[float | None] = []
+
+    class Spy(FakePresubmit):
+        def __call__(self):
+            seen.append(activity.expires)
+            return super().__call__()
+
+    matchers = hooks.hooks_for(DEVELOPER, CWD, Spy(), activity=activity)
+    (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    await call(matchers, "PreToolUse", payload)
+    assert hooked.timeout == hooks.GUARD_TIMEOUT_S + 120.0 + 900.0
+    assert seen == [2_000.0 + hooked.timeout]
+    assert activity.in_flight == 0 and activity.expires is None
