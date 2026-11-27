@@ -566,7 +566,9 @@ class CheckoutPresubmit:
         # the other started checks before the error propagates, so no check outlives
         # the call; nothing is recorded for it, the same as serial.
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            per_check = pool.map(lambda item: self._run_once(*item, abandoned), self.checks.items())
+            per_check = pool.map(
+                lambda item: self._run_once(item[0], item[1], abandoned), self.checks.items()
+            )
             return [row for rows in per_check for row in rows]
 
     def _run_under_plan(

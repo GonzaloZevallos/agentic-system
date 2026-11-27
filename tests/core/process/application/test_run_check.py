@@ -2,11 +2,12 @@
 runs, reports and stores. Every figure it returns comes from `CheckoutPresubmit._run`."""
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from agentic.core.process.application.ports import CommandResult, Grant
+from agentic.core.process.application.ports import CheckAbandoned, CommandResult, Grant
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.application.run_check import RunCheck
 from agentic.core.process.domain import check_results
@@ -281,3 +282,84 @@ def test_a_pass_stored_at_one_share_is_read_at_another_the_key_is_the_declared_c
     second, _, _ = scheduled_tool(commands, FakeCheckScheduler(12), store)
     row = second.run("tests")
     assert row.reused and commands.ran == []
+
+
+# -- an abandoned attempt (GH-1169) ------------------------------------------------------
+# Seam: `RunCheck.run(name, abandoned=...)`. An abandoned call raises `CheckAbandoned`, stores
+# nothing and records no call; a check already launched runs to its own wall.
+
+
+class Flag:
+    def __init__(self) -> None:
+        self.value = False
+
+    def is_set(self) -> bool:
+        return self.value
+
+
+class FlippingCommands(MemoryCommands):
+    """Sets `flag` once `command` has run, as the reap of a stalled attempt would."""
+
+    def __init__(self, flag: Flag, command: str, **queues: list[CommandResult]) -> None:
+        super().__init__(**queues)
+        self._flag, self._command = flag, command
+
+    def run(self, cwd, command, timeout_s, *, env=None):
+        result = super().run(cwd, command, timeout_s, env=env)
+        if command == self._command:
+            self._flag.value = True
+        return result
+
+
+def test_a_flag_set_before_the_call_launches_and_stores_nothing():
+    handler, store, _, commands = tool()
+    flag = Flag()
+    flag.value = True
+    with pytest.raises(CheckAbandoned):
+        handler.run("tests", abandoned=flag.is_set)
+    assert commands.ran == [] and store.puts == [] and handler.calls == []
+    assert handler.gate.grant is None
+
+
+def test_a_check_that_finishes_after_the_flag_is_not_stored():
+    flag = Flag()
+    commands = FlippingCommands(flag, "pytest")
+    handler, store, _, _ = tool(commands)
+    with pytest.raises(CheckAbandoned):
+        handler.run("tests", abandoned=flag.is_set)
+    assert [c for _, c in commands.ran] == ["pytest"]
+    assert store.puts == [] and handler.calls == [] and handler.gate.grant is None
+
+
+def test_a_witness_that_finishes_after_the_flag_launches_no_check():
+    flag = Flag()
+    commands = FlippingCommands(flag, "witness")
+    handler, store, _, _ = tool(commands, witness="witness")
+    with pytest.raises(CheckAbandoned):
+        handler("tests", abandoned=flag.is_set)
+    assert [c for _, c in commands.ran] == ["witness"]
+    assert store.puts == [] and handler.gate.witness_result is None
+
+
+def test_an_abandoned_share_wait_books_nothing_and_leaves_the_gate_grant_alone():
+    flag = Flag()
+
+    class Late(FakeCheckScheduler):
+        def acquire(self, request):
+            grant = super().acquire(request)
+            flag.value = True
+            return grant
+
+    handler, store, workspace, commands = tool()
+    scheduler = Late()
+    handler.gate.ports = replace(handler.gate.ports, check_scheduler=scheduler)
+    with pytest.raises(CheckAbandoned):
+        handler.run("tests", abandoned=flag.is_set)
+    assert len(scheduler.released) == 1 and commands.ran == []
+    assert handler.gate.grant is None and store.puts == []
+
+
+def test_without_a_flag_the_call_is_the_one_of_before():
+    handler, store, _, commands = tool()
+    assert handler.run("tests").passed
+    assert commands.ran == [(PATH, "pytest")] and len(store.puts) == 1
