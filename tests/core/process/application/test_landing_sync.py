@@ -173,7 +173,10 @@ def _chain(ports, *, tip: str = HEAD, merge: str = NEW, parents: tuple[str, ...]
     """The first-parent chain `scope_of` reads after the sync: the one merge of master made on
     top of the accepted `tip` (`parents` overrides its parents, to make it a foreign merge)."""
     ports.workspace.first_parent_line = (Commit(merge, parents or (tip, MASTER)),)
-    ports.workspace.ancestors = {tip, MASTER}
+    # Master is an ancestor of itself only for the kind check; whether the merge holds it is
+    # the fake's own `merge_brings_nothing`, through `ancestors`.
+    ports.workspace.ancestors_by_ref = {MASTER: {MASTER}}
+    ports.workspace.ancestors = {tip}
 
 
 # ---- the five behaviours -----------------------------------------------------------------
@@ -797,6 +800,7 @@ def test_a_settled_docs_conflict_is_carried_regenerated_and_pushed(tmp_path):
     ports.stack.declared_docs = docs
     ports.workspace.upstream_merges[MASTER] = UpstreamMerge(False, ("docs/gen/a.md",), NEW)
     ports.workspace.full_head = lambda path: NEW  # the concluded merge commit
+    ports.workspace.ancestors.add(MASTER)  # a settled merge holds master
     ports.workspace.ancestries[("e" * 40, "e" * 40)] = "same"  # master's merge-base on both sides
     ports.workspace.merge_bases = {(NEW, MASTER): "e" * 40, (MASTER, MASTER): "e" * 40}
     ports.workspace.merge_resolutions = {NEW: OWNED_HUNK}
