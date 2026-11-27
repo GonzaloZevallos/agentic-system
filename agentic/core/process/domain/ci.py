@@ -1268,6 +1268,11 @@ _PLAYWRIGHT_HEADER = re.compile(r"^\s*\d+\) (\[[^\]]*\] › .*)$")
 _PLAYWRIGHT_RULE = re.compile(r"\s*─+\s*$")
 _PLAYWRIGHT_RETRY = re.compile(r"\s*\(retry #\d+\)\s*$")
 _PLAYWRIGHT_POSITION = re.compile(r":\d+:\d+$")
+# The list reporter's line for one finished test: `✘  N [project] › file:line:col › title (Xs)`,
+# `✓` when it passed (GH-1151). A job cancelled at its time limit never prints the numbered
+# summary, so these lines are all a log has to name the failing specs.
+_LIST_LINE = re.compile(r"^\s*(?P<mark>[✘✓])\s+\d+\s+(?P<key>\[[^\]]*\] › .*)$")
+_LIST_TIMING = re.compile(r"\s*\(\d+(?:\.\d+)?(?:ms|s|m)\)\s*$")
 # Anchored at the start of a line already stripped of gh's prefix and ANSI: the first line of a
 # test's error under a header, in pytest (`E   `) and Playwright (`TimeoutError:`).
 ERROR_LINE = re.compile(r"^\s*(?:E   |\w*Error:)")
@@ -1337,6 +1342,26 @@ def _playwright_id(text: str) -> str | None:
     return f"{project} › {path}{sep}{tail}".rstrip()
 
 
+def _list_reporter_ids(lines: Sequence[str]) -> list[tuple[int, str]]:
+    """`(line, key)` of the `✘` lines of Playwright's list reporter, the key being
+    `[project] › file:line:col › title`: the index, the marker, a `(retry #n)` and the timing
+    only at the end of the line are left out, so parentheses inside a title stay. A key a later
+    `✓` line repeats is a retry that passed and is not listed; a key that failed more than once
+    is listed once, at its first line."""
+    marks: list[tuple[int, str, str]] = []
+    for i, text in enumerate(lines):
+        found = _LIST_LINE.match(text)
+        if found is not None:
+            key = _PLAYWRIGHT_RETRY.sub("", _LIST_TIMING.sub("", found.group("key"), count=1))
+            marks.append((i, found.group("mark"), key.rstrip()))
+    passed_at = {key: i for i, mark, key in marks if mark == "✓"}
+    firsts: dict[str, int] = {}
+    for i, mark, key in marks:
+        if mark == "✘" and passed_at.get(key, -1) < i:
+            firsts.setdefault(key, i)
+    return [(i, key) for key, i in firsts.items()]
+
+
 def _fit_to_travel(item: str) -> bool:
     return (
         0 < len(item) <= FLAKE_ID_MAX_CHARS
@@ -1351,10 +1376,10 @@ def scan_headers(text: str) -> HeaderScan:
     truncated (a cut id could be another test's), and counted in `dropped`. Pure."""
     lines = _clean_lines(text)
     found = _pytest_ids(lines)
-    for i, clean in enumerate(lines):
-        playwright = _playwright_id(clean)
-        if playwright is not None:
-            found.append((i, playwright))
+    summary = [(i, pid) for i, clean in enumerate(lines) if (pid := _playwright_id(clean))]
+    # The numbered summary is the complete word on a run that finished; the `✘` lines name the
+    # same tests with another key, so they are read only when the run was cut before it.
+    found += summary or _list_reporter_ids(lines)
     headers: list[FailingHeader] = []
     seen: set[str] = set()
     dropped = 0
