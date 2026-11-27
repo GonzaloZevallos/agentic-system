@@ -18,8 +18,8 @@ from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
 from . import ci, merge_ci, presubmit, pull_request, rules, stacking
-from .docs import Docs, owned
 from .adr_numbers import Ambiguous, Renaming
+from .docs import Docs, owned
 from .document import HUMAN
 from .landing_order import Turn
 from .roles import LANDING_DIAGNOSER
