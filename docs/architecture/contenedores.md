@@ -92,7 +92,7 @@ cualquier otra excepción) y antes del sleep, con la línea `agentic: poll: grap
 La arma `agentic/core/process/application/budget_round.py:budget_round`: drena el registro de
 llamadas `gh`, lee `gh api rate_limit` con `agentic/composition.py:budget_read` (acotada a
 `BUDGET_READ_TIMEOUT_S` = 5 s y nunca contada en ningún `GhCallLog` real) y calcula los puntos de
-la ronda con `domain/github_budget.py:round_points`. Solo corre si `main` pasa `budget_read` y
+la ronda con `agentic/core/process/domain/github_budget.py:round_points`. Solo corre si `main` pasa `budget_read` y
 `gh_calls`; sin alguno de los dos, `_poll` no imprime ni drena nada. La lectura es síncrona y puede
 frenar el lazo hasta unos 5 s, igual que las demás llamadas `gh` de la ronda.
 
