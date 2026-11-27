@@ -63,9 +63,9 @@ sequenceDiagram
    `agentic/cli.py:_stack_gate` consulta la puerta del arranque apilado
    (`agentic/core/process/application/stacked_start.py:decide`) cuando hay una pista de
    lanzamiento o, con `--fresh`, un `stack_parent` legible en el documento anterior. Un
-   `Wait`, en la puerta o al crear la rama (`StackWait` en `agentic/cli.py:_invoke`), termina
-   la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr, sin invocar el grafo ni
-   escalar.
+   `Wait` en la puerta termina la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr,
+   sin invocar el grafo. Un `Wait` al crear la rama (`StackWait` atrapada en
+   `agentic/cli.py:_invoke`, ya iniciado el grafo) termina igual. Ninguno escala.
 4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
    (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
    `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del

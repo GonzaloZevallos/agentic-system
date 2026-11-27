@@ -447,7 +447,7 @@ class ParentFacts:
     """What the application layer read about a stacked child's parent, for `start_ref`. Each
     fact is `None` when its read failed. `merged`: the parent's work is in the upstream;
     `abandoned`: its issue is closed as not planned; `paused`: its run escalated or was
-    stopped; `ready`: its document is `ready_for_review` and not archived; `head`: its approved
+    stopped; `ready`: its document is `ready_for_review`; `head`: its approved
     head (`None` if it has none); `carried`: its remote branch carries `head`."""
 
     merged: bool | None
