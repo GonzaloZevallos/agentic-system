@@ -351,6 +351,18 @@ FIXTURES: dict[str, object] = {
         {"at": NOW, "upstream": SHA, "conflict": False, "cost_usd": 0.5, "tokens": {"in": 1}}
     ],
     "stack_pauses": [{"parent": 7, "cause": "parent_open", "at": NOW, "resumed_at": None}],
+    "reintegrations": [
+        {
+            "at": NOW,
+            "upstream": SHA,
+            "mode": "session",
+            "cause": "regenerated",
+            "attempt_s": 1.5,
+            "generate_s": 0.5,
+            "regeneration": SHA,
+            "resumed": True,
+        }
+    ],
     "full_checks_reads": [
         {
             "version": 1,
@@ -579,6 +591,7 @@ def test_a_spec_survives_with_the_commit_the_guard_moves():
         ("split_closed_at", ""),
         ("split_abandoned_at", None),
         ("format_released", []),
+        ("reintegrations", []),
     ],
 )
 def test_a_key_added_by_this_task_writes_nothing_when_unset(key: str, unset: object):
