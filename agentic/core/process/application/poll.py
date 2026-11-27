@@ -34,38 +34,47 @@ from ..domain import (
     document,
     exempt_queue,
     experiment,
+    format_retakes,
     hold,
     landing_order,
     launch_order,
     merge_ci,
     merge_conflict,
     presubmit,
+    rate_limit,
     rules,
     stacking,
+    terminal_states,
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
+from ..domain import stacking as stacking_rules
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import IssueRef, LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
-from ..domain.retakes import RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
+from ..domain.retakes import RESUMED_BY_POLLER, RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
 from ..domain.task import (
     INTEGRATION,
     HeadYield,
     PullRequest,
+    RefusalRule,
     TaskState,
+    TrackerFailure,
     add_head_yield,
     add_tracker_failures,
     apply,
+    format_issue_for,
     refusal_noted_record,
 )
+from ..domain.terminal_states import OpenView, TerminalMemo
 from . import (
     adr_collision,
     board_sync,
     ci_ref_sweep,
     close_issues,
+    format_hold,
     landing_lane,
     landing_plan,
     preflight,
@@ -79,6 +88,7 @@ from . import (
 )
 from . import escalate as escalate_module
 from .checkouts import task_base
+from .format_release import FormatReleaseCarry, release_fixed_holds
 from .ports import (
     GitError,
     HeldListMayBeCut,
@@ -91,6 +101,7 @@ from .ports import (
     RunLock,
     RunRegistration,
     RunRegistry,
+    StackHint,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -302,6 +313,7 @@ def _merge_facts(
     current_master: str | None,
     *,
     comments: Sequence[IssueComment] | None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> rules.MergeFacts:
     """What the poller can know about a delivered task before any worktree exists, every
     fact off the product checkout's own document, the tracker and the upstream sha --
@@ -348,6 +360,7 @@ def _merge_facts(
         ),
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
+        eval_set_unread=eval_set_unread if eval_set is None else None,
         touched_paths=None,
         ci_untrusted=None,
         merge_ci=tuple(raw.get("merge_ci") or ()),
@@ -702,6 +715,7 @@ def assess_merge(
     cfg: Configuration | None,
     memo: StackMemo,
     now: datetime | None = None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
@@ -736,6 +750,7 @@ def assess_merge(
         number,
         current_master,
         comments=read_comments(ports, task_id) if thread_needed(raw) else [],
+        eval_set_unread=eval_set_unread,
     )
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
     # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
@@ -1176,6 +1191,7 @@ def evaluate_landing_order(
     *,
     memo: StackMemo,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.advance`, the one
@@ -1224,7 +1240,16 @@ def evaluate_landing_order(
             continue
         try:
             assessed = assess_merge(
-                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo, now=now
+                ports,
+                task_id,
+                raw,
+                number,
+                eval_set,
+                current_master,
+                cfg=cfg,
+                memo=memo,
+                now=now,
+                eval_set_unread=eval_set_unread,
             )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
@@ -1560,6 +1585,7 @@ def gather_merges(
     memo: StackMemo,
     dry_run: bool,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1611,6 +1637,7 @@ def gather_merges(
         integrating,
         memo=memo,
         skip=skip,
+        eval_set_unread=eval_set_unread,
     )
 
     def at_work(task_id: str) -> bool:
@@ -1694,6 +1721,8 @@ def gather_merges(
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            if decision.reason == "eval_set_unreadable" and facts.eval_set_unread is not None:
+                line += f" ({facts.eval_set_unread})"
             if decision.reason == "merge_conflict" and assessed.conflict_source is not None:
                 line += f" ({assessed.conflict_source})"
             if decision.reason == "checks_failed":
@@ -1775,8 +1804,104 @@ def gather_merges(
     return found
 
 
+def _rate_limit_candidate(
+    ports: Ports,
+    raw: TaskState,
+    number: int,
+    reason: rules.ResumeKey,
+    comments: Sequence[IssueComment],
+    now: datetime,
+) -> rules.ResumeCandidate | None:
+    """The candidate of a GitHub rate-limit pause (GH-989), from the facts alone: `since` is the
+    pause's own `at` (`rate_limit.pause_at`; it carries no `Escalated:` comment), `prior` and
+    `chase_prior` the poller's retakes after it, `retaken` whether there was one and the stated
+    reset carries the product's offset, so `rules.retake_due` lands on `rate_limit.retake_due_at`.
+    `None` (the task is left out) when the pause has no readable `at`, when a person commented
+    after it (`rate_limit.person_spoke`: the automatic retakes stop) or when its 12 h are spent
+    (`rate_limit.rate_limit_exhausted`: `rate_limit_escalations` persists it)."""
+    from .resume import SYSTEM_COMMENTS
+
+    at = rate_limit.pause_at(raw)
+    if at is None:
+        return None
+    stamped = [(c.body, _parse_timestamp(c.created_at)) for c in comments]
+    if rate_limit.person_spoke(stamped, at, SYSTEM_COMMENTS):
+        return None
+    if rate_limit.rate_limit_exhausted(raw, now):
+        return None
+    prior = rate_limit.poller_retakes(stamped, at, RESUMED_BY_POLLER)
+    resets_at = rate_limit.governing_reset(rules.stated_reset(raw), ports.stack.product())
+    return rules.ResumeCandidate(
+        number,
+        reason,
+        at,
+        prior,
+        rules.auto_resume_limit(raw, reason),
+        prior,
+        False,
+        resets_at,
+        prior > 0,
+    )
+
+
+# A `label` row of `tracker_failures` this recent means the `needs-human` write failed just now:
+# the safety net of a format pause waits before it tries again (GH-1019).
+LABEL_RETRY = timedelta(hours=1)
+
+
+def _label_failed_recently(raw: TaskState, now: datetime) -> bool:
+    """Whether `tracker_failures` holds a `label` row from the last `LABEL_RETRY`."""
+    for row in raw.get("tracker_failures", []):
+        if row["target"] != "label":
+            continue
+        at = _parse_timestamp(row["at"])
+        if at is not None and now - at < LABEL_RETRY:
+            return True
+    return False
+
+
+def _put_needs_human(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    labels: Mapping[int, tuple[str, ...] | None],
+    now: datetime,
+) -> None:
+    """The safety net of a format pause a person commented on (GH-1019): a retake is not coming,
+    so the task is the human's and gets `needs-human`, a Nota (`Tracker.put_label`). Skipped when
+    the labels the round already read carry it (an issue the read did not list is closed) or when
+    a label write failed in the last hour; a failure goes to `tracker_failures`, from a fresh
+    load, replacing the older `label` row so the hour counts from the last failure."""
+    if number not in labels:
+        return
+    read = labels[number]
+    if read is not None and escalate_module.NEEDS_HUMAN in read:
+        return
+    if _label_failed_recently(raw, now):
+        return
+    failure = ports.tracker.put_label(task_id, escalate_module.NEEDS_HUMAN)
+    if failure is None:
+        return
+    fresh = ports.documents.load(task_id) or {}
+    kept = [row for row in fresh.get("tracker_failures", []) if row["target"] != "label"]
+    rows = add_tracker_failures(kept, [failure.record()])
+    ports.documents.record_closure(task_id, {"tracker_failures": rows})
+
+
+FormatCarried = tuple[str, tuple[RefusalRule, ...]]
+"""What `gather_resumes` carries for a format candidate to `execute` (GH-1019): its format key (the
+reason `auto_resumable` found) and the distinct rules of its epoch, both re-checked on the fresh
+document before the retake is counted."""
+
+
 def gather_resumes(
-    ports: Ports, now: datetime, *, skip: frozenset[int] = frozenset()
+    ports: Ports,
+    now: datetime,
+    *,
+    skip: frozenset[int] = frozenset(),
+    format_rules: dict[int, FormatCarried] | None = None,
+    labels: Mapping[int, tuple[str, ...] | None] | None = None,
 ) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
     `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
@@ -1794,28 +1919,46 @@ def gather_resumes(
         raw = ports.documents.load(task_id) or {}
         if raw.get("closed_at") or not raw.get("escalated"):
             continue
+        if rules.format_held(raw):
+            continue  # held on its format retakes (GH-1019): only a human's resume releases it
         reason = rules.auto_resumable(raw)
         if reason is None:
             continue
         comments = ports.tracker.timestamped_comments(task_id)
         if landing_plan.stranded(raw, comments):
             continue  # `land` owns it (GH-257): `resume` would refuse a task that is not paused
+        if reason == "github_rate_limit":
+            candidate = _rate_limit_candidate(ports, raw, number, reason, comments, now)
+            if candidate is not None:
+                resumes.append(candidate)
+            continue
         since = _since_last_escalated(comments)
         if since is None:
             continue
+        is_format = reason in rules.FORMAT_REASONS
+        if is_format and rules.format_hold_due(raw):
+            continue  # no retake left: `hold_format_failures` holds it, never a candidate (GH-1019)
         if _human_spoke_after_the_system(comments):
             # A person is talking (Human decision, issue #137): the pause is the
             # human's from here on, whatever the calendar says -- never retaken on
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
+            if is_format and labels is not None:
+                _put_needs_human(ports, task_id, number, raw, labels, now)
             continue
         chase = _prior_auto_resumes(comments)
         resets_at = None
-        if reason == "account_limit":
+        if is_format:
+            prior, ceiling_spent = sum(raw.get("format_retakes", {}).values()), False
+            if format_rules is not None:
+                format_rules[number] = (reason, rules.format_epoch_rules(raw))
+        elif reason == "account_limit":
             prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
             resets_at = rules.stated_reset(raw)
         else:
             prior, ceiling_spent = chase, False
         limit = rules.auto_resume_limit(raw, reason)
+        if is_format:
+            limit += prior  # `auto_resume_limit` says the retakes left; the calendar wants slots
         resumes.append(
             rules.ResumeCandidate(
                 number,
@@ -1850,7 +1993,8 @@ def escalate_persisted_limits(
     """The week of hourly retakes is spent (`rules.account_limit_persisted`): the task
     escalates as a failure, once -- the patch leaves a failure entry that `rules.
     auto_resumable` no longer retakes, so the next round does not find it again. The one
-    place the poller writes a task document, and only for this escalation."""
+    place the poller writes a task document for an account limit; `rate_limit_escalations` writes
+    the GitHub limit's own (GH-989)."""
     lines: list[str] = []
     for r in resumes:
         if not rules.account_limit_persisted(r):
@@ -1868,6 +2012,175 @@ def escalate_persisted_limits(
             f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"
         )
     return lines
+
+
+def _record_tracker_failures(
+    ports: Ports, task_id: str, failures: Sequence[TrackerFailure | None]
+) -> bool:
+    """Writes the failures that landed into the task's `tracker_failures`, from a fresh load, and
+    says whether there was any."""
+    landed = [failure.record() for failure in failures if failure is not None]
+    if not landed:
+        return False
+    stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+    rows = add_tracker_failures(stored if isinstance(stored, list) else [], landed)
+    ports.documents.record_closure(task_id, {"tracker_failures": rows})
+    return True
+
+
+def _write_format_hold(ports: Ports, task_id: str, number: int, out: list[str]) -> TaskState | None:
+    """Holds the task whose format retakes are spent (GH-1019): `format_retakes.hold_patch` on a
+    fresh document, `issue_url` from `task.format_issue_for` and left out without a record, then
+    the poller's line. The fresh document decides again, so a resume that got there first, or a
+    hold that exists, writes nothing. Returns the document as it stands."""
+    fresh = ports.documents.load(task_id)
+    if fresh is None or not rules.format_epoch(fresh) or not rules.format_hold_due(fresh):
+        return fresh
+    entries = rules.format_epoch_entries(fresh)
+    format_rules = rules.format_epoch_rules(fresh)
+    counts = fresh.get("format_retakes", {})
+    rule = format_retakes.held_rule(counts, format_rules, entries)
+    record = format_issue_for(fresh.get("format_issue", []), rule) if rule else None
+    patch = format_retakes.hold_patch(
+        fresh, format_rules, record["url"] if record else None, ports.now(), entries
+    )
+    if not patch:
+        return fresh
+    state = apply(fresh, patch)
+    ports.documents.save(state)
+    out.append(f"agentic: poll: #{number} format hold ({patch['format_hold']['rule']})")
+    return state
+
+
+def _announce_format_hold(
+    ports: Ports,
+    task_id: str,
+    number: int,
+    state: TaskState,
+    labels: Mapping[int, tuple[str, ...] | None] | None,
+) -> None:
+    """The noted step of a hold (GH-1019), run each round while `noted_at` is absent: read the
+    comments once for the marker, post the Nota unless it is there, and only then drop
+    `needs-human` (unless the labels the round read say it is gone), so a task is never left with
+    neither the label nor the announcement. `noted_patch` is written only when both landed. A
+    failure goes to `tracker_failures` and the next round tries again; a comment read that failed
+    writes nothing."""
+    hold = state.get("format_hold")
+    if not hold or hold.get("noted_at"):
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        return
+    if not any(format_hold.marker(hold) in c.body for c in comments) and _record_tracker_failures(
+        ports, task_id, [ports.tracker.note(task_id, format_hold.note(hold, number))]
+    ):
+        return  # the label stays until the Nota is there
+    read = labels.get(number) if labels is not None else None
+    if (read is None or escalate_module.NEEDS_HUMAN in read) and _record_tracker_failures(
+        ports, task_id, [ports.tracker.drop_label(task_id, escalate_module.NEEDS_HUMAN)]
+    ):
+        return
+    fresh = ports.documents.load(task_id)
+    if fresh is None:
+        return
+    patch = format_retakes.noted_patch(fresh, ports.now())
+    if patch:
+        ports.documents.save(apply(fresh, patch))
+
+
+def hold_format_failures(
+    ports: Ports,
+    lock: RunLock,
+    busy: Collection[str],
+    labels: Mapping[int, tuple[str, ...] | None] | None = None,
+) -> list[str]:
+    """The hold step of the format retakes (GH-1019), a sibling of `escalate_persisted_limits`:
+    for every paused task whose format retakes are spent and has no hold, `_write_format_hold`;
+    for every held task the human was not told about, `_announce_format_hold`. It writes only
+    for a task with a free writer (`stack_hold.free_writer`: no live run, no live lock), and the
+    caller never calls it in a dry round. A task with `noted_at` costs no call."""
+    out: list[str] = []
+    for task_id in ports.documents.ids():
+        number = ports.inbox.issue_of(task_id)
+        if number is None:
+            continue
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("closed_at") or not raw.get("escalated"):
+            continue
+        owed_hold = not rules.format_held(raw) and rules.format_epoch(raw)
+        if owed_hold and not rules.format_hold_due(raw):
+            continue
+        if not owed_hold and (not rules.format_held(raw) or raw["format_hold"].get("noted_at")):
+            continue
+        if not stack_hold.free_writer(task_id, busy, lock):
+            continue
+        state = _write_format_hold(ports, task_id, number, out) if owed_hold else raw
+        if state is not None:
+            _announce_format_hold(ports, task_id, number, state, labels)
+    return out
+
+
+def rate_limit_escalations(
+    cfg: Configuration,
+    ports: Ports,
+    now: datetime,
+    at_work: Callable[[str], bool],
+    out: list[str],
+) -> None:
+    """GitHub's rate-limit pause after 12 h (GH-989), read from the documents alone: a round
+    with nothing owed makes no tracker call. For each task not at work: when
+    `rate_limit.persist_due` holds the document is loaded fresh and saved with
+    `rate_limit_persisted_patch`; then, when `rate_limit.rate_limit_notice_owed` holds, the
+    comments are read once, `needs-human` is put and the `Escalated:` comment noted (unless
+    `rate_limit.notice_posted` finds it already there). Both writes go through the best-effort
+    verbs: a failure is recorded in `tracker_failures` and the round goes on, and
+    `rate_limit_noticed_at` is stamped only when both landed, so a failed one is retried by the
+    next round and a comment that landed is never posted twice."""
+    for task_id in ports.documents.ids():
+        if ports.inbox.issue_of(task_id) is None or at_work(task_id):
+            continue
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("closed_at") or not raw.get("escalated"):
+            continue
+        if rate_limit.persist_due(raw, now):
+            fresh = ports.documents.load(task_id)
+            if fresh is None:
+                continue
+            raw = apply(fresh, rate_limit.rate_limit_persisted_patch(at=ports.now()))
+            ports.documents.save(raw)
+            out.append(
+                f"agentic: poll: #{ports.inbox.issue_of(task_id)} github rate limit persisted "
+                "-> left to the human"
+            )
+        if rate_limit.rate_limit_notice_owed(raw):
+            _send_rate_limit_notice(cfg, ports, task_id, raw, out)
+
+
+def _send_rate_limit_notice(
+    cfg: Configuration, ports: Ports, task_id: str, raw: TaskState, out: list[str]
+) -> None:
+    """The label and the comment of one owed notice, then the stamp (see
+    `rate_limit_escalations`). A read of the comments that failed writes nothing: the next round
+    tries again."""
+    at = rate_limit.pause_at(raw)
+    if at is None:
+        return
+    comments = read_comments(ports, task_id)
+    if comments is None:
+        out.append(f"agentic: poll: #{ports.inbox.issue_of(task_id)} rate limit notice unread")
+        return
+    stamped = [(c.body, _parse_timestamp(c.created_at)) for c in comments]
+    text = escalate_module.comment(raw, cfg, ports)
+    failures = [ports.tracker.put_label(task_id, escalate_module.NEEDS_HUMAN)]
+    if not rate_limit.notice_posted(stamped, at, text):
+        failures.append(ports.tracker.note(task_id, text))
+    landed = [failure.record() for failure in failures if failure is not None]
+    if landed:
+        stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+        rows = add_tracker_failures(stored if isinstance(stored, list) else [], landed)
+        ports.documents.record_closure(task_id, {"tracker_failures": rows})
+        return
+    ports.documents.record_closure(task_id, {"rate_limit_noticed_at": ports.now()})
 
 
 @dataclass(frozen=True)
@@ -2088,7 +2401,11 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
 
 
 def _blocker_verdict(
-    cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
+    cfg: Configuration,
+    ports: Ports,
+    blocker: int,
+    upstream: Callable[[], Upstream],
+    open_view: OpenView | None = None,
 ) -> rules.BlockerVerdict:
     """How one blocker stands. Every resolution path sits behind `state == "CLOSED"`: an
     open issue never resolves. A `COMPLETED` issue resolves on a merge commit in the
@@ -2096,18 +2413,33 @@ def _blocker_verdict(
     `closed_by_slices` with every unit's `reviewed_head` an ancestor of the upstream, or
     `tracker_only`, where there was no pull request and nothing to merge; or (GH-619) a
     split parent the split sweep recorded closed (`split_closed_at`), whose parts landed.
-    The record only counts behind `CLOSED`: on an open issue it claims nothing. Never prose."""
-    state = ports.tracker.issue_state(blocker)
-    if state.state != "CLOSED":
-        return "open"
-    if state.state_reason not in ("COMPLETED", "NOT_PLANNED"):
+    The record only counts behind `CLOSED`: on an open issue it claims nothing. Never prose.
+    `open_view` (GH-992) is the round's proof for the terminal memo: a closure the memo kept
+    stands in for the `issue_state` read (`terminal_states.served`), and a live read that
+    decides is kept (`terminal_states.record`). The document's merge commit, its status
+    records and the ancestry are judged live either way; without it nothing is kept or served."""
+    served_closure = (
+        terminal_states.served(open_view.memo, blocker, open_view) if open_view else None
+    )
+    if served_closure is not None:
+        state_reason = served_closure.state_reason
+        closing_merge_commit = served_closure.closing_merge_commit
+    else:
+        state = ports.tracker.issue_state(blocker)
+        if open_view is not None:
+            terminal_states.record(open_view.memo, blocker, state)
+        if state.state != "CLOSED":
+            return "open"
+        state_reason = state.state_reason
+        closing_merge_commit = state.closing_merge_commit
+    if state_reason not in ("COMPLETED", "NOT_PLANNED"):
         return "unknown"
-    if state.state_reason == "NOT_PLANNED":
+    if state_reason == "NOT_PLANNED":
         return "resolved"
     # The fetched tip, never local `HEAD` (GH-180): a merge on the remote that nobody
     # pulled is merged. `upstream` is asked only here, when a merge commit is to be
     # judged, and is memoised per round by `run_once`: at most one fetch.
-    merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
+    merge_commit = _merge_commit_for(ports, blocker, closing_merge_commit)
     if merge_commit is not None:
         tip = upstream().sha
         merged = ports.workspace.is_ancestor(cfg.product_dir, merge_commit, ref=tip or "HEAD")
@@ -2148,6 +2480,8 @@ def _blocked(
     number: int,
     upstream: Callable[[], Upstream],
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    stacking: stacking_rules.ParentMemo | None = None,
+    open_view: OpenView | None = None,
 ) -> rules.BlockerReport:
     """What `number`'s blockers come to; the launch predicate is `bool(report)`. Any
     doubt -- an unknown git object, a `gh` failure, a blocker whose own `stateReason` this
@@ -2159,7 +2493,11 @@ def _blocked(
     candidate's git trouble must cost that candidate's own launch, never the round, and
     never the process. When the blockers themselves cannot be read the candidate is its
     own `unknown` entry, so the report still blocks. The numbers it read (GH-836) are set in
-    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none."""
+    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none.
+    `stacking` (GH-858, ADR-0103) is the round's `ParentMemo`; without it the report is the one
+    above, byte for byte. With it, the one `open` blocker of a candidate that has no other
+    unresolved one may be read as its stacked parent (`_stacked_parent`) and move to
+    `stacked_on`; any doubt leaves it in `open`. `open_view` (GH-992) goes to `_blocker_verdict`."""
     try:
         blockers = _blocker_numbers(ports, number)
     except (ValueError, OSError, KeyError, GitError):
@@ -2171,7 +2509,7 @@ def _blocked(
     unknown: list[int] = []
     for blocker in blockers:
         try:
-            verdict = _blocker_verdict(cfg, ports, blocker, upstream)
+            verdict = _blocker_verdict(cfg, ports, blocker, upstream, open_view)
         except (ValueError, OSError, KeyError, GitError):
             verdict = "unknown"
         match verdict:
@@ -2183,7 +2521,62 @@ def _blocked(
                 unknown.append(blocker)
             case reason:
                 closed.append((blocker, reason))
+    if stacking is not None and len(open_) == 1 and not closed and not unknown:
+        if _stacked_parent(cfg, ports, number, open_[0], stacking):
+            return rules.BlockerReport(stacked_on=open_[0])
     return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
+
+
+def _stacked_parent(
+    cfg: Configuration, ports: Ports, child: int, parent: int, memo: stacking_rules.ParentMemo
+) -> bool:
+    """Whether `parent`, the child's only unresolved blocker, is the Ready same-split parent
+    a stacked start would build on (GH-858, ADR-0103, ADR-0104). Positive only when every
+    condition reads positive: the parent's document is `ready_for_review` with an approved
+    head and no `stack_parent` of its own (depth 1: an unreadable record excludes too); both
+    bodies carry exactly one `agentic-split` marker and the same id; and the parent's task
+    branch on the remote carries that head (`remote_tip`, bounded and fetched once per
+    `(parent, head)` and round, then `is_ancestor`; a tip that descends from the head counts).
+    Any exception, a failed or rate-limited `gh`, a failed fetch, is doubt: not stacked, so
+    the blocker stays `open`. After the first failed remote read of the round no other one
+    is made. The marker is read per child; the memo holds what only the parent decides."""
+    try:
+        parent_id = ports.inbox.task_id(parent)
+        parent_document = ports.documents.load(parent_id)
+        if parent_document is None or parent_document.get("status") != "ready_for_review":
+            return False
+        if stacking.stacked(parent_document):
+            return False
+        head = rules.approved_head(parent_document)
+        if head is None:
+            return False
+        ours = rules.split_marker_ids(ports.inbox.task(child)["description"])
+        theirs = rules.split_marker_ids(ports.inbox.task(parent)["description"])
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+    if len(ours) != 1 or ours != theirs:
+        return False
+    known = memo.outcome(parent, head)
+    if known is not None:
+        return known == "stacked"
+    if memo.origin_failed:
+        return memo.record(parent, head, "doubt") == "stacked"
+    try:
+        tip = ports.workspace.remote_tip(
+            cfg.product_dir, rules.task_branch(parent_id), bounded=True
+        )
+    except GitError:
+        memo.fail_origin()
+        return memo.record(parent, head, "doubt") == "stacked"
+    except (ValueError, OSError, KeyError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    if tip is None:
+        return memo.record(parent, head, "not_stacked") == "stacked"
+    try:
+        carried = ports.workspace.is_ancestor(cfg.product_dir, head, ref=tip)
+    except (ValueError, OSError, KeyError, GitError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    return memo.record(parent, head, "stacked" if carried else "not_stacked") == "stacked"
 
 
 # A budget with nothing used: what the cheap, fields-only verdicts are asked with.
@@ -2211,6 +2604,9 @@ def gather_launches(
     documents: Mapping[int, TaskState | None] | None = None,
     declaration: experiment.Experiment | None = None,
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    memo: stacking_rules.ParentMemo | None = None,
+    stack_hints: dict[int, StackHint] | None = None,
+    open_view: OpenView | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -2227,16 +2623,43 @@ def gather_launches(
     new one: `_assign_arms` does that, after `rules.poll_plan`, for the launches that come out.
     Every other candidate arrives with no arm. Each candidate's blocker numbers, the ones
     `_blocked` already read (native or the body's), are set in `blockers_of` when given
-    (GH-836), the queue's edges of the launch order: no call is added."""
+    (GH-836), the queue's edges of the launch order: no call is added. The product's stacking
+    switch (GH-858, ADR-0103) is read here and nowhere else, once per round, at the fetched
+    upstream tip and only when a candidate has one open blocker and nothing else; any doubt reads
+    it as off. With it on,
+    `memo` (the round's `ParentMemo`) goes to `_blocked`, and a candidate whose only blocker
+    is the Ready parent it judged launches, its hint `{parent, approved head}` set in
+    `stack_hints` under its issue for the launch record; without the head the judgement saw,
+    it stays blocked."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
+    stacking_memo: stacking_rules.ParentMemo | None = None
+    switch_read = False
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
             continue
-        report = _blocked(cfg, ports, number, upstream, blockers_of)
+        report = _blocked(cfg, ports, number, upstream, blockers_of, None, open_view)
+        if len(report.open) == 1 and not report.closed_unresolved and not report.unknown:
+            # Only a candidate whose one unresolved blocker may be a stacked parent needs the
+            # switch, so a round without one never fetches the upstream for it.
+            if not switch_read:
+                switch_read = True
+                if _stacking_on(ports, upstream):
+                    stacking_memo = memo if memo is not None else stacking_rules.ParentMemo()
+            if stacking_memo is not None:
+                report = _blocked(
+                    cfg, ports, number, upstream, blockers_of, stacking_memo, open_view
+                )
+        hint = None
+        if report.stacked_on is not None and stacking_memo is not None:
+            hint = _stack_hint(stacking_memo, report.stacked_on)
+            if hint is None:
+                report = rules.BlockerReport(open=(report.stacked_on,))
+            elif stack_hints is not None:
+                stack_hints[number] = hint
         if reports is not None:
             reports.append(report)
         if by_issue is not None:
@@ -2255,9 +2678,31 @@ def gather_launches(
     return launches
 
 
+def _stacking_on(ports: Ports, upstream: Callable[[], Upstream]) -> bool:
+    """The product's stacking switch at the fetched upstream tip (GH-858); the one read of it.
+    Off when the key is absent, and off on any doubt (no tip, a key that is not a boolean)."""
+    try:
+        return ports.stack.stacking(upstream().sha)
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+
+
+def _stack_hint(memo: stacking_rules.ParentMemo, parent: int) -> StackHint | None:
+    """The approved head the round's judgement found stacked for `parent`: the one head it
+    recorded as such, `None` when it recorded none or more than one."""
+    heads = {head for (p, head), seen in memo.outcomes.items() if p == parent and seen == "stacked"}
+    return StackHint(parent, next(iter(heads))) if len(heads) == 1 else None
+
+
 def _issue_number(url: str) -> int | None:
     tail = url.rstrip("/").rsplit("/", 1)[-1]
     return int(tail) if tail.isdigit() else None
+
+
+def _labels_of(refs: Sequence[IssueRef]) -> dict[int, tuple[str, ...] | None]:
+    """The labels each open issue carries, from the round's one read of them (`None`: the
+    tracker did not say)."""
+    return {n: ref.labels for ref in refs if (n := _issue_number(ref.url)) is not None}
 
 
 def read_open_refs(ports: Ports) -> tuple[list[IssueRef], str | None]:
@@ -2401,6 +2846,7 @@ def gather_orphans(
     by_issue: dict[int, rules.BlockerReport],
     spent: dict[int, RetakesSpent] | None = None,
     reported: set[int] | None = None,
+    open_view: OpenView | None = None,
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -2444,7 +2890,12 @@ def gather_orphans(
             continue
         if record is not None:
             continue
-        report = _blocked(cfg, ports, number, upstream)
+        if stacking.stacked_on(raw) is not None:
+            # A stacked child waits for its parent through `stacking.held` and `pause_cause`
+            # (ADR-0103), not through its blockers (GH-858): no judgement, and no memo ever.
+            report = rules.BlockerReport()
+        else:
+            report = _blocked(cfg, ports, number, upstream, None, None, open_view)
         reports.append(report)
         by_issue[number] = report
         if report:
@@ -2559,11 +3010,12 @@ def _spawn_resume(
     launcher: Launcher,
     argv0: str,
     product_dir: str,
-    comment: str,
+    comment: str | None,
     register_timeout_s: float,
     sleep: Callable[[float], None],
     crash: CrashRetake | None = None,
     orphan_prior: int | None = None,
+    format_carried: FormatCarried | None = None,
 ) -> list[str]:
     """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
     --yes --detach` child (plus `--from-document` for an orphan retake, GH-403: `orphan_prior`
@@ -2573,9 +3025,19 @@ def _spawn_resume(
     to register. A retake that never registered says so, with which of its tries it was:
     it is the only case where the wait ends with the registry flock held for nothing.
     Neither kind records a launch attempt: that calendar belongs to `launch` alone. A crash
-    retake (`crash`, counted once by `gather_retakes`) names its own count and cap there."""
+    retake (`crash`, counted once by `gather_retakes`) names its own count and cap there. A
+    `comment` of `None` posts nothing: a GitHub rate-limit pause spends no retake budget, so
+    its only comment is the `Resumed by the poller:` the resume itself posts (GH-989). A format
+    retake (`format_carried`, GH-1019: the rules `gather_resumes` carried) is counted by
+    `_count_format_retake` before the spawn, or is stale and spawns nothing."""
     number = action.issue
     task_id = ports.inbox.task_id(number)
+    previous: dict[RefusalRule, int] | None = None
+    if format_carried is not None:
+        counted = _count_format_retake(ports, task_id, number, format_carried)
+        if isinstance(counted, str):
+            return [counted]
+        previous = counted
     if crash is not None:
         prior = crash.prior
     elif orphan_prior is not None:
@@ -2595,10 +3057,12 @@ def _spawn_resume(
     try:
         pid = launcher.spawn(argv)
     except OSError as exc:
-        return [f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"]
+        line = f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"
+        return [line, *_restore_format_count(ports, task_id, number, previous)]
     lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
     try:
-        ports.tracker.comment(task_id, comment)
+        if comment is not None:
+            ports.tracker.comment(task_id, comment)
     except TrackerCallFailed as exc:  # the child runs on: only the comment is lost
         what = "timed out" if isinstance(exc, TrackerTimedOut) else f"failed: {exc}"
         lines.append(f"agentic: poll: {action.kind} #{number} -> comment {what}")
@@ -2608,6 +3072,46 @@ def _spawn_resume(
             f"agentic: poll: retake #{number} -> not registered (retake {prior + 1} of {cap})"
         )
     return lines
+
+
+def _count_format_retake(
+    ports: Ports, task_id: str, number: int, carried: FormatCarried
+) -> dict[RefusalRule, int] | str:
+    """Counts one format retake before its child spawns (GH-1019), under the round's
+    `registry.exclusive()`: the fresh document, its key and rules recomputed, and only when it is
+    still the same format key and the very rules `gather_resumes` carried (`carried`, and not
+    held) is `format_retakes.count_patch` saved. Returns the map as it was, for
+    `_restore_format_count`, or the `stale (not counted)` line, with nothing written, when the
+    owner got there first."""
+    fresh = ports.documents.load(task_id)
+    if (
+        fresh is None
+        or rules.format_held(fresh)
+        or rules.auto_resumable(fresh) != carried[0]
+        or rules.format_epoch_rules(fresh) != carried[1]
+    ):
+        return f"agentic: poll: format retake #{number} -> stale (not counted)"
+    entries = rules.format_epoch_entries(fresh)
+    previous = dict(fresh.get("format_retakes", {}))
+    ports.documents.save(apply(fresh, format_retakes.count_patch(fresh, entries)))
+    return previous
+
+
+def _restore_format_count(
+    ports: Ports, task_id: str, number: int, previous: dict[RefusalRule, int] | None
+) -> list[str]:
+    """Puts the `format_retakes` map back to what it was before a spawn that raised, so a retake
+    that never started is not spent. A restore that fails says so; the retake stays counted."""
+    if previous is None:
+        return []
+    try:
+        fresh = ports.documents.load(task_id)
+        if fresh is None:
+            raise ValueError("no document")
+        ports.documents.save(apply(fresh, {"format_retakes": previous}))
+    except (ValueError, OSError) as exc:
+        return [f"agentic: poll: format retake #{number} -> count not restored: {exc}"]
+    return []
 
 
 _SHAPE_TEXT: Mapping[retake_rules.RetakeShape, str] = {
@@ -2693,6 +3197,8 @@ def execute(
     reruns: frozenset[int] = frozenset(),
     orphan_retakes: Mapping[int, int] | None = None,
     spent_notices: Mapping[int, RetakesSpent] | None = None,
+    format_rules: Mapping[int, FormatCarried] | None = None,
+    stack_hints: Mapping[int, StackHint] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -2720,7 +3226,9 @@ def execute(
     own calendar. A `retake` whose `reason` is `orphaned` (GH-403) resumes `--from-document` and
     posts `RETAKEN_ORPHANED` with `orphaned_comment`, from the count `orphan_retakes[issue]`
     that `gather_orphans` made. A `retakes_spent` action announces the spent budget of
-    `spent_notices[issue]` (`_announce_spent`), spawning nothing."""
+    `spent_notices[issue]` (`_announce_spent`), spawning nothing. A `resume` of an issue in
+    `format_rules` (GH-1019) counts its format retake before the spawn (`_count_format_retake`),
+    here and nowhere else."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -2747,9 +3255,12 @@ def execute(
                 launcher,
                 argv0,
                 product_dir,
-                f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
+                None
+                if reason == "github_rate_limit"
+                else f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
                 register_timeout_s,
                 sleep,
+                format_carried=(format_rules or {}).get(action.issue),
             )
         elif action.kind == "retake" and action.reason == "crash":
             crash = (crash_retakes or {})[action.issue]
@@ -2820,7 +3331,9 @@ def execute(
             await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
-            registry.record_launch(product, action.issue, now, action.arm)
+            registry.record_launch(
+                product, action.issue, now, action.arm, (stack_hints or {}).get(action.issue)
+            )
             fresh = ("--fresh",) if action.issue in reruns else ()
             arm = (experiment.ARM_FLAG, action.arm) if action.arm is not None else ()
             argv = _argv(argv0, "run", action.issue, product_dir, *fresh, *arm, "--detach")
@@ -2857,6 +3370,20 @@ def _recent_spend(ports: Ports, now: datetime) -> tuple[list[rules.SpendRun], in
         fresh.extend(found)
         skipped += count
     return fresh, skipped
+
+
+def eval_set_unread_of(
+    upstream: Upstream, eval_set: frozenset[int] | None
+) -> rules.EvalSetUnread | None:
+    """Why `eval_set` is `None` for this round's `upstream` (GH-1142), `None` when it was
+    read. The upstream's data decides, never its note's text: any note besides the left-out
+    commits (no upstream, a failed fetch) is `failure`; a clean upstream with an unread set
+    is a declaration that did not parse."""
+    if eval_set is not None:
+        return None
+    only_left_out = bool(upstream.left_out) and not upstream.fetch_failed
+    failure = bool(upstream.note) and not only_left_out
+    return rules.eval_set_unread_cause(upstream.sha is not None, upstream.left_out, failure, False)
 
 
 def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
@@ -3123,6 +3650,8 @@ def run_once(
     system_version: Callable[[], str | None] = lambda: None,
     dry_run: bool = False,
     sweep_carry: worktree_sweep.SweepCarry | None = None,
+    format_release_carry: FormatReleaseCarry | None = None,
+    terminal_memo: TerminalMemo | None = None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -3158,7 +3687,12 @@ def run_once(
     outside the exclusive section, when the round is not held or `rules.sweeps_when_held` says its
     holds include the product volume (GH-865), not dry and `sweep_carry` is
     given: it keeps its memory in the carry, its lines join the notes and it never ends the
-    round. A held round that did not sweep, with a carry, says once per process that it did not."""
+    round. A held round that did not sweep, with a carry, says once per process that it did not.
+    `terminal_memo`
+    (GH-992) is the poller's memo of determinate blocker closures: with it, and only when this
+    round's open listing was read in full (no `refs_note`) and the round starts something, the
+    three blocker checks of the round (`gather_launches`, `gather_orphans`) get an `OpenView`
+    over it; the split sweep never does."""
     closes = gather_closes(ports)
     swept: list[str] = []
     dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
@@ -3177,6 +3711,7 @@ def run_once(
     # and the sections under the registry's lock share them; nothing is asked until one is called.
     upstream = functools.cache(ports.workspace.upstream)
     stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
+    parent_memo = stacking_rules.ParentMemo()  # GH-858: the launch judgement's reads, same life
     if not dry_run:
         # The sweep's own memoised upstream (at most one fetch, and only when it has a merge
         # commit to judge); the one `registry.exclusive()` builds below is not shared with it.
@@ -3216,7 +3751,45 @@ def run_once(
         ports, lock, stack_view, queued_all, now, dry_run=dry_run, space_held=bool(held)
     )
     queued = {n: raw for n, raw in queued_all.items() if n not in stack_held}
-    resumes = gather_resumes(ports, now, skip=stack_held)
+    # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
+    # starts nothing, so it has no order to rank and makes no call. Read before the resumes:
+    # their `needs-human` safety net (GH-1019) asks the labels it carries, never a read per task.
+    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
+    open_view: OpenView | None = None
+    if terminal_memo is not None and not starts_nothing and refs_note is None:
+        open_numbers = frozenset(
+            n for ref in open_refs if (n := _issue_number(ref.url)) is not None
+        )
+        open_view = OpenView(terminal_memo, open_numbers)
+    format_rules: dict[int, FormatCarried] = {}
+    # A task a child of this product still works on is nobody's candidate: counting a retake for
+    # it (GH-1019) would spend one on a run that is not paused.
+    mine = ports.stack.product()
+    at_work = frozenset(
+        number
+        for r in registry.live()
+        if r.product == mine and (number := ports.inbox.issue_of(r.task_id)) is not None
+    )
+    release_lines: list[str] = []
+    if not dry_run and not starts_nothing:
+        # GH-1020: a noted hold whose refusal issue is fixed is released before the resumes, so
+        # the task is retaken in this same round; outside `registry.exclusive()`, and the reads
+        # of the step all happen before it takes a task's lock.
+        live_tasks = {r.task_id for r in registry.live() if r.product == mine}
+        release_lines = release_fixed_holds(
+            ports,
+            lock,
+            lambda task_id: stack_hold.free_writer(task_id, live_tasks, lock),
+            format_release_carry if format_release_carry is not None else FormatReleaseCarry(),
+            skip=stack_held | at_work,
+        )
+    resumes = gather_resumes(
+        ports,
+        now,
+        skip=stack_held | at_work,
+        format_rules=format_rules,
+        labels=None if starts_nothing or dry_run or refs_note else _labels_of(open_refs),
+    )
     crash_retakes: dict[int, CrashRetake] = {}
     spent_notices: dict[int, RetakesSpent] = {}
     seen: dict[int, Seen] = {}
@@ -3233,13 +3806,31 @@ def run_once(
         reported=reported,
         skip=stack_held,
     )
+    human_lines += release_lines
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
+    if not dry_run:
+        # GH-1019: the task whose format retakes are spent is held, and its Nota announced; only
+        # a task with a free writer, and `needs-human` is dropped only from the round's own read.
+        human_lines += hold_format_failures(
+            ports,
+            lock,
+            {r.task_id for r in registry.live() if r.product == mine},
+            None if starts_nothing or refs_note else _labels_of(open_refs),
+        )
+    if not starts_nothing and not dry_run:
+        # GH-989: the GitHub limit's 12 h persist and notice, from the documents alone; a task
+        # with a live run or a lock is not written.
+        working = {r.task_id for r in registry.live()}
+        rate_limit_escalations(
+            cfg,
+            ports,
+            now,
+            lambda task_id: task_id in working or lock.refusal(task_id) is not None,
+            human_lines,
+        )
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
-    # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
-    # starts nothing, so it has no order to rank and makes no call.
-    open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
     with registry.exclusive():
         running = registry.live()
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
@@ -3268,6 +3859,7 @@ def run_once(
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        stack_hints: dict[int, StackHint] = {}
         queue_blockers: dict[int, tuple[int, ...]] = {}
         experiment_notes: list[str] = []
         declaration = _declared_experiment(cfg, ports, experiment_notes)
@@ -3284,6 +3876,9 @@ def run_once(
             queued,
             declaration,
             queue_blockers,
+            parent_memo,
+            stack_hints,
+            open_view,
         )
         dependents = launch_order.dependents(launch_edges(open_refs, queued_all, queue_blockers))
         merges: list[int] = []
@@ -3313,6 +3908,7 @@ def run_once(
                 memo=stack_memo,
                 dry_run=dry_run,
                 skip=stack_held,
+                eval_set_unread=eval_set_unread_of(upstream(), eval_set),
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -3355,6 +3951,7 @@ def run_once(
                 blockers_by_issue,
                 spent_notices,
                 reported,
+                open_view,
             )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
@@ -3491,6 +4088,8 @@ def run_once(
                 frozenset(reruns),
                 orphans,
                 spent_notices,
+                format_rules,
+                stack_hints,
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.

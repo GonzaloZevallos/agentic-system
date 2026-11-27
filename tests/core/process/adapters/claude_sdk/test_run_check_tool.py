@@ -19,7 +19,7 @@ from agentic.core.process.adapters.claude_sdk.check_server import (
 from agentic.core.process.adapters.claude_sdk.hooks import HookActivity
 from agentic.core.process.adapters.claude_sdk.runner import options_for
 from agentic.core.process.application import presubmit
-from agentic.core.process.application.ports import CommandResult, RunStopped
+from agentic.core.process.application.ports import CheckAbandoned, CommandResult, RunStopped
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.application.run_check import RunCheck, resolved_walls
 from agentic.core.process.domain.check_schedule import CheckPriority
@@ -183,6 +183,22 @@ def test_a_stop_in_the_run_check_tool_gives_no_result_and_waits_for_the_cancella
     assert cancelled and done == []  # no tool result: the stop is not one
 
 
+class AbandonedTool(SlowTool):
+    def __call__(self, name: str) -> str:
+        raise CheckAbandoned
+
+
+def test_an_abandoned_call_answers_the_fixed_text_and_does_not_wait():
+    async def drive() -> dict:
+        with anyio.fail_after(5):
+            return await run_check_tool(AbandonedTool()).handler({"name": "tests"})
+
+    reply = asyncio.run(drive())
+    assert reply == {
+        "content": [{"type": "text", "text": "the attempt was abandoned; no check was run"}]
+    }
+
+
 # -- a verification longer than the foreground limit (ADR-0065 addendum, GH-451) ------
 
 
@@ -290,3 +306,22 @@ def test_the_description_names_the_verifications_and_is_todays_for_a_product_wit
     with_one, _ = long_tool(monkeypatch)
     assert run_check_tool(with_one).description.endswith("compare.")
     assert run_check_tool(SlowTool()).description == DESCRIPTION
+
+
+def test_the_ceiling_the_watchdog_gets_is_the_deadline_the_tool_timeout_declares(monkeypatch):
+    handler, _ = long_tool(monkeypatch)  # declares walls: its timeout is past the default
+    clock_value = 500.0
+    activity = HookActivity(lambda: clock_value)
+    seen: list[float | None] = []
+
+    class Spy:
+        names = handler.names
+        timeout_s = handler.timeout_s
+        verification_names = handler.verification_names
+
+        def __call__(self, name: str) -> str:
+            seen.append(activity.expires)
+            return "check: compare\npassed: yes"
+
+    asyncio.run(run_check_tool(Spy(), activity).handler({"name": "compare"}))
+    assert seen == [clock_value + int(tool_timeout_ms(handler)) / 1000]

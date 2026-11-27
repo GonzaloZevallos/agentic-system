@@ -30,7 +30,7 @@ from agentic.core.process.domain.stall import ChildActivity
 PRODUCT = reaping.product_key(f"/work/a-product/{uuid4().hex}")
 WORKTREES_ROOT = Path("/nonexistent/worktrees")
 
-STUBBORN = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"
+IGNORE_TERM = "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN)"
 OBEDIENT = "import time; time.sleep(300)"
 
 
@@ -90,13 +90,23 @@ def short_waits(monkeypatch):
     monkeypatch.setattr(reaper_module, "REAP_KILL_WAIT_S", 2.0)
 
 
-def spawn(children, code: str, value: str | None, cwd: Path | None = None) -> subprocess.Popen:
+def spawn(
+    children,
+    code: str,
+    value: str | None,
+    cwd: Path | None = None,
+    *,
+    setup: str = "",
+) -> subprocess.Popen:
     env = {k: v for k, v in os.environ.items() if k != reaping.MARK_NAME}
     if value is not None:
         env[reaping.MARK_NAME] = value
-    # `-u` and a ready line: the signal handler is installed before the test signals.
+    # The ready line is printed after `setup` has run and before `code` does: whatever must
+    # be in place before the test signals the child (a signal handler) goes in `setup`, not
+    # in `code`, which a TERM sent right after the ready line may beat.
+    ready = f"{setup}; " if setup else ""
     child = subprocess.Popen(
-        [sys.executable, "-c", f"import sys; print('up', flush=True); {code}"],
+        [sys.executable, "-c", f"import sys; {ready}print('up', flush=True); {code}"],
         env=env,
         cwd=cwd,
         stdout=subprocess.PIPE,
@@ -120,9 +130,29 @@ def wait_gone(child: subprocess.Popen) -> None:
     child.wait(timeout=5)
 
 
+def ignored_signals(pid: int) -> int:
+    """The `SigIgn` mask of `/proc/<pid>/status`: bit `n - 1` is set when signal `n` is ignored."""
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("SigIgn:"):
+            return int(line.split()[1], 16)
+    raise AssertionError(f"no SigIgn line in /proc/{pid}/status")
+
+
+def test_spawn_ready_line_means_the_setup_has_run(children):
+    child = spawn(children, OBEDIENT, None, setup=IGNORE_TERM)
+
+    assert ignored_signals(child.pid) & (1 << (signal.SIGTERM - 1))
+
+
+def test_spawn_without_setup_leaves_term_default(children):
+    child = spawn(children, OBEDIENT, None)
+
+    assert not ignored_signals(child.pid) & (1 << (signal.SIGTERM - 1))
+
+
 def test_a_process_that_obeys_term_is_reaped_as_term_and_one_that_ignores_it_as_kill(children):
     obedient = spawn(children, OBEDIENT, mark_of("GH-12"))
-    stubborn = spawn(children, STUBBORN, mark_of("GH-12"))
+    stubborn = spawn(children, OBEDIENT, mark_of("GH-12"), setup=IGNORE_TERM)
     sibling = spawn(children, OBEDIENT, None)
 
     reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12")
@@ -142,7 +172,7 @@ def test_a_process_that_obeys_term_is_reaped_as_term_and_one_that_ignores_it_as_
 
 
 def test_a_reap_for_another_task_signals_nothing(children):
-    mine = spawn(children, STUBBORN, mark_of("GH-12"))
+    mine = spawn(children, OBEDIENT, mark_of("GH-12"), setup=IGNORE_TERM)
 
     assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-99") == ()
     assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-1") == ()
@@ -150,7 +180,12 @@ def test_a_reap_for_another_task_signals_nothing(children):
 
 
 def test_a_process_of_another_product_with_the_same_task_is_left_alone(children):
-    other = spawn(children, STUBBORN, mark_of("GH-12", product=reaping.product_key("/work/other")))
+    other = spawn(
+        children,
+        OBEDIENT,
+        mark_of("GH-12", product=reaping.product_key("/work/other")),
+        setup=IGNORE_TERM,
+    )
 
     assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12") == ()
     assert alive(other)
@@ -189,7 +224,7 @@ def test_an_attempt_scope_reaps_only_that_attempts_processes(children):
 def test_a_process_that_survives_kill_is_recorded_and_announced_on_stderr(
     children, monkeypatch, capsys
 ):
-    stubborn = spawn(children, STUBBORN, mark_of("GH-12"))
+    stubborn = spawn(children, OBEDIENT, mark_of("GH-12"), setup=IGNORE_TERM)
     # A process KILL cannot take (uninterruptible sleep) looks, to the reaper, like one the
     # scan keeps finding: simulate it by making the signal a no-op.
     monkeypatch.setattr(reaper_module.signal, "pidfd_send_signal", lambda fd, sig: None)
@@ -454,7 +489,7 @@ def test_an_unmarked_process_in_the_checkout_dies_and_is_reported(children, root
 
 
 def test_one_that_ignores_term_is_killed_and_reported_as_kill(children, root):
-    stubborn = spawn(children, STUBBORN, None, cwd=checkout(root, "GH-7"))
+    stubborn = spawn(children, OBEDIENT, None, cwd=checkout(root, "GH-7"), setup=IGNORE_TERM)
 
     reaped = ShellReaper(PRODUCT, root).reap_within([root / "GH-7"])
 
@@ -583,19 +618,12 @@ def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(
     # lets a loaded machine get the child born before it ends.
     monkeypatch.setattr(reaper_module, "REAP_GRACE_S", 5.0)
     cwd = checkout(root, "GH-7")
-    code = (
-        "import signal, subprocess, sys, time; "
+    on_term_spawn_a_child = (
+        "import signal, subprocess; "
         "signal.signal(signal.SIGTERM, lambda *a: subprocess.Popen("
-        "[sys.executable, '-c', 'import time; time.sleep(300)'])); "
-        "open('armed', 'w').close(); time.sleep(300)"
+        "[sys.executable, '-c', 'import time; time.sleep(300)']))"
     )
-    parent = spawn(children, code, None, cwd=cwd)
-    # `spawn`'s ready line comes before the handler exists; a TERM that beat the handler
-    # would kill the parent with no child born (a race seen on a slow CI runner).
-    deadline = time.monotonic() + 10
-    while not (cwd / "armed").exists():
-        assert time.monotonic() < deadline, "the handler was never installed"
-        time.sleep(0.01)
+    parent = spawn(children, OBEDIENT, None, cwd=cwd, setup=on_term_spawn_a_child)
 
     reaped = ShellReaper(PRODUCT, root).reap_within([cwd])
 

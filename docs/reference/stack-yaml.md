@@ -55,7 +55,7 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Presencia**: opcional
 - **Se lee como**: `tuple[str, ...]`
 - **Si falta**: lista vacía (`()`)
-- **Qué es**: list of globs whose change forces the full form of every check
+- **Qué es**: list of globs whose change forces the full form of every check: the inputs with no reliable mapping to the tests they can break
 - **Lector**: `agentic.core.knowledge.domain.stack.affected_fallback`
 
 ## `delivery_checks`
@@ -209,3 +209,11 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Si falta**: el valor que calcula el lector
 - **Qué es**: `numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or `yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated form instead of renumbering it
 - **Lector**: `agentic.core.knowledge.domain.stack.adr_naming`
+
+## `stacking`
+
+- **Presencia**: opcional
+- **Se lee como**: `bool`
+- **Si falta**: `false`
+- **Qué es**: boolean: true lets a part start on its Ready same-split parent's branch, once the launch judgement reads it; absent means false, the launch of today
+- **Lector**: `agentic.core.knowledge.domain.stack.stacking`

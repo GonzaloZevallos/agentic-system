@@ -19,6 +19,7 @@ from agentic.core.process.adapters.shell.stage0_candidate import (
     CLONE_TIMEOUT_S,
     HELP_TIMEOUT_S,
     POLL_SMOKE_TIMEOUT_S,
+    PRODUCT_SMOKE_TIMEOUT_S,
     RESOLVE_TIMEOUT_S,
     UV_SYNC_TIMEOUT_S,
     ShellStage0Candidate,
@@ -83,12 +84,16 @@ def failing(word: str, result: Answer) -> Answerer:
 
 
 def build(
-    tmp_path: Path, answer: Answerer = succeed, products: tuple[str, ...] = ()
+    tmp_path: Path,
+    answer: Answerer = succeed,
+    products: tuple[str, ...] = (),
+    said: list[str] | None = None,
 ) -> tuple[ShellStage0Candidate, RecordingRunner, MemoryScratch]:
     scratch = MemoryScratch(root=tmp_path / "scratch")
     runner = RecordingRunner(scratch, answer)
     held = tuple(Path(d) for d in products)
-    candidate = ShellStage0Candidate(tmp_path, scratch, held, ORIGIN, runner)
+    out = said.append if said is not None else None
+    candidate = ShellStage0Candidate(tmp_path, scratch, held, ORIGIN, runner, out)
     return candidate, runner, scratch
 
 
@@ -96,14 +101,11 @@ def venv_agentic(root: Path, stage: str) -> str:
     return str(root / stage / ".venv" / "bin" / "agentic")
 
 
-def test_smoke_runs_help_then_one_dry_poll_per_product_in_the_stage(tmp_path: Path) -> None:
-    candidate, runner, _ = build(
-        tmp_path,
-        products=(
-            "/srv/a",
-            "/srv/b",
-        ),
-    )
+def test_smoke_runs_help_then_the_local_product_smoke_per_product_in_the_stage(
+    tmp_path: Path,
+) -> None:
+    said: list[str] = []
+    candidate, runner, _ = build(tmp_path, products=("/srv/a", "/srv/b"), said=said)
     stage = tmp_path / SHA
     agentic = venv_agentic(tmp_path, SHA)
 
@@ -112,17 +114,73 @@ def test_smoke_runs_help_then_one_dry_poll_per_product_in_the_stage(tmp_path: Pa
     assert [(c.argv, c.cwd, c.timeout_s) for c in runner.calls] == [
         ((agentic, "--help"), stage, HELP_TIMEOUT_S),
         (
-            (agentic, "poll", "--product-dir", "/srv/a", "--dry-run", "--once"),
+            (agentic, "stage0", "smoke", "--product-dir", "/srv/a"),
             stage,
-            POLL_SMOKE_TIMEOUT_S,
+            PRODUCT_SMOKE_TIMEOUT_S,
         ),
         (
-            (agentic, "poll", "--product-dir", "/srv/b", "--dry-run", "--once"),
+            (agentic, "stage0", "smoke", "--product-dir", "/srv/b"),
             stage,
-            POLL_SMOKE_TIMEOUT_S,
+            PRODUCT_SMOKE_TIMEOUT_S,
         ),
     ]
-    assert (HELP_TIMEOUT_S, POLL_SMOKE_TIMEOUT_S) == (60, 300)
+    assert said == []
+    assert (HELP_TIMEOUT_S, PRODUCT_SMOKE_TIMEOUT_S, POLL_SMOKE_TIMEOUT_S) == (60, 120, 300)
+
+
+def answering(new: Answer, legacy: Answer) -> Answerer:
+    """`new` to the `stage0 smoke` step, `legacy` to the `poll` one, 0 to the rest."""
+
+    def answer(argv: Sequence[str]) -> Answer:
+        if "smoke" in argv:
+            return new
+        return legacy if "poll" in argv else 0
+
+    return answer
+
+
+def test_a_new_step_that_exits_2_runs_the_legacy_poll_and_says_so_never_red(
+    tmp_path: Path,
+) -> None:
+    said: list[str] = []
+    candidate, runner, _ = build(tmp_path, answering(2, 0), ("/srv/a", "/srv/b"), said)
+    agentic = venv_agentic(tmp_path, SHA)
+
+    assert candidate.smoke(SHA) == Green()
+
+    assert [(c.argv[1:], c.timeout_s) for c in runner.calls] == [
+        (("--help",), HELP_TIMEOUT_S),
+        (("stage0", "smoke", "--product-dir", "/srv/a"), PRODUCT_SMOKE_TIMEOUT_S),
+        (("poll", "--product-dir", "/srv/a", "--dry-run", "--once"), POLL_SMOKE_TIMEOUT_S),
+        (("stage0", "smoke", "--product-dir", "/srv/b"), PRODUCT_SMOKE_TIMEOUT_S),
+        (("poll", "--product-dir", "/srv/b", "--dry-run", "--once"), POLL_SMOKE_TIMEOUT_S),
+    ]
+    assert {c.argv[0] for c in runner.calls} == {agentic}
+    assert said == ["smoke: legacy step"] * 2
+
+
+def test_the_legacy_step_that_exits_2_is_red(tmp_path: Path) -> None:
+    candidate, _, _ = build(tmp_path, answering(2, 2), ("/srv/a",))
+
+    assert candidate.smoke(SHA) == Red()
+
+
+def test_a_legacy_step_that_times_out_is_smoke_timeout(tmp_path: Path) -> None:
+    candidate, _, _ = build(tmp_path, answering(2, TimedOut()), ("/srv/a",))
+
+    assert candidate.smoke(SHA) == Unavailable("smoke_timeout")
+
+
+@pytest.mark.parametrize("code", [1, 3])
+def test_a_new_step_that_exits_other_than_0_or_2_is_red_without_the_legacy_step(
+    tmp_path: Path, code: int
+) -> None:
+    said: list[str] = []
+    candidate, runner, _ = build(tmp_path, answering(code, 0), ("/srv/a",), said)
+
+    assert candidate.smoke(SHA) == Red()
+    assert not [c for c in runner.calls if "poll" in c.argv]
+    assert said == []
 
 
 def test_smoke_with_no_products_runs_only_help(tmp_path: Path) -> None:
@@ -153,10 +211,12 @@ def test_smoke_of_the_candidate_and_of_current_differ_only_in_the_stage_path(
     ]
 
 
-def test_a_timeout_of_the_poll_is_smoke_timeout(tmp_path: Path) -> None:
+def test_a_timeout_of_the_new_step_is_smoke_timeout_and_runs_no_legacy_step(
+    tmp_path: Path,
+) -> None:
     candidate, runner, _ = build(
         tmp_path,
-        failing("poll", TimedOut()),
+        failing("smoke", TimedOut()),
         (
             "/srv/a",
             "/srv/b",
@@ -173,7 +233,7 @@ def test_a_timeout_of_help_is_smoke_timeout(tmp_path: Path) -> None:
     assert candidate.smoke(SHA) == Unavailable("smoke_timeout")
 
 
-@pytest.mark.parametrize("flag", ["--help", "poll"])
+@pytest.mark.parametrize("flag", ["--help", "smoke"])
 def test_a_non_zero_exit_of_the_smoke_is_red(tmp_path: Path, flag: str) -> None:
     candidate, _, _ = build(tmp_path, failing(flag, 3), ("/srv/a",))
 

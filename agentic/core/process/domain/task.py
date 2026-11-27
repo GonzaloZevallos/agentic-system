@@ -38,10 +38,22 @@ from .ci_push import PushKind
 from .landing_order import LaneDecision, YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
-from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
+from .presubmit import (
+    FAILED_IDS_MAX,
+    BudgetBreach,
+    CheckResult,
+    FlakeGate,
+    GateForm,
+    RedCheck,
+    TimeoutFact,
+    timeout_line,
+)
 from .reaping import ReapedProcess
+from .refusal import OutputRefusal as OutputRefusal
+from .refusal import RefusalRule as RefusalRule
 from .size_budget import ActualSize, PlanSize
 from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
+from .stall import LastEvent
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -98,10 +110,15 @@ FindingCategory = Literal[
     "spec-scope",
     "process-uncommitted",
     "process-suite-red",
+    "process-check-timeout",
     "plan-calibration",
     "plan-invariant",
     "integration-crosscut",
 ]
+# The categories only the system writes (GH-1075): a check that timed out with no failing test is
+# an observation about the machine, not a defect of the branch. No role is offered one, none
+# returns a subtask, and `timeout_rows` is the only place that creates a row with one.
+SYSTEM_CATEGORIES: frozenset[str] = frozenset({"process-check-timeout"})
 # What a text finding is about (the Tech Writer's review): `copy-unwritten` is a person-facing
 # text in the diff that Tech Writer never wrote, `copy-criteria-written` one it wrote that
 # breaks the product's writing criteria, `copy-criteria-changed` one the Developer changed
@@ -144,11 +161,21 @@ FailureReason = Literal[
     "upstream",
     "network",
     "disk_full",
+    "github_rate_limit",
     "sdk",
     "stall",
     "render",
     "other",
 ]
+
+
+class RefusalRepair(TypedDict):
+    """One refusal the role repaired within the same run: which rule and which field."""
+
+    rule: RefusalRule
+    field: str
+
+
 # What the Landing Diagnoser says about an approved pull request the landing could not land
 # (ADR-0048): `sync` (the work lands once master is merged into its branch) or `unlandable`
 # (the approved work itself cannot land). Closed, and defined only here: every reader and writer
@@ -202,6 +229,7 @@ MechanicalCause = Literal[
     "ci_gh_unreadable",
     "ci_run_unfinished",
     "delivery_transient",
+    "check_timeout",
 ]
 # The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
 # `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
@@ -426,7 +454,8 @@ def add_assumptions(existing: list[AssumptionRow], new: list[AssumptionRow]) -> 
     return list(joined.values())
 
 
-TrackerTarget = Literal["comment", "label"]
+# `issue` (GH-1011) is the format-refusal issue the filing built in #1030 opens or comments on.
+TrackerTarget = Literal["comment", "label", "issue"]
 TrackerFailureClass = Literal["timed_out", "unreachable", "transient", "rate_limited", "refused"]
 TRACKER_FAILURES_MAX = 10
 
@@ -463,6 +492,60 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+HoldCause = Literal["rule_spent", "task_spent"]
+"""Why a task is held on its format retakes (GH-1019): `rule_spent` a rule used its retakes,
+`task_spent` the task used its backstop."""
+
+
+class FormatHold(TypedDict):
+    """The hold a spent format-retake budget leaves (GH-1019): the `rule` it holds on, the
+    `cause` and when (`at`, ISO UTC). `issue_url` is the refusal issue the hold waits on and
+    `noted_at` when the human was told, each present only when known."""
+
+    rule: RefusalRule
+    cause: HoldCause
+    at: str
+    issue_url: NotRequired[str]
+    noted_at: NotRequired[str]
+
+
+class FormatReleased(TypedDict):
+    """One release of a format hold (GH-1020): the refusal issue it waited on (`issue_url`), the
+    commit that closed it (`closing_commit`, `None` when a person closed it by hand) and when
+    (`at`, ISO UTC). One per release in `TaskState.format_released`."""
+
+    issue_url: str
+    closing_commit: str | None
+    at: str
+
+
+class FormatIssueRecord(TypedDict):
+    """The issue filed for one refusal rule (GH-1011): the rule, the issue's URL and when
+    (ISO UTC). One per rule in `TaskState.format_issue`, read only through `format_issue_for`."""
+
+    rule: RefusalRule
+    url: str
+    at: str
+
+
+def add_format_issues(
+    existing: list[FormatIssueRecord], new: list[FormatIssueRecord]
+) -> list[FormatIssueRecord]:
+    """The records of `existing` and `new` as one list: one entry per rule, the first write
+    wins and the first-write order is kept, so two simultaneous writers merge to one record
+    per rule. The only way `format_issue` is ever written."""
+    joined: dict[str, FormatIssueRecord] = {}
+    for record in (*existing, *new):
+        joined.setdefault(record["rule"], record)
+    return list(joined.values())
+
+
+def format_issue_for(entries: Sequence[FormatIssueRecord], rule: str) -> FormatIssueRecord | None:
+    """The record of `rule` in `entries`, `None` when none was filed. The only read of
+    `TaskState.format_issue`: no module indexes the list itself."""
+    return next((r for r in entries if r["rule"] == rule), None)
 
 
 class RefusalNoted(TypedDict):
@@ -843,6 +926,7 @@ ScopeCause = Literal[
     "first",
     "no_merge",
     "clean",
+    "regenerated",
     "resolved",
     "rewritten",
     "own_before_merge",
@@ -906,6 +990,54 @@ def add_stack_restacks(existing: list[StackRestack], new: list[StackRestack]) ->
     joined: dict[tuple[str, str], StackRestack] = {}
     for row in (*existing, *new):
         joined.setdefault((row["at"], row["upstream"]), row)
+    return list(joined.values())
+
+
+ReintegrationMode = Literal["mechanical", "session"]
+ReintegrationCause = Literal[
+    "clean", "regenerated", "foreign_conflict", "generate_failed", "checks_red"
+]
+
+
+class ReintegrationRecord(TypedDict):
+    """One attempt to bring a task up to date with its upstream (GH-994): `at` the ISO 8601 UTC
+    instant, `upstream` the master sha it was for, `mode` who did it, `cause` how it ended,
+    `attempt_s` how long the attempt took, `generate_s` how long the generation step took (absent
+    when none ran), `regeneration` the sha of the system regeneration commit it made (absent when
+    it made none) and `resumed` whether it continued an earlier session. `landing.reintegration_row`
+    guards writers against `mechanical` with `resumed`; the loader (`from_frontmatter`) does not
+    validate, so a reader must not assume that pair is impossible. Written only through
+    `add_reintegrations`; never a metric, a label or a span attribute."""
+
+    at: str
+    upstream: str
+    mode: ReintegrationMode
+    cause: ReintegrationCause
+    attempt_s: float
+    generate_s: NotRequired[float]
+    regeneration: NotRequired[str]
+    resumed: bool
+
+
+def _reintegration_key(row: ReintegrationRecord) -> tuple[str, str, str]:
+    """The identity of a reintegration row, shared by the reducer and the patch computation:
+    the `mechanical` and the `session` attempt for one `(at, upstream)` are two rows."""
+    return (row["at"], row["upstream"], row["mode"])
+
+
+def add_reintegrations(
+    existing: list[ReintegrationRecord], new: list[ReintegrationRecord]
+) -> list[ReintegrationRecord]:
+    """The reintegration rows of `existing` and `new` as one list: append-only, one row per
+    `_reintegration_key` (a retried write adds nothing), the first seen kept whole, in arrival
+    order. The only way `reintegrations` is ever written.
+
+    There is no cap, on purpose: a row with `regeneration` is the provenance of that commit, and
+    dropping it would make the commit count as a Developer's own commit. Any later cap must keep
+    every row with `regeneration`."""
+    joined: dict[tuple[str, str, str], ReintegrationRecord] = {}
+    for row in (*existing, *new):
+        joined.setdefault(_reintegration_key(row), row)
     return list(joined.values())
 
 
@@ -1035,6 +1167,16 @@ class LandedSlice(TypedDict, total=False):
     at: str
 
 
+class StallRecord(TypedDict):
+    """How a stalled attempt is told on its `Failure` (GH-978, ADR-0057): the silence in
+    whole seconds, the closed kind of the last event seen and whether a delivery hook was
+    in flight. Only these three, never a message or a log line."""
+
+    seconds: int
+    last_event: LastEvent
+    in_hook: bool
+
+
 class Failure(TypedDict):
     role: str
     attempt: int
@@ -1053,9 +1195,10 @@ class Failure(TypedDict):
     # this field existed, which reads as `role.max_turns`.
     max_turns: NotRequired[int]
     # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
-    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
-    # only a wait hint, never the reason. Absent on any other failure and on one recorded
-    # before this field existed.
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381),
+    # or the one GitHub's `rate_limit` read gave a `github_rate_limit` failure, bounded by
+    # `rate_limit.rate_limit_pause_patch`'s window: only a wait hint, never the reason. Absent
+    # on any other failure and on one recorded before this field existed.
     resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
@@ -1111,6 +1254,11 @@ class Failure(TypedDict):
     # Written only when something was reaped, so a document with no leak renders as it
     # always did; read with `.get("reaped", [])`.
     reaped: NotRequired[list[ReapedProcess]]
+    # How the stall was told (GH-978), off `AttemptFailed.stall`: written only when the
+    # recorded (narrowed) reason is `stall`; read with `.get("stall")`. Absent on any other
+    # failure and on one recorded before this field existed, which reads as unknown, never
+    # as 0.
+    stall: NotRequired[StallRecord]
     # When this attempt began and when its `AttemptFailed` was caught, ISO-8601 UTC, stamped
     # by `run_role` from its injected clock. Absent on a failure recorded before these fields
     # existed, which reads as unknown (`None`), never as 0.
@@ -1120,6 +1268,33 @@ class Failure(TypedDict):
     # last 50 only, and how many older ones were dropped. Absent when none was recorded.
     check_runs: NotRequired[list[CheckRun]]
     check_runs_dropped: NotRequired[int]
+    # The refusal rule this attempt was refused with, decided at the raise site in
+    # `run_role._attempt` (GH-1011), never parsed from `error`. Written only when the
+    # recorded (narrowed) `reason` is `schema` or `check`; absent otherwise and on a failure
+    # recorded before this field existed.
+    rule: NotRequired[RefusalRule]
+    # The field of the role's schema (or `markdown`) the refusal names, after
+    # `run_role.refusal_field`; never the value. Same conditions as `rule`, and absent when
+    # the refusal names no declared field.
+    field: NotRequired[str]
+    # The size of the refused value (a string's length, a list's or dict's item count) at the
+    # same top-level key as `field`, from `format_issue.value_len` on the raw structured output,
+    # never the value. Written by the refusal raise site built in #1030 under the same
+    # conditions as `rule`, absent when unknown (never `None`); no row carries it before then.
+    value_len: NotRequired[int]
+    # What the role wrote in `field`, as `refusal_retry.clean_value` leaves it (one line, at
+    # most 240 characters), so the retry can show it back (GH-1017). Same conditions as `rule`,
+    # and absent when the refusal has no value to show (a missing field, `output_missing`). It
+    # is never a metric label or a span attribute.
+    value: NotRequired[str]
+    # The refusal's own motive, as `refusal_retry.clean_detail` leaves it, for the retry's
+    # `detail` line (GH-1017). Same conditions as `rule`; absent when the motive is empty.
+    detail: NotRequired[str]
+    # The refusals this attempt repaired before the one that failed it, `{rule, field}` each
+    # (GH-1016): its own record, written only when it has some. Never in the delivered
+    # section: no output came of this attempt. Absent on a failure recorded before this
+    # field existed, which reads as none.
+    repairs: NotRequired[list[RefusalRepair]]
 
 
 class CheckRun(TypedDict):
@@ -1176,6 +1351,16 @@ class GateRecord(TypedDict, total=False):
     overdue: bool
 
 
+# The most timeouts one `RoleRun` keeps: a gate has a handful of checks, so more than this is a
+# runaway, not a record.
+ROLE_TIMEOUTS_MAX = 20
+
+
+def capped_timeouts(timeouts: Sequence[TimeoutFact]) -> list[TimeoutFact]:
+    """The first `ROLE_TIMEOUTS_MAX` of `timeouts`, in the order given."""
+    return list(timeouts[:ROLE_TIMEOUTS_MAX])
+
+
 class RoleRun(TypedDict):
     """One successful run of a role. `section` is what it wrote (a role may write
     several: one per subtask, one per interview); `version` numbers the deliveries of
@@ -1218,6 +1403,12 @@ class RoleRun(TypedDict):
     # order (GH-361): the wait for a share apart from the run. Absent on a run recorded
     # before this field existed, and on a run that never ran a gate.
     gates: NotRequired[list[GateRecord]]
+    # The form each check of the delivery gate's last invocation ran and why (`GateForm`), the
+    # last 50 only, and how many older ones were dropped (written only when above 0). Written
+    # by the system, never by the model. Absent on a run recorded before these fields existed
+    # (ADR-0041), and on a run that never ran a gate.
+    forms: NotRequired[list[GateForm]]
+    forms_dropped: NotRequired[int]
     # Calls to the model in this run: one per `AssistantMessage` the runner saw before
     # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
     # before this field existed.
@@ -1274,6 +1465,10 @@ class RoleRun(TypedDict):
     # every recorded `Failure.turn_notice_firings` (`run_role._run_notice_firings`).
     # Absent on a run recorded before this field existed, which reads as `0`.
     turn_notice_firings: NotRequired[int]
+    # The refusals this run repaired on the attempt that delivered, `{rule, field}` each
+    # (GH-1011, GH-1016); a failed attempt's own stay on its `Failure`. Absent on a run
+    # recorded before this field existed, or with none, which reads as none.
+    repairs: NotRequired[list[RefusalRepair]]
     # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
     # entrega), off `RawResult.deliveries`. The run's total, for the section note
     # (`rules.deliveries_note`), also folds in every recorded `Failure.deliveries`:
@@ -1307,6 +1502,10 @@ class RoleRun(TypedDict):
     # (`.get`). The merge gate reads the pair; nothing else does.
     perf_verdict: NotRequired[Literal["approved", "returned", "unverified"]]
     perf_head: NotRequired[str]
+    # The checks of the delivering attempt's last gate that timed out with no failing test
+    # (GH-1075), ordered by check and capped at `ROLE_TIMEOUTS_MAX` (`capped_timeouts`).
+    # Absent on a run recorded before this field existed, and on one with no timeout.
+    timeouts: NotRequired[list[TimeoutFact]]
 
 
 class InterviewStats(TypedDict):
@@ -1451,6 +1650,48 @@ class FindingRecord(TypedDict):
     landing_checks: NotRequired[list[str]]
 
 
+def system_written(category: str) -> bool:
+    """Whether `category` is one only the system writes (`SYSTEM_CATEGORIES`)."""
+    return category in SYSTEM_CATEGORIES
+
+
+def returns(category: str) -> bool:
+    """Whether a finding of `category` can return a subtask: false for a system-written one."""
+    return not system_written(category)
+
+
+def timeout_rows(
+    subtask: str, timeouts: Sequence[TimeoutFact], existing_findings: Sequence[FindingRecord]
+) -> list[FindingRecord]:
+    """The rows for the checks that timed out (GH-1075), one per check, in the order given: an
+    `observation` of scope `plan` at `checks:<check>`, with the fixed claim `timeout_line` writes.
+    A check adds none while an `open` row of `subtask` is already at its location, whatever its
+    seconds: the dedup is on `(subtask, location)`, never on the claim. The only place a row
+    with a `SYSTEM_CATEGORIES` category is created; `version` is 0, no review pass raised it."""
+    taken = {
+        (row["subtask"], row["location"]) for row in existing_findings if row["status"] == "open"
+    }
+    rows: list[FindingRecord] = []
+    for fact in timeouts:
+        location = f"checks:{fact['check']}"
+        if (subtask, location) in taken:
+            continue
+        taken.add((subtask, location))
+        rows.append(
+            {
+                "subtask": subtask,
+                "version": 0,
+                "location": location,
+                "claim": timeout_line(fact),
+                "severity": "observation",
+                "scope": "plan",
+                "category": "process-check-timeout",
+                "status": "open",
+            }
+        )
+    return rows
+
+
 class DesignItemRecord(TypedDict):
     """One remark from a lead's (UX Lead's or UI Lead's) walk or comparisons, or from
     PM's consolidation (ADR-0040), as `design_items` keeps it: the role that raised it
@@ -1572,6 +1813,10 @@ class EscalationPauseEntry(TypedDict):
     # Why a spec delivery's `questions` pause was raised (GH-594): written only when the patch
     # carried one, which needs a spec; never `None`, so a pause without a spec reads as before.
     spec_cause: NotRequired[SpecEscalationCause]
+    # The checks that timed out behind a `check_timeout` escalation, and those of the escalation
+    # before it (GH-1075), both ordered by check. Absent on every other entry.
+    timeouts: NotRequired[list[TimeoutFact]]
+    previous_timeouts: NotRequired[list[TimeoutFact]]
 
 
 class FailurePauseEntry(TypedDict):
@@ -1582,6 +1827,9 @@ class FailurePauseEntry(TypedDict):
     # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
     # entry written before this field existed (`rules.auto_resumable` never requires it).
     resets_at: NotRequired[str]
+    # The failure's `rule`, copied by `rules.logged` only when it has one (GH-1019); read only
+    # by `format_retakes` and the document codec.
+    rule: NotRequired[RefusalRule]
 
 
 class LapsePauseEntry(TypedDict):
@@ -1805,6 +2053,21 @@ class EstimateRecord(TypedDict):
     files: int
     # The Tech Lead's own figure, written only when the system raised `cost_usd` above it.
     declared_usd: NotRequired[float]
+
+
+class PlanHeld(TypedDict):
+    """The plan the plan node dropped when it escalated on drawing departures the owner has not
+    answered (GH-1004), kept whole so the answer's re-plan can start from it.
+
+    `estimate` is the one figure that counts: exactly the estimate the same patch stored, after
+    the floor and the lift. `plan["estimated_cost_usd"]` is kept only because the plan dict is
+    stored whole. Part 2 restores `estimate` from this record, never runs `_floored` again on
+    the stored plan, and clears the record; this part never clears it."""
+
+    plan: dict[str, Any]
+    departures: list[dict[str, Any]]
+    round: int
+    estimate: EstimateRecord
 
 
 class EstimateRevision(TypedDict):
@@ -2308,8 +2571,8 @@ class TaskState(TaskInput, total=False):
     # Why a spec was refused and what it names (GH-594): written only by
     # `spec_route.refusal_escalation`, cleared by `rules.resumed`; never by `record_closure`.
     spec_refusal: Annotated[SpecRefusalRecord | None, last]
-    # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
-    # round-trip belongs to the part that does.
+    # The spec a delivery is built against (GH-594), written whole by `document.render` when
+    # set, so a resumed delivery keeps it (`spec_guard`, `rules.spec_delivery` read it).
     spec: Annotated[SpecContract, last]
     # What the system did with the draft Spec PM returned (GH-594 part 5a): written only by
     # `application/spec_draft.py`, distinct from `spec`; nothing reads it until the approval part.
@@ -2346,6 +2609,22 @@ class TaskState(TaskInput, total=False):
     # True when a fit question or an estimate with parts was decided, the plan node's
     # successful patch writes it False. Absent reads False.
     plan_due: Annotated[bool, last]
+    # The instant (ISO-8601 UTC) the GitHub rate limit first paused this task, kept across
+    # the poller's retakes of the same limit so `rate_limit.rate_limit_exhausted` counts the
+    # whole wait; `rate_limit_noticed_at` is when the human was told it outlasted the wait.
+    # Both absent on a task the GitHub limit never paused. Plain fields, no reducer: `apply`
+    # overrides them, which is what `last` would do.
+    rate_limit_paused_at: str
+    rate_limit_noticed_at: str
+    # The format retakes (GH-1019): the retakes already made per refusal rule, and the hold a
+    # spent budget leaves. Plain fields like the two above, written only by the composers of
+    # `format_retakes` and cleared (as `None`) by `rules.resumed`; absent reads as none.
+    format_retakes: NotRequired[dict[RefusalRule, int]]
+    format_hold: NotRequired[FormatHold]
+    # The history of the holds released on their own (GH-1020): the whole list, never only the
+    # new entry, written only by `format_retakes.fixed_release_patch`. A person's resume never
+    # clears it; absent (or `None` in memory) reads as none. No reducer: `apply` overwrites it.
+    format_released: NotRequired[list[FormatReleased]]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records
@@ -2412,7 +2691,9 @@ class TaskState(TaskInput, total=False):
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The parent a stacked task was started on (GH-855). Absent for every task that was not
     # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
-    stack_parent: StackParent
+    # `None` (GH-858, written only by `stacked_start`) is the form that clears the record: the
+    # document never writes the key for it.
+    stack_parent: StackParent | None
     # The wait on an unfetchable stacked head (GH-885); `None` (written by `record_closure`, which
     # cannot delete a key) reads as no record. Written only by `stacking.unfetchable_patch` and
     # read only through `stacking.parse_unfetchable`.
@@ -2615,6 +2896,10 @@ class TaskState(TaskInput, total=False):
     # per `(target, cls)`, at most ten, never `gh`'s text. Read with
     # `.get("tracker_failures", [])`: a document written before this field has none.
     tracker_failures: Annotated[list[TrackerFailureRecord], add_tracker_failures]
+    # The issue filed for each refusal rule (GH-1011), `add_format_issues`: one record per
+    # rule, the first write wins. Read with `format_issue_for`, never by indexing the list; a
+    # document written before this field has none. Nothing writes it before #1030.
+    format_issue: Annotated[list[FormatIssueRecord], add_format_issues]
     # The restorations of an archived task (GH-406), `add_restorations`: one row per archive
     # it was brought back from, each with the `landing` length at that moment. Read with
     # `.get("restorations", [])` -- only through `rules.live_landing` and `rules.restored`;
@@ -2636,9 +2921,14 @@ class TaskState(TaskInput, total=False):
     # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
     stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
+    # The attempts to bring the task up to date with its upstream (GH-994,
+    # `ReintegrationRecord`), `add_reintegrations`: append-only, no cap. Read with
+    # `.get("reintegrations", [])`: a document written before it has none. Only
+    # `add_reintegrations` writes it; never a metric, a label or a span attribute.
+    reintegrations: Annotated[list[ReintegrationRecord], add_reintegrations]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
-    # `early_split.measured`; a document written before it has none. The figures are read by no
+    # `rules.early_measured`; a document written before it has none. The figures are read by no
     # decision.
     early_split: Annotated[list[EarlySplitRow], add_early_split]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
@@ -2656,6 +2946,10 @@ class TaskState(TaskInput, total=False):
     # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
     # Written only by the system's serialized turn, never by a role.
     drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
+    # The plan held while the owner answers the plan's own drawing departures (GH-1004,
+    # `PlanHeld`). Written only by the plan node's escalation of open plan-stage departures; no
+    # route reads it yet. `document.render` writes it explicitly, after `drawing_escalation`.
+    plan_held: Annotated[PlanHeld | None, last]
     # The drawing checks of the verified head (GH-766 part 5, `DrawingChecksRecord`). No
     # reducer: the last write wins. Absent until the writer of part 5.2 records it; without it
     # the merge gate decides as it did before. `document.render` writes it explicitly.
@@ -2757,6 +3051,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_format_issues:
+            held_rules = {r["rule"] for r in old}
+            if fresh_issues := [
+                r for r in add_format_issues([], value) if r["rule"] not in held_rules
+            ]:
+                patch[key] = fresh_issues
         elif reducer is add_tracker_actions:
             if add_tracker_actions(old, value) != old:
                 patch[key] = value
@@ -2796,6 +3096,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 r for r in value if (r["at"], r["upstream"]) not in held_restacks
             ]:
                 patch[key] = fresh_restacks
+        elif reducer is add_reintegrations:
+            held_reintegrations = {_reintegration_key(r) for r in old}
+            if fresh_reintegrations := [
+                r for r in value if _reintegration_key(r) not in held_reintegrations
+            ]:
+                patch[key] = fresh_reintegrations
         elif reducer is add_stack_pauses:
             held_pauses = {(r["parent"], r["cause"], r["at"]): r for r in old}
             if changed_pauses := [

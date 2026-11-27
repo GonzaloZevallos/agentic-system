@@ -298,15 +298,17 @@ options:
 ## `agentic stage0`
 
 ```text
-usage: agentic stage0 [-h] {rotate} ...
+usage: agentic stage0 [-h] {rotate,smoke} ...
 
 positional arguments:
-  {rotate}
-    rotate    move stage0's `current` to the newest green commit of master, smoked first; every
-              outcome that keeps `current` exits 0
+  {rotate,smoke}
+    rotate        move stage0's `current` to the newest green commit of master, smoked first; every
+                  outcome that keeps `current` exits 0
+    smoke         prove this stage starts and can read a product: the real preflight over ports that
+                  make no tracker, inbox or board call; exits 0, or non-zero on any failure
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help      show this help message and exit
 ```
 
 ## `agentic stage0 rotate`
@@ -317,6 +319,17 @@ usage: agentic stage0 rotate [-h] [--root DIR]
 options:
   -h, --help  show this help message and exit
   --root DIR  the rotation root (default ~/.agentic-stage0s)
+```
+
+## `agentic stage0 smoke`
+
+```text
+usage: agentic stage0 smoke [-h] --product-dir PRODUCT_DIR
+
+options:
+  -h, --help            show this help message and exit
+  --product-dir PRODUCT_DIR
+                        root of the product repo (AGENTIC_PRODUCT_DIR)
 ```
 
 ## `agentic scores`

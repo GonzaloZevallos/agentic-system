@@ -34,6 +34,11 @@ from .task import (
     CarveOutcome,
     CarveRecord,
     DepartureRecord,
+    FormatHold,
+    FormatIssueRecord,
+    FormatReleased,
+    HoldCause,
+    RefusalRule,
     RoleRun,
     assumption_text,
 )
@@ -104,7 +109,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
 # one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
 # `stack_pauses` (GH-899) is the list of waits of a stacked child, which the poller's hold replaces
-# whole with `add_stack_pauses`' result.
+# whole with `add_stack_pauses`' result. `format_issue` (GH-1011) is the issue filed per refusal
+# rule, replaced whole with `add_format_issues`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -120,6 +126,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flake_comments",
         "flakes",
         "tracker_failures",
+        "format_issue",
         "lead_time",
         "head_yields",
         "lane_admitted",
@@ -141,10 +148,14 @@ _FLOW_KEYS = (
     "merge_refusal",
     "flakes",
     "tracker_failures",
+    "format_issue",
     "lead_time",
     "head_yields",
     "lane_admitted",
     "lane_merges",
+    "stack_unfetchable",
+    "worktree_release_lapse",
+    "closed_by_slices",
 )
 
 
@@ -319,6 +330,105 @@ def _escalation_record(raw: object) -> dict[str, Any] | None:
     }
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _plan_held_record(raw: object) -> dict[str, Any] | None:
+    """The stored `plan_held` (GH-1004) as it was written, or `None` when it is not whole: not a
+    mapping, a `plan` that is not one, `departures` that are not a list of mappings, a `round`
+    that is not an int, or an `estimate` that is not a mapping with a numeric `cost_usd`. A
+    hand-edited record is dropped as absent, as `_escalation_record` does, and never fails the
+    load."""
+    if not isinstance(raw, Mapping):
+        return None
+    plan, departures, round_, estimate = (
+        raw.get(k) for k in ("plan", "departures", "round", "estimate")
+    )
+    cost = estimate.get("cost_usd") if isinstance(estimate, Mapping) else None
+    if not (
+        isinstance(plan, Mapping)
+        and isinstance(departures, list)
+        and all(isinstance(d, Mapping) for d in departures)
+        and _is_int(round_)
+        and isinstance(cost, int | float)
+        and not isinstance(cost, bool)
+    ):
+        return None
+    return dict(raw)
+
+
+def _format_issue_rows(raw: object) -> list[FormatIssueRecord]:
+    """The records of a stored `format_issue` list that are whole: a `rule` of `RefusalRule` and a
+    non-empty `str` `url` and `at`. Any other record is dropped, and a value that is not a list
+    reads as none: a hand-edited document never fails to load for it."""
+    rules = get_args(RefusalRule)
+    return [
+        {"rule": item["rule"], "url": item["url"], "at": item["at"]}
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and item.get("rule") in rules
+        and all(isinstance(item.get(k), str) and item[k] for k in ("url", "at"))
+    ]
+
+
+def _is_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _retake_counts(raw: object) -> dict[RefusalRule, int]:
+    """The stored `format_retakes` (GH-1019) without what is not whole: a key that is not a
+    `RefusalRule`, and a count that is not an int (a `bool` is not) or is negative. Anything
+    that is not a map, and an empty one, reads as no counts."""
+    rules = get_args(RefusalRule)
+    return {
+        rule: count
+        for rule, count in (raw.items() if isinstance(raw, Mapping) else [])
+        if rule in rules and _is_int(count) and count >= 0
+    }
+
+
+def _format_hold(raw: object) -> dict[str, str] | None:
+    """The stored `format_hold` (GH-1019), or `None` when it is not whole: not a map, a `rule`
+    that is not a `RefusalRule`, a `cause` that is not a `HoldCause`, or an `at` that is not a
+    non-empty string. `issue_url` and `noted_at` are each kept only as a non-empty string."""
+    if not (
+        isinstance(raw, Mapping)
+        and raw.get("rule") in get_args(RefusalRule)
+        and raw.get("cause") in get_args(HoldCause)
+        and _is_text(raw.get("at"))
+    ):
+        return None
+    optional = {k: raw[k] for k in ("issue_url", "noted_at") if _is_text(raw.get(k))}
+    return {"rule": raw["rule"], "cause": raw["cause"], "at": raw["at"], **optional}
+
+
+def _format_released(raw: object) -> list[FormatReleased]:
+    """The stored `format_released` (GH-1020) without the entries that are not whole, in order:
+    an entry is whole when it is a map, `issue_url` and `at` are non-empty strings and
+    `closing_commit` is `None` or a non-empty string. Anything that is not a list reads as none."""
+    return [
+        FormatReleased(
+            issue_url=item["issue_url"], closing_commit=item.get("closing_commit"), at=item["at"]
+        )
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+        and _is_text(item.get("issue_url"))
+        and _is_text(item.get("at"))
+        and (item.get("closing_commit") is None or _is_text(item.get("closing_commit")))
+    ]
+
+
+def _pause_entry(raw: object) -> object:
+    """A stored `pause_log` entry; a failure entry whose `rule` is not a `RefusalRule` loses
+    that key alone (GH-1019), every other entry is kept as it was."""
+    if not (isinstance(raw, Mapping) and raw.get("kind") == "failure" and "rule" in raw):
+        return raw
+    if raw["rule"] in get_args(RefusalRule):
+        return raw
+    return {k: v for k, v in raw.items() if k != "rule"}
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -403,6 +513,29 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    # The document codec is the one place that reads the stored list itself: it sanitises it on
+    # parse (GH-1011). Every consumer of the records goes through `task.format_issue_for`.
+    if "format_issue" in state:
+        state["format_issue"] = _format_issue_rows(state["format_issue"])
+    # The format retakes and their hold (GH-1019): read tolerantly, a key that is not whole
+    # reads as absent, and a pause entry loses a bad `rule` alone.
+    if "format_retakes" in state:
+        if counts := _retake_counts(state["format_retakes"]):
+            state["format_retakes"] = counts
+        else:
+            del state["format_retakes"]
+    if "format_hold" in state:
+        if (hold := _format_hold(state["format_hold"])) is None:
+            del state["format_hold"]
+        else:
+            state["format_hold"] = hold
+    if "format_released" in state:
+        if released := _format_released(state["format_released"]):
+            state["format_released"] = released
+        else:
+            del state["format_released"]
+    if isinstance(state.get("pause_log"), list):
+        state["pause_log"] = [_pause_entry(entry) for entry in state["pause_log"]]
     if "drawing_departures" in state:
         state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     if "drawing_escalation" in state:
@@ -410,6 +543,11 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             del state["drawing_escalation"]
         else:
             state["drawing_escalation"] = escalation
+    if "plan_held" in state:
+        if (held := _plan_held_record(state["plan_held"])) is None:
+            del state["plan_held"]
+        else:
+            state["plan_held"] = held
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -534,7 +672,30 @@ def render(
         # The best-effort tracker writes that failed (GH-389): closed class, target and time,
         # written only when there is one, as one flow line so `record_closure` replaces it.
         **({"tracker_failures": _LANDING_PLACEHOLDER} if state.get("tracker_failures") else {}),
+        # The issue filed per refusal rule (GH-1011): one flow line, written only when there is one.
+        **({"format_issue": _LANDING_PLACEHOLDER} if state.get("format_issue") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
+        # The wait on an unfetchable stacked head (GH-885), the worktree removal a merge could not
+        # make (GH-820) and the pull requests of the slices that closed the task (GH-334): each
+        # written only when truthy, as one flow line, so `record_closure` replaces it in place.
+        **({"stack_unfetchable": _LANDING_PLACEHOLDER} if state.get("stack_unfetchable") else {}),
+        **(
+            {"worktree_release_lapse": _LANDING_PLACEHOLDER}
+            if state.get("worktree_release_lapse")
+            else {}
+        ),
+        **({"closed_by_slices": _LANDING_PLACEHOLDER} if state.get("closed_by_slices") else {}),
+        # The parent a stacked task was started on (GH-855), raw: `None` is no record, any other
+        # value (even a malformed `{}`) is the record as written, so `stacking.parse_stack_parent`
+        # judges the same record after a reload as before it.
+        **({"stack_parent": p} if (p := state.get("stack_parent")) is not None else {}),
+        # The split sweep's own record (GH-619), ISO UTC strings, each written only when set.
+        **({"split_repointed_at": s} if (s := state.get("split_repointed_at")) else {}),
+        **({"split_closed_at": s} if (s := state.get("split_closed_at")) else {}),
+        **({"split_abandoned_at": s} if (s := state.get("split_abandoned_at")) else {}),
+        # The spec a delivery is built against (GH-594), whole: every `SpecContract` field,
+        # including the `commit` the spec guard moves. `{}`, the graph's default, writes nothing.
+        **({"spec": s} if (s := state.get("spec")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),
@@ -551,10 +712,11 @@ def render(
         # there is a row, so a document that was never stacked is byte-identical to one written
         # before; parsed back under the same names, nothing reads them to decide.
         **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
+        **({"reintegrations": r} if (r := state.get("reintegrations")) else {}),
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # The verdicts of the early size check: written only when there is a row, so every
         # document written before it is byte-identical; parsed back under the same name, and
-        # read only by `early_split.measured`.
+        # read only by `rules.early_measured`.
         **({"early_split": r} if (r := state.get("early_split")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
@@ -585,6 +747,11 @@ def render(
             if (e := _escalation_record(state.get("drawing_escalation")))
             else {}
         ),
+        # The plan held while the owner answers its own departures (GH-1004), written whenever the
+        # key is there and not `None`, never otherwise, so a document without it is byte-identical
+        # to one written before. Kept out of `RECORD_KEYS` and `_FLOW_KEYS`; `parse` drops a
+        # record that is not whole.
+        **({"plan_held": h} if (h := state.get("plan_held")) is not None else {}),
         # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
         # there and never when it is absent, so a document without it is byte-identical to one
         # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.
@@ -690,6 +857,19 @@ def render(
         # A re-plan owed after the owner's decision (GH-798): written only when true, so a
         # document without it is byte-identical to one written before; absent reads false.
         **({"plan_due": True} if state.get("plan_due") else {}),
+        # The GitHub rate-limit pause's instants (GH-989), written only when set, so a
+        # document the limit never paused is byte-identical to one written before them.
+        **({"rate_limit_paused_at": e} if (e := state.get("rate_limit_paused_at")) else {}),
+        **({"rate_limit_noticed_at": e} if (e := state.get("rate_limit_noticed_at")) else {}),
+        # The format retakes and their hold (GH-1019), written only when there is one: counts in
+        # the declaration order of the rules, the hold's fields in a fixed one.
+        **({"format_retakes": r} if (r := _ordered_counts(state.get("format_retakes"))) else {}),
+        **({"format_hold": h} if (h := _ordered_hold(state.get("format_hold"))) else {}),
+        # The holds released on their own (GH-1020), the list of what `format_hold` once was,
+        # written only when non-empty and in insertion order.
+        **(
+            {"format_released": r} if (r := _ordered_released(state.get("format_released"))) else {}
+        ),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task
@@ -756,6 +936,33 @@ def render(
     if departures := drawing_section(state.get("drawing_departures")):
         parts.append(f"## {DRAWING_DEPARTURES}\n\n{departures}\n")
     return "\n".join(parts)
+
+
+def _ordered_counts(counts: Mapping[RefusalRule, int] | None) -> dict[str, int]:
+    """`format_retakes` with its keys in the declaration order of `RefusalRule`, so the same
+    counts always render the same text; `{}` for none."""
+    return {rule: counts[rule] for rule in get_args(RefusalRule) if counts and rule in counts}
+
+
+def _ordered_hold(hold: FormatHold | None) -> dict[str, str]:
+    """`format_hold` with its fields in a fixed order; `{}` for none."""
+    if not hold:
+        return {}
+    ordered: dict[str, str] = {"rule": hold["rule"], "cause": hold["cause"], "at": hold["at"]}
+    if url := hold.get("issue_url"):
+        ordered["issue_url"] = url
+    if noted := hold.get("noted_at"):
+        ordered["noted_at"] = noted
+    return ordered
+
+
+def _ordered_released(released: list[FormatReleased] | None) -> list[dict[str, str | None]]:
+    """`format_released` with each entry's fields in a fixed order, `closing_commit` written even
+    when null, the entries in insertion order; `[]` for none."""
+    return [
+        {"issue_url": e["issue_url"], "closing_commit": e["closing_commit"], "at": e["at"]}
+        for e in released or []
+    ]
 
 
 def _rounded_shadow(record: Mapping[str, Any]) -> dict[str, Any]:

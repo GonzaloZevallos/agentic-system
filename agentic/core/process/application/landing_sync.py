@@ -42,7 +42,7 @@ from ..domain.task import (
     add_review_scopes,
     add_stack_restacks,
 )
-from . import docs_settlement, spec_guard
+from . import docs_settlement, review_scope, spec_guard
 from . import resume as resuming
 from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
@@ -375,7 +375,8 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
                 merged = UpstreamMerge(True, (), ports.workspace.full_head(checkout.path))
         except GitError as failed:
             return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
-        if not _sync_carries(context, state, reviewed, merged):
+        scope = _sync_carries(context, state, unit, reviewed, merged, checkout.path)
+        if scope is None or scope[0].scope != "carried":
             return f"Master ({sha}) was merged into the branch; review the result as it is.", (
                 "delivered"
             )
@@ -404,7 +405,7 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
         resolved = landing.resolve_open(written, _now(), cost)
         rows = _restacked(state, written, resolved)
         result = _carries(
-            state, unit, reviewed, merged.head, holds=True, cause="clean", ports=ports
+            state, unit, scope[1], merged.head, holds=True, cause=scope[0].cause, ports=ports
         )
         settled: TaskState = {
             **state,
@@ -485,23 +486,20 @@ def _carries(
 
 
 def _sync_carries(
-    context: LandingContext, state: TaskState, reviewed: str | None, merged: UpstreamMerge
-) -> bool:
-    """Whether the verdict on `reviewed` stands for the clean merge `merged`: the merge's first
-    parent, the pull request head, is one the Tech Lead accepted (`rules.head_reviewed`), and
-    `landing.review_scope` finds nothing after the merge to review. A unit never reviewed, or
-    a head not accepted, carries nothing."""
+    context: LandingContext,
+    state: TaskState,
+    unit: str,
+    reviewed: str | None,
+    merged: UpstreamMerge,
+    path: Path,
+) -> tuple[landing.ScopeVerdict, str | None] | None:
+    """What the review of the merged head `merged` covers, and the accepted tip it starts from,
+    from `review_scope.scope_of`, the only computer of scope (GH-976). `None` when the pull
+    request head the merge started from is not one the Tech Lead accepted
+    (`rules.head_reviewed`): such a unit carries nothing. Only a `carried` verdict carries."""
     if not reviewed or not rules.head_reviewed(reviewed, state.get("close_docs"), context.head):
-        return False
-    facts = landing.ScopeFacts(
-        reviewed=reviewed,
-        readable=True,
-        unreadable_cause=None,
-        reviewed_is_ancestor=True,
-        system_merge=True,
-        steps=(landing.ScopeStep(merged.head, "upstream_merge", ""),),
-    )
-    return landing.review_scope(facts).scope == "carried"
+        return None
+    return review_scope.scope_of(state, unit, merged.head, path, context.ports)
 
 
 def _message(moves: Sequence[tuple[str, str]]) -> str:

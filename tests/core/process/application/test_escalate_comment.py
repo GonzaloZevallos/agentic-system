@@ -7,7 +7,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application import escalate
-from agentic.core.process.domain import rules, task, tracker_items
+from agentic.core.process.domain import escalation_prompts, rate_limit, rules, task, tracker_items
 from agentic.core.process.domain.spec_delivery import SpecRouteCause
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
@@ -241,3 +241,170 @@ def test_a_drawing_pause_with_no_issue_number_shows_only_prose():
     text = escalate.comment(_drawing_state(), Configuration(product_dir="/tmp/p"), ports)
     assert "--drawing" not in text.replace("`Drawing <n>", "")
     assert "agentic resume" not in text.split("Options:")[0]
+
+
+# --- GH-989: the GitHub rate limit pauses without telling the tracker -------------------------
+
+CLOCK = "2026-11-19T00:00:00+00:00"
+NOW = "2026-11-19T01:00:00+00:00"
+
+
+def limited(**extra):
+    base = {"id": "GH-12", "status": "developing", "rate_limit_paused_at": CLOCK, **extra}
+    return task.apply(base, rate_limit.rate_limit_pause_patch(base, resets_at=None, at=NOW))
+
+
+@pytest.mark.anyio
+async def test_a_github_rate_limit_pause_saves_the_document_and_writes_nothing_to_the_tracker(cfg):
+    ports = memory_ports()
+    paused = limited()
+
+    patch = await escalate.escalate(paused, cfg, ports)
+
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert ports.documents.last["rate_limit_paused_at"] == NOW
+    assert patch == {}
+
+
+@pytest.mark.anyio
+async def test_the_persisted_escalation_also_writes_nothing_from_the_node(cfg):
+    ports = memory_ports()
+    persisted = task.apply(
+        limited(), rate_limit.rate_limit_persisted_patch(at="2026-11-19T13:00:00+00:00")
+    )
+
+    await escalate.escalate(persisted, cfg, ports)
+
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert ports.documents.last["escalated"] == rate_limit.RATE_LIMIT_PERSISTED
+
+
+@pytest.mark.anyio
+async def test_an_ordinary_escalation_still_labels_and_comments_and_clears_the_clock(cfg):
+    ports = memory_ports()
+    ordinary = {**raised(), "rate_limit_paused_at": CLOCK, "rate_limit_noticed_at": NOW}
+
+    patch = await escalate.escalate(ordinary, cfg, ports)
+
+    assert ports.tracker.labels == [("GH-12", "needs-human")]
+    assert len(ports.tracker.comments) == 1
+    assert patch == {"rate_limit_paused_at": None, "rate_limit_noticed_at": None}
+    assert ports.documents.last.get("rate_limit_paused_at") is None
+    assert ports.documents.last.get("rate_limit_noticed_at") is None
+
+
+def _format_state(**extra):
+    log = [
+        {"kind": "failure", "value": "schema", "section": "S", "rule": "schema_invalid"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    return state("Tech Lead failed", "failure", pause_log=log, **extra)
+
+
+def test_a_format_refusal_asks_to_fix_the_rule_not_to_try_again(cfg):
+    text = escalate.comment(_format_state(), cfg, memory_ports())
+
+    question, recommended, _ = rules.ESCALATION_PROMPTS[("failure", "format_refusal")]
+    assert f"Question: {question}" in text
+    assert f"Recommended: `{recommended.format(issue=12)}`" in text
+    assert "Should the task try again now?" not in text
+
+
+def test_a_held_format_task_asks_about_the_hold(cfg):
+    held = _format_state(format_hold={"rule": "schema_invalid", "cause": "rule_spent", "at": "x"})
+    text = escalate.comment(held, cfg, memory_ports())
+
+    question, _, _ = rules.ESCALATION_PROMPTS[("failure", "format_hold")]
+    assert f"Question: {question}" in text
+    assert "Should the task try again now?" not in text
+
+
+def test_a_failure_that_is_not_a_format_epoch_keeps_the_plain_question(cfg):
+    for log in (
+        [
+            {"kind": "failure", "value": "schema", "section": "S"},  # no rule
+            {"kind": "escalation", "value": "failure"},
+        ],
+        [
+            {"kind": "failure", "value": "schema", "section": "S", "rule": "schema_invalid"},
+            {"kind": "failure", "value": "rate_limit", "section": "T"},
+            {"kind": "escalation", "value": "failure"},
+        ],
+    ):
+        text = escalate.comment(state("x", "failure", pause_log=log), cfg, memory_ports())
+        assert "Question: Should the task try again now?" in text
+
+
+def _stalled_failure(**extra):
+    return {
+        "reason": "stall",
+        "error": "stalled",
+        "stall": {"seconds": 1801, "last_event": "system", "in_hook": True},
+        **extra,
+    }
+
+
+def _escalated_by(failures, cls="failure"):
+    """A state built the way the graph builds it: the real `rules.escalation` patch composed
+    through `rules.logged` over `failures`, folded in by `task.apply`."""
+    patch = rules.logged(
+        {"failures": failures, **rules.escalation(cls, "Tech Lead failed")},
+        failures,
+        at="2026-11-27T00:00:00+00:00",
+    )
+    return task.apply({"id": "GH-12", "pause_log": []}, patch)
+
+
+def test_two_stalls_add_the_suffix_and_ask_the_session_stalled_question(cfg):
+    stalled = _escalated_by([_stalled_failure(), _stalled_failure()])
+    text = escalate.comment(stalled, cfg, memory_ports())
+
+    lines = text.splitlines()
+    question, recommended, options = escalation_prompts.SESSION_STALLED_PROMPT
+    assert lines[0] == "Escalated: Tech Lead failed (session_stalled)"
+    assert f"Question: {question}" in lines
+    assert f"Recommended: `{recommended.format(issue=12)}`" in lines
+    assert text.count(question) == 1
+    # Never stored: the state keeps its reason and its (absent) cause.
+    assert stalled["escalated"] == "Tech Lead failed"
+    assert stalled["escalation_cause"] is None
+    assert (
+        rules.auto_resumable(stalled) is None and rules.pause_kind(stalled["pause_log"]) == "human"
+    )
+
+
+def test_a_single_stall_or_a_stall_then_a_schema_failure_keeps_the_plain_retry(cfg):
+    retry = escalation_prompts.ESCALATION_PROMPTS[("failure", None)][0]
+    schema = {"reason": "schema", "error": "bad"}
+    for failures in ([_stalled_failure()], [_stalled_failure(), schema]):
+        text = escalate.comment(_escalated_by(failures), cfg, memory_ports())
+        assert text.splitlines()[0] == "Escalated: Tech Lead failed"
+        assert f"Question: {retry}" in text and "session_stalled" not in text
+
+
+def test_a_format_failure_keeps_its_format_row_and_no_suffix(cfg):
+    text = escalate.comment(_format_state(), cfg, memory_ports())
+
+    assert "session_stalled" not in text.splitlines()[0]
+    assert (
+        f"Question: {escalation_prompts.ESCALATION_PROMPTS[('failure', 'format_refusal')][0]}"
+        in text
+    )
+
+
+def test_another_class_never_picks_the_stall_row(cfg):
+    stalled = _escalated_by([_stalled_failure(), _stalled_failure()], cls="cap")
+    text = escalate.comment(stalled, cfg, memory_ports())
+
+    assert "session_stalled" not in text
+    assert escalation_prompts.SESSION_STALLED_PROMPT[0] not in text
+
+
+def test_the_picker_runs_once_per_comment(cfg, monkeypatch):
+    calls = []
+    real = escalation_prompts.stalled_batch
+    monkeypatch.setattr(
+        escalation_prompts, "stalled_batch", lambda log: calls.append(1) or real(log)
+    )
+    escalate.comment(_escalated_by([_stalled_failure(), _stalled_failure()]), cfg, memory_ports())
+    assert calls == [1]

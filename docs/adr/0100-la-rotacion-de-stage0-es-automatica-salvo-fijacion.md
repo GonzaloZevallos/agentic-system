@@ -84,6 +84,28 @@ restart. enable --now no reinicia una unidad que ya está activa (es comportamie
 systemd), así que sin el reinicio el poller viejo sigue en su código. Las corridas
 sobreviven al reinicio porque la unidad del poller usa `KillMode=process`.
 
+## Enmienda (GH-1152): el smoke ya no depende de GitHub
+
+El smoke de un candidato corría `agentic poll --dry-run --once` por cada producto instalado. Esa
+ronda lee GitHub por cada issue que espera merge o está bloqueado; en un producto con unos 170
+issues abiertos pasaba de los 300 s, terminaba como `Unavailable("smoke_timeout")` y `current`
+nunca se movía. Ahora el smoke es `--help` y, por cada producto, `agentic stage0 smoke
+--product-dir P`: el `preflight` real sobre los puertos del producto con el tracker, la bandeja y
+el tablero reemplazados por puertos que lanzan ante cualquier uso. No hace ninguna llamada a
+GitHub y su costo es constante.
+
+- **Respaldo.** Un stage anterior al arreglo no conoce el subcomando y sale 2 (argparse). Ese 2 no
+  es `Red` por sí solo: el candidato se juzga con el paso viejo `poll --dry-run --once` (300 s) y
+  se imprime `smoke: legacy step`. El 2 del paso viejo sí es `Red`, como antes.
+- **Tiempo.** `PRODUCT_SMOKE_TIMEOUT_S` = max(120, 4 × la medición en frío), redondeado a 30 s. Se
+  midió en el checkout del propio sistema (12,2 s, cache de bytecode frío); apostrophe no se midió.
+  Pasarse sigue siendo `Unavailable("smoke_timeout")`: nunca `rejected`.
+- **Causa.** `keep: unavailable (<causa>)` dice la causa, siempre un valor cerrado de
+  `CandidateCause` (`clone`, `uv`, `smoke_timeout`, `disk`, `control_red`), nunca texto de una
+  excepción ni salida de un hijo.
+- **Arranque.** El `current` viejo smokea con el código viejo, así que el primer stage corregido se
+  instala a mano una sola vez.
+
 ## Consecuencias
 
 - ADR-0002 y ADR-0017 no se editan; esta enmienda es la que lee quien llegue desde ellos.

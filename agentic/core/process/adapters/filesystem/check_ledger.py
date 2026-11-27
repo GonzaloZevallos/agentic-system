@@ -28,7 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from ...application.ports import CheckRequest, Grant, ProcessReaper
+from ...application.ports import CheckAbandoned, CheckRequest, Grant, ProcessReaper
 from ...domain import reaping
 from ...domain.check_schedule import (
     CheckPriority,
@@ -84,6 +84,7 @@ class FilesystemCheckLedger:
         ask = Request(request.priority, enqueued_at, self._pid(), token)
         try:
             while True:
+                self._leave_if_abandoned(request)
                 with self._ledger() as entries:
                     now = self._wall()
                     decision = decide(entries, ask, now, self._limits)
@@ -94,6 +95,7 @@ class FilesystemCheckLedger:
                 if remaining <= 0:
                     break
                 self._sleep(min(POLL_INTERVAL_S, remaining))
+            self._leave_if_abandoned(request)
             with self._ledger() as entries:
                 now = self._wall()
                 decision = overdue_decision(entries, ask, now, self._limits)
@@ -101,6 +103,13 @@ class FilesystemCheckLedger:
         except BaseException:
             self._drop(token)
             raise
+
+    @staticmethod
+    def _leave_if_abandoned(request: CheckRequest) -> None:
+        """Raised before the ledger is touched, so the `except` of `acquire` drops this
+        token's line and nothing is booked, the overdue share included (GH-1169)."""
+        if request.cancelled is not None and request.cancelled():
+            raise CheckAbandoned
 
     def release(self, grant: Grant) -> None:
         self._drop(grant.token)

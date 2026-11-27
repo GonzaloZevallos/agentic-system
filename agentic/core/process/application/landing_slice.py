@@ -25,7 +25,7 @@ from . import api_break, ci_flakes, landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .poll import ci_gate, read_criteria
-from .ports import GitError, MergeCallFailed, TrackerUnreachable
+from .ports import GitError, MergeCallFailed, TrackerTurnRefused, TrackerUnreachable
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_checkout
 from .resume import state_from
@@ -328,6 +328,13 @@ def _decide(
         return
     try:
         ports.tracker.merge(reference, head)
+    except TrackerTurnRefused as exc:
+        # `gh` never launched (GH-1083): nothing merged and nothing refused; the next round retries.
+        context.log(
+            f"agentic: land: {context.task_id}: slice: the write turn was refused ({exc}): "
+            "nothing merged, next round retries"
+        )
+        return
     except TrackerUnreachable as exc:
         context.log(f"agentic: land: {context.task_id}: slice: GitHub unreachable: {exc}")
         return

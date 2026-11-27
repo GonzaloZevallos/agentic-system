@@ -116,6 +116,15 @@ class GitStack:
             return "numbered"
         return stack.adr_naming(data, source)
 
+    def stacking(self, revision: str) -> bool:
+        """The stacking switch at `revision`. YAML that does not parse raises `ValueError`, as
+        a wrong value does, so the one caller (the poller's launch judgement) reads it as off."""
+        try:
+            data, source = self._declaration(revision)
+        except yaml.YAMLError as error:
+            raise ValueError(f"stack declaration at {revision}: not valid YAML: {error}") from error
+        return stack.stacking(data, source)
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         data, source = self._declaration(revision)
         return tuple(

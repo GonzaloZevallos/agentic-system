@@ -41,15 +41,18 @@ from typing import Any, Literal, NoReturn, TypeVar, get_args
 
 from ...application.ports import (
     BoardWritten,
+    GhCallLog,
     IssueRow,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
+from ...domain.github_access import GithubAccess
 from .run import (
     GH_EXIT_AUTH,
     GhRetry,
@@ -187,14 +190,18 @@ class GhBoard:
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
         latch: RateLimitLatch | None = None,
+        access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
         self._latch = latch if latch is not None else RateLimitLatch()
         self.cwd = cwd
+        self._calls = calls
         self.owner = owner
         self.number = number
         self.run: Run = run if run is not None else partial(bounded_run, timeout_s=BOARD_TIMEOUT_S)
         self.log = log
         self.retry = retry
+        self.access = access
         self.clock = clock
         self._exit = 0
         self._identity: _Identity | None = None
@@ -216,6 +223,9 @@ class GhBoard:
             log=self.log,
             latch=self._latch,
             retry=self.retry if write else None,
+            access=self.access,
+            write=write,
+            calls=self._calls,
         )
 
     def _keeping_errors(
@@ -387,7 +397,10 @@ class GhBoard:
 
     def _stop(self, rnd: _Round, exc: BaseException) -> None:
         rnd.stopped = rnd.stopped or exc
-        self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
+        if isinstance(exc, TrackerTurnRefused):
+            self._halt(rnd, f"agentic: board: write stopped: {exc}")
+        else:
+            self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
 
     def _add(
         self,
@@ -478,7 +491,13 @@ class _Unauthenticated(TrackerRefused):
 
 def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
     """What one failed chunk does to the write, from the exception alone."""
-    stopping = (TrackerUnreachable, TrackerRateLimited, _Unauthenticated, OSError)
+    stopping = (
+        TrackerTurnRefused,  # before `TrackerTransient`: a refused turn is not worth a split
+        TrackerUnreachable,
+        TrackerRateLimited,
+        _Unauthenticated,
+        OSError,
+    )
     if isinstance(exc, stopping):
         return "stop"
     if isinstance(exc, TrackerCallFailed | TrackerRefused) and exc.status in BOARD_STOP_STATUSES:

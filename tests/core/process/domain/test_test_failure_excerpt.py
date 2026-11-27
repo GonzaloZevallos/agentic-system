@@ -97,3 +97,31 @@ def test_an_id_unfit_to_travel_is_counted_in_the_more_line() -> None:
     lines += ["FAILED " + "x" * 201, "=== 8 failed ==="]
     excerpt = landing.test_failure_excerpt([log_of(lines)])
     assert "3 failing headers more (1 without a usable id)" in excerpt.splitlines()
+
+
+CUT_SPEC = "[mobile] › e2e/mobile.spec.ts:44:5 › phone standard at 320x568, claro"
+
+
+def cut_log(*after: str) -> JobLog:
+    """A job killed at its time limit: list-reporter lines, no numbered summary (GH-1151)."""
+    passed = [line(f"  ✓  {n} [mobile] › e2e/ok.spec.ts:{n}:1 › fine (1.0s)") for n in range(1, 4)]
+    return log_of([*passed, line(f"  ✘  4 {CUT_SPEC} (7.0m)"), *map(line, after)])
+
+
+def test_a_cut_log_shows_the_failing_spec_and_the_error_that_follows_it() -> None:
+    excerpt = landing.test_failure_excerpt([cut_log("    TimeoutError: page.click: 5000ms")])
+    assert f"✘  4 {CUT_SPEC} (7.0m)" in excerpt
+    assert "    TimeoutError: page.click: 5000ms" in excerpt.splitlines()
+
+
+def test_a_cut_log_without_an_error_falls_back_to_the_step_tail() -> None:
+    excerpt = landing.test_failure_excerpt([cut_log("last words of the step")])
+    assert f"✘  4 {CUT_SPEC} (7.0m)" in excerpt
+    assert "last words of the step" in excerpt
+    assert "failing headers more" not in excerpt
+
+
+def test_a_cut_log_counts_the_failing_specs_beyond_the_first_five() -> None:
+    failing = [line(f"  ✘  {n} [mobile] › e2e/f.spec.ts:{n}:1 › case {n} (3.0s)") for n in range(8)]
+    excerpt = landing.test_failure_excerpt([log_of(failing)])
+    assert "3 failing headers more" in excerpt.splitlines()

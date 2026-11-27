@@ -60,6 +60,8 @@ def test_the_tuple_is_the_planning_roles_of_roles_py_and_neither_sizer_nor_consu
     assert "plan_sizer" in known and "pm_consultant" in known
     assert not {"plan_sizer", "pm_consultant"} & set(planning.PLANNING_SLUGS)
     assert {"tech_lead_critic", "tech_lead_critic_platform"} <= set(planning.PLANNING_SLUGS)
+    assert "definition_sizer" in known and "definition_sizer" not in planning.PLANNING_SLUGS
+    assert "definition_sizer" != planning.SIZER_SLUG
 
 
 def test_two_arms_both_routes_a_misroute_and_a_critic_failure_are_every_figure():

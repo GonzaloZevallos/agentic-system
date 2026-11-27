@@ -4,7 +4,8 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
   - [domain](packages-process-domain.md)
     - [domain: checks](packages-process-domain-checks.md)
     - [domain: landing](packages-process-domain-landing.md)
-    - [domain: machine](packages-process-domain-machine.md)
+    - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
+    - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
     - [domain: playbook](packages-process-domain-playbook.md)
     - [domain: roles](packages-process-domain-roles.md)
     - [domain: state (parte 1)](packages-process-domain-state-1.md)
@@ -24,7 +25,8 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
     - [application: support (parte 2)](packages-process-application-support-2.md)
   - [adapters](packages-process-adapters.md)
   - [adapters.claude_sdk](packages-process-adapters-claude_sdk.md)
-  - [adapters.filesystem](packages-process-adapters-filesystem.md)
+  - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
+  - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
@@ -44,6 +46,7 @@ graph TD
     g_pkg__adapters --> g_pkg__application
     g_pkg__adapters --> g_pkg__domain
     g_pkg__adapters__claude_sdk --> g_pkg__adapters
+    g_pkg__adapters__claude_sdk --> g_pkg__adapters__git
     g_pkg__adapters__claude_sdk --> g_pkg__application
     g_pkg__adapters__claude_sdk --> g_pkg__domain
     g_pkg__adapters__filesystem --> g_pkg__adapters

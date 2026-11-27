@@ -14,11 +14,12 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, landing, presubmit, rules, stacking, tracker_items
+from ..domain import document, landing, presubmit, rate_limit, rules, stacking, tracker_items
 from ..domain.pull_request import (
     BoundedBody,
     bounded_body,
-    closes_line,
+    closes_lines,
+    closing_numbers,
     stacked_line,
     with_required_lines,
 )
@@ -26,10 +27,10 @@ from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState, add_stack_restacks
 from . import api_break
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
+from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed, TrackerRateLimited
 from .preflight import over_cap
 from .release import release_task
-from .run_role import finish
+from .run_role import finish, rate_limit_paused
 from .tracker_items import run_system_items
 from .tracker_only import post_tracker_checklist
 
@@ -137,6 +138,28 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if record:
         state = {**state, **record}
     replaced_note = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    # GH-1104: the parent's `Closes` lines come from the issue body as it stands now, not from the
+    # description stored at classification, which a narrowing by hand leaves stale. Read once,
+    # never stored. An evaluation run has no issue: its description is all there is.
+    try:
+        step = "issue body read failed"
+        number = ports.inbox.issue_of(state["id"])
+        current_body = (
+            state.get("description", "")
+            if number is None
+            else ports.inbox.task(number)["description"]
+        )
+    except (ValueError, OSError) as failed:
+        return _ended(
+            state,
+            {
+                **_undelivered(step, failed, state, replaced, at=ports.now()),
+                **record,
+                **posted,
+                **items_done,
+            },
+            ports,
+        )
     over = _criteria_over_cap(task.branch, ports)
     if over:
         state = {**state, "criteria_over_cap": over}
@@ -144,7 +167,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         part
         for part in (
             replaced_note,
-            closes_line(state.get("description", "")),
+            closes_lines(closing_numbers(current_body, number)),
             stacked_line(stacking.stacked_on(state)),
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
@@ -268,7 +291,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         patch["reaped_at_cleanup"] = list(reaped)
     if lapses:
         patch = _with_lapses(patch, lapses, at=ports.now())
-    done = _ended(state, patch, ports)
+    done = _ended(state, rate_limit.cleared_on_close(state, patch), ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
@@ -482,6 +505,10 @@ def _transient(failed: Exception | str) -> bool:
 def _undelivered(
     step: str, failed: Exception | str, state: TaskState, replaced: str | None, *, at: str
 ) -> TaskState:
+    if isinstance(failed, TrackerRateLimited):
+        # GH-989: the rate limit is a pause of its own, never `delivery_transient`: the poller
+        # retakes it and no human is told before the wait is spent.
+        return {"current_role": PJM.name, **rate_limit_paused(state, failed, at=at)}
     reason = f"{step}: {failed}; the branch is integrated, resume to deliver again"
     if replaced:
         reason += f". {rules.replaced_note(replaced, [], rules.task_branch(state['id']))}"

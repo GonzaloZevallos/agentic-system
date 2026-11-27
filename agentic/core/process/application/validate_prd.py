@@ -21,7 +21,7 @@ from ..domain.schemas import VerdictWithSpecDraft
 from ..domain.spec_brief import DRAFT_BLOCK
 from ..domain.spec_delivery import (
     draft_body_refusal,
-    draft_refusal_message,
+    draft_refusal,
     draft_retry,
     draft_text,
 )
@@ -118,7 +118,8 @@ def _check(state: TaskState, task: Checkout, cfg: Configuration, ports: Ports) -
 def _with_draft_check(approval: Check, task: Checkout, cfg: Configuration, ports: Ports) -> Check:
     """`approval`, then a synchronous check of the draft body PM approved, so a body `deliver`
     would refuse goes back to PM once, with the reason, before the verdict counts. It raises
-    `ValueError` (what `run_role` retries on) with the fixed sentence of the cause. The preview of
+    `ValueError` (what `run_role` retries on, an `OutputRefusal` from `draft_refusal`) with the
+    fixed sentence of the cause. The preview of
     the draft approved by the owner runs only with a well-formed `owner_login` and clock
     (`spec_draft.draft_cause`); without them it is skipped, never an error. Nothing is read from
     the checkout and nothing is written.
@@ -143,6 +144,6 @@ def _with_draft_check(approval: Check, task: Checkout, cfg: Configuration, ports
                 draft_text(body), validator, task.base, cfg.owner_login, ports.now()
             ).cause
         if cause is not None and draft_retry(cause, calls_before) == "refuse":
-            raise ValueError(draft_refusal_message(cause))
+            raise draft_refusal(cause)
 
     return check

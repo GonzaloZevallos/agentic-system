@@ -19,6 +19,11 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__FormatFiler["FormatFiler"]
+    class ports__FormatFixReads["FormatFixReads"]
+    class ports__FreeSpace["FreeSpace"]
+    class ports__GhCallLog["GhCallLog"]
+    class ports__GitError["GitError"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
@@ -28,20 +33,17 @@ classDiagram
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
     class ports__LabelTimeline["LabelTimeline"]
-    class ports__LaunchAttempt["LaunchAttempt"]
-    class ports__Launcher["Launcher"]
-    class ports__ListMayBeCut["ListMayBeCut"]
-    class ports__ListedPullRequest["ListedPullRequest"]
-    class ports__LoadReader["LoadReader"]
+    class ports__LandRecord["LandRecord"]
 ```
 
 ## Relaciones con otras páginas
 
-- [application: checks](classes-process-application-checks.md)
-  - `presubmit.Readiness` se asocia con `ports.LoadReader`
-- [application: reflection](classes-process-application-reflection.md)
-  - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 1)](classes-process-application-support-1.md)
+  - `ci_push.PushFailed` hereda de `ports.GitError`
+- [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.Inbox`
-- [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
+  - `ports.SystemRepo` se asocia con `ports.Inbox`
+  - `ports.UnstageablePath` hereda de `ports.GitError`

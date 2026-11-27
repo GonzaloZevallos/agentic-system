@@ -159,7 +159,11 @@ def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(composition, "GhInbox", lambda product_dir: GhInbox(product_dir, run=run))
+    monkeypatch.setattr(
+        composition,
+        "GhInbox",
+        lambda product_dir, calls=None: GhInbox(product_dir, run=run, calls=calls),
+    )
     return calls
 
 
@@ -6361,6 +6365,7 @@ COMMAND_PATHS = [
     ("stack", "review"),
     ("stage0",),
     ("stage0", "rotate"),
+    ("stage0", "smoke"),
     ("scores",),
     ("scores", "backfill"),
     ("dashboards",),
@@ -7074,3 +7079,297 @@ def test_a_document_with_no_merge_has_nothing_to_retire(monkeypatch, tmp_path):
     scorer = FakeScorer()
     _backfill(monkeypatch, root, ports, scorer)
     assert scorer.events == ["write"]
+
+
+def _refused_failure(reason, rule=None):
+    failure = {"role": "PjM", "attempt": 1, "error": "e", "cost_usd": 0.01, "reason": reason}
+    if rule is not None:
+        failure["rule"] = rule
+    return failure
+
+
+def test_report_prints_the_refusals_by_rule_with_what_was_repaired(capsys):
+    final = {
+        "status": "delivered",
+        "failures": [
+            _refused_failure("check", "parts_when_fits"),
+            _refused_failure("check", "parts_when_fits"),
+            _refused_failure("schema", "output_missing"),
+        ],
+        "runs": [{"repairs": [{"rule": "parts_when_fits", "field": "subtasks"}]}],
+    }
+    cli._report(final, "GH-1", memory_ports())
+    lines = capsys.readouterr().out.splitlines()
+    assert "failures:  3" in lines
+    assert lines[lines.index("failures:  3") + 1] == (
+        "refusals:  output_missing=1 (repaired 0) parts_when_fits=2 (repaired 1)"
+    )
+
+
+def test_report_prints_no_refusals_line_when_there_are_none(capsys):
+    final = {"status": "delivered", "failures": [_refused_failure("account_limit")]}
+    cli._report(final, "GH-1", memory_ports())
+    assert "refusals" not in capsys.readouterr().out
+
+
+def test_report_of_an_escalated_task_prints_the_refusals_before_it_exits(capsys):
+    final = {
+        "status": "waiting_on_human",
+        "escalated": "PjM failed",
+        "failures": [_refused_failure("schema", "schema_invalid")] * 2,
+    }
+    with pytest.raises(SystemExit):
+        cli._report(final, "GH-1", memory_ports())
+    out = capsys.readouterr().out
+    assert "refusals:  schema_invalid=2 (repaired 0)" in out
+    assert out.index("refusals:") < out.index("escalated:")
+
+
+# GH-858: the stacked-start gate in `_run` (first launch and `--fresh`), before the archive.
+
+_STACK_HEAD, _STACK_MERGE, _STACK_TIP = "a" * 40, "d" * 40, "c" * 40
+
+
+class _RunsCheckout(RecordsEntry):
+    """A graph double that, like the first node that needs a branch, asks for the task's
+    checkout with the state the run was entered with."""
+
+    ports = None
+    cfg = None
+
+    async def ainvoke(self, task, config):
+        from agentic.core.process.application import checkouts
+
+        self.entered = dict(task)
+        checkouts.task_checkout(self.entered, self.cfg, self.ports)
+        return self.final
+
+
+def _stacked_world(monkeypatch, tmp_path, *, hint=True, document=None, issue=None, carried=True):
+    """Ports with a Ready parent GH-5 for the child GH-6, the graph double, and the registry
+    that holds the launch hint (`hint=False`: a launch with none)."""
+    from agentic.core.process.application.ports import (
+        IssueState,
+        LaunchAttempt,
+        StackHint,
+        Upstream,
+    )
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports()
+    ports.tracker.states[5] = issue or IssueState("OPEN", "", (), None, ())
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "title": "p",
+            "description": "d",
+            "status": "ready_for_review",
+            "subtasks": {"a": {"reviewed_head": _STACK_HEAD}},
+        }
+    )
+    ports.workspace.remote_tips["agentic/GH-5"] = _STACK_TIP
+    ports.workspace.ancestors = {_STACK_HEAD, _STACK_MERGE} if carried else set()
+    ports.workspace.upstream_answer = Upstream("origin/main", _STACK_TIP, None)
+    if document is not None:
+        ports.documents.save(document)
+    registry = MemoryRunRegistry()
+    if hint:
+        registry.attempts[(cli.product_name(ports), 6)] = LaunchAttempt(
+            datetime.now(UTC), 1, None, StackHint(5, _STACK_HEAD)
+        )
+    graph = _RunsCheckout({"id": "GH-6", "title": "t", "status": "open"})
+    graph.ports, graph.cfg = ports, cfg
+    monkeypatch.setattr(cli, "graph", graph)
+    return cfg, ports, registry, graph
+
+
+async def _run_child(cfg, ports, registry, *, fresh):
+    task = {"id": "GH-6", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        cfg,
+        ports,
+        fresh=fresh,
+        checkpointer=in_memory,
+        registry=registry,
+        run_lock=FakeLock(),
+    )
+
+
+def _previous_child(**more):
+    return {"id": "GH-6", "system_commit": "abc1234", "title": "t", **more}
+
+
+@pytest.mark.anyio
+async def test_first_launch_with_a_ready_parent_hint_writes_the_record_before_the_branch(
+    monkeypatch, tmp_path
+):
+    cfg, ports, registry, graph = _stacked_world(monkeypatch, tmp_path)
+    await _run_child(cfg, ports, registry, fresh=False)
+    record = graph.entered["stack_parent"]
+    assert (record["issue"], record["task_id"], record["head"]) == (5, "GH-5", _STACK_HEAD)
+    assert ports.workspace.started["agentic/GH-6"] == _STACK_HEAD
+
+
+@pytest.mark.anyio
+async def test_first_launch_without_a_hint_never_reaches_the_gate(monkeypatch, tmp_path):
+    cfg, ports, registry, graph = _stacked_world(monkeypatch, tmp_path, hint=False)
+    ports.tracker.state_errors.add(5)  # a read that would be a Wait, were it made
+    await _run_child(cfg, ports, registry, fresh=False)
+    assert "stack_parent" not in graph.entered
+    assert "agentic/GH-6" not in ports.workspace.started  # from upstream, as today
+    assert ports.workspace.fetched_commits == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("fresh", [False, True])
+async def test_a_wait_at_the_gate_leaves_no_document_branch_worktree_or_spend(
+    monkeypatch, tmp_path, capsys, fresh
+):
+    cfg, ports, registry, graph = _stacked_world(monkeypatch, tmp_path, carried=False)
+    if fresh:
+        ports.documents.save(_previous_child())
+        ports.workspace.existing_branches["agentic/GH-6"] = ("h1", "b0")
+    before = list(ports.documents.saved)
+    with pytest.raises(SystemExit) as info:
+        await _run_child(cfg, ports, registry, fresh=fresh)
+    assert info.value.code == cli.STACK_WAIT_EXIT == 3
+    assert capsys.readouterr().err == "agentic: stack: GH-6 waits on #5 (head_not_carried)\n"
+    assert graph.entered is None
+    assert ports.workspace.renamed == [] and ports.workspace.checkouts_made == []
+    assert ports.workspace.on_disk == set()
+    assert ports.tracker.comments == [] and ports.tracker.labels == []
+    assert ports.documents.written_into == []
+    assert ports.documents.saved == before
+    assert registry.cleared == []
+
+
+@pytest.mark.anyio
+async def test_a_wait_in_fresh_over_a_stacked_document_moves_nothing(monkeypatch, tmp_path, capsys):
+    old = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": "b" * 40,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch,
+        tmp_path,
+        hint=False,
+        carried=False,
+        document=_previous_child(stack_parent=old),
+    )
+    ports.workspace.existing_branches["agentic/GH-6"] = ("h1", "b0")
+    before = list(ports.documents.saved)
+    with pytest.raises(SystemExit) as info:
+        await _run_child(cfg, ports, registry, fresh=True)
+    assert info.value.code == cli.STACK_WAIT_EXIT
+    assert capsys.readouterr().err == "agentic: stack: GH-6 waits on #5 (head_not_carried)\n"
+    assert graph.entered is None
+    assert ports.workspace.renamed == [] and ports.workspace.checkouts_made == []
+    assert ports.documents.saved == before and ports.documents.written_into == []
+    assert ports.tracker.comments == [] and ports.tracker.labels == []
+
+
+@pytest.mark.anyio
+async def test_fresh_over_a_stacked_document_follows_its_record_and_recreates_at_the_parent_head(
+    monkeypatch, tmp_path
+):
+    old = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": "b" * 40,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch, tmp_path, hint=False, document=_previous_child(stack_parent=old)
+    )
+    ports.workspace.existing_branches["agentic/GH-6"] = ("h1", "b0")
+    await _run_child(cfg, ports, registry, fresh=True)
+    assert graph.entered["stack_parent"]["head"] == _STACK_HEAD  # the parent's current head
+    assert ports.workspace.renamed  # the old run was archived first
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("hinted", [True, False])
+async def test_fresh_with_a_merged_parent_starts_at_upstream_and_clears_the_record(
+    monkeypatch, tmp_path, hinted
+):
+    from agentic.core.process.application.ports import IssueState
+
+    merged = IssueState("CLOSED", "COMPLETED", (), _STACK_MERGE, ())
+    old = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": _STACK_HEAD,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch, tmp_path, hint=hinted, issue=merged, document=_previous_child(stack_parent=old)
+    )
+    await _run_child(cfg, ports, registry, fresh=True)
+    assert graph.entered["stack_parent"] is None
+    assert "agentic/GH-6" not in ports.workspace.started
+
+
+@pytest.mark.anyio
+async def test_fresh_with_neither_hint_nor_record_starts_at_upstream_and_writes_no_record(
+    monkeypatch, tmp_path
+):
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch, tmp_path, hint=False, document=_previous_child()
+    )
+    await _run_child(cfg, ports, registry, fresh=True)
+    assert "stack_parent" not in graph.entered
+    assert ports.workspace.fetched_commits == []
+    assert "agentic/GH-6" not in ports.workspace.started
+
+
+@pytest.mark.anyio
+async def test_a_landing_restart_goes_through_the_gate_and_the_branch_creation_call(
+    monkeypatch, tmp_path
+):
+    old = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": "b" * 40,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+    previous = _previous_child(stack_parent=old, landing_restarts=1, cost_usd=2.0)
+    cfg, ports, registry, graph = _stacked_world(
+        monkeypatch, tmp_path, hint=False, document=previous
+    )
+    await _run_child(cfg, ports, registry, fresh=True)
+    assert graph.entered["landing_restarts"] == 1  # the carry still reaches the run
+    assert graph.entered["stack_parent"]["head"] == _STACK_HEAD
+    assert ports.workspace.started["agentic/GH-6"] == _STACK_HEAD
+
+
+@pytest.mark.anyio
+async def test_a_wait_at_branch_creation_creates_no_branch_and_exits_without_escalating(
+    monkeypatch, tmp_path, capsys
+):
+    cfg, ports, registry, graph = _stacked_world(monkeypatch, tmp_path, hint=False)
+    ports.workspace.unfetchable.add(_STACK_HEAD)
+    record = {
+        "issue": 5,
+        "task_id": "GH-5",
+        "head": _STACK_HEAD,
+        "started_at": "2026-11-26T09:00:00+00:00",
+    }
+
+    class SavedRecord(_RunsCheckout):
+        async def ainvoke(self, task, config):  # a document that already carries the record
+            return await super().ainvoke({**task, "stack_parent": record}, config)
+
+    saved = SavedRecord({"id": "GH-6", "title": "t", "status": "open"})
+    saved.ports, saved.cfg = ports, cfg
+    monkeypatch.setattr(cli, "graph", saved)
+    with pytest.raises(SystemExit) as info:
+        await _run_child(cfg, ports, registry, fresh=False)
+    assert info.value.code == cli.STACK_WAIT_EXIT
+    assert capsys.readouterr().err == "agentic: stack: GH-6 waits on #5 (unreadable)\n"
+    assert ports.workspace.checkouts_made == []
+    assert ports.tracker.labels == [] and ports.documents.written_into == []

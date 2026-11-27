@@ -109,7 +109,7 @@ def build(tmp_path, comments, stack=None, system_file=False, commands=None, scri
             commands=commands or MemoryCommands(),
             sample_app=MemorySampleApp(),
             check_results=None,
-            inbox=MemoryInbox(),
+            inbox=MemoryInbox(unseeded_body="Issue body."),
         )
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)

@@ -147,7 +147,7 @@ def _tracker(tmp_path: Path, stderr: str, failing: str) -> GhTracker:
 def test_a_tracker_note_records_the_class_and_a_plain_failure_still_raises(
     tmp_path: Path, stderr: str, cause: str | None
 ) -> None:
-    tracker = _tracker(tmp_path, stderr, "issue")
+    tracker = _tracker(tmp_path, stderr, "api")  # a comment goes through `gh api -i` (GH-1089)
     if cause is None:
         with pytest.raises(ValueError, match="gh issue comment failed"):
             tracker.note("GH-7", "text")

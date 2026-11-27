@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -38,6 +40,7 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class rules__SpentSplit["SpentSplit"]
     class size_budget__ActualSize["ActualSize"]
     class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]
@@ -45,5 +48,4 @@ classDiagram
     class spec_approval__ApprovalReading["ApprovalReading"]
     class spec_approval__Comment["Comment"]
     class spec_delivery__DraftReading["DraftReading"]
-    class spec_delivery__Screen["Screen"]
 ```

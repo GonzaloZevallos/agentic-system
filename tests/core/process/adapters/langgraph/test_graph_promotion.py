@@ -67,7 +67,7 @@ async def test_a_light_task_promoted_after_an_approved_commit_keeps_the_commit_a
         tech_lead_review__api=[asking(ASK), reviewed("approved")],
     )
     fakes.tracker.states[1] = IssueState("OPEN", "", None, None, ())
-    graph = compiled(script, fakes=fakes, inbox=MemoryInbox())
+    graph = compiled(script, fakes=fakes, inbox=MemoryInbox(unseeded_body="Issue body."))
     final = await graph.ainvoke(
         {"id": "GH-1", "title": "Export report", "description": "CSV."}, config=config
     )
@@ -126,7 +126,7 @@ async def test_a_promotion_keeps_an_approved_subtask_branch_and_the_head_approve
 
     script.on_call = on_call
     fakes.tracker.states[1] = IssueState("OPEN", "", None, None, ())
-    graph = compiled(script, fakes=fakes, inbox=MemoryInbox())
+    graph = compiled(script, fakes=fakes, inbox=MemoryInbox(unseeded_body="Issue body."))
     final = await graph.ainvoke(
         {"id": "GH-1", "title": "Export report", "description": "CSV."}, config=config
     )
@@ -169,7 +169,9 @@ async def test_a_diff_under_a_declared_risk_glob_ends_on_the_full_path(config):
         ),
     )
     fakes.tracker.states[1] = IssueState("OPEN", "", None, None, ())
-    graph = compiled(script, fakes=fakes, stack=stack, inbox=MemoryInbox())
+    graph = compiled(
+        script, fakes=fakes, stack=stack, inbox=MemoryInbox(unseeded_body="Issue body.")
+    )
     final = await graph.ainvoke(
         {"id": "GH-1", "title": "Export report", "description": "CSV."}, config=config
     )

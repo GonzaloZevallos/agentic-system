@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
     class spec_delivery__SpecDraftRecord["SpecDraftRecord"]
     class spec_delivery__SpecLine["SpecLine"]
@@ -45,14 +48,13 @@ classDiagram
     class task__CarveRecord["CarveRecord"]
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
-    class task__CiCancelRerun["CiCancelRerun"]
     spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
     spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: state (parte 10)](classes-process-domain-state-10.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`

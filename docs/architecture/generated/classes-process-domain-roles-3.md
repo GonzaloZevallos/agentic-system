@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__Delivery["Delivery"]
     class schemas__DesignDraft["DesignDraft"]
     class schemas__DesignItem["DesignItem"]
     class schemas__DesignReview["DesignReview"]
@@ -45,7 +48,6 @@ classDiagram
     class schemas__FitDecision["FitDecision"]
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
-    class schemas__LandingDiagnosis["LandingDiagnosis"]
     schemas__FinalDesignReview --|> schemas__DesignReview
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
@@ -55,10 +57,10 @@ classDiagram
 - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.Delivery` hereda de `schemas.RoleOutput`
   - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
   - `schemas.DesignReview` hereda de `schemas.RoleOutput`
   - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
   - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
-  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

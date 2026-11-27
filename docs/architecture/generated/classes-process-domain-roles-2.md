@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -44,8 +46,8 @@ classDiagram
     class schemas__CopyFinding["CopyFinding"]
     class schemas__CopyReview["CopyReview"]
     class schemas__CritiqueFinding["CritiqueFinding"]
+    class schemas__DefinitionSize["DefinitionSize"]
     class schemas__DefinitionTurn["DefinitionTurn"]
-    class schemas__Delivery["Delivery"]
     schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
@@ -64,4 +66,4 @@ classDiagram
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
-  - `schemas.Delivery` hereda de `schemas.RoleOutput`
+  - `schemas.DefinitionSize` hereda de `schemas.PlanSize`

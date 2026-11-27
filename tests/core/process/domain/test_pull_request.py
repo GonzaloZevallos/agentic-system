@@ -7,10 +7,15 @@ import re
 
 import pytest
 
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.pull_request import (
     PR_BODY_MAX,
     api_break_reason,
     bounded_body,
+    carriers,
+    closes_lines,
+    closes_marker,
+    closing_numbers,
     declares,
     fence_open,
     github_length,
@@ -321,3 +326,65 @@ def test_the_closing_line_alone_is_written_when_the_heading_does_not_fit_with_it
     result = bounded_body([("PM", "p")], "T", pointer, limit=90, assumptions=_rows(3))
     assert result.text.startswith("…and 3 more in the task document")
     assert "## Assumptions" not in result.text
+
+
+# --- GH-1104: the closing lines come from whole-line markers outside a fence ---------------
+
+
+def test_closing_numbers_keep_first_seen_order_deduplicated_and_skip_the_own_issue():
+    body = "\n".join(
+        [
+            closes_marker(346),
+            "text",
+            closes_marker(345),
+            f"  {closes_marker(346)}  ",
+            closes_marker(12),
+        ]
+    )
+    assert closing_numbers(body, 12) == [346, 345]
+    assert closing_numbers(body, None) == [346, 345, 12]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"Closes the part: `{closes_marker(7)}`.",
+        f"see {closes_marker(7)} in the text",
+        f"```\n{closes_marker(7)}\n```",
+        f"~~~\n{closes_marker(7)}\n~~~",
+        f"````\n```\n{closes_marker(7)}\n````",
+        f"```\n{closes_marker(7)}",
+        "no marker at all",
+        "",
+    ],
+)
+def test_a_marker_that_is_not_a_whole_line_outside_a_fence_closes_nothing(body):
+    assert closing_numbers(body, None) == []
+
+
+def test_a_marker_after_a_closed_fence_counts_again():
+    body = f"```\n{closes_marker(7)}\n```\n{closes_marker(8)}"
+    assert closing_numbers(body, None) == [8]
+
+
+def test_closes_lines_gives_one_line_per_number_or_nothing():
+    assert closes_lines([346, 345]) == "Closes #346\nCloses #345"
+    assert closes_lines([]) == ""
+
+
+def _ref(number: int, body: str) -> IssueRef:
+    return IssueRef(f"https://github.com/o/r/issues/{number}", "", body)
+
+
+def test_carriers_are_the_issues_whose_body_closes_the_parent_minus_parent_and_parts():
+    refs = [
+        _ref(837, closes_marker(837)),
+        _ref(1009, closes_marker(837)),
+        _ref(1023, f"Last.\n\n{closes_marker(837)}"),
+        _ref(1022, "nothing"),
+        _ref(1030, f"quoted `{closes_marker(837)}`"),
+        _ref(1031, f"```\n{closes_marker(837)}\n```"),
+        _ref(1040, closes_marker(900)),
+        IssueRef("not-a-url", "", closes_marker(837)),
+    ]
+    assert carriers(refs, 837, {1009, 1010}) == [1023]

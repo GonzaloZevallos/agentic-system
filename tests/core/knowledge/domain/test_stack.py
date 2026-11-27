@@ -358,6 +358,25 @@ def test_the_template_keeps_parallel_checks_commented_out():
     assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")
 
 
+# -- `stacking`: the opt-in to start a part on its Ready parent's branch (GH-858) ---------
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_stacking_reads_a_declared_bool_as_it_is(value):
+    assert stack.stacking({"checks": {"tests": "pytest"}, "stacking": value}, "x") is value
+
+
+def test_a_product_that_does_not_declare_stacking_does_not_stack():
+    assert stack.stacking({"checks": {"tests": "pytest"}}, "x") is False
+
+
+@pytest.mark.parametrize("value", ["true", "yes", 1, 0, None, [], [True], {"on": True}, 1.0])
+def test_a_stacking_that_is_not_a_bool_is_an_error_never_read_as_a_no(value):
+    declared = {"checks": {"tests": "pytest"}, "stacking": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `stacking`.*true or false"):
+        stack.stacking(declared, "stack.yaml")
+
+
 # -- `adr_naming`: how the product names its ADRs (GH-611) --------------------------------
 
 

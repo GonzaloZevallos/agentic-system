@@ -18,7 +18,7 @@ product's; the stage0 root is machine-wide."""
 from __future__ import annotations
 
 import re
-from typing import get_args
+from typing import Literal, get_args
 
 from ..domain.stage0_rotation import CandidateCause
 from .ports import Inbox, Stage0Store, Tracker
@@ -44,8 +44,16 @@ _UNAVAILABLE_TEXT = (
 )
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _ISSUE_NUMBER = re.compile(r"/issues/(\d+)$")
-_FAILED = "escalation: failed"
 _UNKNOWN = "unknown"
+
+EscalationFailure = Literal[
+    "issue_lookup", "issue_open", "bad_url", "comments", "comment", "invalid_sha", "unknown"
+]
+
+
+def failed_line(reason: EscalationFailure) -> str:
+    """The journal line of a failed pass; `reason` is the step that failed, a closed set."""
+    return f"escalation: failed ({reason})"
 
 
 def render_marker(template: str, sha: str) -> str:
@@ -72,7 +80,7 @@ class Stage0Escalation:
         try:
             self._run()
         except Exception:
-            self._out(_FAILED)
+            self._out(failed_line("unknown"))
 
     def _run(self) -> None:
         pending = self._pending()
@@ -83,12 +91,12 @@ class Stage0Escalation:
             return
         number = _ISSUE_NUMBER.search(url)
         if number is None:
-            self._out(_FAILED)
+            self._out(failed_line("bad_url"))
             return
         try:
             comments = self._tracker.issue_comments(f"GH-{number.group(1)}")
         except Exception:
-            self._out(_FAILED)
+            self._out(failed_line("comments"))
             return
         for marker, text, line in pending:
             if any(has_line(comment, marker) for comment in comments):
@@ -96,7 +104,7 @@ class Stage0Escalation:
             try:
                 self._tracker.comment_on_issue(url, f"{text}\n\n{marker}")
             except Exception:
-                self._out(_FAILED)
+                self._out(failed_line("comment"))
                 continue
             self._out(line)
 
@@ -131,25 +139,29 @@ class Stage0Escalation:
                     )
                 )
         if invalid:
-            self._out(_FAILED)
+            self._out(failed_line("invalid_sha"))
         return pending
 
     def _issue(self) -> str | None:
-        """The fixed issue's URL, or None after saying `escalation: failed`."""
+        """The fixed issue's URL, or None after saying `escalation: failed (<reason>)`."""
         stored = self._store.escalation_issue()
         if stored is not None:
             return stored
         try:
             refs = self._inbox.open_issue_refs()
         except Exception:
-            self._out(_FAILED)
+            self._out(failed_line("issue_lookup"))
             return None
         found = next(
             (r.url for r in refs if r.title == ISSUE_TITLE and has_line(r.body, ISSUE_MARKER)),
             None,
         )
         if found is None:
-            found = self._tracker.open_issue(ISSUE_TITLE, f"{_ISSUE_BODY}\n\n{ISSUE_MARKER}")
+            try:
+                found = self._tracker.open_issue(ISSUE_TITLE, f"{_ISSUE_BODY}\n\n{ISSUE_MARKER}")
+            except Exception:
+                self._out(failed_line("issue_open"))
+                return None
             self._out("escalation: opened")
         self._store.write_escalation_issue(found)
         return found

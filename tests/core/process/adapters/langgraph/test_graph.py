@@ -184,7 +184,8 @@ def compiled(
             # pass one run stored cannot show up as a reused row in the next run's prompt.
             check_results=None,
             sample_app=sample_app,
-            **({"inbox": inbox} if inbox is not None else {}),
+            # GH-1104: delivery reads the issue body now; the default inbox answers one.
+            inbox=inbox if inbox is not None else MemoryInbox(unseeded_body="Issue body."),
             **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
             **({"now": now} if now is not None else {}),
         )
@@ -722,7 +723,7 @@ async def test_questions_for_the_human_escalate_with_the_list(config):
 
 async def test_approving_a_feature_without_definitions_is_retried_then_escalated(config, tmp_path):
     empty = verdict("approved", definitions=[])
-    script = script_for(pm=[empty, empty])
+    script = script_for(pm=[empty, empty, empty])
     final = await run_graph(script, config)
     assert final["status"] == WAITING_ON_HUMAN
     assert "without `definitions`" in final["escalated"]
@@ -1073,7 +1074,7 @@ async def test_the_task_cap_escalates_once_during_a_fan_out(config):
 
 
 async def test_escalating_during_a_fan_out_saves_the_document_with_every_branch(config, tmp_path):
-    # Both Developers leave their tree dirty twice and escalate in the same superstep.
+    # Both Developers leave their tree dirty three times and escalate in the same superstep.
     # Each branch saves its own view of the document, so whichever writes last loses
     # the other's failures; `escalate` saves the merged state, and the document ends
     # with both whatever the order.
@@ -1082,20 +1083,20 @@ async def test_escalating_during_a_fan_out_saves_the_document_with_every_branch(
         {MemoryWorkspace.ROOT / "GH-1.api", MemoryWorkspace.ROOT / "GH-1.domain"}
     )
     plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
-    script = script_for(**technical(tech_lead=[plan], developer=[delivered()] * 4))
+    script = script_for(**technical(tech_lead=[plan], developer=[delivered()] * 6))
     final = await run_graph(script, config, fakes=fakes)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"].startswith("Developer failed 2 times: structured output invalid")
-    assert len(final["failures"]) == 4
+    assert final["escalated"].startswith("Developer failed 3 times: structured output invalid")
+    assert len(final["failures"]) == 6
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
-    assert len(doc["failures"]) == 4
+    assert len(doc["failures"]) == 6
     assert doc["status"] == WAITING_ON_HUMAN and doc["escalated"] == final["escalated"]
     assert len(fakes.tracker.comments) == 1
 
 
 async def test_a_branch_that_escalates_does_not_lose_the_sister_that_delivered(config, tmp_path):
-    # `domain` leaves its tree dirty twice and escalates; `api` is approved in the same
+    # `domain` leaves its tree dirty three times and escalates; `api` is approved in the same
     # wave. Before the fan-in this was not testable: both branches saved the document
     # and both wrote `status`, so whether the run ended `developing` or
     # `waiting_on_human`, and whether `api`'s approval survived, was the event loop's
@@ -1107,22 +1108,23 @@ async def test_a_branch_that_escalates_does_not_lose_the_sister_that_delivered(c
         **technical(
             tech_lead=[plan],
             developer__api=[delivered("api")],
-            developer__domain=[delivered()] * 2,
+            developer__domain=[delivered()] * 3,
             tech_lead_review__api=[reviewed("approved")],
         )
     )
     final = await run_graph(script, config, fakes=fakes)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"].startswith("Developer failed 2 times")
+    assert final["escalated"].startswith("Developer failed 3 times")
     assert final["subtasks"]["api"]["status"] == "approved"
     assert final["subtasks"]["domain"]["status"] == "pending"
     assert "Tech Lead: review api" in final["sections"]
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
     assert doc["status"] == WAITING_ON_HUMAN and doc["escalated"] == final["escalated"]
     assert doc["subtasks"]["api"]["status"] == "approved"
-    # Told once, however many branches came back.
-    assert fakes.tracker.labels == [("GH-1", "needs-human")]
+    # Told once, however many branches came back. The failure is a format one with its retakes
+    # left (GH-1019), which the poller retakes: no `needs-human` until they are spent.
+    assert fakes.tracker.labels == []
     assert len(fakes.tracker.comments) == 1
 
 

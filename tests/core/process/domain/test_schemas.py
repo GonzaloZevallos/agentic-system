@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import pytest
 import yaml
@@ -14,6 +15,7 @@ from agentic.core.process.domain.schemas import (
     TechPlan,
     Verdict,
 )
+from agentic.core.process.domain.task import SYSTEM_CATEGORIES, FindingCategory, OutputRefusal
 from tests.fakes import PART_DEFAULTS
 
 ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}
@@ -190,6 +192,25 @@ def test_review_findings_are_typed_and_the_categories_closed():
         "plan-invariant",
         "integration-crosscut",
     }
+
+
+def test_a_reviewer_finding_with_a_system_category_is_refused_with_its_rule_and_field():
+    raw = {
+        "markdown": "x",
+        "reason": "r",
+        "findings": [finding(), finding(category="process-check-timeout")],
+    }
+    with pytest.raises(OutputRefusal) as refused:
+        schemas.validate(schemas.Review, raw, VOCAB)
+    assert (refused.value.rule, refused.value.field) == ("system_category", "findings[1].category")
+
+
+def test_the_reviewer_is_never_offered_a_system_category():
+    out = schemas.json_schema(schemas.Review, VOCAB)
+    offered = json.dumps(out)
+    assert "process-check-timeout" not in offered
+    assert set(schemas.CATEGORIES) == set(get_args(FindingCategory)) - SYSTEM_CATEGORIES
+    assert set(get_args(schemas.ReviewerCategory)) == set(schemas.CATEGORIES)
 
 
 def test_plan_check_accepts_a_plan_with_no_subtasks_heading():
@@ -1889,3 +1910,121 @@ def test_plan_check_for_finds_a_rejected_departure_among_several_and_keys_by_dra
     check(_with_departures(other_drawing))  # does not raise
     with pytest.raises(ValueError, match="#4"):
         check(_with_departures(other_drawing, _departure()))
+
+
+# The early split's parts (GH-999): `early_parts_check` is the only judge of them.
+
+PRD_TEXT = """## Jobs
+
+- As an owner I can export the monthly report as a CSV file.
+- As an owner I can pick the month to export.
+
+## Screens
+
+Export screen: a month picker and an Export button.
+"""
+QUOTE = "> As an owner I can export the monthly report as a CSV file."
+
+
+def _early(body_one, body_two, **sizes):
+    return [
+        {**_piece(**sizes), "body": body_one},
+        {**_piece(depends_on=[1]), "body": body_two},
+    ]
+
+
+def _body(quote=QUOTE, issue="#10"):
+    return f"Export the report, {issue}.\n\n{quote}\n\nFlags: touches_ui=true touches_copy=false"
+
+
+def _early_check(parts, issue=10, ratio=size_budget.UNPROVEN_RATIO):
+    schemas.early_parts_check(parts, issue, PRD_TEXT, ratio)
+
+
+def test_early_parts_check_accepts_a_real_quote():
+    _early_check(_early(_body(), _body()))
+
+
+def test_early_parts_check_accepts_a_real_quote_with_other_line_breaks_and_spacing():
+    wrapped = "> As an owner I can\n>   export the monthly\n> report   as a CSV file."
+    _early_check(
+        _early(
+            _body(wrapped), _body("  > As an owner I can export the monthly report as a CSV file.")
+        )
+    )
+
+
+def test_early_parts_check_pins_one_real_block_next_to_invented_prose_as_accepted():
+    invented = f"{QUOTE}\n\n> As an owner I can fly to the moon."
+    _early_check(_early(_body(invented), _body()))
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "> As an owner I can export the yearly report as a CSV file.",
+        "> as an owner i can export the monthly report as a csv file.",
+        ">\n>   \nplain prose, no real block",
+        "no quote at all",
+    ],
+    ids=["fabricated", "case", "empty-block", "no-block"],
+)
+def test_early_parts_check_refuses_a_body_with_no_real_quote(quote):
+    with pytest.raises(ValueError, match="part 2 quotes nothing of the PRD"):
+        _early_check(_early(_body(), _body(quote)))
+
+
+def test_early_parts_check_refuses_a_body_without_the_issue_number():
+    with pytest.raises(ValueError, match=r"part 1 does not reference the original issue #10"):
+        _early_check(_early(_body(issue="the original"), _body()))
+
+
+def test_early_parts_check_does_not_count_a_longer_number_as_the_issue():
+    with pytest.raises(ValueError, match="part 1 does not reference"):
+        _early_check(_early(_body(issue="#100"), _body()), issue=10)
+    _early_check(_early(_body(issue="#100"), _body(issue="#100")), issue=100)
+
+
+def test_early_parts_check_refuses_fewer_than_two_parts():
+    with pytest.raises(ValueError, match="at least two parts"):
+        _early_check([{**_piece(), "body": _body()}])
+
+
+def test_early_parts_check_says_every_refusal_of_every_part_in_one_message():
+    parts = _early(_body("> invented", issue="none"), _body("> invented too"))
+    with pytest.raises(ValueError) as refused:
+        _early_check(parts)
+    message = str(refused.value)
+    assert message.count("; ") == 2  # three refusals
+    assert message.index("part 1 quotes") < message.index("part 1 does not reference")
+    assert message.index("part 1 does not reference") < message.index("part 2 quotes")
+    assert "part 2 does not reference" not in message
+
+
+def test_early_parts_check_judges_the_size_at_the_ratio_it_is_given():
+    parts = _early(_body(), _body())
+    parts[1]["hand_files"] = 6  # 6 x 1.5 is 9, within 15; 6 x 3 is 18
+    _early_check(parts)
+    with pytest.raises(ValueError, match="part 2 does not fit the size budget"):
+        _early_check(parts, ratio=3.0)
+    parts[1]["hand_files"] = 11  # over at 1.5; within at a ratio of 1.0
+    with pytest.raises(ValueError, match="part 2 does not fit the size budget"):
+        _early_check(parts)
+    _early_check(parts, ratio=1.0)
+
+
+def test_early_parts_check_keeps_the_structure_check_of_parts_check():
+    parts = _early(_body(), _body())
+    parts[1]["depends_on"] = [2]
+    with pytest.raises(ValueError, match="depends only on earlier parts"):
+        _early_check(parts)
+
+
+def test_definition_size_validates_with_parts_absent_and_with_parts_present():
+    base = {"markdown": "m", "estimated_cost_usd": 3.0, "estimated_files": 4}
+    assert schemas.validate(schemas.DefinitionSize, base, {})["parts"] == []
+    parts = [{**_piece(), "body": _body()}, {**_piece(depends_on=[1]), "body": _body()}]
+    sized = schemas.validate(schemas.DefinitionSize, {**base, "parts": parts}, {})
+    assert [part["title"] for part in sized["parts"]] == ["T", "T"]
+    with pytest.raises(ValueError):
+        schemas.validate(schemas.DefinitionSize, {**base, "estimated_files": -1}, {})

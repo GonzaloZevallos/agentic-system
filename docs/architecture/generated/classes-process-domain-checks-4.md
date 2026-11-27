@@ -11,6 +11,8 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,8 +33,9 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class presubmit__RedCheck["RedCheck"]
     class presubmit__RerunForm["RerunForm"]
+    class presubmit__TimeoutFact["TimeoutFact"]
+    class presubmit__UngrantedWorkers["UngrantedWorkers"]
     class presubmit__WitnessResult["WitnessResult"]
     class run_check__CheckRun["CheckRun"]
     class run_check__Outcome["Outcome"]

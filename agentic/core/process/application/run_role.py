@@ -2,11 +2,13 @@
 
 A role failure is one of four things (README.md, 3 and 14): the harness broke, the
 model ran out of turns, its structured output is missing or invalid, or its
-`markdown` is empty. `run_with_retry` retries once with the error as input: inside the
+`markdown` is empty. `run_with_retry` retries with the error as input: inside the
 session the attempt left when there is one, appended to the prompt of a fresh session
-when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, which
-the use case turns into an escalation. The graph engine's own retry was rejected
-because it reruns the node without telling the model what went wrong.
+when there is none (ADR-0004, addendum). How many attempts it makes is `rules.attempts_for`'s
+call: one retry, two after a refusal of the structured output (GH-1017), whose retry message
+names the rule, the field, the value and the fix (`refusal_retry`). The last failure raises
+`RoleFailure`, which the use case turns into an escalation. The graph engine's own retry was
+rejected because it reruns the node without telling the model what went wrong.
 
 A `max_turns` cut is not an ordinary failure: the harness stopped the attempt on the
 turn cap alone, and the work up to that point may already be done. `_retry_input`
@@ -53,12 +55,16 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 
 from __future__ import annotations
 
+import asyncio
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, ValidationError
 
 from agentic.shared.configuration import Configuration
 
@@ -67,8 +73,11 @@ from ..domain import (
     cost_history,
     document,
     drawing,
+    format_issue,
     plan_view,
     playbook,
+    rate_limit,
+    refusal_retry,
     rules,
     schemas,
     spec_assumptions,
@@ -77,6 +86,7 @@ from ..domain import (
     turn_notice,
 )
 from ..domain.document import HUMAN
+from ..domain.output_repair import Repair, RepairContext, repair_note
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import (
     DEVELOPER,
@@ -98,6 +108,10 @@ from ..domain.task import (
     WAITING_ON_HUMAN,
     EscalationClass,
     Failure,
+    FailureReason,
+    OutputRefusal,
+    RefusalRepair,
+    RefusalRule,
     RoleRun,
     TaskState,
     apply,
@@ -105,7 +119,17 @@ from ..domain.task import (
 from .checkouts import task_base
 from .closed import closed_documents
 from .limits import RunLimits
-from .ports import AttemptFailed, CheckRuns, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
+from .ports import (
+    AttemptFailed,
+    CheckRuns,
+    CheckTool,
+    Ports,
+    Presubmit,
+    RawResult,
+    RoleRunner,
+    SchemaGuard,
+    TrackerRateLimited,
+)
 from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
@@ -268,6 +292,9 @@ class Output:
     # The Developer's own check runs in the delivering attempt (`RawResult.check_runs`); the
     # runs of a failed attempt stay on its `Failure`, never here.
     check_runs: CheckRuns = field(default_factory=CheckRuns)
+    # The refusals repaired on the delivering attempt alone (`_judged`, GH-1016); those of a
+    # failed attempt stay on its `Failure`, never here.
+    repairs: list[RefusalRepair] = field(default_factory=list)
 
 
 # The roles that write files under a spec delivery: only they are told the spec is not theirs.
@@ -533,6 +560,8 @@ async def run_with_retry(
     floor_bytes: int = 0,
     now: Callable[[], str] | None = None,
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
+    repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     """`now` is the clock the attempts' instants come from (`Ports.now` in a run; this
     module's own when `None`): `RoleRun.started_at`/`ended_at` and each `Failure`'s own.
@@ -552,6 +581,11 @@ async def run_with_retry(
 
     `check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
+
+    `repair` is the registry of mechanical fixes (`output_repair.REPAIRS`, GH-1016): a refusal
+    whose rule it holds is repaired on the raw output and judged again inside the same
+    attempt, once per rule (`_judged`). `None`, the default, is a run with no repairs, byte
+    for byte what it was.
 
     `spent_usd` is what the task spent before this call; with `task_cap_usd`
     set, an attempt that would start at or over the cap raises `TaskCapReached`
@@ -610,7 +644,11 @@ async def run_with_retry(
     )
     guard = _chain(schema_guard, delivery_check)
     clock = now or _now_iso
-    for attempt in range(1, max(retries, 0) + 2):
+    attempt = 0
+    # The bound is `rules.attempts_for`'s, asked after every failure with that failure's reason:
+    # the first attempt always runs, and a refusal of the format earns the third.
+    while not failures or len(failures) < rules.attempts_for(failures[-1]["reason"], retries):
+        attempt += 1
         if before_attempt is not None:
             before_attempt()
         total = max(spent_usd + spent(failures), limits.spent_usd)
@@ -657,6 +695,8 @@ async def run_with_retry(
                     max_turns=turns,
                     declared_checks=declared_checks,
                     now=clock,
+                    refuse=refuse,
+                    repair=repair,
                 )
                 ended_at = clock()
         except AttemptFailed as exc:
@@ -668,6 +708,9 @@ async def run_with_retry(
             resets_at = (
                 account_reset.reset_at(str(exc), _now()) if reason == "account_limit" else None
             )
+            # A rule is written only on a refusal the recorded reason still says is one: a
+            # narrowed `disk_full` is the machine's failure, not the model's output.
+            refused = exc.rule is not None and reason in ("schema", "check")
             failures.append(
                 {
                     "role": role.name,
@@ -689,6 +732,31 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    # Written only on the reason the record says (the narrowed one), so a
+                    # stall narrowed to `disk_full` carries none.
+                    **(
+                        {
+                            "stall": {
+                                "seconds": exc.stall.seconds,
+                                "last_event": exc.stall.last_event,
+                                "in_hook": exc.stall.in_hook,
+                            }
+                        }
+                        if exc.stall is not None and reason == "stall"
+                        else {}
+                    ),
+                    **({"rule": exc.rule} if refused else {}),
+                    **({"field": exc.field} if refused and exc.field else {}),
+                    **({"value": exc.value} if refused and exc.value is not None else {}),
+                    **({"detail": exc.detail} if refused and exc.detail else {}),
+                    # Measured at the raise site on the raw output, never here: `exc.value`
+                    # is already cleaned and cut.
+                    **(
+                        {"value_len": exc.value_len}
+                        if refused and exc.value_len is not None
+                        else {}
+                    ),
+                    **({"repairs": exc.repairs} if exc.repairs else {}),
                     **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
                     **(
                         {"check_runs_dropped": exc.check_runs.dropped}
@@ -782,13 +850,19 @@ def _retry_input(
     A cut for `reason == "max_turns"` swaps that error for
     `rules.turn_cut_retry_message(role)` (ADR-0004, seventh addendum): the harness
     stopped the attempt on the turn cap alone, so the next attempt is told that,
-    never ordered to "fix" work that did not fail. Every other reason keeps today's
-    message, byte for byte."""
+    never ordered to "fix" work that did not fail. A `schema` or `check` failure that
+    names its rule (GH-1017) gets `refusal_retry.retry_message` instead: the rule, the field,
+    the value and the fix, with the motive. Every other reason keeps today's message, byte
+    for byte, and so does a format failure with no rule."""
     if not failures:
         return prompt, resume
     last = failures[-1]
     if last.get("reason") == "max_turns":
         error = rules.turn_cut_retry_message(role)
+    elif last.get("reason") in ("schema", "check") and "rule" in last:
+        error = refusal_retry.retry_message(
+            last["rule"], last.get("field", ""), last.get("value"), last.get("detail")
+        )
     else:
         error = (
             f"<PreviousAttemptFailed>\n{last['error']}\n</PreviousAttemptFailed>\n\n"
@@ -797,6 +871,191 @@ def _retry_input(
     if left := last["session_id"]:
         return error, left
     return f"{prompt}\n\n{error}", resume
+
+
+_FIELD_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def refusal_field(schema: type[BaseModel], candidate: object) -> str:
+    """The field a refusal names, kept only when `schema` declares it (or it is `markdown`,
+    which every role's output has): a claim from a validator or a check is never trusted
+    as a label, so what is not a declared field becomes `""` (GH-1011). A path into a field
+    (`parts[1].depends_on_reasons[0]`) is kept when it is well formed and its root is declared."""
+    if not isinstance(candidate, str) or not _FIELD_PATH.fullmatch(candidate):
+        return ""
+    root = re.split(r"[.\[]", candidate, maxsplit=1)[0]
+    return candidate if root in schema.model_fields or root == "markdown" else ""
+
+
+def _value_of(output: object, field: str) -> object:
+    """What the role wrote in the top-level `field` it was refused on, or `None` when there
+    is no such field or the delivery has nothing there."""
+    if not field:
+        return None
+    found = refusal_retry.value_at(output, (field,))
+    return None if found is refusal_retry.MISSING else found
+
+
+def _validation_rule(
+    schema: type[BaseModel], exc: ValueError, output: object
+) -> tuple[RefusalRule, str, object]:
+    """The rule, field and value `schemas.validate`'s refusal carries. The one place that
+    reads a pydantic error's `ctx`: a validator that raised an `OutputRefusal` has it there,
+    the first such error deciding, with the value it carries or else what `output` holds in
+    its field; any other validation error is `schema_invalid` on the top-level field its
+    `loc` starts with, with the leaf its `loc` walks to in `output` (never pydantic's own
+    `input`), and none when the error is a missing field; any other `ValueError` is
+    `unmapped`, with no value."""
+    if not isinstance(exc, ValidationError):
+        return "unmapped", "", None
+    errors = exc.errors()
+    for error in errors:
+        refusal = error.get("ctx", {}).get("error")
+        if isinstance(refusal, OutputRefusal):
+            field = refusal_field(schema, refusal.field)
+            return refusal.rule, field, _refusal_value(refusal, field, output)
+    first = errors[0] if errors else None
+    loc = first["loc"] if first else ()
+    field = refusal_field(schema, loc[0]) if loc else ""
+    value = None
+    if first and field and first["type"] != "missing":
+        found = refusal_retry.value_at(output, loc)
+        value = None if found is refusal_retry.MISSING else found
+    return "schema_invalid", field, value
+
+
+def _refusal_value(refusal: OutputRefusal, field: str, output: object) -> object:
+    """The value an `OutputRefusal` shows: the one its raise site carries, else what the
+    delivery holds in the field it names once that field survived `refusal_field`."""
+    return refusal.value if refusal.value is not None else _value_of(output, field)
+
+
+def _refused(
+    result: RawResult,
+    message: str,
+    cost: float,
+    session: str,
+    *,
+    reason: FailureReason,
+    rule: RefusalRule,
+    field: str,
+    output: object,
+    value: object = None,
+    detail: str = "",
+    repairs: Sequence[RefusalRepair] = (),
+) -> AttemptFailed:
+    """The `AttemptFailed` of one refusal of the role's output: what the runner measured
+    on the attempt, plus the reason, the rule and the field its raise site decided, the value
+    the role wrote there (cleaned here, the one place, by `refusal_retry.clean_value`) and the
+    motive that goes to the retry's `detail` line. `output` is the raw structured output that
+    was refused: the size of the value is measured on it (`format_issue.value_len`) before
+    the value is cleaned and cut."""
+    return AttemptFailed(
+        message,
+        cost,
+        session,
+        reason=reason,
+        denials=result.denials,
+        turn_notice=result.turn_notice,
+        turn_notice_firings=result.turn_notice_firings,
+        deliveries=result.deliveries,
+        presubmit_denials=result.presubmit_denials,
+        main_thread_turns=result.main_thread_turns,
+        reaped=result.reaped,
+        check_runs=result.check_runs,
+        rule=rule,
+        field=field,
+        value=None if value is None else refusal_retry.clean_value(value),
+        detail=refusal_retry.clean_detail(detail) if detail else "",
+        repairs=repairs,
+        value_len=format_issue.value_len(output, field),
+    )
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    """One refusal of the raw output, as `_verdict` found it: what `_refused` needs, and the
+    error it came from."""
+
+    reason: FailureReason
+    rule: RefusalRule
+    field: str
+    value: object
+    motive: str
+    cause: ValueError
+
+
+def _verdict(
+    role: Role, raw: dict, vocabulary: dict[str, str], check: Check | None
+) -> dict | _Refusal:
+    """`schemas.validate` and then `check` over the raw output: the validated data, or the
+    first refusal with its rule, field and value (`_validation_rule`, `refusal_field`)."""
+    try:
+        data = schemas.validate(role.schema, raw, vocabulary)
+    except TrackerRateLimited:
+        raise
+    except ValueError as exc:
+        rule, field_, value = _validation_rule(role.schema, exc, raw)
+        return _Refusal("schema", rule, field_, value, rules.exception_motive(exc), exc)
+    if check is None:
+        return data
+    try:
+        check(data)
+    except TrackerRateLimited:
+        raise
+    except ValueError as exc:
+        rule = "unmapped"
+        field_ = ""
+        value = None
+        if isinstance(exc, OutputRefusal):
+            rule, field_ = exc.rule, refusal_field(role.schema, exc.field)
+            value = _refusal_value(exc, field_, raw)
+        return _Refusal("check", rule, field_, value, rules.exception_motive(exc), exc)
+    return data
+
+
+def _judged(
+    role: Role,
+    result: RawResult,
+    vocabulary: dict[str, str],
+    check: Check | None,
+    repair: Mapping[RefusalRule, Repair] | None,
+) -> tuple[dict, list[RefusalRepair]]:
+    """The validated data of the attempt's structured output and the repairs made to get it.
+
+    A refusal whose rule has a registered repair, not yet used in this attempt, is repaired
+    on the RAW dict and the whole chain runs again from `schemas.validate` (GH-1016): the
+    repaired output is judged from scratch, never from the old validated data. Any other
+    refusal, a repair that does not apply and a second refusal of a rule already repaired
+    fail the attempt, carrying the repairs made so far on its own record. With `repair` `None`
+    this is the one validate-then-check pass it always was."""
+    raw = result.structured_output
+    assert raw is not None  # `_attempt` refuses a missing output before it asks
+    made: list[RefusalRepair] = []
+    while True:
+        verdict = _verdict(role, raw, vocabulary, check)
+        if not isinstance(verdict, _Refusal):
+            return verdict, made
+        fix = None if repair is None else repair.get(verdict.rule)
+        fixed = None
+        if fix is not None and all(done["rule"] != verdict.rule for done in made):
+            fixed = fix(raw, RepairContext())
+        if fixed is None:
+            raise _refused(
+                result,
+                f"structured output invalid: {verdict.motive}",
+                result.cost_usd,
+                result.session_id,
+                reason=verdict.reason,
+                rule=verdict.rule,
+                field=verdict.field,
+                output=raw,
+                value=verdict.value,
+                detail=verdict.motive,
+                repairs=made,
+            ) from verdict.cause
+        made.append({"rule": verdict.rule, "field": verdict.field})
+        raw = fixed
 
 
 async def _attempt(
@@ -819,6 +1078,8 @@ async def _attempt(
     max_turns: int | None = None,
     declared_checks: Mapping[str, str] | None = None,
     now: Callable[[], str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
+    repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -837,73 +1098,35 @@ async def _attempt(
         max_turns=max_turns,
         declared_checks=declared_checks,
         now=now,
+        refuse=refuse,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
-        raise AttemptFailed(
+        raise _refused(
+            result,
             "structured output missing; it is required",
             cost,
             session,
             reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
+            rule="output_missing",
+            field="",
+            output=None,
         )
-    try:
-        data = schemas.validate(role.schema, result.structured_output, vocabulary)
-    except ValueError as exc:
-        raise AttemptFailed(
-            f"structured output invalid: {rules.exception_motive(exc)}",
-            cost,
-            session,
-            reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
-        ) from exc
-    if check is not None:
-        try:
-            check(data)
-        except ValueError as exc:
-            raise AttemptFailed(
-                f"structured output invalid: {rules.exception_motive(exc)}",
-                cost,
-                session,
-                reason="check",
-                denials=result.denials,
-                turn_notice=result.turn_notice,
-                turn_notice_firings=result.turn_notice_firings,
-                deliveries=result.deliveries,
-                presubmit_denials=result.presubmit_denials,
-                main_thread_turns=result.main_thread_turns,
-                reaped=result.reaped,
-                check_runs=result.check_runs,
-            ) from exc
+    data, repairs = _judged(role, result, vocabulary, check, repair)
     text = data.pop("markdown").strip()
     if not text:
-        raise AttemptFailed(
+        raise _refused(
+            result,
             "`markdown` is empty; the Markdown section is required",
             cost,
             session,
             reason="schema",
-            denials=result.denials,
-            turn_notice=result.turn_notice,
-            turn_notice_firings=result.turn_notice_firings,
-            deliveries=result.deliveries,
-            presubmit_denials=result.presubmit_denials,
-            main_thread_turns=result.main_thread_turns,
-            reaped=result.reaped,
-            check_runs=result.check_runs,
+            rule="schema_invalid",
+            field="markdown",
+            # No entry of `REPAIRS` touches `markdown`, so the unrepaired output is the one
+            # that was judged.
+            output=result.structured_output,
+            detail="`markdown` is empty; the Markdown section is required",
         )
     return Output(
         text=text,
@@ -925,6 +1148,7 @@ async def _attempt(
         main_thread_turns=result.main_thread_turns,
         reaped=result.reaped,
         check_runs=result.check_runs,
+        repairs=repairs,
     )
 
 
@@ -966,7 +1190,7 @@ def estimate_stop_for(
 
 
 def escalation(exc: Escalating, *, at: str) -> TaskState:
-    """The patch of a role that failed twice, or that the task cap stopped: the human
+    """The patch of a role that failed its attempts, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
     the task cap, `failure` for a role `run_with_retry` gave up on.
 
@@ -987,6 +1211,15 @@ def escalation(exc: Escalating, *, at: str) -> TaskState:
     if isinstance(exc, EstimateCapReached):
         patch["proposed_estimate"] = exc.proposed_usd
     return rules.logged(patch, exc.failures, at=at)
+
+
+def rate_limit_paused(state: TaskState, exc: TrackerRateLimited, *, at: str) -> TaskState:
+    """The patch of a node whose `gh` call outlasted its rate-limit wait (GH-989): the pause
+    `rate_limit.rate_limit_pause_patch` writes, never a role failure or a needs-human
+    escalation. Only the pause, even when the wait is already exhausted: the persisted patch is
+    the poller's to write. `exc.resets_at` is the reset `gh` stated, if any."""
+    pause = rate_limit.rate_limit_pause_patch(state, resets_at=exc.resets_at, at=at)
+    return {"status": WAITING_ON_HUMAN, **pause}
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
@@ -1018,6 +1251,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "presubmit_denials": output.presubmit_denials,
         "main_thread_turns": output.main_thread_turns,
         **({"reaped": output.reaped} if output.reaped else {}),
+        **({"repairs": output.repairs} if output.repairs else {}),
         **({"check_runs": output.check_runs.rows} if output.check_runs.rows else {}),
         **({"check_runs_dropped": output.check_runs.dropped} if output.check_runs.dropped else {}),
         **({"check_runs_errors": output.check_runs.errors} if output.check_runs.errors else {}),
@@ -1074,7 +1308,10 @@ def _section_text(role: Role, output: Output) -> str:
     notes in front when the run had any (glossary: Negación; Sección) — the denial note
     first, then the turn-notice note, then the deliveries note (only past one), the
     same seam `develop.cold_fallback_note` uses for a dropped session, so an expensive
-    or nearly-cut run is legible without opening logs."""
+    or nearly-cut run is legible without opening logs. A repair note comes last, one line per
+    repair of the delivering attempt, from `output.repairs` only: unlike the denials, it is
+    never folded in from `output.failures`, because the note describes the delivered text,
+    and a repair made on an attempt that failed changed nothing of it (GH-1016)."""
     notes = []
     if count := _run_denials(output):
         notes.append(rules.denial_note(role, count))
@@ -1084,6 +1321,7 @@ def _section_text(role: Role, output: Output) -> str:
         notes.append(rules.deliveries_note(count))
     if reaped := _run_reaped(output):
         notes.append(rules.reaped_note(reaped))
+    notes.extend(repair_note(done["rule"], done["field"]) for done in output.repairs)
     if notes:
         return "\n\n".join([*notes, output.text])
     return output.text
@@ -1109,6 +1347,8 @@ async def run_role(
     tiers: str = "",
     extra_input: str = "",
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
+    repair: Mapping[RefusalRule, Repair] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -1131,7 +1371,10 @@ async def run_role(
 
     `extra_input` (GH-449) is text the caller read at run time, appended as its own block to
     the message of every attempt, `cold_prompt` included. Empty, nothing changes. It is for
-    the prompt only: it never reaches the system prompt, its hash, the patch or a span."""
+    the prompt only: it never reaches the system prompt, its hash, the patch or a span.
+
+    `repair` reaches `run_with_retry` unchanged (its own doc has the rule); `None`, the default,
+    repairs nothing."""
     section = section or role.name
     # With a spec the role is asked for its `*WithAssumptions` schema (GH-594): the guard,
     # the JSON schema and the validation all read the swapped one.
@@ -1163,6 +1406,11 @@ async def run_role(
         if spec and prompt is None and (block := spec_brief.block_for(role.slug)) is not None:
             raw_block = ports.prompts.spec_block(block)
             block_text = filled_block(raw_block, raw, rendered.source, role, state, ports)
+    except TrackerRateLimited as limited:
+        return None, {
+            "current_role": role.name,
+            **rate_limit_paused(state, limited, at=ports.now()),
+        }
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
         # kept (`raw()` re-raises it), and the spec data refusal. The playbook, the flags and
@@ -1229,6 +1477,8 @@ async def run_role(
             floor_bytes=cfg.scratch_floor_bytes,
             now=ports.now,
             declared_checks=declared_checks,
+            refuse=refuse,
+            repair=repair,
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already
@@ -1237,7 +1487,12 @@ async def run_role(
         # `pause_log`'s own reducer expects appended -- `patch` itself never has one
         # at this point, but the guard that checks this is structural and does not
         # know that, by design (`tests/core/process/application/test_pause_log_guard.py`).
-        return None, {**patch, **escalation(exc, at=ports.now())}
+        at = ports.now()
+        extra = await _format_filing(exc, state, role, ports)
+        return None, {**patch, **escalation(exc, at=at), **extra}
+    except TrackerRateLimited as limited:
+        # A gh call a run node made outlasted its wait: the pause, not a failed role.
+        return None, {**patch, **rate_limit_paused(state, limited, at=ports.now())}
 
     patch |= {
         "sections": rules.sections_for(state, section, _section_text(role, output)),
@@ -1248,6 +1503,48 @@ async def run_role(
     if rows := spec_assumptions.assumption_rows(role.name, output.data, has_spec):
         patch["assumptions"] = rows
     return output, patch
+
+
+def _product_or_unknown(ports: Ports) -> str:
+    try:
+        return ports.stack.product()
+    except Exception:
+        return "unknown"
+
+
+async def _format_filing(exc: Escalating, state: TaskState, role: Role, ports: Ports) -> TaskState:
+    """What the system's issue of a format refusal adds to the escalation patch (GH-1011): the
+    `format_issue` record, or the `tracker_failures` row of a write that did not land. Empty
+    for anything but a `RoleFailure` the domain finds due, with no filing wired, or a task with
+    no issue number. Best effort: `FormatFiling.file` never raises, and it runs off the event
+    loop because its two `gh` calls block."""
+    filing = ports.format_filing
+    if filing is None or not isinstance(exc, RoleFailure) or not format_issue.due(exc.failures):
+        return {}
+    try:
+        number = ports.inbox.issue_of(state["id"])
+        # The name is a label here, never worth the escalation (invariant 2): any stack that
+        # cannot be read, a malformed `stack.yaml` included, files under `unknown`.
+        product = _product_or_unknown(ports)
+    except Exception:
+        return {}
+    if number is None:
+        return {}
+    record, rows = await asyncio.to_thread(
+        filing.file,
+        task_id=state["id"],
+        issue_number=number,
+        product=product,
+        role=role.name,
+        failures=exc.failures,
+        existing=state.get("format_issue", []),
+    )
+    extra: TaskState = {}
+    if record is not None:
+        extra["format_issue"] = [record]
+    if rows:
+        extra["tracker_failures"] = rows
+    return extra
 
 
 def finish(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:

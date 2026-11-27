@@ -1,11 +1,16 @@
 """The checkpointer the CLI opens: a real SQLite file in the product (ADR-0003)."""
 
 import asyncio
+import json
+import os
 import sqlite3
 import subprocess
+import sys
+import textwrap
 import threading
 from dataclasses import replace
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from langgraph.checkpoint.base import empty_checkpoint
@@ -15,13 +20,17 @@ from langgraph.types import Command, interrupt
 
 from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from agentic.core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain import reaping
+from agentic.core.process.domain.board import Etapa
 from agentic.core.process.domain.ci import CiCheck, CiReport, red_checks
+from agentic.core.process.domain.github_access import GithubAccess
 from agentic.core.process.domain.landing import CI_LOG_JOBS
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
@@ -279,7 +288,7 @@ def _retry_of(tmp_path, monkeypatch, **kwargs):
 def test_the_tracker_has_no_retry_policy_unless_the_caller_asks(tmp_path, monkeypatch):
     # The poller, `inbox`, `close` and every other verb build their ports like this.
     assert _retry_of(tmp_path, monkeypatch) is None
-    assert composition.system_repo().tracker._retry is None
+    assert composition.system_repo(GithubAccess(), InProcessGhCallLog()).tracker._retry is None
 
 
 def test_run_and_resume_retry_with_the_long_cap_and_their_stop_flag(tmp_path, monkeypatch):
@@ -434,7 +443,7 @@ def test_the_tmpdir_of_an_attempt_on_the_systems_own_repository_is_outside_it(
     monkeypatch.setattr(preflight, "CHECKOUT", system)
     monkeypatch.setattr(composition, "refuse_its_own_checkout", lambda cfg, ports: None)
     cfg = Configuration(product_dir=system)
-    ports = composition._ports(cfg, NullStopFlag())
+    ports = composition._ports(cfg, NullStopFlag(), calls=InProcessGhCallLog())
     git = GitWorkspace(system, cfg.git_identity)
     with ports.scratch.open("GH-1", "r", "abcdef0123456789", "developer") as tmpdir:
         assert tmpdir.is_dir()
@@ -632,3 +641,230 @@ def test_the_backfill_clock_reads_the_current_utc_time():
     moment = composition.backfill_clock()()
     assert before <= moment <= datetime.now(UTC)
     assert moment.tzinfo is not None
+
+
+def _gated_ports(tmp_path, monkeypatch, **kwargs):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    # The board's memory file is named after the product, read from a stack the fixture lacks.
+    monkeypatch.setattr(composition.GitStack, "product", lambda self, revision="HEAD": "demo")
+    product = a_repository(tmp_path / "product")
+    cfg = Configuration(
+        product_dir=product, github_dir=tmp_path / "github", board_project="owner/7"
+    )
+    return cfg, composition.default_ports(cfg, **kwargs)
+
+
+def test_the_poller_tracker_and_its_board_share_one_gate_on_the_configured_file(
+    tmp_path, monkeypatch
+):
+    cfg, ports = _gated_ports(tmp_path, monkeypatch)
+    access = ports.tracker._access
+    assert access is not None and access.gate is not None
+    assert ports.board.access is access
+    assert ports.format_fixes._tracker._access is access
+    assert access.gate._path == tmp_path / "github" / WRITE_TURN_FILE
+    assert ports.format_filing._system.tracker._access is access
+
+
+def test_the_gate_cap_is_one_minute_under_exempt_and_the_long_cap_otherwise(tmp_path, monkeypatch):
+    for gh_retry, cap in ((None, 900), ("run", 900), ("exempt", 60)):
+        _, ports = _gated_ports(tmp_path / str(gh_retry), monkeypatch, gh_retry=gh_retry)
+        assert ports.tracker._access.gate.cap_s == cap
+        assert ports.board.access.gate.cap_s == cap
+
+
+def test_the_stop_flag_of_the_run_reaches_the_gate(tmp_path, monkeypatch):
+    stop = EventStopFlag()
+    _, ports = _gated_ports(tmp_path, monkeypatch, stop_flag=stop, gh_retry="run")
+    assert ports.tracker._access.gate._stop is stop
+
+
+def test_the_write_access_names_the_file_under_the_configured_github_dir(tmp_path):
+    cfg = Configuration(product_dir=tmp_path, github_dir=tmp_path / "gh")
+    gate = composition.write_access(cfg, None, NullStopFlag()).gate
+    assert gate._path == tmp_path / "gh" / WRITE_TURN_FILE
+    assert gate.cap_s == 900
+
+
+def test_the_system_repo_and_the_stage0_window_trackers_carry_the_access_given(tmp_path):
+    access = GithubAccess()
+    calls = InProcessGhCallLog()
+    assert composition.system_repo(access, calls).tracker._access is access
+    window = composition.stage0_master_window(tmp_path, "u", tmp_path, lambda s: (), access, calls)
+    assert window.ci._tracker._access is access
+
+
+# -- GH-990: every gh adapter the composition builds counts into the one log it is given --------
+
+_HEAD = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
+_PULL_REQUEST = "https://github.com/o/r/pull/7"
+
+
+def _identity_answer() -> dict:
+    options = [{"id": f"O{i}", "name": n} for i, n in enumerate(get_args(Etapa))]
+    nodes = [
+        {"id": "F_etapa", "name": "Etapa", "dataType": "SINGLE_SELECT", "options": options},
+        {"id": "F_bloqueo", "name": "Bloqueo", "dataType": "TEXT"},
+        {"id": "F_costo", "name": "Costo USD", "dataType": "NUMBER"},
+        {"id": "F_inicio", "name": "Inicio", "dataType": "DATE"},
+        {"id": "F_fin", "name": "Fin", "dataType": "DATE"},
+    ]
+    project = {"id": "PVT_1", "fields": {"nodes": nodes}}
+    return {"data": {"repositoryOwner": {"projectV2": project}}}
+
+
+def _report_answer() -> dict:
+    red = {
+        "__typename": "CheckRun",
+        "name": "check",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "detailsUrl": "https://github.com/o/r/actions/runs/5/job/11",
+    }
+    contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [red]}
+    commit = {"oid": _HEAD, "statusCheckRollup": {"contexts": contexts}}
+    pull_request = {
+        "baseRefName": "master",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "commits": {"nodes": [{"commit": commit}]},
+    }
+    return {"data": {"repository": {"pullRequest": pull_request}}}
+
+
+@pytest.fixture
+def fake_gh(tmp_path, monkeypatch):
+    """A `gh` first on PATH that always exits 0, appends one line per launch to a file and
+    prints the minimal JSON the read at hand parses. Returns the function that counts the
+    launches since it was last called."""
+    answers = {
+        "issue_state": {
+            "state": "OPEN",
+            "stateReason": None,
+            "blockedBy": {"nodes": [], "totalCount": 0},
+            "closedByPullRequestsReferences": [],
+            "labels": [],
+        },
+        "identity": _identity_answer(),
+        "report": _report_answer(),
+    }
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    launches = tmp_path / "launches.txt"
+    script = bin_dir / "gh"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent(
+            f"""
+            import json, sys
+            args = sys.argv[1:]
+            with open({str(launches)!r}, "a") as out:
+                out.write(" ".join(args).replace("\\n", " ") + "\\n")
+            answers = json.loads({json.dumps(answers)!r})
+            if args[:2] == ["issue", "list"]:
+                print("[]")
+            elif args[:2] == ["issue", "view"]:
+                print(json.dumps(answers["issue_state"]))
+            elif args[:2] == ["repo", "view"]:
+                print(json.dumps({{"nameWithOwner": "o/r"}}))
+            elif args[:2] == ["api", "graphql"] and "--input" in args:
+                print(json.dumps(answers["identity"]))
+            elif args[:2] == ["api", "graphql"]:
+                print(json.dumps(answers["report"]))
+            elif args[:2] == ["run", "view"]:
+                print("E   boom")
+            """
+        )
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    seen = [0]
+
+    def launched() -> int:
+        lines = launches.read_text().splitlines() if launches.exists() else []
+        fresh, seen[0] = len(lines) - seen[0], len(lines)
+        return fresh
+
+    return launched
+
+
+def _board_cfg(product: Path) -> Configuration:
+    return Configuration.from_sources(
+        {"product_dir": str(product)}, {"AGENTIC_BOARD_PROJECT": "owner/3"}
+    )
+
+
+def test_each_read_of_each_adapter_lands_on_the_log_it_was_built_with(
+    tmp_path, monkeypatch, fake_gh
+):
+    # The board's memory file is named after the product, read from a stack the fixture lacks.
+    monkeypatch.setattr(composition.GitStack, "product", lambda self, revision="HEAD": "demo")
+    product = a_repository(tmp_path / "product")
+    log = InProcessGhCallLog()
+    ports = composition._ports(_board_cfg(product), NullStopFlag(), calls=log)
+
+    ports.tracker.issue_state(7)
+    assert dict(log.drain()) == {
+        "issue_list": 0, "issue_view": 1, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
+    }  # fmt: skip
+    assert fake_gh() == 1
+
+    ports.inbox.open_issues()
+    assert dict(log.drain()) == {
+        "issue_list": 1, "issue_view": 0, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
+    }  # fmt: skip
+    assert fake_gh() == 1
+
+    logs = ports.ci_logs.failed_job_logs(_PULL_REQUEST, _HEAD)
+    assert [entry.cause for entry in logs] == ["read"]
+    assert dict(log.drain()) == {
+        "issue_list": 0, "issue_view": 0, "pr_list": 0, "pr_view": 0, "api": 1, "other": 1
+    }  # fmt: skip
+    assert fake_gh() == 2
+
+    assert ports.board is not None
+    assert ports.board.project_id() == "PVT_1"
+    assert dict(log.drain()) == {
+        "issue_list": 0, "issue_view": 0, "pr_list": 0, "pr_view": 0, "api": 1, "other": 0
+    }  # fmt: skip
+    assert fake_gh() == 1
+
+    # The slug read is the one launch: the issue is of another repository than `o/r`.
+    assert ports.format_fixes.closing("https://github.com/x/y/issues/9") is None
+    assert dict(log.drain()) == {
+        "issue_list": 0, "issue_view": 0, "pr_list": 0, "pr_view": 0, "api": 0, "other": 1
+    }  # fmt: skip
+    assert fake_gh() == 1
+
+
+def test_a_second_ports_with_its_own_log_leaves_the_first_log_untouched(
+    tmp_path, monkeypatch, fake_gh
+):
+    monkeypatch.setattr(composition.GitStack, "product", lambda self, revision="HEAD": "demo")
+    product = a_repository(tmp_path / "product")
+    first, second = InProcessGhCallLog(), InProcessGhCallLog()
+    cfg = _board_cfg(product)
+    composition._ports(cfg, NullStopFlag(), calls=first)
+    other = composition._ports(cfg, NullStopFlag(), calls=second)
+
+    other.tracker.issue_state(7)
+    assert dict(first.drain()) == {
+        "issue_list": 0, "issue_view": 0, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
+    }  # fmt: skip
+    assert dict(second.drain()) == {
+        "issue_list": 0, "issue_view": 1, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
+    }  # fmt: skip
+    assert fake_gh() == 1
+
+
+def test_two_default_ports_without_calls_share_the_process_call_log(tmp_path, monkeypatch, fake_gh):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    cfg = Configuration(product_dir=a_repository(tmp_path / "product"))
+    one = composition.default_ports(cfg)
+    two = composition.default_ports(cfg)
+
+    one.inbox.open_issues()
+    two.tracker.issue_state(7)
+    assert dict(composition.process_call_log().drain()) == {
+        "issue_list": 1, "issue_view": 1, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
+    }  # fmt: skip
+    assert fake_gh() == 2

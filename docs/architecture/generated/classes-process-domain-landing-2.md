@@ -11,6 +11,8 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,8 +33,6 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
-    class cost_history__History["History"]
-    class cost_history__Pair["Pair"]
     class cost_history__Raise["Raise"]
     class landing__ApiBreakAnswer["ApiBreakAnswer"]
     class landing__Commented["Commented"]
@@ -44,9 +44,15 @@ classDiagram
     class landing__ScopeFacts["ScopeFacts"]
     class landing__ScopeStep["ScopeStep"]
     class landing__ScopeVerdict["ScopeVerdict"]
+    class landing__Slice["Slice"]
+    class landing__SliceInputs["SliceInputs"]
+    class landing__SliceUnit["SliceUnit"]
+    class landing_order__Member["Member"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: landing (parte 3)](classes-process-domain-landing-3.md)
+  - `landing_order.Yield` se asocia con `landing_order.Member`
+- [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

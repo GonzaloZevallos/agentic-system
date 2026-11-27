@@ -25,6 +25,11 @@ from tests.fakes import BlockingRunner, delivered, planned, reviewed
 pytestmark = pytest.mark.anyio
 
 
+# A guard against a hang, not an assertion about speed: under `-n 12` with the machine loaded
+# (GH-979) a run that takes 6 s alone took past the 20 s and 30 s these waits used to carry.
+HANG_GUARD_S = 120
+
+
 @pytest.fixture
 def config(tmp_path):
     return {"configurable": {"product_dir": str(tmp_path), "thread_id": "GH-1"}}
@@ -72,7 +77,7 @@ async def test_a_dependent_starts_when_its_dependency_is_approved_while_a_siblin
     assert "developer__domain" in runner.began
     assert "developer__domain" not in runner.finished
     runner.release("developer__domain")
-    final = await asyncio.wait_for(run, 20)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
     assert {s["status"] for s in final["subtasks"].values()} == {"approved"}
@@ -87,7 +92,7 @@ async def test_a_dependent_starts_while_a_sibling_is_in_review(config):
     await runner.started("tech_lead_review__domain")  # delivered, being reviewed meanwhile
     assert "tech_lead_review__domain" not in runner.finished
     runner.release("tech_lead_review__domain")
-    final = await asyncio.wait_for(run, 20)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
 
@@ -101,7 +106,7 @@ async def test_a_delivery_is_reviewed_while_its_sibling_is_still_building(config
     assert "developer__domain" in runner.began
     assert "developer__domain" not in runner.finished
     runner.release("developer__domain")
-    final = await asyncio.wait_for(run, 20)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
 
@@ -124,7 +129,7 @@ async def test_a_returned_subtask_restarts_after_the_turn_wrote_the_findings(con
             )
 
     runner.on_call = on_call
-    final = await asyncio.wait_for(start(runner, fakes, config), 30)
+    final = await asyncio.wait_for(start(runner, fakes, config), HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
     assert runner.began.count("developer__domain") == 2
@@ -136,21 +141,21 @@ async def test_a_returned_subtask_restarts_after_the_turn_wrote_the_findings(con
 async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once(config):
     runner, fakes = blocking(subtask("domain"), subtask("ui", "api"))
     fakes.workspace.dirty.add(MemoryWorkspace.ROOT / "GH-1.domain")
-    runner.queues["developer__domain"] = [delivered(), delivered()]
+    runner.queues["developer__domain"] = [delivered(), delivered(), delivered()]
     runner.hold("tech_lead_review__api")
     run = start(runner, fakes, config)
 
     await runner.started("tech_lead_review__api")
     documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
-    while not saved(documents).get("escalated"):  # domain failed twice
+    while not saved(documents).get("escalated"):  # domain failed three times
         await asyncio.sleep(0.01)
     for _ in range(50):  # let its branch end and the loop fold the escalation in
         await asyncio.sleep(0)
     runner.release("tech_lead_review__api")  # the sibling in flight is drained, not killed
-    final = await asyncio.wait_for(run, 20)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"].startswith("Developer failed 2 times")
+    assert final["escalated"].startswith("Developer failed 3 times")
     assert final["subtasks"]["api"]["status"] == "approved"  # the drained review counted
     assert "developer__ui" not in runner.began  # api's dependent never started
     assert final["subtasks"]["ui"]["status"] == "pending"
@@ -173,7 +178,7 @@ async def test_the_bound_on_parallel_subtasks_is_never_exceeded(config):
 
     # Overlap is established by events, not by how long a role takes: two Developers are
     # held, whichever two the loop picked first, so both are running at once.
-    await asyncio.wait_for(two_started.wait(), 30)
+    await asyncio.wait_for(two_started.wait(), HANG_GUARD_S)
     for _ in range(50):  # a fixed number of loop turns in which a third could start
         await asyncio.sleep(0)
     started = [k for k in runner.began if k.startswith("developer__")]
@@ -181,7 +186,7 @@ async def test_the_bound_on_parallel_subtasks_is_never_exceeded(config):
     assert runner.running == 2
     assert runner.peak == 2
     runner.release(*developers)
-    final = await asyncio.wait_for(run, 30)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
     assert runner.peak == 2  # a running maximum: a third start while two were held reads 3
@@ -201,7 +206,7 @@ async def test_a_delivered_review_takes_its_role_slot_without_waiting_under_the_
     await runner.started("tech_lead_review__api")  # api delivered, b building: 2 slots, both used
     assert "developer__c" not in runner.began  # the bound of two holds the third back
     runner.release("developer__b")
-    final = await asyncio.wait_for(run, 30)
+    final = await asyncio.wait_for(run, HANG_GUARD_S)
 
     assert final["status"] == "ready_for_review"
     assert runner.peak == 2

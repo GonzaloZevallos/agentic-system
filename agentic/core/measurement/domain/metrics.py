@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Literal, get_args
+from typing import Any, Literal, TypedDict, get_args
 
 from agentic.core.process.domain import rules, task_path
 from agentic.core.process.domain.returns import is_return
@@ -27,6 +27,7 @@ from agentic.core.process.domain.task import (
     InterviewStats,
     PullRequest,
     PullRequestCommit,
+    RefusalRule,
     RoleRun,
     TaskState,
 )
@@ -207,6 +208,36 @@ def failures_by_reason(failures: list[Failure]) -> dict[str, int]:
     for failure in failures:
         reason = failure.get("reason", "other")
         counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+class RefusalCounts(TypedDict):
+    """How often one refusal rule refused an attempt, and how often a run repaired it."""
+
+    refused: int
+    repaired: int
+
+
+def refusals_by_rule(
+    failures: list[Failure], runs: list[RoleRun]
+) -> dict[RefusalRule, RefusalCounts]:
+    """The refusals of structured outputs, by rule: `refused` counts the failures that
+    carry a `rule` and whose recorded reason is `schema` or `check` (`run_with_retry` writes
+    it only then; any other entry is skipped), `repaired` counts the entries of every run's
+    `repairs` and of every failure's own (a repair made on an attempt that then failed
+    still happened, GH-1016). A rule appears only when one of its two numbers is above zero.
+    The rule is read from the entry, never mapped from its error text (GH-1011)."""
+    counts: dict[RefusalRule, RefusalCounts] = {}
+    for failure in failures:
+        for repair in failure.get("repairs", []):
+            counts.setdefault(repair["rule"], {"refused": 0, "repaired": 0})["repaired"] += 1
+        rule = failure.get("rule")
+        if rule is None or failure.get("reason") not in ("schema", "check"):
+            continue
+        counts.setdefault(rule, {"refused": 0, "repaired": 0})["refused"] += 1
+    for run in runs:
+        for repair in run.get("repairs", []):
+            counts.setdefault(repair["rule"], {"refused": 0, "repaired": 0})["repaired"] += 1
     return counts
 
 

@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from ...application.ports import ListMayBeCut
+from ...application.ports import GhCallLog, ListMayBeCut
 from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
 from .run import RateLimitLatch, bounded_run, print_line, run_gh
@@ -29,9 +29,11 @@ class GhInbox:
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
         latch: RateLimitLatch | None = None,
+        calls: GhCallLog | None = None,
     ):
         self.product_dir = product_dir
         self._latch = latch if latch is not None else RateLimitLatch()
+        self._calls = calls
         self._run = run
         self._log = log
 
@@ -48,6 +50,7 @@ class GhInbox:
             cwd=self.product_dir,
             log=self._log,
             latch=self._latch,
+            calls=self._calls,
             not_installed="gh is not installed; --issue needs the GitHub CLI",
             failed=lambda stderr: f"gh could not read issue #{number}: {stderr}",
         )
@@ -82,6 +85,7 @@ class GhInbox:
             cwd=self.product_dir,
             log=self._log,
             latch=self._latch,
+            calls=self._calls,
             not_installed="gh is not installed; a stack review needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )
@@ -105,13 +109,14 @@ class GhInbox:
                 "--state",
                 "open",
                 "--json",
-                "url,title,body",
+                "url,title,body,labels",
                 "--limit",
                 str(_OPEN_ISSUE_REFS_LIMIT),
             ),
             cwd=self.product_dir,
             log=self._log,
             latch=self._latch,
+            calls=self._calls,
             not_installed="gh is not installed; filing a flake needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )
@@ -121,4 +126,12 @@ class GhInbox:
                 f"gh issue list returned {len(issues)} issues, the limit it was asked for: "
                 "the list may be cut, so no flake issue is matched against it"
             )
-        return [IssueRef(i["url"], i.get("title") or "", i.get("body") or "") for i in issues]
+        return [
+            IssueRef(
+                i["url"],
+                i.get("title") or "",
+                i.get("body") or "",
+                tuple(label["name"] for label in i["labels"]) if "labels" in i else None,
+            )
+            for i in issues
+        ]

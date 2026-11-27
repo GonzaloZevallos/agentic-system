@@ -15,6 +15,8 @@ from agentic.core.process.domain import (
     boot,
     check_schedule,
     document,
+    github_access,
+    github_budget,
     landing,
     playbook,
     presubmit,
@@ -33,6 +35,7 @@ CORE = Path(__file__).resolve().parents[1] / "agentic" / "core"
 # Glossary term -> the type or module that models it.
 TYPES = {
     "Rol": roles.Role,
+    "Turno de escritura": github_access.Turn,
     "Par": roles.Pair,
     "Tarea": task.TaskState,
     "Fallo de rol": task.Failure,
@@ -69,6 +72,7 @@ TYPES = {
     "Cercanía": rules.closeness,
     "Espera de aterrizaje": rules.holds_launches,
     "Cupo de chequeo": check_schedule.Entry,
+    "Presupuesto de la cuenta de GitHub": github_budget.Budget,
 }
 
 # Glossary term -> (the domain module, the name of the constant) that models it, for a term a

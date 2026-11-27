@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, drawing_answer, escalation_prompts, rules, tracker_items
+from ..domain import document, drawing_answer, escalation_prompts, rate_limit, rules, tracker_items
 from ..domain.task import EscalationClass, TaskState
 from .ports import Ports
+from .run_role import finish
 
 NEEDS_HUMAN = "needs-human"
 # How the system's own comments start: a resume looks past them for the human's answer.
@@ -30,22 +31,29 @@ async def escalate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     reason = state.get("escalated")
     if not reason:
         return {}
-    ports.documents.save(state)
-    if rules.needs_a_human(state):
-        ports.tracker.label(state["id"], NEEDS_HUMAN)
-    ports.tracker.comment(state["id"], comment(state, cfg, ports))
-    return {}
+    # The escalation of any class but a GitHub rate-limit pause ends the invocation: the next
+    # limit is a new wait, so the clock is cleared in what is saved and returned (GH-989).
+    closed = rate_limit.cleared_on_close(state, {})
+    finish(state, closed, ports)
+    # The pause the poller retakes writes nothing to the tracker: the document is all there is.
+    if not rate_limit.tracker_silent(state):
+        if rules.needs_a_human(state):
+            ports.tracker.label(state["id"], NEEDS_HUMAN)
+        ports.tracker.comment(state["id"], comment(state, cfg, ports))
+    return closed
 
 
 def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
     reason = state.get("escalated")
-    lines = [f"{ESCALATED}{reason}"]
+    cls = state.get("escalation_class")
+    # The one evaluation of the stall picker: the first line and the block both read it.
+    stalled = _session_stalled(state) if cls == "failure" else None
+    lines = [f"{ESCALATED}{reason}" + (f" ({stalled})" if stalled else "")]
     questions = state.get("questions_for_human", [])
     number = ports.inbox.issue_of(state["id"])
-    cls = state.get("escalation_class")
     if cls is not None:
         usd = rules.suggested_budget(state, cfg.max_budget_usd) if cls == "cap" else None
-        lines.extend(_prompt_block(state, cls, number, questions, usd))
+        lines.extend(_prompt_block(state, cls, number, questions, usd, stalled))
     if questions and cls != "questions":
         lines.append("\nQuestions for you:\n")
         lines.extend(f"{n}. {q}" for n, q in enumerate(questions, 1))
@@ -57,6 +65,7 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
         lines.extend(
             f"- {phase}: {usd:.2f} USD" for phase, usd in rules.spent_by_phase(state).items()
         )
+        lines.append(f"\n{rules.spent_split_line(rules.spent_split(state))}")
         budget = rules.suggested_budget(state, cfg.max_budget_usd)
         resume = f"{resume} --task-budget {budget}" if resume else ""
     lines.append(f"\nTask document: `{document.relative_path(state['id'])}`")
@@ -101,12 +110,29 @@ def _drawing_block(state: TaskState, cause: drawing_answer.Cause, number: int | 
     return block
 
 
+def _format_cause(state: TaskState) -> escalation_prompts.FormatCause | None:
+    """The prompt cause of a format failure (GH-1019): `format_hold` when the task is held,
+    `format_refusal` for any other format epoch, `None` for a failure of another kind."""
+    if rules.format_held(state):
+        return "format_hold"
+    return "format_refusal" if rules.format_epoch(state) else None
+
+
+def _session_stalled(state: TaskState) -> escalation_prompts.StallCause | None:
+    """The prompt cause of two stalled attempts in a row (GH-978): `session_stalled` when the
+    failures just before the closing escalation say so, `None` otherwise. Never stored."""
+    return (
+        "session_stalled" if escalation_prompts.stalled_batch(state.get("pause_log", [])) else None
+    )
+
+
 def _prompt_block(
     state: TaskState,
     cls: EscalationClass,
     number: int | None,
     questions: list[str],
     usd: float | None,
+    stalled: escalation_prompts.StallCause | None,
 ) -> list[str]:
     """The one-word block (GH-593): a question, the recommended answer and the options, from
     `escalation_prompts` and closed by the escalation's class and cause. A `returns` escalation of
@@ -122,9 +148,10 @@ def _prompt_block(
         refusal = state.get("spec_refusal")
         # A refused spec escalates as `classification`: its own cause picks the question.
         cause = refusal["cause"] if cls == "classification" and refusal else None
-        question, recommended, options = escalation_prompts.prompt_for(
-            cls, cause or state.get("escalation_cause")
-        )
+        asked: escalation_prompts.PromptCause | None = cause or state.get("escalation_cause")
+        if cls == "failure":
+            asked = _format_cause(state) or stalled or asked
+        question, recommended, options = escalation_prompts.prompt_for(cls, asked)
     fill = {
         "issue": "<issue>" if number is None else str(number),
         "usd": "<usd>" if usd is None else usd,

@@ -74,7 +74,7 @@ async def carved(
         return _resume(state, steps, ports)
     due = carve_out.carve_out_due(state, judged, writes_tracker=carve_out.writes_tracker(state))
     if not due or output is None:
-        return judged
+        return judged  # the plan node relies on getting this same object back (`plan._stand`)
     return await _carve(state, delivered, output, steps, ports)
 
 

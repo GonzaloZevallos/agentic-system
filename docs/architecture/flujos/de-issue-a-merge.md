@@ -59,7 +59,19 @@ sequenceDiagram
    falla, la ronda no arranca nada y dice `holds unread`; los cierres y los barridos siguen.
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
-   `agentic/composition.py:graph`.
+   `agentic/composition.py:graph`. Antes de archivar y de escribir cualquier documento,
+   `agentic/cli.py:_stack_gate` consulta la puerta del arranque apilado
+   (`agentic/core/process/application/stacked_start.py:decide`) cuando hay una pista de
+   lanzamiento o, con `--fresh`, un `stack_parent` legible en el documento anterior. Un
+   `Wait` en la puerta termina la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr,
+   sin invocar el grafo. Un `Wait` al crear la rama (`StackWait` atrapada en
+   `agentic/cli.py:_invoke`, ya iniciado el grafo) termina igual. Ninguno escala.
+   Con `stacking: true` (agentic-system), una parte cuyo único bloqueante es un padre listo
+   para revisión arranca sobre la cabeza del padre (ADR-0104, profundidad 1). Si ese hijo ya
+   tiene `stack_parent` pero todavía no rama, y el padre dejó de estar listo, el poller lo
+   retiene como `parent_not_ready` (`agentic/core/process/application/stack_hold.py`, ADR-0103):
+   no se lanza ni se retoma, no gasta retomas y deja una sola nota por episodio. La retención no
+   lee el interruptor.
 4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
    (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
    `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del
@@ -110,12 +122,24 @@ sequenceDiagram
    `qa_performance`, `full_checks`; `agentic/core/process/application/verifiers.py:verify`) y
    `deliver` espera a todos; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
    marcó con `Owner's rule:` en el issue (`agentic/core/process/application/owner_rules.py`); `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
-   (`agentic/core/process/application/deliver.py:deliver`). Cuando el stack declara
+   (`agentic/core/process/application/deliver.py:deliver`). Las líneas `Closes #N` del padre
+   salen del cuerpo actual del issue, que `deliver` lee en la entrega con `Inbox.task` (no de la
+   descripción guardada): una línea `Closes` por cada marcador `agentic-closes` que sea una línea
+   entera fuera de un bloque de código
+   (`agentic/core/process/domain/pull_request.py:closing_numbers`). Solo si `issue_of` devuelve
+   `None` se usa la descripción guardada. Si la lectura falla, `deliver` escala sin empujar ni
+   abrir nada: `delivery_transient` ante un fallo del tracker, `failure` ante un cuerpo vacío. Cuando el stack declara
    `api_break_line` y la tarea tiene un motivo registrado, el cuerpo de la primera entrega lleva
    la línea `Breaking-API:` primero; en una reentrega `deliver` lee el cuerpo
    (`Tracker.pull_request_body`), le antepone la línea si falta y lo edita
    (`Tracker.update_pull_request_body`) antes del push. Sin clave o sin motivo, nada de esto ocurre
    (`agentic/core/process/domain/pull_request.py:with_required_lines`).
+   Las líneas `Closes #N` del padre salen del cuerpo del issue tal como está al entregar:
+   `deliver` lo lee una sola vez con `Inbox.task` (la descripción guardada solo sirve cuando no hay
+   issue, como en una evaluación) y `agentic/core/process/domain/pull_request.py:closing_numbers`
+   toma cada marcador `agentic-closes` que ocupa una línea entera fuera de un bloque de código.
+   Si esa lectura falla, `deliver` escala antes de empujar nada: `delivery_transient` ante una falla
+   del tracker, `failure` ante un cuerpo vacío, y la pausa de rate limit ante un 429.
 7. **Merge.** En rondas siguientes el poller reúne los pull requests entregados
    (`agentic/core/process/application/poll.py:gather_merges`) y lanza
    `agentic merge --issue N` (`agentic/cli.py:_merge`). Este verbo llama a

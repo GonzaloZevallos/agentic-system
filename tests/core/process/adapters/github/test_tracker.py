@@ -9,12 +9,17 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github import tracker as tracker_module
+from agentic.core.process.adapters.github.run import GhRetry
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
     HeldListMayBeCut,
     MergeCallFailed,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
     TrackerTimedOut,
+    TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from agentic.core.process.domain import rules
@@ -25,9 +30,16 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
+from agentic.core.process.domain.github_access import GithubAccess, Turn
 from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from tests.core.process.adapters.github.gh_fake import (
+    RecordingRun,
+    ScriptedRun,
+    gh_fixture,
+    gh_response,
+)
 
 
 class Recorder:
@@ -47,75 +59,265 @@ def test_issue_number_is_read_off_the_task_id():
     assert issue_number("GH-12") == 12 and issue_number("T-abc") is None
 
 
+def _plain(stdout: str = "") -> RecordingRun:
+    """What `gh` prints for a call with no `-i`: the text alone."""
+    return RecordingRun(stdout, "", 0)
+
+
+def _http(status: int, body: str = "{}") -> str:
+    """The stdout of a `gh api -i` call that answered `status` with `body`."""
+    return f"HTTP/2.0 {status}\r\ncontent-type: application/json\r\n\r\n{body}"
+
+
+def _option(argv: list[str], flag: str) -> list[str]:
+    """The value after each `flag` in `argv`."""
+    return [argv[i + 1] for i, arg in enumerate(argv) if arg == flag]
+
+
 def test_comment_and_label_go_through_gh():
-    run = Recorder()
+    run = ScriptedRun(gh_fixture("comment_201.json"), _plain())
     tracker = GhTracker(Path("/p"), run)
     tracker.comment("GH-12", "PR: x")
     tracker.label("GH-12", "needs-human")
-    assert run.calls == [
-        ["gh", "issue", "comment", "12", "--body", "PR: x"],
-        ["gh", "issue", "edit", "12", "--add-label", "needs-human"],
+    [comment, label] = run.argv
+    assert comment[:7] == [
+        "gh",
+        "api",
+        "-i",
+        "-X",
+        "POST",
+        "repos/{owner}/{repo}/issues/12/comments",
+        "-F",
     ]
+    assert comment[7].startswith("body=@") and len(comment) == 8
+    assert run.bodies[0] == "PR: x"
+    assert label == ["gh", "issue", "edit", "12", "--add-label", "needs-human"]
 
 
-def test_open_pull_request_sends_the_closes_prefixed_body_in_a_file_never_in_argv():
-    written = {}
-
-    class RecordingRun(Recorder):
-        def __call__(self, args, cwd, capture_output, text, check):
-            self.calls.append(args)
-            path = args[args.index("--body-file") + 1]
-            written["path"] = path
-            written["body"] = Path(path).read_text(encoding="utf-8")
-            return subprocess.CompletedProcess(args, 0, self.stdout, "")
-
-    run = RecordingRun()
+def test_open_pull_request_reads_the_base_then_posts_the_closes_prefixed_body_from_a_file():
+    run = ScriptedRun(_plain("main\n"), gh_fixture("pulls_201.json"))
     body = "## PM\n\n" + "😀" * 30_000  # a multibyte body well past what one argv slot takes
     url = GhTracker(Path("/p"), run).open_pull_request("GH-12", "agentic/GH-12", "Dashboard", body)
     assert url == "https://github.com/o/r/pull/7"
-    [call] = run.calls
-    assert call[:3] == ["gh", "pr", "create"]
-    assert call[call.index("--head") + 1] == "agentic/GH-12"
-    assert call[call.index("--title") + 1] == "Dashboard"
-    assert "--body-file" in call and "--body" not in call
-    assert written["body"] == f"Closes #12\n\n{body}"
-    assert not any(body in argument for argument in call)
+    [read, post] = run.argv
+    assert read == ["gh", "api", "repos/{owner}/{repo}", "--jq", ".default_branch"]
+    assert post[:7] == ["gh", "api", "-i", "-X", "POST", "repos/{owner}/{repo}/pulls", "-f"]
+    assert _option(post, "-f") == ["title=Dashboard", "head=agentic/GH-12", "base=main"]
+    [body_option] = _option(post, "-F")
+    assert body_option.startswith("body=@")
+    assert run.bodies == [None, f"Closes #12\n\n{body}"]
+    assert not any(body in argument for call in run.argv for argument in call)
     # The temp file does not outlive the call.
-    assert not Path(written["path"]).exists()
+    assert not Path(body_option.removeprefix("body=@")).exists()
+
+
+@pytest.mark.parametrize("title", ["@/etc/passwd", "true", "123", "@", "a=b", "-F x=@y"])
+def test_open_pull_request_sends_every_text_as_a_raw_field_after_f_verbatim(title):
+    run = ScriptedRun(_plain("main"), gh_fixture("pulls_201.json"))
+    GhTracker(Path("/p"), run).open_pull_request("GH-12", "b", title, "x")
+    post = run.argv[1]
+    assert f"title={title}" in _option(post, "-f")
+    assert [arg for arg in _option(post, "-F") if not arg.startswith("body=@")] == []
+    assert not any(arg.startswith(("-F", "--field", "--input")) for arg in post if arg != "-F")
+
+
+def test_open_pull_request_removes_its_file_and_fails_once_on_a_duplicate_head():
+    run = ScriptedRun(_plain("main"), gh_fixture("pulls_422_duplicate_head.json"))
+    with pytest.raises(ValueError) as raised:
+        GhTracker(Path("/p"), run).open_pull_request("GH-12", "agentic/GH-12", "t", "x")
+    message = str(raised.value)
+    assert message.startswith("gh pr create failed: gh: Validation Failed (HTTP 422)")
+    assert "A pull request already exists" in message and "(head agentic/GH-12)" in message
+    assert type(raised.value) is ValueError
+    assert len(run.argv) == 2  # the base read, then one POST: no lookup, no second try
+    [body_option] = _option(run.argv[1], "-F")
+    assert not Path(body_option.removeprefix("body=@")).exists()
+
+
+def test_open_pull_request_does_not_read_stdout_for_its_failure_message():
+    failing = gh_response(
+        422, [], '{"message":"STDOUT-BODY"}', stderr="gh: Validation Failed (HTTP 422)"
+    )
+    with pytest.raises(ValueError) as raised:
+        GhTracker(Path("/p"), ScriptedRun(_plain("main"), failing)).open_pull_request(
+            "GH-12", "b", "t", "x"
+        )
+    assert "STDOUT-BODY" not in str(raised.value)
+
+
+def test_a_403_with_retry_after_on_pr_create_is_one_post_under_a_policy():
+    run = ScriptedRun(_plain("main"), gh_fixture("rest_secondary_limit_403.json"))
+    policy, slept = _policy()
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy, access=GithubAccess())
+    with pytest.raises(ValueError, match=r"^gh pr create failed: .*\(head b\)"):
+        tracker.open_pull_request("GH-12", "b", "t", "x")
+    assert len(run.argv) == 2 and slept == []
+
+
+def test_a_primary_limit_on_pr_create_is_one_post_and_no_wait():
+    run = ScriptedRun(_plain("main"), gh_fixture("rest_primary_limit_403.json"))
+    policy, slept = _policy()
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy, access=GithubAccess())
+    with pytest.raises(ValueError, match=r"^gh pr create failed: .*\(head b\)"):
+        tracker.open_pull_request("GH-12", "b", "t", "x")
+    assert len(run.argv) == 2 and slept == []
+
+
+@pytest.mark.parametrize(
+    "base_read",
+    [
+        pytest.param(gh_response(404, [], "{}", stderr="gh: Not Found (HTTP 404)"), id="refused"),
+        pytest.param(_plain(""), id="empty"),
+        pytest.param(_plain("\n"), id="blank"),
+    ],
+)
+def test_a_failed_default_branch_read_never_reaches_the_post(base_read):
+    run = ScriptedRun(base_read, gh_fixture("pulls_201.json"))
+    with pytest.raises(ValueError) as raised:
+        GhTracker(Path("/p"), run).open_pull_request("GH-12", "agentic/GH-12", "t", "x")
+    assert str(raised.value).startswith(
+        "gh pr create failed: could not read the default branch (head agentic/GH-12)"
+    )
+    assert len(run.argv) == 1 and run.argv[0][:3] == ["gh", "api", "repos/{owner}/{repo}"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(_plain("https://github.com/o/r/pull/7"), id="unreadable 201"),
+        pytest.param(gh_response(201, [], "not json"), id="201 with no JSON"),
+        pytest.param(gh_response(201, [], "{}"), id="201 without html_url"),
+        pytest.param(gh_response(201, [], '{"html_url": 7}'), id="201 with a non-string url"),
+        pytest.param(gh_response(201, [], "[]"), id="201 with a list"),
+        pytest.param(gh_response(200, [], '{"html_url": "u"}'), id="200 where 201 is expected"),
+        pytest.param(gh_response(202, [], '{"html_url": "u"}'), id="202 where 201 is expected"),
+    ],
+)
+def test_a_pull_request_answer_that_is_not_the_201_with_a_url_may_have_applied_and_is_not_retried(
+    answer,
+):
+    run = ScriptedRun(_plain("main"), answer)
+    policy, slept = _policy()
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(ValueError, match=r"^gh pr create failed: .*may have applied.*\(head b\)$"):
+        tracker.open_pull_request("GH-12", "b", "t", "x")
+    assert len(run.argv) == 2 and slept == []
+
+
+class _Raises:
+    """A `Run` that plays `steps` in order: an exception is raised, a `RecordingRun` answers."""
+
+    def __init__(self, *steps):
+        self.steps, self.calls = list(steps), 0
+
+    def __call__(self, args, **kwargs):
+        self.calls += 1
+        step = self.steps.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step(args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("run", "access", "cls", "phrase"),
+    [
+        pytest.param(
+            lambda: _Raises(*[RecordingRun("", _BAD_GATEWAY, 1)] * 3),
+            None,
+            TrackerTransient,
+            "met a transient GitHub error on each of 3 attempts",
+            id="base read keeps failing with a 502",
+        ),
+        pytest.param(
+            lambda: _Raises(*[subprocess.TimeoutExpired(["gh"], 60)] * 3),
+            None,
+            TrackerTimedOut,
+            "timed out on each of 3 attempts",
+            id="base read keeps timing out",
+        ),
+        pytest.param(
+            lambda: _Raises(_plain("main"), subprocess.TimeoutExpired(["gh"], 60)),
+            None,
+            TrackerTimedOut,
+            "timed out after 60 s",
+            id="POST times out",
+        ),
+        pytest.param(
+            lambda: _Raises(
+                _plain("main"), RecordingRun("", "error connecting to api.github.com", 1)
+            ),
+            None,
+            TrackerUnreachable,
+            "could not reach GitHub",
+            id="POST cannot reach GitHub",
+        ),
+        pytest.param(
+            lambda: _Raises(_plain("main")),
+            lambda: GithubAccess(gate=RefusingGate()),
+            TrackerTurnRefused,
+            "write turn refused",
+            id="POST turn refused",
+        ),
+        pytest.param(
+            lambda: _Raises(FileNotFoundError("gh")),
+            None,
+            ValueError,
+            "gh is not installed",
+            id="no gh",
+        ),
+    ],
+)
+def test_every_pull_request_failure_starts_gh_pr_create_failed_and_names_the_head(
+    run, access, cls, phrase
+):
+    policy, _ = _policy()
+    tracker = GhTracker(
+        Path("/p"), run(), lambda line: None, retry=policy, access=access() if access else None
+    )
+    with pytest.raises(cls) as raised:
+        tracker.open_pull_request("GH-12", "agentic/GH-12", "t", "x")
+    message = str(raised.value)
+    assert message.startswith("gh pr create failed: ") and phrase in message
+    assert message.endswith("(head agentic/GH-12)")
+    assert type(raised.value) is cls
+
+
+def test_a_rate_limited_pull_request_keeps_its_reset_and_status_under_the_prefix():
+    policy = GhRetry(max_wait_s=60, sleep=lambda seconds: None, now=lambda: 1_000.0)
+    # The base read is retried under the policy, and its reset is over the cap.
+    run = ScriptedRun(gh_fixture("rest_primary_limit_403.json"), _rate_limit_reads(9_000))
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(TrackerRateLimited) as raised:
+        tracker.open_pull_request("GH-12", "b", "t", "x")
+    assert str(raised.value).startswith("gh pr create failed: met the GitHub rate limit")
+    assert "(head b)" in str(raised.value)
+    assert raised.value.status == 403 and raised.value.resets_at is not None
 
 
 def test_open_pull_request_removes_its_file_when_gh_fails():
     seen = {}
 
     def run(args, cwd, capture_output, text, check):
-        seen["path"] = args[args.index("--body-file") + 1]
-        raise subprocess.CalledProcessError(1, args, stderr="Body is too long")
+        if "-F" in args:
+            seen["path"] = args[args.index("-F") + 1].removeprefix("body=@")
+            raise subprocess.CalledProcessError(1, args, stderr="Body is too long")
+        return subprocess.CompletedProcess(args, 0, "main\n", "")
 
-    with pytest.raises(ValueError, match="gh pr create failed: Body is too long"):
+    with pytest.raises(ValueError, match=r"gh pr create failed: Body is too long \(head b\)"):
         GhTracker(Path("/p"), run).open_pull_request("GH-12", "b", "t", "x")
     assert not Path(seen["path"]).exists()
 
 
 def test_a_task_without_an_issue_opens_its_pull_request_with_no_closes_prefix():
-    seen = {}
-
-    def run(args, cwd, capture_output, text, check):
-        seen["body"] = Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8")
-        return subprocess.CompletedProcess(args, 0, "https://github.com/o/r/pull/7\n", "")
-
+    run = ScriptedRun(_plain("main"), gh_fixture("pulls_201.json"))
     GhTracker(Path("/p"), run).open_pull_request("T-abc", "b", "t", "x")
-    assert seen["body"] == "x"
+    assert run.bodies[1] == "x"
 
 
-def _body_written_by(**options) -> str:
-    seen = {}
-
-    def run(args, cwd, capture_output, text, check):
-        seen["body"] = Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8")
-        return subprocess.CompletedProcess(args, 0, "https://github.com/o/r/pull/7\n", "")
-
+def _body_written_by(**options) -> str | None:
+    run = ScriptedRun(_plain("main"), gh_fixture("pulls_201.json"))
     GhTracker(Path("/p"), run).open_pull_request("GH-12", "b", "t", "x", **options)
-    return seen["body"]
+    return run.bodies[1]
 
 
 def test_a_pull_request_opened_without_closes_issue_has_no_closes_line():
@@ -153,67 +355,82 @@ def test_open_issue_uses_body_file_and_sends_no_label(tmp_path, monkeypatch):
     assert not Path(written["path"]).exists()
 
 
-def test_comment_on_issue_sends_the_text_in_a_file_to_the_referenced_issue():
-    written = {}
-
-    class RecordingRun(Recorder):
-        def __call__(self, args, cwd, capture_output, text, check):
-            self.calls.append(args)
-            path = args[args.index("--body-file") + 1]
-            written["path"] = path
-            written["body"] = Path(path).read_text(encoding="utf-8")
-            return subprocess.CompletedProcess(args, 0, "", "")
-
-    run = RecordingRun()
+def test_comment_on_issue_posts_the_text_from_a_file_to_the_referenced_issue():
+    run = ScriptedRun(gh_fixture("comment_201.json"))
     text = "flake `tests` seen 😀\n" + "x" * 10_000
-    GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", text)
-    [call] = run.calls
-    assert call[:4] == ["gh", "issue", "comment", "https://github.com/o/r/issues/9"]
-    assert "--body-file" in call and "--body" not in call
-    assert written["body"] == text
+    GhTracker(Path("/p"), run).comment_on_issue("https://github.com/other/repo/issues/9", text)
+    [call] = run.argv
+    assert call[:6] == ["gh", "api", "-i", "-X", "POST", "repos/other/repo/issues/9/comments"]
+    [body_option] = _option(call, "-F")
+    assert _option(call, "-f") == []
+    assert run.bodies == [text]
     assert not any(text in argument for argument in call)
     # The temp file does not outlive the call.
-    assert not Path(written["path"]).exists()
+    assert not Path(body_option.removeprefix("body=@")).exists()
 
 
 def test_comment_on_issue_accepts_a_bare_issue_number_reference():
-    run = Recorder(stdout="")
+    run = ScriptedRun(gh_fixture("comment_201.json"))
     GhTracker(Path("/p"), run).comment_on_issue("42", "x")
-    [call] = run.calls
-    assert call[:4] == ["gh", "issue", "comment", "42"]
+    [call] = run.argv
+    assert call[5] == "repos/{owner}/{repo}/issues/42/comments"
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "https://github.com/o/r/pull/9",
+        "#9",
+        "https://github.com.evil/o/r/issues/9",
+        "https://github.com/o/../issues/9",
+        "https://github.com/o/r/issues/9?x=1",
+        "09",
+    ],
+)
+def test_a_reference_issue_target_does_not_parse_keeps_the_subcommand(reference):
+    run = ScriptedRun(_plain())
+    GhTracker(Path("/p"), run).comment_on_issue(reference, "x")
+    [call] = run.argv
+    assert call[:4] == ["gh", "issue", "comment", reference]
+    assert call[4] == "--body-file" and len(call) == 6 and "api" not in call
+    assert run.bodies == [None]
 
 
 def test_comment_on_issue_raises_value_error_when_gh_fails_and_removes_its_file():
-    seen = {}
+    run = ScriptedRun(gh_fixture("issue_404.json"))
+    with pytest.raises(ValueError, match="^gh issue comment failed: gh: Not Found") as raised:
+        GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", "x")
+    assert type(raised.value) is ValueError
+    [body_option] = _option(run.argv[0], "-F")
+    assert not Path(body_option.removeprefix("body=@")).exists()
 
+
+def test_comment_on_issue_keeps_the_subcommand_failure_wording_for_an_unparsed_reference():
     def run(args, cwd, capture_output, text, check):
-        seen["path"] = args[args.index("--body-file") + 1]
         raise subprocess.CalledProcessError(1, args, stderr="issue not found")
 
     with pytest.raises(ValueError, match="gh issue comment failed: issue not found"):
-        GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", "x")
-    assert not Path(seen["path"]).exists()
+        GhTracker(Path("/p"), run).comment_on_issue("#9", "x")
 
 
-def test_update_issue_body_sends_the_body_in_a_file_and_removes_it():
-    written = {}
-
-    class RecordingRun(Recorder):
-        def __call__(self, args, cwd, capture_output, text, check):
-            self.calls.append(args)
-            path = args[args.index("--body-file") + 1]
-            written["path"] = path
-            written["body"] = Path(path).read_bytes().decode("utf-8")
-            return subprocess.CompletedProcess(args, 0, "", "")
-
-    run = RecordingRun()
+def test_update_issue_body_patches_the_issue_with_the_body_in_a_file_and_removes_it():
+    run = ScriptedRun(gh_fixture("issue_edit_200.json"))
     body = "Blocked by: #7, #9\n\nnaïve 😀\r\nend\n"
     GhTracker(Path("/p"), run).update_issue_body(12, body)
-    [call] = run.calls
-    assert call == ["gh", "issue", "edit", "12", "--body-file", written["path"]]
-    assert "-" not in call and "--body" not in call
-    assert written["body"] == body
-    assert not Path(written["path"]).exists()
+    [call] = run.argv
+    [body_option] = _option(call, "-F")
+    assert call == [
+        "gh",
+        "api",
+        "-i",
+        "-X",
+        "PATCH",
+        "repos/{owner}/{repo}/issues/12",
+        "-F",
+        body_option,
+    ]
+    assert run.bodies == [body]
+    assert not Path(body_option.removeprefix("body=@")).exists()
 
 
 @pytest.mark.parametrize("body", ["", "   ", "\n\t \r\n"])
@@ -225,15 +442,87 @@ def test_update_issue_body_refuses_an_empty_body_before_any_gh_call(body):
 
 
 def test_update_issue_body_raises_value_error_when_gh_fails_and_removes_its_file():
-    seen = {}
-
-    def run(args, cwd, capture_output, text, check):
-        seen["path"] = args[args.index("--body-file") + 1]
-        raise subprocess.CalledProcessError(1, args, stderr="issue not found")
-
-    with pytest.raises(ValueError, match="gh issue edit failed: issue not found"):
+    run = ScriptedRun(gh_fixture("issue_404.json"))
+    with pytest.raises(ValueError, match="^gh issue edit failed: gh: Not Found"):
         GhTracker(Path("/p"), run).update_issue_body(12, "x")
-    assert not Path(seen["path"]).exists()
+    [body_option] = _option(run.argv[0], "-F")
+    assert not Path(body_option.removeprefix("body=@")).exists()
+
+
+@pytest.mark.parametrize(
+    ("write", "answer"),
+    [
+        pytest.param(
+            lambda t: t.comment_on_issue("https://github.com/o/r/issues/9", "x"),
+            gh_response(200, [], "{}"),
+            id="comment_on_issue got 200",
+        ),
+        pytest.param(lambda t: t.comment("GH-12", "x"), gh_response(204, [], ""), id="comment 204"),
+        pytest.param(lambda t: t.comment("GH-12", "x"), _plain("ok"), id="comment unreadable"),
+        pytest.param(
+            lambda t: t.update_issue_body(12, "x"), gh_response(201, [], "{}"), id="edit got 201"
+        ),
+        pytest.param(lambda t: t.update_issue_body(12, "x"), _plain("ok"), id="edit unreadable"),
+    ],
+)
+def test_a_moved_write_that_answers_the_wrong_status_may_have_applied_and_is_not_retried(
+    write, answer
+):
+    run = ScriptedRun(answer)
+    policy, slept = _policy()
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(ValueError, match=r"^gh issue (comment|edit) failed: .*may have applied$"):
+        write(tracker)
+    assert len(run.argv) == 1 and slept == []
+
+
+def _rate_limit_reads(reset: int | None) -> RecordingRun:
+    """The `gh api rate_limit` answer: spent until `reset`, or unreadable when `None`."""
+    if reset is None:
+        return RecordingRun("", "gh: Not Found (HTTP 404)", 1)
+    return _plain(json.dumps({"resources": {"core": {"remaining": 0, "reset": reset}}}))
+
+
+def test_a_primary_limit_on_a_comment_waits_and_then_lands():
+    run = ScriptedRun(
+        gh_fixture("rest_primary_limit_403.json"),
+        _rate_limit_reads(None),
+        gh_fixture("comment_201.json"),
+    )
+    slept: list[float] = []
+    policy = GhRetry(max_wait_s=900, sleep=slept.append, now=lambda: 1_000.0)
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy, access=GithubAccess())
+    tracker.comment("GH-12", "x")
+    assert sum(slept) == 60  # the rate_limit read failed: the x-ratelimit-reset header says 60 s
+    assert [call[4] for call in run.argv if call[1] == "api" and "-X" in call] == ["POST", "POST"]
+
+
+def test_a_primary_limit_that_never_clears_on_a_comment_is_tracker_rate_limited():
+    run = ScriptedRun(
+        *[
+            step
+            for _ in range(3)
+            for step in (gh_fixture("rest_primary_limit_403.json"), _rate_limit_reads(1_030))
+        ]
+    )
+    slept: list[float] = []
+    policy = GhRetry(max_wait_s=900, sleep=slept.append, now=lambda: 1_000.0)
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(TrackerRateLimited) as raised:
+        tracker.comment_on_issue("https://github.com/o/r/issues/9", "x")
+    assert raised.value.status == 403 and raised.value.resets_at is not None
+    assert str(raised.value).startswith("gh issue comment met the GitHub rate limit")
+    assert sum(slept) == 60
+
+
+def test_a_secondary_limit_on_a_comment_stays_a_refusal_with_one_call():
+    run = ScriptedRun(gh_fixture("rest_secondary_limit_403.json"))
+    policy, slept = _policy()
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy, access=GithubAccess())
+    with pytest.raises(TrackerRefused) as raised:
+        tracker.comment("GH-12", "x")
+    assert raised.value.status == 403 and not isinstance(raised.value, TrackerRateLimited)
+    assert len(run.argv) == 1 and slept == []
 
 
 def test_a_task_without_an_issue_writes_nothing_to_the_issue():
@@ -259,11 +548,6 @@ def test_close_issue_of_a_task_without_an_issue_calls_nothing():
 def test_a_failed_close_issue_is_a_value_error():
     with pytest.raises(ValueError):
         GhTracker(Path("/p"), Recorder(fail=True)).close_issue("GH-12")
-
-
-def test_gh_failures_are_value_errors():
-    with pytest.raises(ValueError, match="gh pr create failed: no auth"):
-        GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
 
 
 def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None, head_oid=...):
@@ -821,6 +1105,33 @@ def test_merge_with_no_allowed_method_raises_and_merges_nothing():
     assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
 
 
+def test_merge_with_method_merge_and_merge_commits_allowed_uses_merge_and_pins_the_head():
+    run = MethodRecorder(True, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge") == "merge"
+    assert run.calls[-1] == ["gh", "pr", "merge", "7", "--merge", "--match-head-commit", "abc123"]
+
+
+@pytest.mark.parametrize(
+    "allowed", [(False, True, True), (False, False, True), (False, False, False)]
+)
+def test_merge_with_method_merge_without_merge_commits_raises_no_merge_method_and_merges_nothing(
+    allowed,
+):
+    run = MethodRecorder(*allowed)
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method="merge")
+    assert raised.value.failure == "no_merge_method"
+    assert type(raised.value) is MergeCallFailed
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+    assert run.calls[-1][1:3] == ["repo", "view"]
+
+
+def test_merge_without_method_still_falls_back_to_squash_when_merge_commits_are_off():
+    run = MethodRecorder(False, True, True)
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123", method=None) == "squash"
+    assert run.calls[-1][4] == "--squash"
+
+
 def test_merge_never_asks_for_auto_or_branch_deletion():
     run = MethodRecorder(True, True, True)
     GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
@@ -890,6 +1201,47 @@ def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_cla
         GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert raised.value.failure == "gh_rejected"
     assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
+
+
+# -- list_pull_requests -------------------------------------------------------------------
+
+
+def _listed(**extra):
+    row = {
+        "number": 3,
+        "url": "https://github.com/o/r/pull/3",
+        "state": "OPEN",
+        "body": "b",
+        "mergeCommit": None,
+        "headRefName": "agentic/playbook",
+    }
+    return json.dumps([{**row, **extra}])
+
+
+def test_list_pull_requests_asks_for_is_cross_repository():
+    run = Recorder(stdout=_listed())
+    GhTracker(Path("/p"), run).list_pull_requests()
+    fields = run.calls[0][run.calls[0].index("--json") + 1].split(",")
+    assert "isCrossRepository" in fields
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"isCrossRepository": True}, True),
+        ({"isCrossRepository": False}, False),
+        ({}, None),
+        ({"isCrossRepository": None}, None),
+        ({"isCrossRepository": "false"}, None),
+        ({"isCrossRepository": 0}, None),
+    ],
+    ids=["true", "false", "missing", "null", "string", "number"],
+)
+def test_list_pull_requests_maps_cross_repository_and_unreadable_values_to_none(extra, expected):
+    run = Recorder(stdout=_listed(**extra))
+    (listed,) = GhTracker(Path("/p"), run).list_pull_requests()
+    assert listed.cross_repository is expected
+    assert (listed.number, listed.branch, listed.state) == (3, "agentic/playbook", "OPEN")
 
 
 # -- pull_requests_on ---------------------------------------------------------------------
@@ -1627,8 +1979,17 @@ def _policy():
     ],
 )
 def test_the_retrying_verbs_survive_a_502(call):
+    class AnsweringRun(Flaky):
+        """Answers a `gh api -i` write with the status it expects, as GitHub does."""
+
+        def __call__(self, args, cwd, capture_output, text, check):
+            answer = super().__call__(args, cwd, capture_output, text, check)
+            if "-i" in args and answer.returncode == 0:
+                answer.stdout = _http(200 if "PATCH" in args else 201)
+            return answer
+
     policy, slept = _policy()
-    run = Flaky(failing=1, stdout="{}")
+    run = AnsweringRun(failing=1, stdout="{}")
     call(GhTracker(Path("/p"), run, lambda line: None, retry=policy))
     assert len(run.calls) == 2 and slept == [1, 1]  # a 2 s backoff, slept in 1 s slices
 
@@ -1636,7 +1997,6 @@ def test_the_retrying_verbs_survive_a_502(call):
 @pytest.mark.parametrize(
     "call",
     [
-        lambda t: t.open_pull_request("GH-12", "b", "title", "body"),
         lambda t: t.open_issue("title", "body"),
         lambda t: t.merge("https://github.com/o/r/pull/7", "abc"),
         lambda t: t.close_issue("GH-12"),
@@ -1651,6 +2011,20 @@ def test_the_verbs_that_create_or_merge_call_gh_exactly_once_on_a_502(call):
     with pytest.raises(ValueError):
         call(tracker)
     assert len(run.calls) == 1 and slept == []
+
+
+def test_open_pull_request_posts_exactly_once_on_a_502_though_its_base_read_retries():
+    policy, slept = _policy()
+    run = ScriptedRun(
+        RecordingRun("", _BAD_GATEWAY, 1),
+        _plain("main"),
+        *[RecordingRun("", _BAD_GATEWAY, 1)] * 5,
+    )
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(ValueError):
+        tracker.open_pull_request("GH-12", "b", "title", "body")
+    posts = [call for call in run.argv if "-X" in call]
+    assert len(run.argv) == 3 and len(posts) == 1 and slept == [1, 1]  # the read's 2 s backoff
 
 
 def test_a_write_timeout_is_not_retried_and_a_read_timeout_is():
@@ -1719,15 +2093,52 @@ _NOTES = {
 }
 
 
+def test_put_label_makes_the_same_gh_call_as_label_and_returns_none():
+    run = Outcomes("")
+    assert GhTracker(Path("/p"), run, lambda line: None).put_label("GH-12", "needs-human") is None
+    assert run.calls == [["gh", "issue", "edit", "12", "--add-label", "needs-human"]]
+
+
+def test_put_label_that_failed_returns_the_class_on_the_label_target_never_its_text():
+    from agentic.core.process.domain.task import TrackerFailure
+
+    run = Outcomes(_failed_gh("could not resolve to an Issue " + _SECRET))
+    failure = GhTracker(Path("/p"), run, lambda line: None, retry=_quiet_policy()).put_label(
+        "GH-12", "needs-human"
+    )
+    assert isinstance(failure, TrackerFailure)
+    assert (failure.target, failure.cls) == ("label", "refused")
+    assert _SECRET not in repr(failure)
+
+
+def test_put_label_on_a_task_with_no_issue_calls_nothing_and_a_missing_gh_still_raises():
+    run = Outcomes()
+    assert GhTracker(Path("/p"), run).put_label("T-abc", "x") is None and run.calls == []
+    missing = Outcomes(FileNotFoundError("gh"))
+    with pytest.raises(ValueError, match="not installed"):
+        GhTracker(Path("/p"), missing, lambda line: None, retry=_quiet_policy()).put_label(
+            "GH-12", "x"
+        )
+
+
 @pytest.mark.parametrize("target", ["comment", "label"])
 def test_a_note_that_lands_returns_none_and_makes_the_same_gh_call_as_comment_and_unlabel(target):
-    run = Outcomes("")
+    run = Outcomes(_http(201) if target == "comment" else "")
     assert _NOTES[target](GhTracker(Path("/p"), run, lambda line: None)) is None
     expected = {
-        "comment": ["gh", "issue", "comment", "12", "--body", "Resumed"],
+        "comment": [
+            "gh",
+            "api",
+            "-i",
+            "-X",
+            "POST",
+            "repos/{owner}/{repo}/issues/12/comments",
+            "-F",
+        ],
         "label": ["gh", "issue", "edit", "12", "--remove-label", "needs-human"],
     }[target]
-    assert run.calls == [expected]
+    [call] = run.calls
+    assert call[: len(expected)] == expected and len(call) == len(expected) + (target == "comment")
 
 
 @pytest.mark.parametrize(
@@ -2479,3 +2890,364 @@ def test_close_issue_with_a_comment_is_one_gh_call_carrying_it():
     assert run.calls == [
         ["gh", "issue", "close", "12", "--reason", "completed", "--comment", "All parts merged"]
     ]
+
+
+# --- the access keyword (GH-1091, ADR-0107) ----------------------------------------------
+
+
+def _spied_access(monkeypatch) -> list:
+    seen: list = []
+    real = tracker_module.run_gh
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["access"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tracker_module, "run_gh", spy)
+    return seen
+
+
+def test_a_tracker_passes_its_access_to_every_run_gh_call(monkeypatch):
+    seen = _spied_access(monkeypatch)
+    access = GithubAccess()
+    tracker = GhTracker(Path("/p"), Recorder(stdout=_http(201)), access=access)
+    tracker.comment("GH-12", "PR: x")  # a retrying write
+    tracker.open_issue("T", "body")  # the door with no retry
+    assert seen == [access, access]
+
+
+def test_a_tracker_with_no_access_passes_none(monkeypatch):
+    seen = _spied_access(monkeypatch)
+    GhTracker(Path("/p"), Recorder(stdout=_http(201))).comment("GH-12", "PR: x")
+    assert seen == [None]
+
+
+class RefusingGate:
+    """A fake `WriteGate` that refuses the turn of every write."""
+
+    cap_s = 60.0
+
+    def __init__(self, outcome="refused"):
+        self.outcome = outcome
+        self.asked = 0
+
+    def take(self, remaining_s):
+        self.asked += 1
+        return Turn(self.outcome, 0.0)
+
+
+def test_a_refused_turn_on_pr_merge_raises_turn_refused_not_gh_unreadable_and_never_runs_it():
+    run = MethodRecorder(True, True, True)
+    gate = RefusingGate()
+    tracker = GhTracker(Path("/p"), run, log=lambda line: None, access=GithubAccess(gate=gate))
+    with pytest.raises(TrackerTurnRefused) as raised:
+        tracker.merge(PR_URL, "abc123")
+    assert not isinstance(raised.value, MergeCallFailed)
+    assert gate.asked == 1  # `repo view` is a read: only the merge asked for a turn
+    assert [call[1:3] for call in run.calls] == [["repo", "view"]]  # `gh pr merge` never ran
+
+
+def test_a_stopped_turn_on_pr_merge_is_refused_the_same_way():
+    run = MethodRecorder(True, True, True)
+    tracker = GhTracker(
+        Path("/p"), run, log=lambda line: None, access=GithubAccess(gate=RefusingGate("stopped"))
+    )
+    with pytest.raises(TrackerTurnRefused):
+        tracker.merge(PR_URL, "abc123")
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+
+
+def test_a_refused_turn_makes_a_note_a_transient_failure_and_raises_nothing():
+    run = Recorder()
+    tracker = GhTracker(
+        Path("/p"),
+        run,
+        log=lambda line: None,
+        now=lambda: "2026-11-26T00:00:00+00:00",
+        access=GithubAccess(gate=RefusingGate()),
+    )
+    failure = tracker.note("GH-7", "a note")
+    assert failure is not None and failure.cls == "transient" and failure.target == "comment"
+    assert run.calls == []
+
+
+# -- GH-1151: a bounded page loop over the CI connections, and what `gh` said quoted -------------
+
+
+def _commit_page(
+    checks,
+    *,
+    next_checks=None,
+    suites=None,
+    next_suites=None,
+    oid="c" * 40,
+):
+    """One page of a commit's CI. `next_checks` / `next_suites` are the `endCursor` a connection
+    still has to follow (`None`: that connection is whole)."""
+    contexts = {
+        "nodes": checks,
+        "pageInfo": {"hasNextPage": next_checks is not None, "endCursor": next_checks},
+    }
+    commit: dict = {"oid": oid, "statusCheckRollup": {"contexts": contexts}}
+    if suites is not None:
+        commit["checkSuites"] = {
+            "nodes": suites,
+            "pageInfo": {"hasNextPage": next_suites is not None, "endCursor": next_suites},
+        }
+    return commit
+
+
+def _page_suite(run_id, status="COMPLETED", conclusion="SUCCESS", checks=1):
+    return {
+        "status": status,
+        "conclusion": conclusion,
+        "workflowRun": {"databaseId": run_id},
+        "checkRuns": {"totalCount": checks},
+    }
+
+
+def _as_pull_request(commit):
+    pull_request = {
+        "createdAt": "2026-10-07T10:00:00Z",
+        "baseRefName": "master",
+        "headRefOid": commit["oid"],
+        "commits": {"nodes": [{"commit": commit}]},
+    }
+    return {"data": {"repository": {"pullRequest": pull_request}}}
+
+
+def _as_branch(commit):
+    return {"data": {"repository": {"ref": {"target": commit}}}}
+
+
+# (how a page is wrapped, how the reader is asked): the three readers that follow the pages.
+_PAGED_READERS = pytest.mark.parametrize(
+    ("wrap", "read"),
+    [
+        (_as_pull_request, lambda tracker: tracker.ci_report(PR)),
+        (_as_branch, lambda tracker: tracker.branch_ci("master")),
+        (_as_branch, lambda tracker: tracker.watched_branch_ci("master")),
+    ],
+    ids=["ci_report", "branch_ci", "watched_branch_ci"],
+)
+
+
+def _scripted(wrap, *pages):
+    return ScriptedRun(*(_plain(json.dumps(wrap(page))) for page in pages))
+
+
+def _after(argv, variable):
+    """The value `-f <variable>=...` carried in one `gh` call, `None` when it had none."""
+    values = [arg.split("=", 1)[1] for arg in argv if arg.startswith(f"{variable}=")]
+    return values[0] if values else None
+
+
+@_PAGED_READERS
+def test_a_whole_first_page_is_one_call_with_no_cursor(wrap, read):
+    run = _scripted(wrap, _commit_page([_run_node("ci-ok", "COMPLETED", "SUCCESS")], suites=[]))
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport) and [c.name for c in report.checks] == ["ci-ok"]
+    [argv] = run.argv
+    assert _after(argv, "contextsAfter") is None and _after(argv, "suitesAfter") is None
+
+
+@_PAGED_READERS
+def test_checks_on_a_second_page_are_merged_into_one_report(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="cursor-1")
+    second = _commit_page([_run_node("ci-ok", "COMPLETED", "FAILURE")])
+    run = _scripted(wrap, first, second)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport)
+    assert [(c.name, c.conclusion) for c in report.checks] == [
+        ("unit", "SUCCESS"),
+        ("ci-ok", "FAILURE"),
+    ]
+    assert [_after(argv, "contextsAfter") for argv in run.argv] == [None, "cursor-1"]
+
+
+@_PAGED_READERS
+def test_suites_on_a_second_page_are_merged_before_the_runs_are_read(wrap, read):
+    first = _commit_page(
+        [_run_node("unit", "COMPLETED", "SUCCESS")],
+        suites=[_page_suite(1)],
+        next_suites="suite-cursor",
+    )
+    second = _commit_page(
+        [_run_node("unit", "COMPLETED", "SUCCESS")],
+        suites=[_page_suite(2, conclusion="CANCELLED")],
+    )
+    run = _scripted(wrap, first, second)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport)
+    assert report.cancelled_runs == frozenset({"2"}) and report.runs_completed is True
+    # The checks were whole on page one: only the suites asked for a next page, and the checks
+    # the second answer repeats are not added twice.
+    assert [c.name for c in report.checks] == ["unit"]
+    assert [_after(argv, "suitesAfter") for argv in run.argv] == [None, "suite-cursor"]
+    assert _after(run.argv[1], "contextsAfter") is None
+
+
+@_PAGED_READERS
+def test_both_connections_are_followed_together_one_call_per_page(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node(f"c{n}", "COMPLETED", "SUCCESS")],
+            next_checks=f"k{n}" if n < 3 else None,
+            suites=[_page_suite(n)],
+            next_suites=f"s{n}" if n < 2 else None,
+        )
+        for n in (1, 2, 3)
+    ]
+    run = _scripted(wrap, *pages)
+    report = read(GhTracker(Path("/p"), run))
+    assert isinstance(report, CiReport) and [c.name for c in report.checks] == ["c1", "c2", "c3"]
+    assert len(run.argv) == 3
+
+
+@_PAGED_READERS
+def test_more_than_five_pages_of_checks_is_unreadable_naming_the_bound_never_a_part(wrap, read):
+    pages = [
+        _commit_page([_run_node(f"c{n}", "COMPLETED", "FAILURE")], next_checks=f"k{n}")
+        for n in range(1, 7)
+    ]
+    run = _scripted(wrap, *pages)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "contexts" in got.detail and "5 pages" in got.detail
+    assert len(run.argv) == 5  # no sixth call
+
+
+@_PAGED_READERS
+def test_five_pages_of_checks_that_end_on_the_fifth_are_read_whole(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node(f"c{n}", "COMPLETED", "SUCCESS")], next_checks=f"k{n}" if n < 5 else None
+        )
+        for n in range(1, 6)
+    ]
+    report = read(GhTracker(Path("/p"), _scripted(wrap, *pages)))
+    assert isinstance(report, CiReport) and len(report.checks) == 5
+
+
+@_PAGED_READERS
+def test_more_than_three_pages_of_suites_is_unreadable_naming_the_bound(wrap, read):
+    pages = [
+        _commit_page(
+            [_run_node("unit", "COMPLETED", "SUCCESS")],
+            suites=[_page_suite(n)],
+            next_suites=f"s{n}",
+        )
+        for n in range(1, 5)
+    ]
+    run = _scripted(wrap, *pages)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "checkSuites" in got.detail and "3 pages" in got.detail
+    assert len(run.argv) == 3
+
+
+@_PAGED_READERS
+def test_a_cut_list_of_checks_with_no_cursor_is_unreadable_never_followed(wrap, read):
+    page = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="x")
+    page["statusCheckRollup"]["contexts"]["pageInfo"]["endCursor"] = None
+    run = _scripted(wrap, page)
+    assert read(GhTracker(Path("/p"), run)) == CiUnreadable("gh_unreadable")
+    assert len(run.argv) == 1
+
+
+@_PAGED_READERS
+def test_a_later_page_that_says_more_and_gives_no_cursor_is_unreadable_never_whole(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    second = _commit_page([_run_node("ci-ok", "COMPLETED", "FAILURE")], next_checks="x")
+    second["statusCheckRollup"]["contexts"]["pageInfo"]["endCursor"] = None
+    run = _scripted(wrap, first, second)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "cursor" in got.detail
+    assert len(run.argv) == 2
+
+
+@_PAGED_READERS
+def test_a_next_page_of_another_commit_is_unreadable_never_mixed(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    second = _commit_page([_run_node("web", "COMPLETED", "SUCCESS")], oid="d" * 40)
+    assert read(GhTracker(Path("/p"), _scripted(wrap, first, second))) == CiUnreadable(
+        "gh_unreadable"
+    )
+
+
+@_PAGED_READERS
+def test_a_next_page_that_cannot_be_read_is_that_unreadable_never_the_first_page_alone(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    run = ScriptedRun(_plain(json.dumps(wrap(first))), _plain("<html>502 Bad Gateway</html>"))
+    got = read(GhTracker(Path("/p"), run))
+    assert isinstance(got, CiUnreadable) and "502 Bad Gateway" in got.detail
+
+
+def test_the_three_queries_that_follow_pages_ask_for_the_cursor_and_the_next_page_takes_it():
+    for query in (
+        tracker_module._PULL_REQUEST_CI_QUERY,
+        tracker_module._BRANCH_CI_QUERY,
+        tracker_module._WATCHED_BRANCH_CI_QUERY,
+    ):
+        assert query.count("endCursor") == 2 and "after:" not in query
+        after = tracker_module._page_after(query)
+        assert "$contextsAfter: String, $suitesAfter: String" in after
+        assert "contexts(first: 100, after: $contextsAfter)" in after
+        assert "checkSuites(first: 50, after: $suitesAfter)" in after
+
+
+@_PAGED_READERS
+def test_non_json_from_gh_is_unreadable_and_quotes_what_gh_returned(wrap, read):
+    got = read(GhTracker(Path("/p"), Recorder(stdout="<html>502 Bad Gateway</html>")))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and got.detail == "<html>502 Bad Gateway</html>"
+
+
+@_PAGED_READERS
+def test_a_gh_that_exits_non_zero_quotes_the_first_line_of_its_message_sanitised(wrap, read):
+    stderr = "HTTP 401: bad credentials ghp_AbC123xyz `oops`\nsecond line"
+    got = read(GhTracker(Path("/p"), ScriptedRun(RecordingRun("", stderr, 1))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable)
+    assert got.detail == "gh api graphql failed: HTTP 401: bad credentials [redacted] oops"
+
+
+@_PAGED_READERS
+def test_null_data_is_unreadable_and_says_what_it_could_not_find(wrap, read):
+    got = read(GhTracker(Path("/p"), Recorder(stdout=json.dumps({"data": None}))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and got.detail != ""
+
+
+@_PAGED_READERS
+def test_a_cancelled_check_run_with_every_nullable_field_null_is_a_readable_failure_input(
+    wrap, read
+):
+    """GH-1133's shape, pinned: `conclusion`, `detailsUrl` and both times may be null on a check
+    run cut at its limit; none of them makes the read unreadable."""
+    cancelled = {
+        "__typename": "CheckRun",
+        "id": "id-1",
+        "name": "e2e-shard (1)",
+        "status": "COMPLETED",
+        "conclusion": "CANCELLED",
+        "detailsUrl": None,
+        "startedAt": None,
+        "completedAt": None,
+    }
+    nodes = [cancelled, _run_node("ci-ok", "COMPLETED", "FAILURE")]
+    report = read(
+        GhTracker(Path("/p"), _scripted(wrap, _commit_page(nodes, suites=[_page_suite(1)])))
+    )
+    assert isinstance(report, CiReport)
+    assert report.checks[0] == CiCheck("e2e-shard (1)", "COMPLETED", "CANCELLED", "")
+    assert report.checks[1].conclusion == "FAILURE" and report.runs_completed is True
+
+
+@_PAGED_READERS
+def test_a_check_run_with_a_null_name_is_unreadable_naming_the_field(wrap, read):
+    nameless = {**_run_node("x", "COMPLETED", "CANCELLED"), "name": None}
+    got = read(GhTracker(Path("/p"), _scripted(wrap, _commit_page([nameless]))))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "check field" in got.detail

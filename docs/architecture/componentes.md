@@ -64,11 +64,14 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `TaskDocuments` | leer y escribir el documento de la tarea | `agentic/core/process/adapters/filesystem/documents.py:FilesystemTaskDocuments` |
 | `Prompts` | el prompt de cada rol, con overlay del producto, y el bloque de spec constante por nombre (`spec_block`, `spec_block_names`; GH-718, ADR-0096): una instantánea tomada al construir el adaptador, que lee `.agentic/prompts/spec/<nombre>.md` del producto (gana) o `prompts/spec/<nombre>.md` del sistema, y nunca otro directorio, porque el nombre debe pasar `block_name_ok` | `agentic/core/process/adapters/filesystem/prompts.py:FilesystemPrompts` |
 | `Workspace` | ramas, worktrees, commits y upstream | `agentic/core/process/adapters/git/workspace.py:GitWorkspace` |
-| `Tracker` | pull requests, comentarios, etiquetas, reescritura del cuerpo de un issue (`update_issue_body`, GH-619: re-apunta las líneas `Blocked by:` de los dependientes de una partida), lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
+| `Tracker` | pull requests, comentarios, etiquetas (con `note`, `drop_label` y `put_label` como escrituras de mejor esfuerzo que devuelven el fallo), reescritura del cuerpo de un issue (`update_issue_body`, GH-619: re-apunta las líneas `Blocked by:` de los dependientes de una partida), lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request y, para la cabeza que se juzga (`flake_block`, GH-464), las líneas `agentic-flakes:` de los últimos 4 MiB del log de los jobs que nombra el `ci:` del stack | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |
 | `ExperimentFile` (opcional, `None` sin adaptador) | la declaración de experimento del producto, el archivo experiment.yaml de .agentic | `agentic/core/process/adapters/filesystem/experiment_file.py:FilesystemExperimentFile` |
 | `SpecReader` (opcional, cableado en `agentic/composition.py:_ports` con `GitSpecReader` sobre la raíz del producto; sólo lo llama `agentic/core/process/application/spec_guard.py`, también para el intake de `classify.spec_intake`, que sólo lee cuando están los dos puertos (`spec_delivery.honoured`); inerte sin `state["spec"]`, GH-594) | leer una spec del repo del producto en un commit completo, nunca del worktree; sólo `docs/specs/<nombre>.md`, un blob de a lo sumo 64 KiB en UTF-8, y si no, `SpecUnreadable` con el motivo y nada más | `agentic/core/knowledge/adapters/git/spec_reader.py:GitSpecReader` |
 | `SpecValidator` (opcional, cableado en `agentic/composition.py:_ports` con `DomainSpecValidator`; sólo lo llama `agentic/core/process/application/classify.py:spec_intake`, y únicamente cuando están los dos puertos, `spec_delivery.honoured`; GH-594) | decidir si el texto de una spec leída es un contrato aprobado para una rebanada: devuelve el `SpecContract` o la causa que lo detiene, sin I/O y sin lanzar | `agentic/core/knowledge/adapters/spec_validator.py:DomainSpecValidator` |
+| `PendingPaths` (opcional, cableado en `agentic/composition.py:_ports` con la misma instancia de `GitWorkspace` que `workspace`; nadie lo lee hasta #1096; GH-1093) | las rutas que el árbol de trabajo de un checkout tiene pendientes contra su HEAD (preparadas, sin preparar, sin seguimiento, borradas y ambos lados de un renombre o copia; nunca las ignoradas); lanza `GitError` cuando git no puede decirlo | `agentic/core/process/adapters/git/workspace.py:GitWorkspace` |
+| `BudgetStore` (opcional, sin cablear: nadie lo lee ni lo construye todavía, GH-1071; GH-1098) | el presupuesto de pedidos de la cuenta de GitHub, compartido por los procesos de la máquina y guardado por la clave de la cuenta (`github.com-` más 16 hex del hash del token, nunca el token): `load` lo lee, `claim` reserva con un `flock` acotado la única lectura de `gh api rate_limit` por minuto y `put` guarda lo leído salvo que otra reserva más nueva ya lo haya hecho; nada de lo que no puede leer o escribir lanza, queda como desconocido | `agentic/core/process/adapters/filesystem/budget_store.py:FilesystemBudgetStore`; la clave sale de `agentic/core/process/adapters/github/account.py:AccountKeys` |
+| `GhCallLog` (cableado, GH-990: `agentic/composition.py:process_call_log()` es el único registro por proceso; `_ports`, `system_repo` y `stage0_master_window` reciben `calls` obligatorio y `default_ports` cae a `process_call_log()` si no se le pasa; todo adaptador Gh pasa `calls` a `run_gh`/`stream_gh`, y `ci_logs` lanza por `stream_gh`; `GhLabelTimeline.label_added_at` y `composition.backfill_gh_read` quedan sin contar) | contar por clase (`issue_list`, `issue_view`, `pr_list`, `pr_view`, `api`, `other`; `agentic/core/process/domain/gh_calls.py:kind_of`) cada intento de lanzar `gh`, una vez por intento y antes de que el proceso arranque, no una petición a GitHub: `record` cuenta y `drain` devuelve las seis claves, ceros incluidos, como vista de sólo lectura y reinicia (un solo consumidor drena: `agentic/core/process/application/budget_round.py:budget_round`, una vez por ronda del poller); el registro es por proceso; sólo `run_gh` y `stream_gh` de `agentic/core/process/adapters/github/run.py` registran | `agentic/core/process/adapters/github/gh_call_log.py:InProcessGhCallLog`, construido sólo en `agentic/composition.py:process_call_log` |
 | `Inbox` | la cola de issues | `agentic/core/process/adapters/github/inbox.py:GhInbox` |
 | `Board` | el espejo del Project | `agentic/core/process/adapters/github/board.py:GhBoard` |
 | `Commands` | correr los chequeos del producto | `agentic/core/process/adapters/shell/commands.py:ShellCommands` |
@@ -78,6 +81,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `LoadReader` | leer la carga de la máquina (la única lectura de `os.getloadavg`) | `agentic/core/process/adapters/shell/load_reader.py:ShellLoadReader` |
 | `RunLock`, `RunRegistry` | un solo proceso por tarea, quién corre; el registro guarda además los intentos de la cola exenta del poller, con clave `(producto, issue, tipo)`, y la espera exenta que publica cada producto (`exempt/attempts/`, `exempt/waiting/`; `FilesystemRunRegistry.exempt_attempts`, `FilesystemRunRegistry.publish_exempt_wait`) | `agentic/core/process/adapters/filesystem/lock.py:FilesystemRunLock`, `agentic/core/process/adapters/filesystem/run_registry.py:FilesystemRunRegistry` |
 | `Scratch`, `FreeSpace` | el directorio temporal y el espacio libre | `agentic/core/process/adapters/filesystem/scratch.py:FilesystemScratch`, `agentic/core/process/adapters/filesystem/free_space.py:StatvfsFreeSpace` |
+| `FormatFiler` (opcional, `None` sin adaptador; cableado en `agentic/composition.py:_ports`, `None` en dry-run y evaluación; GH-1011) | abrir, o comentar, el issue del repo del sistema por cada regla de rechazo de formato de un rol; nunca lanza, y publica sólo la evidencia cerrada de `agentic/core/process/domain/format_issue.py` (nunca el valor, el `error` ni el `detail`) | `agentic/core/process/application/format_issue.py:FormatFiling` |
 | `StopFlag` | marcar que una señal frena la corrida | `agentic/core/process/adapters/shell/stop.py:EventStopFlag` |
 
 `ProductKnowledge`, `FlagVocabulary` y `ProductStack` los implementa `core/knowledge`.
@@ -108,7 +112,14 @@ es la fábrica `agentic/composition.py:stage0_rotation`, que lo lee una sola vez
 pasa la tupla al candidato, de modo que el smoke del candidato, el de la repetición y el de
 control usan la misma lista; un directorio o una unidad ilegible da `Unreadable` antes de
 construir nada, y `agentic stage0 rotate` imprime `keep: unreadable` sin rechazar nada. Sin
-unidades el smoke corre solo `--help`. El comando `agentic stage0 rotate` lo llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
+unidades el smoke corre solo `--help`. Por producto, el smoke corre `agentic stage0 smoke
+--product-dir P` (GH-1152): el `preflight` real sobre los puertos de
+`agentic/composition.py:offline_ports`, donde tracker, inbox y board son
+`agentic/core/process/adapters/offline.py:NoGithub` y lanzan ante cualquier uso, de modo que no
+hay ninguna llamada a GitHub. Si ese paso sale 2 (un stage anterior al subcomando), el candidato
+corre el paso legado `poll --dry-run --once` y lo dice con `smoke: legacy step`; un 2 del paso
+nuevo nunca es `Red` por sí solo, y un tiempo agotado es `Unavailable` con la causa
+`smoke_timeout` en la línea `keep: unavailable (<causa>)`. El comando `agentic stage0 rotate` lo llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
 por sha, que arma el reporte con `agentic/core/process/adapters/github/tracker.py:commit_report`;
 un oid que no son 40 hex en minúscula, o cualquier falla, es `CiUnreadable`. Lo cablea la fábrica
 `agentic/composition.py:stage0_master_window`, que llama `stage0_rotation`. `Stage0Store` es la raíz de rotación
@@ -207,7 +218,10 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   un archivo ilegible, corrupto o de otra versión es una lectura nueva y se sobrescribe.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
-  proceso y la composición se lo pasa a `build_graph`.
+  proceso y la composición se lo pasa a `build_graph`. Implementa también
+  `Telemetry.gh_budget` (GH-939 parte 4, GH-991): el poller le manda su línea del presupuesto
+  (`cli._poll_budget_wiring`) y cada hijo `merge`/`land` sus llamadas a `gh`, como el span
+  `agentic.gh.budget`.
 - `adapters/langfuse/`: puntajes (`agentic/core/measurement/adapters/langfuse/scores.py:LangfuseScores`)
   y dashboards (`agentic/core/measurement/adapters/langfuse/dashboards.py:PostgresDashboards`,
   `agentic/core/measurement/adapters/langfuse/widget_data.py:ClickHouseWidgetData`).

@@ -274,6 +274,10 @@ def test_a_resume_under_the_flat_ceiling_goes_on_to_the_returned_integration(cfg
     assert "reason:    " + CAP in text
     assert "spent:     60.00 USD (definition 0.00, plan 0.00, development 25.00, " in text
     assert "review 25.00, other 10.00)" in text
+    state = paused(cost_usd=60.0)
+    split_line = rules.spent_split_line(rules.spent_split(state))
+    assert split_line == "definition >= 0.00 USD · build >= 50.00 USD · unattributed 10.00 USD"
+    assert f"\nsplit:     {split_line}\n" in text
     assert "task cap:  250.00 USD (ceiling 250)" in text
     assert "resumes:   integrate (integration)" in text
     assert "session:   Developer: integration: d1" in text
@@ -1310,3 +1314,36 @@ async def test_a_pending_record_whose_check_would_refuse_the_remainder_still_fin
     assert runner.calls == []
     assert patch["carve_out"]["outcome"] == "applied" and list(patch["subtasks"]) == ["api", "b"]
     assert patch.get("escalation_class") is None
+
+
+# --- GH-989: a manual resume opens a fresh rate-limit clock; the poller's keeps it -----------
+
+
+def _limited(**more):
+    return paused(
+        escalated="GitHub rate limit outlasted the wait",
+        rate_limit_paused_at="2026-11-19T00:00:00+00:00",
+        rate_limit_noticed_at="2026-11-19T12:00:00+00:00",
+        **more,
+    )
+
+
+def _prepare(cfg, by_poller=None):
+    ports = memory_ports()
+    ports.workspace.checkouts = [cfg.product_dir / ".agentic/worktrees/GH-12"]
+    extra = {} if by_poller is None else {"by_poller": by_poller}
+    return resume.prepare("GH-12", _limited(), "document", cfg, ports, **extra)
+
+
+def test_a_manual_resume_clears_both_rate_limit_fields(cfg):
+    r = _prepare(cfg)
+
+    assert r.resumed["rate_limit_paused_at"] is None
+    assert r.resumed["rate_limit_noticed_at"] is None
+
+
+def test_a_poller_resume_keeps_the_rate_limit_fields(cfg):
+    r = _prepare(cfg, by_poller=True)
+
+    assert r.resumed["rate_limit_paused_at"] == "2026-11-19T00:00:00+00:00"
+    assert r.resumed["rate_limit_noticed_at"] == "2026-11-19T12:00:00+00:00"

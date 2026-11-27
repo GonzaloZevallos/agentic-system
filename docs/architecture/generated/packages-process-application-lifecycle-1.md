@@ -27,6 +27,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_application__archive["application.archive"]
     m_application__board_sync["application.board_sync"]
+    m_application__budget_round["application.budget_round"]
     m_application__carve_out["application.carve_out"]
     m_application__dry_run["application.dry_run"]
     m_application__plan_carve_out["application.plan_carve_out"]
@@ -38,6 +39,8 @@ graph TD
     m_application__archive --> g_pkg__domain
     m_application__board_sync --> g_application__support
     m_application__board_sync --> g_pkg__domain
+    m_application__budget_round --> g_application__support
+    m_application__budget_round --> g_pkg__domain
     m_application__carve_out --> g_application__lifecycle__2
     m_application__carve_out --> g_application__support
     m_application__carve_out --> g_pkg__domain

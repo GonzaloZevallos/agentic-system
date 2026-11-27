@@ -7,10 +7,11 @@ is a no-op. `gh` resolves the repo from the checkout, as the inbox does.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Literal
 
 from ...application.ports import (
     BranchPullRequest,
+    GhCallLog,
     HeldListMayBeCut,
     IssueComment,
     IssueState,
@@ -26,21 +28,21 @@ from ...application.ports import (
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
-    TrackerTimedOut,
-    TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
+    tracker_failure_class,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from ...domain.github_access import GithubAccess, NotAnHttpResponse, split_response
 from ...domain.hold import HELD_LIMIT, HOLD_LABEL
 from ...domain.presubmit import ApiBreakLine
 from ...domain.task import (
     PullRequest,
     PullRequestCommit,
     TrackerFailure,
-    TrackerFailureClass,
     TrackerTarget,
 )
-from ...domain.tracker_refs import issue_number, pull_request_number
+from ...domain.tracker_refs import issue_number, issue_target, pull_request_number
 from .run import GhRetry, RateLimitLatch, bounded_run, print_line, run_gh
 
 # The order a merge method is picked in: the first the repository allows.
@@ -49,6 +51,12 @@ _MERGE_METHODS = (
     ("squash", "squashMergeAllowed"),
     ("rebase", "rebaseMergeAllowed"),
 )
+
+
+def _bool_or_none(value: object) -> bool | None:
+    """A real JSON boolean as it is; anything else (missing, null, a string) is unknown."""
+    return value if isinstance(value, bool) else None
+
 
 # `pull_requests_on` asks for one page of this size; a full page may be a truncated one.
 _BRANCH_PAGE = 50
@@ -138,6 +146,26 @@ checkSuites(first: 50) {
 }
 """
 
+# The same fragments for the three readers that follow the pages (GH-1151), with the `endCursor` of
+# each connection. `COMMIT_CI_QUERY` keeps the plain ones: the stage0 window reads one page, and
+# says so when there is more. A first page is the plain query; the pages after it are `_page_after`.
+_PAGED_ROLLUP = _ROLLUP.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
+_PAGED_SUITES = _SUITES.replace("pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }")
+_PAGED_WATCHED_SUITES = _WATCHED_SUITES.replace(
+    "pageInfo { hasNextPage }", "pageInfo { hasNextPage endCursor }"
+)
+
+
+def _page_after(query: str) -> str:
+    """`query` asking for the page after a cursor: its `contexts` and `checkSuites` take
+    `$contextsAfter` and `$suitesAfter` (a null one is the first page)."""
+    return (
+        query.replace("query($", "query($contextsAfter: String, $suitesAfter: String, $", 1)
+        .replace("contexts(first: 100)", "contexts(first: 100, after: $contextsAfter)")
+        .replace("checkSuites(first: 50)", "checkSuites(first: 50, after: $suitesAfter)")
+    )
+
+
 _PULL_REQUEST_CI_QUERY = (
     """
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -147,8 +175,8 @@ query($owner: String!, $repo: String!, $number: Int!) {
       baseRefName
       headRefOid
       commits(last: 1) { nodes { commit { oid """
-    + _ROLLUP
-    + _SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_SUITES
     + """ } } }
     }
   }
@@ -161,8 +189,8 @@ _BRANCH_CI_QUERY = (
 query($owner: String!, $repo: String!, $ref: String!) {
   repository(owner: $owner, name: $repo) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
-    + _ROLLUP
-    + _SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_SUITES
     + """ } } }
   }
 }
@@ -189,8 +217,8 @@ _WATCHED_BRANCH_CI_QUERY = (
 query($owner: String!, $repo: String!, $ref: String!) {
   repository(owner: $owner, name: $repo) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
-    + _ROLLUP
-    + _WATCHED_SUITES
+    + _PAGED_ROLLUP
+    + _PAGED_WATCHED_SUITES
     + """ } } }
   }
 }
@@ -265,6 +293,73 @@ def _check_run_ids(commit: object) -> dict[str, str]:
 
 class _Unreadable(Exception):
     """Inside this module only: a CI answer that is not whole. Never leaves it."""
+
+
+def _why(exc: Exception) -> str:
+    """Our own account of why an answer could not be read, for `CiUnreadable.of`: the message of
+    an `_Unreadable`, else the kind of error and what it names (a missing key, a null)."""
+    return str(exc) if isinstance(exc, _Unreadable) else f"{type(exc).__name__}: {exc}"
+
+
+# How many pages of each connection of a commit's CI one read follows (GH-1151). Past the bound the
+# read is unreadable and names it: never a partial list used as whole. Each call asks for the next
+# page of every connection still open, so a poll is at most `max(5, 3)` calls more than the first.
+_CONTEXT_PAGES = 5
+_SUITE_PAGES = 3
+
+
+def _connection(commit: object, name: str) -> dict | None:
+    """The `contexts` (under `statusCheckRollup`) or `checkSuites` connection of a GraphQL
+    `Commit`, `None` when the commit does not carry one."""
+    holder = (
+        commit.get("statusCheckRollup")
+        if name == "contexts" and isinstance(commit, dict)
+        else commit
+    )
+    connection = holder.get(name) if isinstance(holder, dict) else None
+    return connection if isinstance(connection, dict) else None
+
+
+def _next_cursor(connection: dict | None) -> str | None:
+    """The `endCursor` of the page after this one, `None` when the connection is whole or absent, or
+    says there is more and gives no cursor: it cannot be followed, and `_commit_ci` (a cut list of
+    checks) or `_runs_completed` (a cut list of suites) already treat it as not whole."""
+    page = connection.get("pageInfo") if connection is not None else None
+    if not isinstance(page, dict) or page.get("hasNextPage") is not True:
+        return None
+    cursor = page.get("endCursor")
+    return cursor if isinstance(cursor, str) and cursor else None
+
+
+def _says_more(connection: dict | None) -> bool:
+    """Whether the connection says a page follows (`hasNextPage` true), cursor or not."""
+    page = connection.get("pageInfo") if connection is not None else None
+    return isinstance(page, dict) and page.get("hasNextPage") is True
+
+
+def _page_nodes(connection: dict | None) -> list:
+    nodes = connection.get("nodes") if connection is not None else None
+    if not isinstance(nodes, list):
+        raise _Unreadable("a page without a node list")
+    return nodes
+
+
+def _whole(commit: dict, nodes: dict[str, list]) -> dict:
+    """`commit` with the connections that were followed replaced by their pages merged, each
+    marked whole (`hasNextPage` false): what `_commit_ci` and the suite readers expect."""
+    merged = dict(commit)
+    done = {"hasNextPage": False}
+    rollup = commit.get("statusCheckRollup")
+    if "contexts" in nodes and isinstance(rollup, dict):
+        contexts = {**rollup["contexts"], "nodes": nodes["contexts"], "pageInfo": done}
+        merged["statusCheckRollup"] = {**rollup, "contexts": contexts}
+    if "checkSuites" in nodes:
+        merged["checkSuites"] = {
+            **commit["checkSuites"],
+            "nodes": nodes["checkSuites"],
+            "pageInfo": done,
+        }
+    return merged
 
 
 def _commit_ci(commit: object) -> tuple[str, tuple[CiCheck, ...]]:
@@ -455,24 +550,6 @@ def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _failure_class(error: ValueError) -> TrackerFailureClass | None:
-    """The closed class of a `gh` failure by the type of the error, never by its text;
-    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
-    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
-    does not absorb."""
-    if isinstance(error, TrackerTimedOut):
-        return "timed_out"
-    if isinstance(error, TrackerUnreachable):
-        return "unreachable"
-    if isinstance(error, TrackerTransient):
-        return "transient"
-    if isinstance(error, TrackerRateLimited):
-        return "rate_limited"
-    if isinstance(error, TrackerRefused):
-        return "refused"
-    return None
-
-
 def _label_names(raw: object) -> tuple[str, ...] | None:
     """The label names of `gh issue view --json labels`; `None` when the field is absent or
     any entry is not a named label, so an unreadable set is never taken for an empty one."""
@@ -496,6 +573,59 @@ def _blocked_by(raw: dict | None) -> tuple[int, ...] | None:
     return tuple(node["number"] for node in raw.get("nodes", []) if "number" in node)
 
 
+def rest_argv(
+    method: str,
+    path: str,
+    raw_fields: Sequence[tuple[str, str]] = (),
+    body_file: str | None = None,
+) -> tuple[str, ...]:
+    """The `gh` arguments of one REST write (GH-1089): `api -i -X <method> <path>`, each text
+    field as `-f key=value` (always raw: `@file`, `true` and `123` stay the text they are) and
+    the body only as `-F body=@<file>`, which reads the file and sends it as it is. No other
+    value is ever a `-F`."""
+    args = ["api", "-i", "-X", method, path]
+    for key, value in raw_fields:
+        args += ["-f", f"{key}={value}"]
+    if body_file is not None:
+        args += ["-F", f"body=@{body_file}"]
+    return tuple(args)
+
+
+@contextlib.contextmanager
+def _body_file(text: str, *, newline: str | None = None) -> Iterator[str]:
+    """`text` in a temp file for one call, removed when it ends: a body is never in argv,
+    whose slots a multibyte body near GitHub's bound would outgrow (ADR-0034)."""
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".md", delete=False, encoding="utf-8", newline=newline
+    ) as handle:
+        handle.write(text)
+        path = handle.name
+    try:
+        yield path
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+_PR_CREATE_FAILED = "gh pr create failed:"
+
+
+def _as_pr_create_failure(exc: ValueError, head: str) -> ValueError:
+    """`exc` as the same class with a message that starts `gh pr create failed:` and ends
+    with the head: what `run_gh` says (`gh pr create timed out after 60 s`) goes after the
+    prefix, with its own `gh pr create ` dropped. Status and reset are kept."""
+    text = str(exc).removeprefix("gh pr create ")
+    message = f"{_PR_CREATE_FAILED} {text}{head}"
+    if isinstance(exc, TrackerRateLimited):
+        return TrackerRateLimited(message, status=exc.status, resets_at=exc.resets_at)
+    if isinstance(exc, TrackerCallFailed | TrackerRefused):
+        return type(exc)(message, status=exc.status)
+    return ValueError(message)
+
+
+def _unreadable(call: str, detail: str) -> ValueError:
+    return ValueError(f"gh {call} failed: unreadable response; the write may have applied{detail}")
+
+
 class GhTracker:
     def __init__(
         self,
@@ -506,7 +636,10 @@ class GhTracker:
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
         latch: RateLimitLatch | None = None,
+        access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
+        self._calls = calls
         self.product_dir = product_dir
         self._latch = latch if latch is not None else RateLimitLatch()
         # The product's `api_break_line` (GH-610), asked only when a check is red.
@@ -515,22 +648,57 @@ class GhTracker:
         self._run = run
         self._log = log
         self._retry = retry
+        self._access = access
 
     def open_pull_request(
         self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
     ) -> str:
         if closes_issue and (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
-        # `--body-file`, as `open_issue`: a multibyte body near the bound is larger than
-        # one argv slot takes, and the limit that can bite is GitHub's own (ADR-0034).
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
-            h.write(body)
-            path = h.name
+        # Every failure starts `gh pr create failed:` and names the head (GH-1089): the ones
+        # built here already do; `run_gh`'s own (timeout, unreachable, retries spent, turn
+        # refused, no `gh`) are re-raised as the same class with that wording.
+        head = f" (head {branch})"
         try:
-            # Not a draft: the human merges it as it is (README.md, 9), or does not.
-            return self._gh("pr", "create", "--head", branch, "--title", title, "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+            return self._create_pull_request(branch, title, body, head)
+        except (TrackerCallFailed, TrackerRefused, ValueError) as exc:
+            if str(exc).startswith(_PR_CREATE_FAILED):
+                raise
+            raise _as_pr_create_failure(exc, head) from (exc.__cause__ or exc)
+
+    def _create_pull_request(self, branch: str, title: str, body: str, head: str) -> str:
+        # The base is the default branch, as `gh pr create` took it. A failed read ends the
+        # call here: the POST is never attempted without a base.
+        base = self._gh_read(
+            "api",
+            "repos/{owner}/{repo}",
+            "--jq",
+            ".default_branch",
+            call="pr create",
+            failed=lambda stderr: f"gh pr create failed: could not read the default branch{head}",
+        )
+        if not base:
+            raise ValueError(f"gh pr create failed: could not read the default branch{head}")
+        # Not a draft: the human merges it as it is (README.md, 9), or does not. Not retried:
+        # a second POST after a lost answer could open a second pull request.
+        with _body_file(body) as path:
+            response = self._rest(
+                "POST",
+                "repos/{owner}/{repo}/pulls",
+                (("title", title), ("head", branch), ("base", base)),
+                path,
+                call="pr create",
+                retrying=False,
+                expect=201,
+                detail=head,
+            )
+        try:
+            url = json.loads(response)["html_url"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise _unreadable("pr create", head) from exc
+        if not isinstance(url, str):
+            raise _unreadable("pr create", head)
+        return url
 
     def open_issue(
         self,
@@ -554,31 +722,39 @@ class GhTracker:
             Path(path).unlink(missing_ok=True)
 
     def comment_on_issue(self, reference: str, text: str) -> None:
-        # `--body-file`, as `open_issue`: the text carries ids from product output, and
-        # the one limit that can bite is GitHub's own, never argv's (ADR-0034).
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
-            h.write(text)
-            path = h.name
-        try:
-            self._gh_retrying("issue", "comment", reference, "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+        # The body goes as a file, as `open_issue`: the text carries ids from product output,
+        # and the one limit that can bite is GitHub's own, never argv's (ADR-0034).
+        target = issue_target(reference)
+        with _body_file(text) as path:
+            if target is None:
+                # Not a reference this module can build a path from: the subcommand, as before.
+                self._gh_retrying("issue", "comment", reference, "--body-file", path)
+                return
+            self._rest(
+                "POST",
+                f"{target}/comments",
+                (),
+                path,
+                call="issue comment",
+                retrying=True,
+                expect=201,
+            )
 
     def update_issue_body(self, number: int, body: str) -> None:
-        # `--body-file <path>`, never `-`: the runner passes `stdin=DEVNULL`, so `-`
-        # would send an empty body. An empty body is refused before any `gh` call.
+        # An empty body is refused before any call: GitHub would take it as the new body.
         if not body.strip():
             raise ValueError(f"refusing to write an empty body to issue #{number}")
         # `newline=""`: the body goes out byte for byte, CRLF lines included.
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".md", delete=False, encoding="utf-8", newline=""
-        ) as h:
-            h.write(body)
-            path = h.name
-        try:
-            self._gh_retrying("issue", "edit", str(number), "--body-file", path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+        with _body_file(body, newline="") as path:
+            self._rest(
+                "PATCH",
+                f"repos/{{owner}}/{{repo}}/issues/{number}",
+                (),
+                path,
+                call="issue edit",
+                retrying=True,
+                expect=200,
+            )
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         pull_request_number(reference)  # rejected before any `gh` call, as `merge` does
@@ -627,13 +803,25 @@ class GhTracker:
 
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh_retrying("issue", "comment", str(number), "--body", text)
+            with _body_file(text) as path:
+                self._rest(
+                    "POST",
+                    f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
+                    (),
+                    path,
+                    call="issue comment",
+                    retrying=True,
+                    expect=201,
+                )
 
     def note(self, task_id: str, text: str) -> TrackerFailure | None:
         return self._best_effort("comment", "note", lambda: self.comment(task_id, text))
 
     def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
         return self._best_effort("label", "drop_label", lambda: self.unlabel(task_id, label))
+
+    def put_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        return self._best_effort("label", "put_label", lambda: self.label(task_id, label))
 
     def _best_effort(
         self, target: TrackerTarget, name: str, write: Callable[[], None]
@@ -644,7 +832,7 @@ class GhTracker:
         try:
             write()
         except ValueError as exc:
-            cls = _failure_class(exc)
+            cls = tracker_failure_class(exc)
             if cls is None:
                 raise
             self._log(f"agentic: {name} could not write the {target} ({cls}); the run goes on")
@@ -684,7 +872,7 @@ class GhTracker:
             "--state",
             "all",
             "--json",
-            "number,url,state,body,mergeCommit,headRefName",
+            "number,url,state,body,mergeCommit,headRefName,isCrossRepository",
             "--limit",
             "500",
         )
@@ -696,6 +884,7 @@ class GhTracker:
                 body=item.get("body") or "",
                 merge_commit=(item.get("mergeCommit") or {}).get("oid") or "",
                 branch=item.get("headRefName") or "",
+                cross_repository=_bool_or_none(item.get("isCrossRepository")),
             )
             for item in json.loads(raw)
         ]
@@ -899,23 +1088,26 @@ class GhTracker:
 
     def ci_report(self, reference: str) -> CiReport | CiUnreadable:
         """See `Tracker.ci_report`. `gh` resolves the repository from `product_dir`. Never
-        raises and never reads stderr: the class of an unreadable answer is the step that
-        failed. `base_sha` is always None: the gate that would have filled it from the
-        Actions runs failed (ADR-0045, GH-216 amendment), `pull_requests` being empty on
-        every run of this product's CI."""
+        raises. It quotes what `gh` said (`CiUnreadable.of`) and never classifies by it: the
+        class of an unreadable answer is the step that failed (ADR-0029). `base_sha` is always None:
+        the gate that would have filled it from the Actions runs failed (ADR-0045, GH-216
+        amendment), `pull_requests` being empty on every run of this product's CI."""
         try:
             number = pull_request_number(reference)
         except ValueError:
             return CiUnreadable("gh_unreadable")
-        answer = self.graphql(
+        read = self._paged_commit(
             _PULL_REQUEST_CI_QUERY,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-F", f"number={number}"),
+            lambda answer: answer["data"]["repository"]["pullRequest"]["commits"]["nodes"][0][
+                "commit"
+            ],
         )
-        if isinstance(answer, CiUnreadable):
-            return answer
+        if isinstance(read, CiUnreadable):
+            return read
+        answer, commit = read
         try:
             pull_request = answer["data"]["repository"]["pullRequest"]
-            commit = pull_request["commits"]["nodes"][0]["commit"]
             head_sha, checks = _commit_ci(commit)
             checks = self._with_failed_step(checks, commit)
             cancelled_runs, running_runs = _suite_run_ids(commit)
@@ -929,8 +1121,8 @@ class GhTracker:
                 cancelled_runs=cancelled_runs,
                 running_runs=running_runs,
             )
-        except (_Unreadable, KeyError, IndexError, TypeError):
-            return CiUnreadable("gh_unreadable")
+        except (_Unreadable, KeyError, IndexError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
 
     def _with_failed_step(self, checks: tuple[CiCheck, ...], commit: object) -> tuple[CiCheck, ...]:
         """`checks` with `failed_step` filled on the red runs of the product's `api_break_line`
@@ -968,18 +1160,79 @@ class GhTracker:
     def _read_branch(self, query: str, branch: str) -> tuple[CiReport, object] | CiUnreadable:
         """The latest commit of `branch` read with `query`: its report and the GraphQL commit it
         was built from, so a caller can read more off the same answer."""
-        answer = self.graphql(
+        read = self._paged_commit(
             query,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-f", f"ref=refs/heads/{branch}"),
+            lambda answer: answer["data"]["repository"]["ref"]["target"],
         )
+        if isinstance(read, CiUnreadable):
+            return read
+        target = read[1]
+        try:
+            report = commit_report(target)
+        except (_Unreadable, KeyError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
+        return report, target
+
+    def _paged_commit(
+        self, query: str, fields: tuple[str, ...], locate: Callable[[dict], object]
+    ) -> tuple[dict, object] | CiUnreadable:
+        """One commit's CI read page by page (GH-1151): the first answer, and the commit `locate`
+        finds in it with the `contexts` and `checkSuites` pages merged and marked whole. Each
+        connection is followed only while its `hasNextPage` is true, up to `_CONTEXT_PAGES` and
+        `_SUITE_PAGES` pages; one call per page asks for the next page of every connection that is
+        still open. Past a bound, or when a page is of another commit, cannot be read or gives no
+        cursor, the read is unreadable: never the pages read so far. A whole first page is the
+        one call it always was and its commit is returned untouched. Every poll starts at page one.
+        """
+        answer = self.graphql(query, fields)
         if isinstance(answer, CiUnreadable):
             return answer
         try:
-            target = answer["data"]["repository"]["ref"]["target"]
-            report = commit_report(target)
-        except (_Unreadable, KeyError, TypeError):
-            return CiUnreadable("gh_unreadable")
-        return report, target
+            commit = locate(answer)
+            variables = {"contextsAfter": "contexts", "suitesAfter": "checkSuites"}
+            bounds = {"contexts": _CONTEXT_PAGES, "checkSuites": _SUITE_PAGES}
+            cursors = {name: _next_cursor(_connection(commit, name)) for name in variables.values()}
+            nodes = {
+                name: list(_page_nodes(_connection(commit, name)))
+                for name, cursor in cursors.items()
+                if cursor is not None
+            }
+            pages = dict.fromkeys(nodes, 1)
+            while any(cursor is not None for cursor in cursors.values()):
+                for name in nodes:
+                    if cursors[name] is not None and pages[name] >= bounds[name]:
+                        return CiUnreadable.of(
+                            "gh_unreadable", f"more {name} than {bounds[name]} pages"
+                        )
+                after = tuple(
+                    part
+                    for variable, name in variables.items()
+                    if cursors[name] is not None
+                    for part in ("-f", f"{variable}={cursors[name]}")
+                )
+                page = self.graphql(_page_after(query), fields + after)
+                if isinstance(page, CiUnreadable):
+                    return page
+                fetched = locate(page)
+                if not isinstance(fetched, dict) or fetched.get("oid") != commit["oid"]:
+                    return CiUnreadable.of(
+                        "gh_unreadable", "the commit changed while its pages were read"
+                    )
+                for name in nodes:
+                    if cursors[name] is None:
+                        continue
+                    connection = _connection(fetched, name)
+                    nodes[name].extend(_page_nodes(connection))
+                    pages[name] += 1
+                    cursors[name] = _next_cursor(connection)
+                    if cursors[name] is None and _says_more(connection):
+                        return CiUnreadable.of(
+                            "gh_unreadable", f"a page of {name} says more and gives no cursor"
+                        )
+        except (_Unreadable, KeyError, IndexError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
+        return answer, (_whole(commit, nodes) if nodes and isinstance(commit, dict) else commit)
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]
@@ -1055,15 +1308,15 @@ class GhTracker:
                 key: _text(item[key])
                 for key in ("event", "displayTitle", "status", "createdAt", "url")
             }
-        except (KeyError, _Unreadable):
-            return CiUnreadable("gh_unreadable")
+        except (KeyError, _Unreadable) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
         viewed = self._read_json("run", "view", str(run_id), "--json", "jobs")
         if isinstance(viewed, CiUnreadable):
             return viewed
         try:
             jobs = tuple(_dispatched_job(job) for job in viewed["jobs"])
-        except (_Unreadable, KeyError, TypeError):
-            return CiUnreadable("gh_unreadable")
+        except (_Unreadable, KeyError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
         return DispatchedRun(
             run_id=run_id,
             event=fields["event"],
@@ -1078,27 +1331,35 @@ class GhTracker:
         """One `gh` read, its parsed JSON or the class of its failure."""
         try:
             raw = self._gh_read(*args)
-        except ValueError as exc:  # `_gh`'s own failure
+        except ValueError as exc:  # `_gh`'s own failure: the first line of its message is quoted
             missing = isinstance(exc.__cause__, FileNotFoundError)
-            return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
-        except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
-            return CiUnreadable("gh_unavailable")
+            first_line = next(iter(str(exc).splitlines()), "")
+            return CiUnreadable.of("gh_unavailable" if missing else "gh_unreadable", first_line)
+        except OSError as exc:  # a `gh` that cannot be run at all (not executable, no permission)
+            return CiUnreadable.of("gh_unavailable", str(exc))
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            return CiUnreadable("gh_unreadable")
+            return CiUnreadable.of("gh_unreadable", raw)  # the class is the step that failed
 
     def graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
         """One `gh api graphql` call, its JSON object or the class of its failure."""
         answer = self._read_json("api", "graphql", "-f", f"query={query}", *fields)
-        return answer if isinstance(answer, dict | CiUnreadable) else CiUnreadable("gh_unreadable")
+        if isinstance(answer, dict | CiUnreadable):
+            return answer
+        return CiUnreadable.of("gh_unreadable", f"not a JSON object: {type(answer).__name__}")
 
-    def merge(self, reference: str, head_sha: str) -> str:
-        """Raises `MergeCallFailed`, its class chosen at the step that failed: never by
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
+        """With `method="merge"` only a merge commit will do: a repository that does not
+        allow one raises `MergeCallFailed("no_merge_method")` and nothing is merged.
+        Raises `MergeCallFailed`, its class chosen at the step that failed: never by
         reading `gh`'s stderr (ADR-0029), or `TrackerUnreachable` from the `repo view` read,
-        before anything could change. The reference is parsed first, so an
-        unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare number and
-        resolves the repository from `product_dir`, as `pull_request` does."""
+        before anything could change, or `TrackerTurnRefused` when the turn of `gh pr merge`
+        was refused: `gh` never launched, so it is never `gh_unreadable`. The reference is parsed
+        first, so an unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare
+        number and resolves the repository from `product_dir`, as `pull_request` does."""
         try:
             number = pull_request_number(reference)
         except ValueError as exc:
@@ -1123,44 +1384,100 @@ class GhTracker:
             raise MergeCallFailed(
                 "gh_unreadable", "gh repo view answered something else than an object"
             )
-        method = next((name for name, key in _MERGE_METHODS if allowed.get(key)), None)
-        if method is None:
+        wanted = _MERGE_METHODS if method is None else _MERGE_METHODS[:1]
+        chosen = next((name for name, key in wanted if allowed.get(key)), None)
+        if chosen is None:
             raise MergeCallFailed("no_merge_method", "no_merge_method")
         # The head sha pins the merge to what the decision saw (GH-178); no `--auto` and no
         # `--delete-branch`: the poller's own `close` owns what happens after.
         try:
-            self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
+            self._gh("pr", "merge", str(number), f"--{chosen}", "--match-head-commit", head_sha)
+        except TrackerTurnRefused:
+            raise  # `gh` never launched: nothing merged, so not `gh_unreadable`
         except ValueError as exc:
             missing = isinstance(exc.__cause__, FileNotFoundError)
             if isinstance(exc, TrackerCallFailed):  # the merge may or may not have happened
                 raise MergeCallFailed("gh_unreadable", str(exc)) from exc
             raise MergeCallFailed("gh_unavailable" if missing else "gh_rejected", str(exc)) from exc
-        return method
+        return chosen
 
     def _gh(self, *args: str) -> str:
-        """No retry, whatever the policy: open_issue, open_pull_request, merge, close_* and
-        rerun_failed_ci call this one, because repeating them can duplicate or merge twice."""
+        """No retry, whatever the policy: open_issue, merge, close_* and rerun_failed_ci call
+        this one, because repeating them can duplicate or merge twice. `open_pull_request` has
+        the same rule through `_rest(retrying=False)`."""
         return self._call(args, retry=None, retry_timeouts=False)
 
-    def _call(self, args: tuple[str, ...], *, retry: GhRetry | None, retry_timeouts: bool) -> str:
+    def _call(
+        self,
+        args: tuple[str, ...],
+        *,
+        retry: GhRetry | None,
+        retry_timeouts: bool,
+        call: str | None = None,
+        failed: Callable[[str], str] | None = None,
+    ) -> str:
+        label = call if call is not None else " ".join(args[:2])
         return run_gh(
             self._run,
             args,
             cwd=self.product_dir,
             log=self._log,
             not_installed="gh is not installed; delivering to GitHub needs the CLI",
-            failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+            failed=failed or (lambda stderr: f"gh {label} failed: {stderr}"),
             latch=self._latch,
             retry=retry,
             retry_timeouts=retry_timeouts,
+            access=self._access,
+            call=call,
+            calls=self._calls,
         )
 
-    def _gh_read(self, *args: str) -> str:
+    def _gh_read(
+        self, *args: str, call: str | None = None, failed: Callable[[str], str] | None = None
+    ) -> str:
         """A read: under a policy a timeout is retried too, since nothing changed."""
-        return self._call(args, retry=self._retry, retry_timeouts=True)
+        return self._call(args, retry=self._retry, retry_timeouts=True, call=call, failed=failed)
 
     def _gh_retrying(self, *args: str) -> str:
         """A write that is safe to repeat (a comment, a label, a body): retried under the
         policy except on a timeout, which may have applied it. The only other door to `gh`
         besides `_gh`, so the verbs that create or merge are the ones that call `_gh`."""
         return self._call(args, retry=self._retry, retry_timeouts=False)
+
+    def _rest(
+        self,
+        method: str,
+        path: str,
+        raw_fields: Sequence[tuple[str, str]],
+        body_file: str | None,
+        *,
+        call: str,
+        retrying: bool,
+        expect: int,
+        detail: str = "",
+    ) -> str:
+        """The one door of the writes moved to `gh api -i` (GH-1089): the body of the response
+        when GitHub answered exactly `expect`. The call goes through `run_gh` as `call` (the
+        subcommand it replaces, so logs and messages keep their wording) and, `retrying`, under
+        the policy except on a timeout, as `_gh_retrying`; a write that creates is never
+        retried. A failure is told by `gh`'s stderr alone, through `failed`; stdout is read only
+        on success, by `split_response`. Any other status, 2xx included, or a stdout that is no
+        response, raises a `ValueError` saying the write may have applied, outside the retry
+        loop: the write is never repeated on it. `detail` ends every message."""
+        raw = self._call(
+            rest_argv(method, path, raw_fields, body_file),
+            retry=self._retry if retrying else None,
+            retry_timeouts=False,
+            call=call,
+            failed=lambda stderr: f"gh {call} failed: {stderr}{detail}",
+        )
+        try:
+            response = split_response(raw)
+        except NotAnHttpResponse as exc:
+            raise _unreadable(call, detail) from exc
+        if response.status != expect:
+            raise ValueError(
+                f"gh {call} failed: unexpected HTTP {response.status}; "
+                f"the write may have applied{detail}"
+            )
+        return response.body

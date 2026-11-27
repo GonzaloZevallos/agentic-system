@@ -8,10 +8,11 @@ its cause falls back to the entry with no cause.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Final, Literal, get_args
 
 from .spec_delivery import SpecRouteCause
-from .task import EscalationClass, MechanicalCause, OwnerDecisionCause
+from .task import EscalationClass, MechanicalCause, OwnerDecisionCause, PauseEntry
 
 RESUME: Final = "agentic resume --issue {issue}"
 RESUME_ESTIMATE: Final = "agentic resume --issue {issue} --estimate {usd}"
@@ -26,7 +27,17 @@ AskedCause = Literal["api_break_missing", "drawing_departure", "drawing_cap"]
 `MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer.
 `drawing_departure` and `drawing_cap` (GH-766) are answered by number: `drawing_answer.prompt_cause`
 selects their rows and `drawing_answer.prompt_lines` builds the per-number `--drawing` commands."""
-PromptCause = MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause
+FormatCause = Literal["format_refusal", "format_hold"]
+"""The cause of a `failure` escalation that a format failure raised (GH-1019): `format_refusal`
+while the poller retakes it or when it escalates, `format_hold` once the task is held. Picked by
+`escalate`, never stored: it is not a `MechanicalCause`."""
+StallCause = Literal["session_stalled"]
+"""The cause of a `failure` escalation whose last two attempts stalled (GH-978): picked by
+`escalate` from `stalled_batch`, never stored, and not a `MechanicalCause`: the pause stays a
+human's."""
+PromptCause = (
+    MechanicalCause | AskedCause | SpecRouteCause | OwnerDecisionCause | FormatCause | StallCause
+)
 
 _RETRY: Final[Prompt] = (
     "Should the task try again now?",
@@ -116,7 +127,35 @@ ESCALATION_PROMPTS[("questions", "spec_owned")] = (
     RESUME,
     (RESUME, CLOSE_UNPLANNED),
 )
+ESCALATION_PROMPTS[("failure", "format_refusal")] = (
+    "A role's output was refused by a format rule and the retakes did not fix it. Resume the task "
+    "once the rule or the brief is fixed, or close it?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("failure", "format_hold")] = (
+    "The task is held: its format retakes are spent. Resume it once the refused rule is fixed, "
+    "or close it?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+SESSION_STALLED_PROMPT: Final[Prompt] = (
+    "The session stalled twice in a row with no sign of life. The failure rows in the task "
+    "document say how long it was silent, the last event and whether a hook was in flight. If a "
+    "hook was, look at that check before resuming. Resume?",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
+ESCALATION_PROMPTS[("failure", "session_stalled")] = SESSION_STALLED_PROMPT
+ESCALATION_PROMPTS[("ci", "check_timeout")] = (
+    "A check timed out twice with no failing test, on the same head and with the same workers. "
+    "Is the machine at fault, or does the check need a longer timeout? Resume once decided.",
+    RESUME,
+    (RESUME, CLOSE_UNPLANNED),
+)
 for _cause in get_args(MechanicalCause):
+    if _cause == "check_timeout":
+        continue
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY
 for _spec_cause in get_args(SpecRouteCause):
     ESCALATION_PROMPTS[("classification", _spec_cause)] = (
@@ -140,6 +179,27 @@ def prompt_for(cls: EscalationClass, cause: PromptCause | None = None) -> Prompt
     """The question, the recommended answer and the options of an escalation. A cause with no row
     of its own reads as its class's."""
     return ESCALATION_PROMPTS.get((cls, cause)) or ESCALATION_PROMPTS[(cls, None)]
+
+
+def stalled_batch(pause_log: Sequence[PauseEntry]) -> bool:
+    """Whether the escalation that closes `pause_log` follows two stalled attempts (GH-978): the
+    batch is the run of `failure` entries just before the last `escalation` entry, whatever their
+    section, and it counts when it has at least two entries and the last two are `stall`. A log
+    with no escalation entry has no batch. Reads nothing but the log: no epoch, no terminal
+    failures."""
+    anchor = next(
+        (i for i in range(len(pause_log) - 1, -1, -1) if pause_log[i]["kind"] == "escalation"),
+        None,
+    )
+    if anchor is None:
+        return False
+    batch: list[str] = []
+    for entry in reversed(pause_log[:anchor]):
+        if entry["kind"] != "failure":
+            break
+        batch.append(entry["value"])
+    # `batch` is newest first: the last two attempts are its first two.
+    return len(batch) >= 2 and batch[0] == "stall" and batch[1] == "stall"
 
 
 def restarted_returns_prompt() -> Prompt:
