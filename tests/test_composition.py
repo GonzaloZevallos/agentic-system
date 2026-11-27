@@ -704,7 +704,7 @@ def _identity_answer() -> dict:
     options = [{"id": f"O{i}", "name": n} for i, n in enumerate(get_args(Etapa))]
     nodes = [
         {"id": "F_etapa", "name": "Etapa", "dataType": "SINGLE_SELECT", "options": options},
-        {"id": "F_bloqueo", "name": "Bloqueo", "dataType": "TEXT"},
+        {"id": "F_motivo", "name": "Motivo", "dataType": "TEXT"},
         {"id": "F_costo", "name": "Costo USD", "dataType": "NUMBER"},
         {"id": "F_inicio", "name": "Inicio", "dataType": "DATE"},
         {"id": "F_fin", "name": "Fin", "dataType": "DATE"},
