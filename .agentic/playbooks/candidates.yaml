@@ -2575,3 +2575,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-27T17:15:50.364+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a run flow (a new gate, exit code or step), update the matching docs/architecture flow page in the same change, and check that each claim in it holds for every path.
+  confidence: medium
+  seen_in:
+  - GH-1162
+  sources:
+  - finding
+  added_at: '2026-11-27T20:01:18.148+00:00'
