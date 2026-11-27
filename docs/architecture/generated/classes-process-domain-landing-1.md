@@ -44,7 +44,7 @@ classDiagram
     class board__Card["Card"]
     class board__FieldWrite["FieldWrite"]
     class board__IssueFacts["IssueFacts"]
+    class board__Remembered["Remembered"]
     class cost_history__Bucket["Bucket"]
-    class cost_history__Floor["Floor"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```

@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
+    class landing__ScopeVerdict["ScopeVerdict"]
     class landing__Slice["Slice"]
     class landing__SliceInputs["SliceInputs"]
     class landing__SliceUnit["SliceUnit"]

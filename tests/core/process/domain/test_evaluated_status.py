@@ -2,6 +2,7 @@
 `deliver`. Every closed map keyed by the status vocabulary must hold it, and the routing sends
 a task carrying `evaluation` there after its full checks -- never a real task."""
 
+from datetime import date
 from typing import get_args
 
 from agentic.core.process.domain import board, rules
@@ -20,7 +21,8 @@ def _facts(status: str) -> IssueFacts:
         live=False,
         blocker=None,
         document={"status": status},
-        in_eval_set=False,
+        today=date(2026, 11, 27),
+        resumes_itself=False,
     )
 
 
@@ -30,8 +32,11 @@ def test_evaluated_is_part_of_the_status_vocabulary():
 
 def test_every_status_of_the_vocabulary_is_known_to_the_board_map():
     # An unknown status reads "documento con estado desconocido": a status the map forgot.
+    # `evaluated` is the one the owner's table sends there on purpose: no card should be a
+    # run's end on the board.
     for status in get_args(Status):
-        assert board.card(_facts(status)).bloqueo != board.UNKNOWN_STATUS, status
+        known = board.card(_facts(status)).motivo != board.UNKNOWN_STATUS
+        assert known == (status != "evaluated"), status
 
 
 def test_evaluated_ends_the_run_and_has_a_rank_of_its_own_in_closeness():
