@@ -378,3 +378,11 @@ def test_the_whole_repo_as_prototype_is_not_listed_and_calls_no_git(product):
         assert stack.prototype_files("HEAD", _design(prototype)) == PrototypeListing(
             (), "whole_repo"
         )
+
+
+def test_stacking_is_read_at_the_given_revision_and_defaults_to_off(product):
+    off = commit_stack(product, "checks:\n  tests: pytest\n")
+    on = commit_stack(product, "checks:\n  tests: pytest\nstacking: true\n")
+    assert GitStack(product).stacking(off) is False
+    assert GitStack(product).stacking(on) is True
+    assert GitStack(product).stacking(off) is False  # the revision decides, not HEAD

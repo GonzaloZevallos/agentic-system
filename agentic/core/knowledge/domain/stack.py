@@ -238,6 +238,7 @@ KEYS = (
     "check_timeouts",
     "not_ready_exit",
     "adr_naming",
+    "stacking",
 )
 # The six risk ids every product has (GH-591). The process side defines its own `BUILTIN_RISKS`
 # and a test pins the two equal: this tuple is only here so `risk_areas` can refuse a repeat.
@@ -584,6 +585,21 @@ def adr_naming(data: object, source: object) -> Literal["numbered", "dated"]:
     if value == "numbered":
         return "numbered"
     raise ValueError(f"{source}: expected `adr_naming` to be one of {ADR_NAMINGS}, not {value!r}")
+
+
+def stacking(data: object, source: object) -> bool:
+    """Whether the product lets a part start on its Ready same-split parent's branch (GH-858,
+    ADR-0103, ADR-0104). Opt-in: a key absent is `False`, the launch of today. Present, it must
+    be a real bool -- `isinstance`, so `1` and `"true"` are refused and not coerced: a typo that
+    quietly read as a no would leave a product waiting the way it did before, and one read as a
+    yes would start parts on a branch nobody asked to build on. Not a version pin."""
+    declared = _declared(data, source)
+    if "stacking" not in declared:
+        return False
+    value = declared["stacking"]
+    if not isinstance(value, bool):
+        raise ValueError(f"{source}: expected `stacking` to be true or false, a boolean")
+    return value
 
 
 def ci(data: object, source: object) -> tuple[str, ...]:
@@ -1645,5 +1661,12 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "`numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or "
         "`yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated "
         "form instead of renumbering it",
+    ),    KeyReference(
+        "stacking",
+        stacking,
+        (),
+        Computed(),
+        "boolean: true lets a part start on its Ready same-split parent's branch, once the "
+        "launch judgement reads it; absent means false, the launch of today",
     ),
 )

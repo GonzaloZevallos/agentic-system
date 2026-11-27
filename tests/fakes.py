@@ -495,6 +495,7 @@ class MemoryStack:
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
         adr_naming: Literal["numbered", "dated"] = "numbered",
+        stacking: bool = False,
         prototype: PrototypeListing | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
@@ -574,6 +575,7 @@ class MemoryStack:
         # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
         # default for one), and each revision asked: a test counts the reads.
         self.declared_adr_naming = adr_naming
+        self.declared_stacking = stacking
         self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
         self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
@@ -654,6 +656,10 @@ class MemoryStack:
     def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
         self.adr_naming_reads.append(revision)
         return self.adr_naming_at.get(revision, self.declared_adr_naming)
+
+    def stacking(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_stacking
 
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.

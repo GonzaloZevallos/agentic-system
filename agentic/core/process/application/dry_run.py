@@ -130,7 +130,7 @@ READS = {
         """adr_naming affected_checks affected_fallback api_break_line check_budgets
         check_timeouts checks ci ci_covers ci_dispatch delivery_checks design docs docs_pathspecs
         forbidden generated merge_inert not_ready_exit parallel_checks performance product
-        prototype_files rerun_checks risk_areas setup verifications witness"""
+        prototype_files rerun_checks risk_areas setup stacking verifications witness"""
     ),
     "ExperimentFile": _names("read"),
     "Launcher": frozenset(),

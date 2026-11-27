@@ -681,6 +681,13 @@ class ProductStack(Protocol):
         file names. Raises `ValueError` when the key is there with any other value."""
         ...
 
+    def stacking(self, revision: str) -> bool:
+        """Whether the product lets a part start on its Ready same-split parent's branch
+        (`core.knowledge`, GH-858, ADR-0103), as the commit `revision` declares it. Opt-in:
+        `False` when the key is absent, the launch of today byte for byte. Raises `ValueError`
+        when the key is there but not a boolean."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
