@@ -1738,3 +1738,13 @@ tasks:
     cost_usd: 0.0541
   GH-1170@review:
     cost_usd: 0.0
+  GH-1172@review:
+    cost_usd: 0.0416
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-1172
