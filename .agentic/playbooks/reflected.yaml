@@ -1748,3 +1748,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-1172
+  GH-1169@review:
+    cost_usd: 0.026
