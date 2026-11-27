@@ -2509,3 +2509,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-26T23:49:05.013+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you add or keep an entry in a list the plan or an ADR invariant says must be documented, update that record in the same change and check every invariant against your diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1081
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T04:50:16.331+00:00'
