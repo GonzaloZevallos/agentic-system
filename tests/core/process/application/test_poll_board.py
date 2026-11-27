@@ -148,7 +148,7 @@ def test_the_mirror_gets_the_stack_pauses_the_round_held_its_children_with(tmp_p
     _round(tmp_path, ports)
     assert seen == [{5: ("parent_stopped", 40), 6: ("unreadable", None)}]
     motivo = {w.issue: w.value for w in board.written if w.field == "motivo"}
-    assert motivo[5] == "padre #40 detenido"
+    assert motivo[5] == domain.STACK_STOPPED.format(40)
     assert motivo[6] == domain.STACK_UNREADABLE
 
 

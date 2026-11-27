@@ -413,8 +413,8 @@ def test_the_stack_causes_tested_are_every_cause_but_none():
 
 def test_the_motivo_names_the_link_that_caused_the_hold_not_the_direct_parent():
     # the chain is 7 -> 30 -> 40: the culprit is the grandparent #40
-    assert _stacked("parent_stopped", 40) == (TE_NECESITA, "padre #40 detenido")
-    assert _stacked("parent_escalated", 31) == (PROXIMO, "espera #31")
+    assert _stacked("parent_stopped", 40) == (TE_NECESITA, board.STACK_STOPPED.format(40))
+    assert _stacked("parent_escalated", 31) == (PROXIMO, f"{board.BLOCKER_PREFIX}#31")
 
 
 @pytest.mark.parametrize(
@@ -449,7 +449,7 @@ def test_only_the_in_flight_statuses_show_the_stack_pause(status):
     paused = board.card(_facts(document=document, stack_pause=("parent_stopped", 40)))
     plain = board.card(_facts(document=document))
     if status in board._IN_FLIGHT:
-        assert (paused.etapa, paused.motivo) == (TE_NECESITA, "padre #40 detenido")
+        assert (paused.etapa, paused.motivo) == (TE_NECESITA, board.STACK_STOPPED.format(40))
     else:
         assert paused == plain
 
@@ -460,7 +460,7 @@ def test_a_child_without_a_document_ignores_the_stack_pause():
 
 def test_a_stack_pause_beats_the_childs_own_open_blockers():
     got = _stacked("parent_stopped", blocker=rules.BlockerReport(open=(12,)))
-    assert got == (TE_NECESITA, "padre #40 detenido")
+    assert got == (TE_NECESITA, board.STACK_STOPPED.format(40))
 
 
 def test_a_pause_that_ends_leaves_no_residue_on_the_card():

@@ -142,7 +142,7 @@ def test_a_stack_pause_reaches_the_written_card_and_costs_no_new_call() -> None:
     mirror(ports, stack_pauses={1: ("parent_stopped", 40)})
     assert etapas(board) == {1: TE_NECESITA, 2: TE_NECESITA}
     motivo = {w.issue: w.value for w in board.written if w.field == "motivo"}
-    assert motivo == {1: "padre #40 detenido", 2: domain.NO_LIVE_PROCESS}
+    assert motivo == {1: domain.STACK_STOPPED.format(40), 2: domain.NO_LIVE_PROCESS}
     # the same round with no pause reads the same things: the pause is not a read
     free_board = FakeBoard(open=[row(1), row(2)])
     free_ports, _ = ports_with(free_board, docs)
