@@ -30,6 +30,7 @@ from agentic.core.process.domain import playbook, rules
 from agentic.core.process.domain.check_results import check_key
 from agentic.core.process.domain.ci import CiVerdict
 from agentic.core.process.domain.docs import Docs, conflict_line
+from agentic.core.process.domain.rules import Commit
 from agentic.core.process.domain.task import TaskState
 from tests.core.process.application.spec_fixtures import (
     SPEC,
@@ -164,7 +165,15 @@ def _behind(tmp_path, **document):
     `attempts_exhausted` asks for a `sync_master`."""
     ports = _ports(5, checks=False, merge_attempts={"head": HEAD, "count": 3}, **document)
     ports.workspace.upstream_merges[MASTER] = MASTER_CLEAN
+    _chain(ports)
     return ports, _World(ports, tmp_path)
+
+
+def _chain(ports, *, tip: str = HEAD, merge: str = NEW, parents: tuple[str, ...] | None = None):
+    """The first-parent chain `scope_of` reads after the sync: the one merge of master made on
+    top of the accepted `tip` (`parents` overrides its parents, to make it a foreign merge)."""
+    ports.workspace.first_parent_line = (Commit(merge, parents or (tip, MASTER)),)
+    ports.workspace.ancestors = {tip, MASTER}
 
 
 # ---- the five behaviours -----------------------------------------------------------------
@@ -213,7 +222,8 @@ def test_a_clean_sync_carries_the_verdict_even_where_master_touched_the_branchs_
         "at": scope["at"],
     }
     assert scope["at"]
-    assert ports.workspace.merge_resolution_asks == []  # the sync never reads a remerge-diff
+    # `scope_of` reads the one remerge-diff of the merge it carries, and finds it empty.
+    assert ports.workspace.merge_resolution_asks == [NEW]
 
     ports.tracker.head_oid = NEW
     world.tick()
@@ -239,6 +249,7 @@ def test_a_head_accepted_only_through_close_docs_still_carries(tmp_path):
         5, checks=False, merge_attempts={"head": docs_head, "count": 3}, close_docs=close_docs
     )
     ports.workspace.upstream_merges[MASTER] = MASTER_CLEAN
+    _chain(ports, tip=docs_head)
     ports.tracker.head_oid = docs_head
     world = _World(ports, tmp_path)
 
@@ -247,9 +258,10 @@ def test_a_head_accepted_only_through_close_docs_still_carries(tmp_path):
     assert [r.step for r in world.landed] == ["sync_master"]
     unit = _unit(ports)
     assert unit["reviewed_head"] == NEW
-    assert unit["reviewed_head_carried_from"] == HEAD
+    # The accepted tip is the close-docs head, a descendant of the reviewed `HEAD`.
+    assert unit["reviewed_head_carried_from"] == docs_head
     [scope] = _document(ports)["review_scopes"]
-    assert (scope["scope"], scope["cause"], scope["base"]) == ("carried", "clean", HEAD)
+    assert (scope["scope"], scope["cause"], scope["base"]) == ("carried", "clean", docs_head)
 
 
 def test_a_head_the_review_does_not_cover_carries_nothing_and_records_nothing(tmp_path):
@@ -772,6 +784,54 @@ def test_the_conflict_reason_is_what_it_was_without_docs_and_regenerates_with_th
     assert declared == plain + conflict_line(docs)
     assert "do not merge them by hand" in declared
     assert "run `make docs` and commit its output" in declared
+
+
+# ---- one computer of scope (GH-976) ------------------------------------------------------
+
+OWNED_HUNK = "diff --git a/docs/gen/a.md b/docs/gen/a.md\n+| row |"
+
+
+def test_a_settled_docs_conflict_is_carried_regenerated_and_pushed(tmp_path):
+    ports, world = _behind(tmp_path)
+    docs = Docs("make docs", ("docs/gen/**",), mode="validate")
+    ports.stack.declared_docs = docs
+    ports.workspace.upstream_merges[MASTER] = UpstreamMerge(False, ("docs/gen/a.md",), NEW)
+    ports.workspace.full_head = lambda path: NEW  # the concluded merge commit
+    ports.workspace.ancestries[("e" * 40, "e" * 40)] = "same"  # master's merge-base on both sides
+    ports.workspace.merge_bases = {(NEW, MASTER): "e" * 40, (MASTER, MASTER): "e" * 40}
+    ports.workspace.merge_resolutions = {NEW: OWNED_HUNK}
+
+    world.tick()
+
+    assert ports.workspace.settle_owned_calls  # settled from master's side, no Developer
+    assert world.resumed == []
+    [scope] = _document(ports)["review_scopes"]
+    assert (scope["scope"], scope["cause"], scope["base"]) == ("carried", "regenerated", HEAD)
+    assert _unit(ports)["reviewed_head"] == NEW
+    assert ports.workspace.pushed
+
+
+def test_a_merge_the_sync_did_not_make_from_master_is_not_carried_and_not_pushed(tmp_path):
+    ports, world = _behind(tmp_path)
+    _chain(ports, parents=(HEAD, FOREIGN))  # `_bring_in`'s merge brought something else
+
+    world.tick()
+
+    assert _unit(ports)["reviewed_head"] == HEAD
+    assert not _document(ports).get("review_scopes")
+    assert not ports.workspace.pushed
+    assert world.resumed == [5]
+
+
+def test_a_git_error_reading_the_scope_is_not_carried_and_not_pushed(tmp_path):
+    ports, world = _behind(tmp_path)
+    ports.workspace.first_parent_error = "git log failed: scripted"
+
+    world.tick()
+
+    assert _unit(ports)["reviewed_head"] == HEAD
+    assert not _document(ports).get("review_scopes")
+    assert not ports.workspace.pushed
 
 
 # ---- the spec carry gate (GH-594, part 4b-3b) --------------------------------------------
