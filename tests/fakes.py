@@ -3475,6 +3475,19 @@ class Measured:
         return getattr(self._graph, name)
 
 
+class MeasuredBuilder:
+    """The graph builder `cli._run` compiles itself: what it compiles is a `Measured` graph."""
+
+    def __init__(self, builder: Any):
+        self._builder = builder
+
+    def compile(self, *args: Any, **kwargs: Any) -> Measured:
+        return Measured(self._builder.compile(*args, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._builder, name)
+
+
 def early_sized(
     hand_files: int = 1,
     hand_lines: int = 10,
