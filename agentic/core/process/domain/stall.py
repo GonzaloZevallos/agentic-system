@@ -7,8 +7,8 @@ stalled when it is older than the threshold. What renews the mark: every message
 stream (the runner does that, it is not a snapshot fact), the output of a delivery hook,
 a hook still in flight (only until the ceiling it declared on entering; past it the whole
 threshold runs from the last renewed tick) and, only while a main-thread tool call is
-pending, the CPU or the state R/D of a marked child of the attempt. A fact that could not be read (`None`)
-counts as activity: nothing is killed without evidence.
+pending, the CPU or the state R/D of a marked child of the attempt. A fact that could not
+be read (`None`) counts as activity: nothing is killed without evidence.
 """
 
 from __future__ import annotations
