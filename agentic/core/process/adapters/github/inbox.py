@@ -9,7 +9,7 @@ from pathlib import Path
 from ...application.ports import ListMayBeCut
 from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
-from .run import bounded_run, print_line, run_gh
+from .run import RateLimitLatch, bounded_run, print_line, run_gh
 from .tracker import Run, issue_number
 
 # `gh issue list`'s own page size cap high enough that a product's open issues never
@@ -28,8 +28,10 @@ class GhInbox:
         *,
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
+        latch: RateLimitLatch | None = None,
     ):
         self.product_dir = product_dir
+        self._latch = latch if latch is not None else RateLimitLatch()
         self._run = run
         self._log = log
 
@@ -45,6 +47,7 @@ class GhInbox:
             ("issue", "view", str(number), "--json", "title,body"),
             cwd=self.product_dir,
             log=self._log,
+            latch=self._latch,
             not_installed="gh is not installed; --issue needs the GitHub CLI",
             failed=lambda stderr: f"gh could not read issue #{number}: {stderr}",
         )
@@ -78,6 +81,7 @@ class GhInbox:
             ),
             cwd=self.product_dir,
             log=self._log,
+            latch=self._latch,
             not_installed="gh is not installed; a stack review needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )
@@ -107,6 +111,7 @@ class GhInbox:
             ),
             cwd=self.product_dir,
             log=self._log,
+            latch=self._latch,
             not_installed="gh is not installed; filing a flake needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )

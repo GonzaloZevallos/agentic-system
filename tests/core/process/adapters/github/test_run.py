@@ -12,13 +12,18 @@ import pytest
 
 from agentic.core.process.adapters.github.run import (
     GH_DRAIN_S,
+    GH_EXEMPT_WAIT_MAX_S,
+    GH_RATE_WAIT_MAX_S,
     GH_TRANSIENT_STATUSES,
+    RateLimitLatch,
+    _rate_limit_reset,
     bounded_run,
     http_status,
     run_gh,
 )
 from agentic.core.process.application.ports import (
     TrackerCallFailed,
+    TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
@@ -26,7 +31,7 @@ from agentic.core.process.application.ports import (
 )
 
 
-def _gh(run, *args, log=None, cwd=Path(".")):
+def _gh(run, *args, log=None, cwd=Path("."), latch=None):
     lines: list[str] = []
     return (
         lambda: run_gh(
@@ -36,6 +41,7 @@ def _gh(run, *args, log=None, cwd=Path(".")):
             not_installed="no gh",
             failed=lambda stderr: f"failed: {stderr}",
             log=log or lines.append,
+            latch=latch,
         ),
         lines,
     )
@@ -99,6 +105,7 @@ def test_run_gh_default_log_is_flushed_stdout(capsys):
             cwd=Path("."),
             not_installed="x",
             failed=str,
+            latch=None,
         )
     captured = capsys.readouterr()
     assert captured.out.startswith("agentic: gh pr list timed out after 60 s")
@@ -326,7 +333,9 @@ def _policy(clock, *, cap=900, stop=None):
     return GhRetry(max_wait_s=cap, sleep=clock.sleep, now=clock.now, stop=stop)
 
 
-def _retrying(run, clock, *, cap=900, stop=None, read=False, args=("issue", "comment", "7")):
+def _retrying(
+    run, clock, *, cap=900, stop=None, read=False, args=("issue", "comment", "7"), latch=None
+):
     lines: list[str] = []
     call = lambda: run_gh(  # noqa: E731
         run,
@@ -335,6 +344,7 @@ def _retrying(run, clock, *, cap=900, stop=None, read=False, args=("issue", "com
         not_installed="no gh",
         failed=lambda stderr: f"failed: {stderr}",
         log=lines.append,
+        latch=latch,
         retry=_policy(clock, cap=cap, stop=stop),
         retry_timeouts=read,
     )
@@ -603,3 +613,126 @@ def test_the_status_exceptions_still_build_from_a_message_alone():
     assert TrackerTransient("m").status is None
     assert TrackerRefused("m").status is None
     assert TrackerRefused("m", status=404).status == 404
+
+
+# --- the rate limit as TrackerRateLimited and the latch (GH-996) ---------------------------
+
+GRAPHQL_LIMITED = "GraphQL: API rate limit already exceeded for user ID 1."
+SECONDARY = "gh: You have exceeded a secondary rate limit. (HTTP 403)"
+UNREACHABLE = "error connecting to api.github.com\ncheck your internet connection"
+_LOG_LINE = (
+    "agentic: gh issue view met the GitHub rate limit; this read fails and the next round retries"
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code", "expected", "status"),
+    [
+        (RATE_LIMITED, 1, TrackerRateLimited, 403),
+        (GRAPHQL_LIMITED, 1, TrackerRateLimited, None),
+        (UNREACHABLE, 1, TrackerUnreachable, None),
+        (BAD_GATEWAY, 1, ValueError, 502),
+        (RATE_LIMITED, 4, ValueError, 403),
+        (SECONDARY, 1, ValueError, 403),
+    ],
+)
+def test_without_a_policy_only_a_rate_limit_is_tracker_rate_limited(stderr, code, expected, status):
+    latch = RateLimitLatch()
+    call, lines = _gh(_raising(_failed(stderr, code)), latch=latch)
+    with pytest.raises(ValueError) as raised:
+        call()
+    assert type(raised.value) is expected
+    assert getattr(raised.value, "status", status) == status
+    assert latch.take() is (expected is TrackerRateLimited)
+    if expected is TrackerRateLimited:
+        suffix = "" if status is None else f" (HTTP {status})"
+        assert str(raised.value) == f"gh issue view met the GitHub rate limit{suffix}"
+        assert lines == [_LOG_LINE]
+        assert "user ID" not in lines[0] + str(raised.value)
+    elif expected is TrackerUnreachable:
+        assert str(raised.value) == "gh issue view could not reach GitHub (error connecting to)"
+    else:
+        assert str(raised.value) == f"failed: {stderr} (HTTP {status})"
+        assert lines == []
+
+
+def _limits(reset):
+    return json.dumps({"resources": {"graphql": {"remaining": 0, "reset": reset}}})
+
+
+@pytest.mark.parametrize("cap", [GH_RATE_WAIT_MAX_S, GH_EXEMPT_WAIT_MAX_S, 30])
+def test_the_graphql_literal_waits_for_a_reset_within_each_cap(cap):
+    clock, latch = _Clock(1_000), RateLimitLatch()
+    run = _script(_failed(GRAPHQL_LIMITED), _limits(1_000 + cap), "done")
+    call, _ = _retrying(run, clock, cap=cap, latch=latch)
+    assert call() == "done"
+    assert sum(clock.sleeps) == pytest.approx(cap)
+    assert latch.take() is False  # a retried success never marks
+
+
+@pytest.mark.parametrize("cap", [GH_RATE_WAIT_MAX_S, GH_EXEMPT_WAIT_MAX_S, 30])
+def test_the_graphql_literal_with_a_reset_beyond_the_cap_raises_without_sleeping(cap):
+    clock, latch = _Clock(1_000), RateLimitLatch()
+    run = _script(_failed(GRAPHQL_LIMITED), _limits(1_000 + cap + 1))
+    call, _ = _retrying(run, clock, cap=cap, latch=latch)
+    with pytest.raises(TrackerRateLimited):
+        call()
+    assert clock.sleeps == []
+    assert latch.take() is True
+
+
+def test_every_ending_limit_marks_the_latch_and_a_stopped_wait_still_raises():
+    clock, latch = _Clock(1_000), RateLimitLatch()
+    # three attempts, each followed (but the last) by a failing rate_limit read: five calls
+    run = _script(*[_failed(RATE_LIMITED)] * 5)
+    call, _ = _retrying(run, clock, latch=latch)
+    with pytest.raises(TrackerRateLimited, match="on each of 3 attempts"):
+        call()
+    assert latch.take() is True and latch.take() is False
+
+    stopping = _Clock(1_000)
+    run = _script(_failed(GRAPHQL_LIMITED), _limits(1_050), "never")
+    call, _ = _retrying(run, stopping, stop=_Stop(after=1, clock=stopping), latch=latch)
+    with pytest.raises(TrackerRateLimited, match="stopped"):
+        call()
+    assert sum(stopping.sleeps) == 1 and latch.take() is True
+
+
+def test_a_failing_rate_limit_read_leaves_the_latch_clear_after_a_retried_success():
+    clock, latch = _Clock(), RateLimitLatch()
+    run = _script(_failed(GRAPHQL_LIMITED), _failed(RATE_LIMITED), "done")
+    call, _ = _retrying(run, clock, latch=latch)
+    assert call() == "done"
+    assert latch.take() is False
+
+
+def test_a_transient_that_runs_out_leaves_the_latch_clear():
+    latch = RateLimitLatch()
+    call, _ = _retrying(_script(*[_failed(BAD_GATEWAY)] * 3), _Clock(), latch=latch)
+    with pytest.raises(TrackerTransient):
+        call()
+    assert latch.take() is False
+
+
+def test_take_reads_and_clears_in_one_step():
+    latch = RateLimitLatch()
+    assert latch.take() is False
+    latch.mark()
+    latch.mark()
+    assert [latch.take(), latch.take()] == [True, False]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("not json", None),
+        ('{"resources": {"core": {"remaining": 5, "reset": 1}}}', None),
+        (
+            '{"resources": {"core": {"remaining": 0, "reset": 40},'
+            ' "graphql": {"remaining": 0, "reset": 90}, "search": {"remaining": 3, "reset": 9}}}',
+            90.0,
+        ),
+    ],
+)
+def test_rate_limit_reset_keeps_its_results(raw, expected):
+    assert _rate_limit_reset(_script(raw), Path(".")) == expected

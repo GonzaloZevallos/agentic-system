@@ -41,7 +41,7 @@ from ...domain.task import (
     TrackerTarget,
 )
 from ...domain.tracker_refs import issue_number, pull_request_number
-from .run import GhRetry, bounded_run, print_line, run_gh
+from .run import GhRetry, RateLimitLatch, bounded_run, print_line, run_gh
 
 # The order a merge method is picked in: the first the repository allows.
 _MERGE_METHODS = (
@@ -505,8 +505,10 @@ class GhTracker:
         retry: GhRetry | None = None,
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
+        latch: RateLimitLatch | None = None,
     ):
         self.product_dir = product_dir
+        self._latch = latch if latch is not None else RateLimitLatch()
         # The product's `api_break_line` (GH-610), asked only when a check is red.
         self._api_break_line = api_break_line
         self._now = now
@@ -1148,6 +1150,7 @@ class GhTracker:
             log=self._log,
             not_installed="gh is not installed; delivering to GitHub needs the CLI",
             failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+            latch=self._latch,
             retry=retry,
             retry_timeouts=retry_timeouts,
         )

@@ -50,7 +50,16 @@ from ...application.ports import (
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
-from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
+from .run import (
+    GH_EXIT_AUTH,
+    GhRetry,
+    RateLimitLatch,
+    Run,
+    bounded_run,
+    http_status,
+    print_line,
+    run_gh,
+)
 
 BOARD_TIMEOUT_S: float = 30
 """Each Project call's own bound (the tracker's is `GH_TIMEOUT_S`, 60)."""
@@ -176,7 +185,9 @@ class GhBoard:
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
+        latch: RateLimitLatch | None = None,
     ):
+        self._latch = latch if latch is not None else RateLimitLatch()
         self.cwd = cwd
         self.owner = owner
         self.number = number
@@ -202,6 +213,7 @@ class GhBoard:
             if write
             else lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=self.log,
+            latch=self._latch,
             retry=self.retry if write else None,
         )
 

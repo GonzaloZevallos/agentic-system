@@ -15,6 +15,7 @@ import re
 import select
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -69,8 +70,12 @@ _HTTP_STATUS = re.compile(
 # captured failure; if `gh`'s wording changes the classifier does not retry, the safe side.
 GH_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
 # What `gh` prints when the primary rate limit is spent ("API rate limit exceeded ... (HTTP
-# 403)"); the wait for it comes from `gh api rate_limit`, never from this text.
-GH_RATE_LIMIT_MARKER = "api rate limit exceeded"
+# 403)") or when a GraphQL call hits it ("GraphQL: API rate limit already exceeded ..."); the
+# wait for it comes from `gh api rate_limit`, never from this text. Used only in this module.
+GH_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    "api rate limit exceeded",
+    "api rate limit already exceeded",
+)
 # The longest one retry wait or rate-limit wait may be: for `run`/`resume`, and for the
 # `merge`/`land` children, which must not hold the lane of the runs exempt from the cap for
 # more than a minute (GH-389, ADR-0050 addendum).
@@ -82,6 +87,24 @@ _SLICE_S: float = 1
 GH_EXIT_AUTH = 4
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+
+class RateLimitLatch:
+    """A fact that crosses threads and must be read exactly once: a call or board request
+    ended rate-limited. `mark` sets it; `take` returns it and clears it in one step."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._marked = False
+
+    def mark(self) -> None:
+        with self._lock:
+            self._marked = True
+
+    def take(self) -> bool:
+        with self._lock:
+            marked, self._marked = self._marked, False
+            return marked
 
 
 def print_line(line: str) -> None:
@@ -287,7 +310,7 @@ def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
-    if GH_RATE_LIMIT_MARKER in lowered:
+    if any(marker in lowered for marker in GH_RATE_LIMIT_MARKERS):
         return "rate_limited"
     if http_status(stderr) in GH_TRANSIENT_STATUSES or any(
         marker in lowered for marker in GH_TRANSIENT_MARKERS
@@ -310,6 +333,7 @@ def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
             not_installed="gh is not installed",
             failed=lambda stderr: "gh api rate_limit failed",
             log=lambda line: None,
+            latch=None,
         )
         resources = json.loads(raw)["resources"]
         resets = [
@@ -349,6 +373,7 @@ def run_gh(
     cwd: Path,
     not_installed: str,
     failed: Callable[[str], str],
+    latch: RateLimitLatch | None,
     log: Callable[[str], None] = print_line,
     retry: GhRetry | None = None,
     retry_timeouts: bool = False,
@@ -371,7 +396,11 @@ def run_gh(
 
     When `gh` printed an HTTP status (`http_status`), the refusal and the exhaustion message
     end with ` (HTTP nnn)` and the exception carries it as `status` (GH-438); nothing else
-    `gh` printed is added."""
+    `gh` printed is added.
+
+    A rate limit that ends the call (no policy, attempts exhausted, reset over the cap, wait
+    stopped) marks `latch` before it raises `TrackerRateLimited`; a retried success never
+    does. `latch` is `None` only for the `rate_limit` read."""
     call = " ".join(args[:2])
     attempt = 1
     while True:
@@ -382,7 +411,15 @@ def run_gh(
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr.strip()
             status = http_status(stderr)
-            kind = None if retry is None else _retryable_kind(exc.returncode, stderr)
+            kind = _retryable_kind(exc.returncode, stderr)
+            if retry is None and kind == "rate_limited":
+                if latch is not None:
+                    latch.mark()
+                message = f"gh {call} {_PHRASES[kind]}"
+                log(f"agentic: {message}; this read fails and the next round retries")
+                raise TrackerRateLimited(_with_status(message, status), status=status) from exc
+            if retry is None:
+                kind = None
             if kind is None:
                 marker = _unreachable_marker(exc.returncode, stderr)
                 if marker is not None and retry is None:
@@ -416,6 +453,8 @@ def run_gh(
                 attempt += 1
                 continue
             giving_up = f"gh {call} {_PHRASES[kind]}; the wait was stopped"
+        if kind == "rate_limited" and latch is not None:
+            latch.mark()
         raise _ERRORS[kind](_with_status(giving_up, status), status=status) from cause
 
 
@@ -429,6 +468,7 @@ __all__ = [
     "GH_TRANSIENT_STATUSES",
     "GH_UNREACHABLE_MARKERS",
     "GhRetry",
+    "RateLimitLatch",
     "StreamRead",
     "bounded_run",
     "bounded_stream",

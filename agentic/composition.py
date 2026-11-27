@@ -75,6 +75,7 @@ from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
     GhRetry,
+    RateLimitLatch,
     Run,
     bounded_run,
     run_gh,
@@ -514,6 +515,7 @@ def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
             not_installed="gh is not installed; the scores backfill needs the gh CLI",
             failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
             log=lambda _line: None,
+            latch=RateLimitLatch(),
             retry=GhRetry(max_wait_s=0, attempts=1),
             retry_timeouts=True,
         )
