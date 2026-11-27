@@ -2556,3 +2556,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-27T15:21:30.184+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep the code for each plan invariant your change touches. When a dependency is missing, skip the step instead of adding a fallback that wires it in a second place.
+  confidence: medium
+  seen_in:
+  - GH-1183
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T17:15:50.364+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change alters a key flow (what a loop or round does, or who consumes a shared resource), update the matching docs/architecture pages in the same change, with file and symbol references.
+  confidence: medium
+  seen_in:
+  - GH-1183
+  sources:
+  - finding
+  added_at: '2026-11-27T17:15:50.364+00:00'
