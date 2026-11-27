@@ -10,7 +10,7 @@ from agentic.core.process.adapters.filesystem.check_ledger import (
     POLL_INTERVAL_S,
     FilesystemCheckLedger,
 )
-from agentic.core.process.application.ports import CheckRequest
+from agentic.core.process.application.ports import CheckAbandoned, CheckRequest
 from agentic.core.process.domain.check_schedule import CheckPriority, Limits
 from agentic.core.process.domain.reaping import CHECK_TASK
 from tests.fakes import FakeReaper
@@ -223,3 +223,80 @@ def test_a_corrupt_or_foreign_boot_ledger_is_read_as_what_survives(tmp_path):
     assert world.ledger(2, boot="boot-b").acquire(request()).share == 6  # reads past the junk
     assert world.ledger(3).acquire(request()).share == 6  # the record of pid 2 is of another boot
     assert sorted(e["pid"] for e in world.entries()) == [3]
+
+
+# -- an abandoned wait (GH-1169) ---------------------------------------------------------
+
+
+def _full_ledger(world: World) -> None:
+    """Two subtasks hold six cores each: the next request has to wait."""
+    world.ledger(1).acquire(request())
+    world.ledger(2).acquire(request())
+
+
+def test_an_abandoned_wait_leaves_the_ledger_within_one_poll_without_booking(tmp_path):
+    world = World(tmp_path)
+    _full_ledger(world)
+    abandoned = False
+
+    def abandon() -> None:
+        nonlocal abandoned
+        abandoned = True
+
+    world.on_sleep = abandon
+    started = world.now
+    with pytest.raises(CheckAbandoned):
+        world.ledger(3).acquire(
+            request(wait=1800.0, expires=7200.0, token="mine", cancelled=lambda: abandoned)
+        )
+    assert world.now - started == POLL_INTERVAL_S  # not wait_max_s, not expires_after_s
+    assert [e["pid"] for e in world.entries()] == [1, 2]  # no line left, no overdue share
+    assert world.slept == [POLL_INTERVAL_S]
+
+
+def test_a_flag_already_set_never_enters_the_queue(tmp_path):
+    world = World(tmp_path)
+    _full_ledger(world)
+    seen: list[int] = []
+    world.on_sleep = lambda: seen.append(len(world.entries()))
+    with pytest.raises(CheckAbandoned):
+        world.ledger(3).acquire(request(wait=60.0, cancelled=lambda: True))
+    assert seen == [] and world.slept == []
+    assert [e["pid"] for e in world.entries()] == [1, 2]
+
+
+def test_a_flag_set_while_a_share_is_free_does_not_book_it(tmp_path):
+    world = World(tmp_path)
+    with pytest.raises(CheckAbandoned):
+        world.ledger(1).acquire(request(cancelled=lambda: True))
+    assert world.entries() == []
+
+
+def test_an_abandoned_wait_keeps_what_a_later_request_of_another_token_booked(tmp_path):
+    world = World(tmp_path)
+    _full_ledger(world)
+    later = world.ledger(3)
+    state = {"abandoned": False}
+
+    def abandon_then_ask_again() -> None:
+        state["abandoned"] = True
+        world.on_sleep = lambda: None
+        later.acquire(request(wait=0.0, token="second"))  # queues, then overdue-books
+
+    world.on_sleep = abandon_then_ask_again
+    with pytest.raises(CheckAbandoned):
+        world.ledger(3).acquire(
+            request(wait=60.0, token="first", cancelled=lambda: state["abandoned"])
+        )
+    tokens = {e["token"] for e in world.entries()}
+    assert "second" in tokens and "first" not in tokens
+
+
+def test_without_a_flag_the_wait_is_the_one_of_before(tmp_path):
+    world = World(tmp_path)
+    _full_ledger(world)
+    grant = world.ledger(3).acquire(request(wait=2.0))
+    assert grant.overdue and world.slept == [POLL_INTERVAL_S, POLL_INTERVAL_S]
+    assert CheckRequest(SUBTASK, 1.0, 2.0) == CheckRequest(
+        SUBTASK, 1.0, 2.0, cancelled=lambda: True
+    )

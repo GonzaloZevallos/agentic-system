@@ -783,6 +783,12 @@ class RunStopped(BaseException):
     rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
 
 
+class CheckAbandoned(BaseException):
+    """The attempt that asked for a share or a check was abandoned (a stall, or any exit of
+    the attempt). Not an `Exception`, for the reason `RunStopped` is not one. It is never a
+    verdict: no row, no flake, no refusal and no stored pass comes of it."""
+
+
 class StopFlag(Protocol):
     """Whether the run was told to stop. Only `run` and `resume` own one that can be set;
     every other verb gets one that never is."""
@@ -2642,13 +2648,16 @@ class CheckRequest:
     and `token` are `None` on the gate's first call and are the grant's on every later one,
     so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
     may wait; `expires_after_s` is how long the share may be held before the ledger drops
-    it, whatever its holder says."""
+    it, whatever its holder says. `cancelled` is the abandonment flag of the attempt that
+    asks, or `None`: read on every pass of the wait, a set one leaves the queue by raising
+    `CheckAbandoned` instead of booking. It is no part of what the request says."""
 
     priority: CheckPriority
     wait_max_s: float
     expires_after_s: float
     enqueued_at: float | None = None
     token: str | None = None
+    cancelled: Callable[[], bool] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
