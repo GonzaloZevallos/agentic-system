@@ -384,7 +384,7 @@ async def test_a_stored_plan_with_parts_and_a_checklist_ends_in_a_split_that_pos
     )
 
 
-# The early size check (GH-999, ADR-0105): between PM's approval and the design branch.
+# The early size check (GH-999, ADR-0109): between PM's approval and the design branch.
 
 BRIEF = "Exports must be reachable from the reports page."
 EARLY_PARTS = [

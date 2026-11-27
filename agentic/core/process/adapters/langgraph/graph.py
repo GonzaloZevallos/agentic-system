@@ -420,7 +420,7 @@ def build_graph(
     # The texts (README.md, 4): `write_copy` is the last rung of `rules.design_step`, so it is
     # reached by the same routing as the design nodes and goes on to the plan.
     graph.add_node("write_copy", _node(write_copy, TECH_WRITER, shared, telemetry, arm_for))
-    # The early size check (GH-999, ADR-0105): right after PM approves the PRD, before the design
+    # The early size check (GH-999, ADR-0109): right after PM approves the PRD, before the design
     # branch; `rules.after_definition` sends a feature here while the check is due.
     graph.add_node("early_size", _node(early_size, DEFINITION_SIZER, shared, telemetry, arm_for))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))

@@ -1,4 +1,4 @@
-"""The early_size node (GH-999, ADR-0105): one patch per run, fail open, never an estimate."""
+"""The early_size node (GH-999, ADR-0109): one patch per run, fail open, never an estimate."""
 
 from __future__ import annotations
 
