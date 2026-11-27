@@ -3156,6 +3156,18 @@ def test_a_cut_list_of_checks_with_no_cursor_is_unreadable_never_followed(wrap, 
 
 
 @_PAGED_READERS
+def test_a_later_page_that_says_more_and_gives_no_cursor_is_unreadable_never_whole(wrap, read):
+    first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
+    second = _commit_page([_run_node("ci-ok", "COMPLETED", "FAILURE")], next_checks="x")
+    second["statusCheckRollup"]["contexts"]["pageInfo"]["endCursor"] = None
+    run = _scripted(wrap, first, second)
+    got = read(GhTracker(Path("/p"), run))
+    assert got == CiUnreadable("gh_unreadable")
+    assert isinstance(got, CiUnreadable) and "cursor" in got.detail
+    assert len(run.argv) == 2
+
+
+@_PAGED_READERS
 def test_a_next_page_of_another_commit_is_unreadable_never_mixed(wrap, read):
     first = _commit_page([_run_node("unit", "COMPLETED", "SUCCESS")], next_checks="k1")
     second = _commit_page([_run_node("web", "COMPLETED", "SUCCESS")], oid="d" * 40)

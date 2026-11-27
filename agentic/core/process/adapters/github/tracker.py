@@ -330,6 +330,12 @@ def _next_cursor(connection: dict | None) -> str | None:
     return cursor if isinstance(cursor, str) and cursor else None
 
 
+def _says_more(connection: dict | None) -> bool:
+    """Whether the connection says a page follows (`hasNextPage` true), cursor or not."""
+    page = connection.get("pageInfo") if connection is not None else None
+    return isinstance(page, dict) and page.get("hasNextPage") is True
+
+
 def _page_nodes(connection: dict | None) -> list:
     nodes = connection.get("nodes") if connection is not None else None
     if not isinstance(nodes, list):
@@ -1215,6 +1221,10 @@ class GhTracker:
                     nodes[name].extend(_page_nodes(connection))
                     pages[name] += 1
                     cursors[name] = _next_cursor(connection)
+                    if cursors[name] is None and _says_more(connection):
+                        return CiUnreadable.of(
+                            "gh_unreadable", f"a page of {name} says more and gives no cursor"
+                        )
         except (_Unreadable, KeyError, IndexError, TypeError) as exc:
             return CiUnreadable.of("gh_unreadable", _why(exc))
         return answer, (_whole(commit, nodes) if nodes and isinstance(commit, dict) else commit)
