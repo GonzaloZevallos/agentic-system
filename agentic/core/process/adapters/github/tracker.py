@@ -19,6 +19,7 @@ from typing import Literal
 
 from ...application.ports import (
     BranchPullRequest,
+    GhCallLog,
     HeldListMayBeCut,
     IssueComment,
     IssueState,
@@ -548,7 +549,9 @@ class GhTracker:
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
         access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
+        self._calls = calls
         self.product_dir = product_dir
         # The product's `api_break_line` (GH-610), asked only when a check is red.
         self._api_break_line = api_break_line
@@ -1269,6 +1272,7 @@ class GhTracker:
             retry_timeouts=retry_timeouts,
             access=self._access,
             call=call,
+            calls=self._calls,
         )
 
     def _gh_read(

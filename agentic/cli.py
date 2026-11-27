@@ -3201,7 +3201,10 @@ async def _reflect(
                 task_id=task_id,
                 system=system
                 if system is not None
-                else composition.system_repo(composition.write_access(cfg, None, NullStopFlag())),
+                else composition.system_repo(
+                    composition.write_access(cfg, None, NullStopFlag()),
+                    composition.process_call_log(),
+                ),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc
