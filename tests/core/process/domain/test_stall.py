@@ -20,6 +20,7 @@ def snap(**overrides) -> StallSnapshot:
         pending_tools=0,
         hooks_in_flight=0,
         last_hook_exit=None,
+        hook_expires=None,
         child=ChildActivity(cpu_ticks=5, running=False),
         previous_child=ChildActivity(cpu_ticks=5, running=False),
         timeout_s=TIMEOUT,
@@ -89,3 +90,98 @@ def test_a_hook_that_just_exited_restarts_the_whole_threshold():
 def test_an_exit_older_than_the_last_activity_changes_nothing():
     last = 9_990.0
     assert judge(snap(last_activity=last, last_hook_exit=100.0)).last_activity == last
+
+
+# The ceiling of an in-flight hook (GH-978): with the ADR-0057 threshold at 1800 s and the
+# watchdog looking every CHECK_EVERY_S, the last renewed tick sits at or before the expiry.
+THRESHOLD = 1800.0
+EXPIRES = 9_000.0
+LAST_TICK = EXPIRES - CHECK_EVERY_S / 2  # a renewal that landed shortly before the expiry
+IDLE = dict(
+    child=ChildActivity(cpu_ticks=5, running=False),
+    previous_child=ChildActivity(cpu_ticks=5, running=False),
+)
+
+
+def hook_snap(**overrides) -> StallSnapshot:
+    fields = dict(
+        pending_tools=0,
+        hooks_in_flight=1,
+        hook_expires=EXPIRES,
+        timeout_s=THRESHOLD,
+        **IDLE,
+    )
+    fields.update(overrides)
+    return snap(**fields)
+
+
+def test_a_hook_inside_its_ceiling_sustains_the_attempt_however_long_the_silence():
+    verdict = judge(hook_snap(now=EXPIRES - 100, last_activity=EXPIRES - 100 - THRESHOLD - 500))
+    assert not verdict.stalled
+    assert verdict.last_activity == EXPIRES - 100
+
+
+def test_a_hook_exactly_at_its_ceiling_still_renews():
+    verdict = judge(hook_snap(now=EXPIRES, last_activity=EXPIRES - THRESHOLD - 500))
+    assert verdict.last_activity == EXPIRES
+
+
+def test_past_the_ceiling_the_hook_stops_renewing_and_the_threshold_runs_from_the_last_tick():
+    verdict = judge(hook_snap(now=LAST_TICK + THRESHOLD, last_activity=LAST_TICK))
+    assert not verdict.stalled
+    assert verdict.last_activity == LAST_TICK
+
+
+def test_past_the_ceiling_plus_the_threshold_it_is_a_stall():
+    verdict = judge(hook_snap(now=LAST_TICK + THRESHOLD + 1, last_activity=LAST_TICK))
+    assert verdict.stalled
+    assert verdict.last_activity == LAST_TICK
+
+
+def test_a_hook_without_a_ceiling_sustains_the_attempt_as_before():
+    verdict = judge(hook_snap(hook_expires=None, now=EXPIRES * 10, last_activity=0.0))
+    assert not verdict.stalled
+    assert verdict.last_activity == EXPIRES * 10
+
+
+def test_a_2900_s_gate_inside_its_ceiling_is_not_stalled():
+    entered = 5_000.0
+    verdict = judge(
+        hook_snap(now=entered + 2900.0, last_activity=entered, hook_expires=entered + 3300.0)
+    )
+    assert not verdict.stalled
+
+
+def test_past_the_ceiling_plus_the_threshold_a_pending_tool_with_a_working_child_keeps_it_alive():
+    verdict = judge(
+        hook_snap(
+            now=EXPIRES + THRESHOLD + 600,
+            last_activity=LAST_TICK,
+            pending_tools=1,
+            child=ChildActivity(cpu_ticks=9, running=False),
+            previous_child=ChildActivity(cpu_ticks=5, running=False),
+        )
+    )
+    assert not verdict.stalled
+
+
+def test_past_the_ceiling_a_pending_tool_with_an_idle_readable_child_stalls():
+    verdict = judge(
+        hook_snap(now=LAST_TICK + THRESHOLD + 1, last_activity=LAST_TICK, pending_tools=1)
+    )
+    assert verdict.stalled
+
+
+def test_an_exit_after_the_ceiling_restarts_the_whole_threshold():
+    exited = LAST_TICK + 600
+    verdict = judge(
+        hook_snap(
+            now=exited + THRESHOLD,
+            last_activity=LAST_TICK,
+            hooks_in_flight=0,
+            hook_expires=None,
+            last_hook_exit=exited,
+        )
+    )
+    assert not verdict.stalled
+    assert verdict.last_activity == exited

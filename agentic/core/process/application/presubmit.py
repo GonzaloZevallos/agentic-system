@@ -19,7 +19,7 @@ from pathlib import Path
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
-from ..domain import presubmit, run_check
+from ..domain import presubmit, rules, run_check
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.docs import Docs
 from ..domain.presubmit import (
@@ -32,7 +32,7 @@ from ..domain.presubmit import (
     RerunForm,
     WitnessResult,
 )
-from ..domain.task import FlakeRecord, GateRecord, TaskState
+from ..domain.task import FlakeRecord, GateRecord, TaskState, TimeoutFact
 from . import docs_settlement
 from .checkouts import task_base
 from .ports import CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
@@ -194,7 +194,7 @@ class CheckoutPresubmit:
         # The wall of the checks and verifications whose product declared one, by name, already
         # resolved by `run_check.resolve_wall` (ADR-0065 addendum, GH-451); every other command
         # gets `check_timeout_s`. Empty is the presubmit of before, byte for byte.
-        self.timeouts: Mapping[str, float] = timeouts or {}
+        self.walls: Mapping[str, float] = timeouts or {}
         # The exit that means "not ready" and the load that excuses it, or None: no command is
         # classified and none reads the load (GH-451). Keyword-only, so every site compiles.
         self.readiness = readiness
@@ -247,6 +247,9 @@ class CheckoutPresubmit:
         # The declared command behind each command a row ran, `{workers}` still in it: what
         # a stored pass is keyed by, so the share never splits the store.
         self._declared: dict[tuple[str, str], str] = {}
+        # The head the last call checked, set only on a moved, clean tree (GH-1075): a timeout
+        # fact is recorded for a delivery only when `head` is that very commit.
+        self._checked_head: str | None = None
 
     @property
     def timeout_s(self) -> float:
@@ -256,7 +259,7 @@ class CheckoutPresubmit:
         declared = max(
             (
                 wall * presubmit.check_runs(name in self.rerun_forms)
-                for name, wall in self.timeouts.items()
+                for name, wall in self.walls.items()
             ),
             default=0.0,
         )
@@ -308,6 +311,7 @@ class CheckoutPresubmit:
         if moved and clean and self.docs is not None:
             head = self._restore_owned_docs(head)
             moved, clean = head != self.before, workspace.is_clean(self.path)
+        self._checked_head = head if moved and clean else None
         if moved and clean and self.before:
             # Before the witness and the checks: a delivery that is not one yet costs no run.
             if (refused := self._refuse_unstageable(head)) is not None:
@@ -321,6 +325,15 @@ class CheckoutPresubmit:
         if witness_reason is not None and self.witness_refusals < presubmit.WITNESS_REFUSALS:
             self.witness_refusals += 1
             return presubmit.witness_refused(witness_reason)
+        # A timeout with no failing test is no refusal and spends none (GH-1075): the delivery
+        # passes unverified, and `timeouts()` says so.
+        if (
+            moved
+            and clean
+            and not self.regressions
+            and presubmit.check_timeout(presubmit.final_results(self.results or []))
+        ):
+            return None
         # A check that ran twice is decided by its last row, never by the affected one
         # the full rerun superseded.
         reason = presubmit.refusal(
@@ -599,6 +612,15 @@ class CheckoutPresubmit:
             )
         return records
 
+    def timeouts(self) -> list[TimeoutFact]:
+        """The checks of the last call that timed out with no failing test (GH-1075), `[]` unless
+        that call checked the commit `head` holds. Derived from `results` on each call."""
+        checked, head = self._checked_head, self.head
+        if checked is None or head is None or not rules.same_commit(checked, head):
+            return []
+        results = self.results or []
+        return presubmit.timeout_facts(results, head) if presubmit.check_timeout(results) else []
+
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran. The
         witness's own line, when one ran, is in this same block whether it agreed or
@@ -610,8 +632,9 @@ class CheckoutPresubmit:
         text = presubmit.checks_markdown(
             self.head, self.results, self.witness_result, base=base, regressions=self.regressions
         )
+        lines = [presubmit.timeout_line(fact) for fact in self.timeouts()]
         notes = [note for note in (self.unstageable_note, self.docs_note) if note]
-        return "\n\n".join([text, *notes])
+        return "\n\n".join([text, *lines, *notes])
 
     def _criteria_regressions(self, head: str) -> list[str]:
         """What this head adds past the criteria caps, against the base this gate was given.
@@ -700,6 +723,8 @@ class CheckoutPresubmit:
         if row is None or row["passed"] is not True:
             return None
         row.pop("mode", None)
+        # A reused row did not run: the share it was stored under is not this run's (GH-1075).
+        row.pop("workers", None)
         if mode is not None:
             row["mode"] = mode
         row["reused"] = True
@@ -714,7 +739,7 @@ class CheckoutPresubmit:
             # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
             declared = self._declared.get((row["name"], row["command"]), row["command"])
             key = self._key(row["name"], declared)
-            if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
+            if key is None or not presubmit.storable(row) or row.get("reused") or row.get("rerun"):
                 continue
             try:
                 store.put(key, row, time.time())
@@ -731,7 +756,7 @@ class CheckoutPresubmit:
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
-        wall = self.timeouts.get(name, self.check_timeout_s)
+        wall = self.walls.get(name, self.check_timeout_s)
         code = self.readiness.exits.get(name) if self.readiness is not None else None
         before = self.readiness.load.one_minute() if self.readiness and code is not None else None
         result = self.ports.commands.run(self.path, command, wall, env=self._grant_env())
@@ -744,6 +769,8 @@ class CheckoutPresubmit:
             "output": output,
             "duration_s": duration_s,
         }
+        if self.grant is not None:
+            row["workers"] = self.grant.share
         if result.timed_out:
             row["timed_out"] = True
         # A timed-out command with nothing captured gives no proof of any test: the note

@@ -10,11 +10,13 @@ import pytest
 import yaml
 
 from agentic.core.process.adapters.github import ci_logs
+from agentic.core.process.adapters.github import run as gh_run
 from agentic.core.process.adapters.github.ci_logs import (
     CI_FLAKE_LOG_BYTES,
     GhCiLogs,
     _Stream,
 )
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.github.run import StreamRead, bounded_stream
 from agentic.core.process.domain.ci import (
     CiCheck,
@@ -24,6 +26,7 @@ from agentic.core.process.domain.ci import (
     log_candidates,
     red_checks,
 )
+from agentic.core.process.domain.gh_calls import GH_CALL_KINDS
 from agentic.core.process.domain.landing import CI_LOG_JOBS
 
 FIXTURES = Path(__file__).resolve().parents[4] / "fixtures" / "ci_logs"
@@ -53,7 +56,15 @@ class Fake:
         assert reference == PR
         return self.report
 
-    def stream(self, args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float):
+    def stream(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        max_bytes: int,
+        timeout_s: float,
+        calls: object = None,
+    ):
         self.calls.append((args, max_bytes, timeout_s))
         return self.answer
 
@@ -68,7 +79,7 @@ def test_a_red_job_of_the_head_is_read_with_its_run_and_job_ids() -> None:
     assert (log.job, log.cause, log.text, log.bytes) == ("check", "read", "E   boom\n", 9)
     assert log.link == "https://github.com/o/r/actions/runs/5/job/11"
     ((args, max_bytes, timeout_s),) = fake.calls
-    assert list(args) == ["gh", "run", "view", "5", "--job", "11", "--log-failed"]
+    assert list(args) == ["run", "view", "5", "--job", "11", "--log-failed"]
     assert max_bytes == 1024 * 1024
     assert 0 < timeout_s <= 60
 
@@ -158,7 +169,9 @@ def test_no_red_job_is_no_log() -> None:
 
 
 def test_a_stream_that_raises_is_unreadable_and_never_reaches_the_caller() -> None:
-    def boom(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+    def boom(
+        args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: object = None
+    ) -> StreamRead:
         raise FileNotFoundError("gh")
 
     fake = Fake([check("check")])
@@ -222,7 +235,9 @@ def flake_fake(
     fake = Fake(checks if checks is not None else [check("check", "SUCCESS")])
     path = FIXTURES / name
 
-    def stream(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+    def stream(
+        args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: object = None
+    ) -> StreamRead:
         fake.calls.append((args, max_bytes, timeout_s))
         return bounded_stream(
             ["cat", str(path)], cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True
@@ -271,7 +286,7 @@ def test_a_green_log_gives_the_prefixed_line_without_gh_columns_or_timestamp() -
         )
     ]
     ((args, max_bytes, timeout_s),) = fake.calls
-    assert list(args) == ["gh", "run", "view", "5", "--job", "11", "--log"]
+    assert list(args) == ["run", "view", "5", "--job", "11", "--log"]
     assert "--log-failed" not in args
     assert max_bytes == 1024 * 1024
     assert 0 < timeout_s <= 60
@@ -316,17 +331,54 @@ def test_the_default_stream_is_the_tail_of_four_mebibytes(
         seen.append(kwargs)
         return StreamRead(b"", 0, 0, False)
 
-    monkeypatch.setattr(ci_logs, "bounded_stream", spy)
+    monkeypatch.setattr(ci_logs, "stream_gh", spy)
     fake = Fake([check("check", "SUCCESS")])
     assert GhCiLogs(Path("."), fake.ci_report).flake_block(PR, HEAD, ["check"]) == [("check", [])]
     assert CI_FLAKE_LOG_BYTES == 4 * 1024 * 1024
     assert [(k["max_bytes"], k["tail"]) for k in seen] == [(CI_FLAKE_LOG_BYTES, True)]
 
 
+def test_the_default_streams_launch_gh_and_record_one_other_call_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: list[list[str]] = []
+
+    def spy(args: Sequence[str], **kwargs: object) -> StreamRead:
+        launched.append(list(args))
+        return StreamRead(b"E   boom\n", 0, 0, False)
+
+    monkeypatch.setattr(gh_run, "bounded_stream", spy)
+    log = InProcessGhCallLog()
+    red = Fake([check("check", "FAILURE")])
+    GhCiLogs(Path("."), red.ci_report, calls=log).failed_job_logs(PR, HEAD)
+    green = Fake([check("check", "SUCCESS")])
+    GhCiLogs(Path("."), green.ci_report, calls=log).flake_block(PR, HEAD, ["check"])
+    assert launched == [
+        ["gh", "run", "view", "5", "--job", "11", "--log-failed"],
+        ["gh", "run", "view", "5", "--job", "11", "--log"],
+    ]
+    assert dict(log.drain()) == {**dict.fromkeys(GH_CALL_KINDS, 0), "other": 2}
+
+
+@pytest.mark.parametrize("flavour", ["failed", "flake"])
+def test_a_stream_that_raises_value_error_keeps_the_unreadable_result(flavour: str) -> None:
+    def refuse(
+        args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: object = None
+    ) -> StreamRead:
+        raise ValueError("stream_gh takes the arguments without the leading gh")
+
+    fake = Fake([check("check", "FAILURE" if flavour == "failed" else "SUCCESS")])
+    adapter = GhCiLogs(Path("."), fake.ci_report, stream=refuse, flake_stream=refuse)
+    if flavour == "failed":
+        assert [log.cause for log in adapter.failed_job_logs(PR, HEAD)] == ["unreadable"]
+    else:
+        assert adapter.flake_block(PR, HEAD, ["check"]) == CiUnreadable("gh_unreadable")
+
+
 def test_only_the_jobs_the_stack_names_are_read() -> None:
     fake = Fake([check("check", "SUCCESS", job=11), check("other", "SUCCESS", job=12)])
     assert flake_lines(fake, jobs=("check", "absent")) == [("check", [])]
-    assert [list(args)[5] for args, _, _ in fake.calls] == ["11"]
+    assert [list(args)[4] for args, _, _ in fake.calls] == ["11"]
 
 
 def test_a_report_for_another_head_reads_nothing() -> None:
@@ -364,7 +416,9 @@ def test_a_check_without_an_actions_link_makes_the_block_unreadable() -> None:
 
 
 def test_a_flake_stream_that_raises_is_unreadable_and_never_reaches_the_caller() -> None:
-    def boom(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+    def boom(
+        args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: object = None
+    ) -> StreamRead:
         raise FileNotFoundError("gh")
 
     fake = Fake([check("check", "SUCCESS")])
@@ -501,7 +555,9 @@ def routed(
     """The logs of `fake` with `--log-failed` answered by `failed` through the plain stream and
     `--log` by `whole` through the tail stream, each remembering how it was asked."""
 
-    def tail(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+    def tail(
+        args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: object = None
+    ) -> StreamRead:
         fake.calls.append((args, max_bytes, timeout_s))
         return whole
 
@@ -535,7 +591,7 @@ def test_a_cut_job_with_nothing_failed_is_read_whole_through_the_tail_stream(
     )
     failed_call, whole_call = fake.calls
     assert list(failed_call[0])[-1] == "--log-failed"
-    assert list(whole_call[0]) == ["gh", "run", "view", "5", "--job", "11", "--log"]
+    assert list(whole_call[0]) == ["run", "view", "5", "--job", "11", "--log"]
     assert whole_call[1] == CI_FLAKE_LOG_BYTES
 
 

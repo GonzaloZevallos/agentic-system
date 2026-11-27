@@ -7319,6 +7319,12 @@ def split_part_of(body: str) -> tuple[str, int, int] | None:
     return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
+def split_marker_ids(body: str) -> tuple[str, ...]:
+    """The task id of every `agentic-split` marker the body carries, in order. The stacking
+    judgement (GH-858) needs exactly one, so a body that holds two reads as ambiguous."""
+    return tuple(found.group(1) for found in _SPLIT_MARKER.finditer(body))
+
+
 # How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
 # size budget is repeated here; the budget is `size_budget.budget_text`.
 SLICING_RULES = (
@@ -7643,6 +7649,10 @@ class BlockerReport:
     open: tuple[int, ...] = ()
     closed_unresolved: tuple[tuple[int, BlockerReason], ...] = ()
     unknown: tuple[int, ...] = ()
+    # The one Ready same-split parent a stacked start would build on (GH-858, ADR-0103): an
+    # issue number, never a sha. Outside `__bool__` on purpose -- it is a reading, not a
+    # verdict: nothing resolves a blocker but `_blocker_verdict`'s merged-in-upstream check.
+    stacked_on: int | None = None
 
     def __bool__(self) -> bool:
         return bool(self.open or self.closed_unresolved or self.unknown)

@@ -44,7 +44,7 @@ it is reopened, resumed, or its escalation is released.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -388,3 +388,30 @@ def unfetchable_patch(
     if record["head"] != pr_head or _released(raw, record):
         return start
     return {}
+
+
+ParentOutcome = Literal["stacked", "not_stacked", "doubt"]
+
+
+@dataclass
+class ParentMemo:
+    """The round's reads of the stacking judgement (GH-858), keyed by `(parent issue, approved
+    head)`: the document read, the remote tip and the ancestry check cost one each per parent
+    and round, whatever the number of children. `not_stacked` and `doubt` are both "not
+    stacked"; `doubt` says the reading failed. `origin_failed` is one-way: once a remote read
+    failed in the round, no further remote read is made for stacking in it. Never a module
+    global and never carried between rounds; pure, it reads nothing."""
+
+    outcomes: dict[tuple[int, str], ParentOutcome] = field(default_factory=dict)
+    origin_failed: bool = False
+
+    def outcome(self, parent: int, head: str) -> ParentOutcome | None:
+        """What this round already concluded about `parent` at `head`, `None` if nothing."""
+        return self.outcomes.get((parent, head))
+
+    def record(self, parent: int, head: str, outcome: ParentOutcome) -> ParentOutcome:
+        self.outcomes[(parent, head)] = outcome
+        return outcome
+
+    def fail_origin(self) -> None:
+        self.origin_failed = True

@@ -623,6 +623,20 @@ ALLOWANCES: tuple[Allowance, ...] = (
     *(
         Allowance(
             test,
+            "scripts/*",
+            "names scripts in strings, in the glob it feeds the matcher or in a command line of a "
+            "fake; it never reads one",
+        )
+        for test in (
+            "tests/core/process/domain/test_master_gain.py",
+            "tests/core/process/domain/test_roles.py",
+            "tests/test_stack.py",
+            "tests/test_affected_tests.py",
+        )
+    ),
+    *(
+        Allowance(
+            test,
             path,
             "names the owner file in strings and in the keys of a fake; it never reads the real "
             "one",
@@ -1126,7 +1140,7 @@ def test_the_stack_declares_the_affected_form_and_keeps_the_other_checks_full():
         "agentic/plugins/*",
         "*CONTEXT*.md",
         ".github/*",
-        "scripts/*",
+        "scripts/affected_tests.py",
         ".env.example",
     )
 
@@ -1356,6 +1370,7 @@ def test_removing_every_dead_allowance_leaves_the_uncovered_reads_unchanged():
 OVERLAPS = {
     "agentic/*.py": "walkers and the guard read every source file, fallback ones included",
     "tests/*.py": "the guard parses every test file, `conftest.py` included",
+    "scripts/*": "tests only name scripts; `scripts/affected_tests.py` stays in the fallback",
 }
 
 
@@ -1469,3 +1484,168 @@ def test_the_gate_names_the_two_exit_codes_this_script_gives():
 
     assert presubmit.AFFECTED_EMPTY_EXIT == script.EMPTY
     assert presubmit.AFFECTED_REFUSED_EXIT == script.REFUSED
+
+
+# -- closure_fraction (GH-1068) ------------------------------------------------------------------
+
+CHAIN = {
+    "agentic/x/leaf.py": "VALUE = 1\n",
+    "agentic/x/mid.py": "from agentic.x import leaf\n",
+    "agentic/x/top.py": "from agentic.x import mid\n",
+    "agentic/x/alone.py": "ALONE = 1\n",
+    "tests/test_leaf.py": "from agentic.x import leaf\n",
+    "tests/test_top.py": "from agentic.x import top\n",
+    "tests/test_other.py": "import json\n",
+    "tests/test_alone.py": "from agentic.x import alone\n",
+}
+
+
+def test_the_closure_grows_with_the_tests_that_reach_the_file_through_the_chain():
+    # The leaf is reached by its own test and, two hops up, by the test of `top`; `top` and
+    # `alone` are each reached by one test; nothing reaches `test_other`.
+    graph = script.graph(CHAIN)
+    leaf = script.closure_fraction(["agentic/x/leaf.py"], graph)
+    top = script.closure_fraction(["agentic/x/top.py"], graph)
+    alone = script.closure_fraction(["agentic/x/alone.py"], graph)
+    assert leaf > top > 0.0
+    assert top == alone
+    assert leaf <= 1.0
+
+
+def test_the_worst_file_of_a_glob_gives_the_closure():
+    graph = script.graph(CHAIN)
+    glob_files = ["agentic/x/top.py", "agentic/x/leaf.py", "agentic/x/alone.py"]
+    assert script.closure_fraction(glob_files, graph) == script.closure_fraction(
+        ["agentic/x/leaf.py"], graph
+    )
+
+
+def test_a_file_outside_the_graph_an_empty_glob_and_a_graph_without_tests_give_zero():
+    graph = script.graph(CHAIN)
+    assert script.closure_fraction(["scripts/ci_flakes.py", "README.md"], graph) == 0.0
+    assert script.closure_fraction([], graph) == 0.0
+    no_tests = script.graph({"agentic/x/leaf.py": ""})
+    assert script.closure_fraction(["agentic/x/leaf.py"], no_tests) == 0.0
+
+
+# -- every Row target resolves (GH-1068) ---------------------------------------------------------
+
+
+def _unresolved(table, graph) -> list[tuple[str, str]]:
+    """(glob, target) for every target of every row that names nothing the graph reaches: each
+    target on its own, never the row's union, so one good target cannot cover a bad one."""
+    tests = {p for p in graph.paths.values() if script.is_test(p)}
+    bad = []
+    for row in table:
+        for target in row.targets:
+            if target.startswith("module:"):
+                name = target.removeprefix("module:")
+                ok = name in graph.paths and bool(script.reaching([name], graph))
+            elif target.endswith("/"):
+                ok = any(t.startswith(target) for t in tests)
+            else:
+                ok = target in tests
+            if not ok:
+                bad.append((row.glob, target))
+    return bad
+
+
+def test_every_target_of_every_row_resolves_in_the_real_graph(real):
+    _, _, found = real
+    assert _unresolved(script.TABLE, found) == []
+
+
+def test_the_resolution_check_rejects_a_misspelled_module_next_to_a_valid_file_target():
+    graph = script.graph(
+        {"agentic/pkg/prompts.py": "", "tests/test_prompts.py": "import agentic.pkg.prompts\n"}
+    )
+    row = script.Row(
+        "agentic/pkg/*",
+        ("tests/test_prompts.py", "module:agentic.pkg.prompt", "tests/gone/", "tests/test_gone.py"),
+        "one good target and three that name nothing",
+    )
+    assert _unresolved([row], graph) == [
+        ("agentic/pkg/*", "module:agentic.pkg.prompt"),
+        ("agentic/pkg/*", "tests/gone/"),
+        ("agentic/pkg/*", "tests/test_gone.py"),
+    ]
+    assert _unresolved([row._replace(targets=("module:agentic.pkg.prompts",))], graph) == []
+
+
+def test_a_module_that_no_test_reaches_does_not_resolve():
+    graph = script.graph({"agentic/pkg/lonely.py": "", "tests/test_x.py": "import json\n"})
+    row = script.Row("x", ("module:agentic.pkg.lonely",), "no test imports it")
+    assert _unresolved([row], graph) == [("x", "module:agentic.pkg.lonely")]
+
+
+# -- the globs that left `affected_fallback` (GH-1068) --------------------------------------------
+
+DROPPED = (
+    ("scripts/*", "scripts/ci_flakes.py", "tests/test_ci_flakes.py"),
+    ("scripts/*", "scripts/docs/check.py", "tests/test_docs.py"),
+    ("scripts/*", "scripts/docs/generate.py", "tests/test_docs.py"),
+    ("scripts/*", "scripts/gate_concurrency.py", "tests/test_gate_concurrency.py"),
+    ("scripts/*", "scripts/poll_waits.py", "tests/test_poll_waits.py"),
+    ("scripts/*", "scripts/install-poller.sh", "tests/test_install_poller.py"),
+    ("scripts/*", "scripts/systemd/agentic-poll.service.in", "tests/test_install_poller.py"),
+    (
+        "scripts/*",
+        "scripts/systemd/agentic-poll.service.in",
+        "tests/core/process/domain/test_poller_units.py",
+    ),
+)
+
+
+@pytest.mark.parametrize(("glob", "example", "named"), DROPPED)
+def test_a_dropped_glob_still_selects_a_named_test_and_no_remaining_glob_matches(
+    real, glob: str, example: str, named: str
+):
+    _, _, found = real
+    assert script.matches(glob, example)
+    assert named in _files(script.select([example], found, script.TABLE, script.IGNORE))
+    declared = stack.affected_fallback(
+        yaml.safe_load(STACK_YAML.read_text(encoding="utf-8")), STACK_YAML
+    )
+    assert glob not in declared
+    assert not [g for g in declared if script.matches(g, example)]
+
+
+def _scripts_repo(repo: Path) -> Path:
+    (repo / "scripts" / "docs").mkdir(parents=True)
+    (repo / "scripts" / "ci_flakes.py").write_text("X = 1\n")
+    (repo / "scripts" / "stage0.sh").write_text("true\n")
+    (repo / "scripts" / "docs" / "render.py").write_text("X = 1\n")
+    (repo / "tests" / "test_ci_flakes.py").write_text("def test_a():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "scripts")
+    return repo
+
+
+def test_a_changed_script_with_a_row_runs_its_test_and_returns_pytests_code(repo: Path, capfd):
+    _scripts_repo(repo)
+    (repo / "scripts" / "ci_flakes.py").write_text("X = 2\n")
+    seen: list[Sequence[str]] = []
+
+    def fake(files: Sequence[str], root: Path, options: Options) -> int:
+        seen.append(files)
+        return 3
+
+    code, out, err = _main(repo, "HEAD", capfd, fake)
+    assert (code, out, err) == (3, "", "")
+    assert seen == [("tests/test_ci_flakes.py",)]
+
+
+def test_a_changed_script_that_no_test_runs_refuses_with_9(repo: Path, capfd):
+    _scripts_repo(repo)
+    (repo / "scripts" / "stage0.sh").write_text("false\n")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs)
+    assert (code, out) == (9, "")
+    assert "maps to no test" in err and "scripts/stage0.sh" in err and err.count("\n") == 1
+
+
+def test_a_python_file_under_scripts_docs_with_no_row_refuses_with_9(repo: Path, capfd):
+    _scripts_repo(repo)
+    (repo / "scripts" / "docs" / "render.py").write_text("X = 2\n")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs)
+    assert (code, out) == (9, "")
+    assert "maps to no test" in err and "scripts/docs/render.py" in err

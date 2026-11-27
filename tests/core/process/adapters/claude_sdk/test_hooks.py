@@ -9,13 +9,14 @@ import pytest
 
 from agentic.core.process.adapters.claude_sdk import check_run_log, hooks
 from agentic.core.process.application.ports import RunStopped
-from agentic.core.process.domain import turn_notice
+from agentic.core.process.domain import check_runs, turn_notice
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
     PJM,
     TECH_LEAD_REVIEWER,
 )
+from agentic.core.process.domain.stall import ChildActivity, StallSnapshot, judge
 from agentic.core.process.domain.suppressions import Forbidden
 
 pytestmark = pytest.mark.anyio
@@ -737,6 +738,48 @@ async def test_with_no_probe_evidence_a_call_without_a_code_never_reads_as_zero(
     assert (row["duration_s"], row["exit_code"]) == (2.5, None)
 
 
+# -- the refusal of a hand run the delivery gate repeats (ADR-0065 addendum 2026-11-25, GH-1070)
+
+REFUSAL = "run the affected form instead"
+
+
+def refusing(command: str) -> str | None:
+    """A `refuse` callable as the application builds it, here over a fixed answer."""
+    found = check_runs.match(command, {"tests": "uv run pytest", "lint": "uv run ruff check ."})
+    return REFUSAL if found is not None and found.check == "tests" else None
+
+
+async def test_an_exact_command_the_gate_repeats_is_denied_with_the_refusal_and_not_recorded():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log, refuse=refusing)
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "uv run pytest"))
+    assert denied(outputs) == [REFUSAL]
+    assert log.snapshot().rows == []
+
+
+async def test_a_command_the_refusal_does_not_name_passes_and_is_recorded():
+    log = check_log(declared={"lint": "uv run ruff check ."})
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log, refuse=refusing)
+    for command in ("uv run ruff check .", "ls -la"):
+        outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", command))
+        assert denied(outputs) == []
+    assert len(log.snapshot().rows) == 1
+
+
+async def test_without_a_refuse_the_same_command_is_not_denied():
+    matchers = hooks.hooks_for(
+        DEVELOPER, CWD, None, runs=check_log(declared={"tests": "uv run pytest"})
+    )
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "uv run pytest"))
+    assert denied(outputs) == []
+
+
+async def test_a_git_denial_is_still_the_first_answer_with_a_refuse():
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, refuse=refusing)
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "git push"))
+    assert denied(outputs) and denied(outputs) != [REFUSAL]
+
+
 class TestGitFromABrokenTaskCheckout:
     """GH-1142: git run from a task checkout whose `.git` is not a gitfile would walk up to
     the product checkout and write there."""
@@ -783,3 +826,104 @@ class TestGitFromABrokenTaskCheckout:
 
     def test_a_denial_says_what_to_do_instead(self):
         assert "checkout" in hooks.NO_CHECKOUT and "system" in hooks.NO_CHECKOUT
+
+
+class _Clock:
+    def __init__(self, now: float = 1_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_two_live_entries_expose_the_later_expiry():
+    clock = _Clock()
+    activity = hooks.HookActivity(clock)
+    with activity.running(ceiling_s=3_000.0):
+        clock.now += 100
+        with activity.running(ceiling_s=1_500.0):
+            assert activity.in_flight == 2
+            assert activity.expires == 1_000.0 + 3_000.0
+        assert activity.expires == 1_000.0 + 3_000.0
+    assert activity.expires is None
+
+
+def test_the_expiry_follows_the_entries_that_are_still_live_when_they_leave_out_of_order():
+    clock = _Clock()
+    activity = hooks.HookActivity(clock)
+    outer, inner = activity.running(ceiling_s=3_000.0), activity.running(ceiling_s=500.0)
+    outer.__enter__()
+    clock.now += 100
+    inner.__enter__()
+    assert activity.expires == 4_000.0
+    outer.__exit__(None, None, None)
+    assert activity.in_flight == 1
+    assert activity.expires == 1_100.0 + 500.0
+    inner.__exit__(None, None, None)
+    assert activity.in_flight == 0
+
+
+def test_an_entry_without_a_ceiling_makes_the_expiry_unbounded():
+    activity = hooks.HookActivity(_Clock())
+    with activity.running(ceiling_s=500.0), activity.running():
+        assert activity.in_flight == 2
+        assert activity.expires is None
+
+
+def test_one_expired_entry_beside_one_inside_its_ceiling_keeps_the_attempt_alive():
+    clock = _Clock()
+    activity = hooks.HookActivity(clock)
+    with activity.running(ceiling_s=300.0), activity.running(ceiling_s=3_000.0):
+        clock.now += 1_000.0  # the first is long past its ceiling, the second is inside
+        verdict = judge(
+            StallSnapshot(
+                now=clock.now,
+                last_activity=clock.now - 5_000.0,
+                pending_tools=0,
+                hooks_in_flight=activity.in_flight,
+                last_hook_exit=activity.last_exit,
+                hook_expires=activity.expires,
+                child=ChildActivity(cpu_ticks=5, running=False),
+                previous_child=ChildActivity(cpu_ticks=5, running=False),
+                timeout_s=1_800.0,
+            )
+        )
+    assert not verdict.stalled
+
+
+def test_after_the_last_entry_leaves_only_the_exit_instant_rules():
+    clock = _Clock()
+    activity = hooks.HookActivity(clock)
+    with activity.running(ceiling_s=300.0):
+        clock.now += 50
+    assert activity.in_flight == 0
+    assert activity.expires is None
+    assert activity.last_exit == 1_050.0
+
+
+def test_an_entry_that_raises_still_leaves():
+    activity = hooks.HookActivity(_Clock())
+    with pytest.raises(RuntimeError), activity.running(ceiling_s=10.0):
+        raise RuntimeError
+    assert activity.in_flight == 0 and activity.expires is None
+
+
+async def test_the_delivery_gate_is_in_flight_with_the_ceiling_its_own_matcher_timeout_carries():
+    """The reruns are already inside `FakePresubmit.timeout_s`: the ceiling is the SDK's own
+    deadline for the hook, never a second formula."""
+    clock = _Clock(2_000.0)
+    activity = hooks.HookActivity(clock)
+    seen: list[float | None] = []
+
+    class Spy(FakePresubmit):
+        def __call__(self):
+            seen.append(activity.expires)
+            return super().__call__()
+
+    matchers = hooks.hooks_for(DEVELOPER, CWD, Spy(), activity=activity)
+    (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    await call(matchers, "PreToolUse", payload)
+    assert hooked.timeout == hooks.GUARD_TIMEOUT_S + 120.0 + 900.0
+    assert seen == [2_000.0 + hooked.timeout]
+    assert activity.in_flight == 0 and activity.expires is None

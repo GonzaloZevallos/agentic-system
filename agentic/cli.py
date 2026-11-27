@@ -595,6 +595,16 @@ def build_parser() -> CommandTree:
         metavar="DIR",
         help="the rotation root (default ~/.agentic-stage0s)",
     )
+    stage0_smoke = add(
+        ("stage0", "smoke"),
+        stage0_sub,
+        "smoke",
+        help="prove this stage starts and can read a product: the real preflight over ports that "
+        "make no tracker, inbox or board call; exits 0, or non-zero on any failure",
+    )
+    stage0_smoke.add_argument(
+        "--product-dir", required=True, help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
     scores = add(("scores",), sub, "scores", help="a task's numbers as Langfuse scores (GH-273)")
     scores_sub = scores.add_subparsers(dest="scores_command", required=True)
     scores_backfill = add(
@@ -753,6 +763,8 @@ def main() -> None:
     if args.command == "perf":
         sys.exit(_perf_main(args))
     if args.command == "stage0":
+        if args.stage0_command == "smoke":
+            sys.exit(_stage0_smoke(args.product_dir))
         sys.exit(_stage0_rotate(args.root))
     if args.command == "run":
         if args.issue_input is not None:
@@ -1162,6 +1174,25 @@ def _stage0_rotate(root: Path) -> int:
         prune=rotation.prune,
         out=print,
     )
+    return 0
+
+
+def _stage0_smoke(product_dir: str) -> int:
+    """`agentic stage0 smoke`: what a rotation asks of a candidate stage for one product (GH-1152).
+    The product's configuration and ports are `poll`'s, with the tracker, the inbox and the board
+    replaced by ports that raise, and the real `preflight` runs over them: the stage's code
+    starts, and the product's stack, flags and prompts read. No GitHub call, so the time is a
+    constant and not the length of a queue. Exits 0, or 1 on any exception; the exception type is
+    the only thing said, never a port's text."""
+    os.environ[ENV_PREFIX + "PRODUCT_DIR"] = product_dir
+    try:
+        cfg = Configuration.from_sources({}, os.environ)
+        if not cfg.agentic_dir.is_dir():
+            raise ValueError("not a product repo: no .agentic/ directory")
+        preflight(cfg, composition.offline_ports(cfg))
+    except Exception as exc:
+        print(f"agentic: stage0 smoke failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -3170,7 +3201,10 @@ async def _reflect(
                 task_id=task_id,
                 system=system
                 if system is not None
-                else composition.system_repo(composition.write_access(cfg, None, NullStopFlag())),
+                else composition.system_repo(
+                    composition.write_access(cfg, None, NullStopFlag()),
+                    composition.process_call_log(),
+                ),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc

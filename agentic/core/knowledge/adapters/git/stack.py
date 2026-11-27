@@ -116,6 +116,10 @@ class GitStack:
             return "numbered"
         return stack.adr_naming(data, source)
 
+    def stacking(self, revision: str) -> bool:
+        data, source = self._declaration(revision)
+        return stack.stacking(data, source)
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         data, source = self._declaration(revision)
         return tuple(

@@ -362,18 +362,19 @@ async def test_a_covered_check_is_never_run_when_the_ci_gave_no_verdict():
     assert ports.check_results.puts == []
 
 
-async def test_an_untrusted_fallback_keeps_a_timeout_red():
+async def test_an_untrusted_fallback_never_defers_a_timeout_it_escalates_it():
     ports = deferring_ports(WEB_OUT)
     ports.workspace.diff_paths = ("src/a.py", ".github/workflows/ci.yml")
     patch = await run(state_of(), ports)
-    assert patch["full_checks"]["ci_fallback"] == "untrusted"
-    assert patch["full_checks"]["passed"] is False and "deferred" not in patch["full_checks"]
+    assert "full_checks" not in patch  # GH-1075: no record, so nothing is deferred or passed
+    assert patch["pause_log"][-1]["cause"] == "check_timeout"
+    assert patch["sections"]["Full checks"].startswith("CI not used (untrusted)")
 
 
-async def test_a_product_without_ci_keeps_a_timeout_red():
+async def test_a_product_without_ci_escalates_a_timeout():
     patch = await run(state_of(), deferring_ports(WEB_OUT, ci=()))
-    assert patch["full_checks"]["passed"] is False
-    assert "deferred" not in patch["full_checks"]
+    assert "full_checks" not in patch
+    assert patch["pause_log"][-1]["cause"] == "check_timeout"
 
 
 # --- the grace period and the one republish (GH-462) ---------------------------------------

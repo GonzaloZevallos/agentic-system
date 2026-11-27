@@ -31,6 +31,8 @@ TAIL_LINES = 30
 # The stack file always forces the full form (ADR-0046): a change to what the checks are
 # can never be measured by the selection that file declares.
 STACK_FILE = ".agentic/stack.yaml"
+# How many characters of a commit sha the checks table shows.
+SHA_SHOWN = 8
 BASE_TOKEN = "{base}"
 WORKERS_TOKEN = "{workers}"
 # Where a `rerun_checks` form takes the test ids `failed_ids` read from the red run (GH-530).
@@ -96,6 +98,13 @@ class CheckResult(TypedDict):
     # (ADR-0065). Set by the system on read, never stored and never by the model; absent
     # on a row that ran.
     reused: NotRequired[bool]
+    # The full sha of G, the last commit this check was green on, on a kept row only (GH-1125):
+    # the affected form selected nothing between G and the head, so G's verdict stands. Set by
+    # `forward_base.kept_row`, never by the model; the row ran nothing.
+    reused_from: NotRequired[str]
+    # The full sha of G on an affected row that really ran against it (GH-1125): what
+    # `kept_row` checks before it keeps G's verdict. Set by the system, absent otherwise.
+    affected_base: NotRequired[str]
     # True on a row produced by the one rerun of a red check (ADR-0066). Set by the system,
     # never by the model; never stored in the check-result store; absent on a first run.
     rerun: NotRequired[bool]
@@ -548,7 +557,8 @@ FORM_PATH_MAX = 200
 FORMS_MAX = 50
 
 # Why a check ran the form it ran (the closed set `RoleRun.forms` records): the first five say
-# why the plan chose it, the last three why an affected form was followed by the full one.
+# why the plan chose it, then why an affected form was followed by the full one, and
+# `kept_green`: the affected form selected nothing since G and G's verdict stands (GH-1125).
 ModeCause = Literal[
     "none",
     "fallback_glob",
@@ -559,6 +569,7 @@ ModeCause = Literal[
     "script_empty",
     "script_refused",
     "affected_red",
+    "kept_green",
 ]
 
 
@@ -636,7 +647,19 @@ def settle_form(
     is the form; when it did not, the full form followed it and the cause is its exit
     (`AFFECTED_EMPTY_EXIT`, `AFFECTED_REFUSED_EXIT`, else `affected_red`; a timed-out row is
     always `affected_red`). A rerun row never sets the cause. With no affected row the plan
-    stands. The only writer of a `ModeCause`."""
+    stands. A kept row (`reused_from`, GH-1125) settles it first: mode `affected-only`, cause
+    `kept_green`. In the exit-8 case both rows are present, the exit-8 row first and then the
+    kept row, so the kept row decides. The only writer of a `ModeCause`."""
+    if any(
+        r.get("mode") == "affected-only" and not r.get("rerun", False) and "reused_from" in r
+        for r in rows
+    ):
+        return {
+            "check": rows[0]["name"],
+            "mode": "affected-only",
+            "cause": "kept_green",
+            "via": via,
+        }
     affected = next(
         (r for r in rows if r.get("mode") == "affected-only" and not r.get("rerun", False)), None
     )
@@ -687,15 +710,24 @@ def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
     return list(last.values())
 
 
+def ran(row: CheckResult) -> bool:
+    """Whether the row is a measured run on this tree: False for a reused row (ADR-0065), a
+    rerun (ADR-0066) and a kept row (`reused_from`, GH-1125). The single test for a row that
+    may enter the check-result store (together with `passed`), feed a duration, or count as a
+    measured run: a kept row passed, but nothing ran for it."""
+    return not (row.get("reused") or row.get("rerun") or "reused_from" in row)
+
+
 def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     """Seconds spent per check name, summed over its rows; a row without one counts zero.
     A reused row never ran, so it adds nothing and a check with only reused rows has no
     entry (ADR-0065): its stored duration is another run's, not a sample of this one. A
     rerun row (ADR-0066) is a second run of the same check, not a sample of the first: it
-    adds nothing either."""
+    adds nothing either. In the exit-8 case (GH-1125) the real exit-8 row still counts and
+    the kept row after it adds nothing: see `ran`."""
     totals: dict[str, float] = {}
     for row in rows:
-        if row.get("reused") or row.get("rerun"):
+        if not ran(row):
             continue
         totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
     return totals
@@ -707,11 +739,14 @@ def decided_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     this invocation spent on a check, so it skips a reused row and a rerun; this answers how long
     the run whose verdict stands took: a flake is its green rerun, and a reused pass is its
     stored `duration_s`, measured on that same tree. A failed or timed-out check has no entry,
-    and neither has a row without a duration: that is never counted as zero."""
+    and neither has a row without a duration: that is never counted as zero. A kept row
+    (`reused_from`, GH-1125) is skipped too: its check gets no entry, never 0. This does not
+    use `ran` on purpose: `ran` is False for a reused pass and a flake's rerun, and skipping
+    those would change `budget_breaches` for every task."""
     return {
         row["name"]: row["duration_s"]
         for row in final_results(rows)
-        if row["passed"] and "duration_s" in row
+        if row["passed"] and "duration_s" in row and "reused_from" not in row
     }
 
 
@@ -850,10 +885,16 @@ def checks_markdown(
             outcome += " (rerun)"
         if r.get("reused"):
             outcome += " (reused)"
+        if "reused_from" in r:
+            outcome += f" (kept from {r['reused_from'][:SHA_SHOWN]})"
+        if "affected_base" in r:
+            outcome += f" against {r['affected_base'][:SHA_SHOWN]}"
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
         shown = f"{seconds[r['name']]:.1f}" if r["name"] in seconds else "-"
+        if "reused_from" in r:
+            shown = "-"
         rows.append("| " + " | ".join([*cells, outcome, shown]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
@@ -861,8 +902,14 @@ def checks_markdown(
     ]
     if moded:
         against = f"`{base}`" if base else "the task base"
+        marked = any("reused_from" in r or "affected_base" in r for r in results)
+        scope = (
+            "`affected-only` rows without `against` or `kept from`"
+            if marked
+            else ("`affected-only` rows")
+        )
         parts.append(
-            f"`affected-only` rows ran the tests selected against {against} (the whole "
+            f"{scope} ran the tests selected against {against} (the whole "
             "branch, `task_base..head`, not the increment under review); the full suite "
             "runs at merge (ADR-0045)."
         )
