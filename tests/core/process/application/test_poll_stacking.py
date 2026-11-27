@@ -4,17 +4,36 @@ pair is landable, memoised per window. In-memory ports with counting wrappers: n
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
 
-from agentic.core.process.application import landing, merge, poll
-from agentic.core.process.application.ports import IssueState, Upstream
+import pytest
+
+from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.application import (
+    checkouts,
+    landing,
+    merge,
+    poll,
+    stack_hold,
+    stacked_start,
+)
+from agentic.core.process.application.ports import IssueState, LockRecord, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
-from agentic.core.process.domain import landing_order
+from agentic.core.process.domain import landing_order, rules, stacking
 from agentic.core.process.domain.task import VERDICT_UNLANDABLE, StackParent
+from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_poll import _cfg, _Locks
-from tests.core.process.application.test_poll_merge import HEAD, MASTER, _HeldLocks, _ports
+from tests.core.process.application.test_poll_merge import (
+    HEAD,
+    MASTER,
+    URL,
+    _HeldLocks,
+    _ports,
+    _pr,
+)
 
 PARENT = "c" * 40
 CLOSING = "f" * 40
@@ -420,3 +439,168 @@ def test_the_member_makes_no_read_of_its_own():
 def test_every_lane_reason_has_poller_text():
     assert set(poll.LANE_TEXT) == set(get_args(landing_order.LaneReason))
     assert poll.LANE_TEXT["stack_parent_unmerged"] == "stacked parent unmerged"
+
+
+# --- GH-1163: the whole stacked life on real git -------------------------------------------------
+
+REPO_NOW = datetime(2026, 11, 27, 12, 0, tzinfo=UTC)
+
+
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+@pytest.fixture
+def product(tmp_path):
+    remote = tmp_path / "remote.git"
+    _git("init", "--bare", "-q", str(remote), cwd=tmp_path)
+    repo = tmp_path / "product"
+    repo.mkdir()
+    _git("init", "-q", "-b", "master", cwd=repo)
+    (repo / "README.md").write_text("v0\n")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "v0", cwd=repo)
+    _git("remote", "add", "origin", str(remote), cwd=repo)
+    _git("push", "-q", "-u", "origin", "master", cwd=repo)
+    return repo
+
+
+def _ready_parent(repo: Path) -> str:
+    """Parent GH-5: a pushed task branch with one commit, which is the head its review approved."""
+    _git("checkout", "-q", "-b", "agentic/GH-5", cwd=repo)
+    (repo / "parent.txt").write_text("parent\n")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "parent", cwd=repo)
+    head = _git("rev-parse", "HEAD", cwd=repo)
+    _git("push", "-q", "origin", "agentic/GH-5", cwd=repo)
+    _git("checkout", "-q", "master", cwd=repo)
+    return head
+
+
+def _real_ports(repo: Path, parent_head: str):
+    workspace = GitWorkspace(repo, Configuration(product_dir=repo).git_identity)
+    ports = dataclasses.replace(_ports(), workspace=workspace)
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "status": "ready_for_review",
+            "subtasks": {"a": {"id": "a", "status": "approved", "reviewed_head": parent_head}},
+        }
+    )
+    return ports
+
+
+def _deliver_child(ports, record, head: str, master: str):
+    """The child's document as delivery leaves it: approved at `head`, checks green on the pair."""
+    ports.tracker.prs[URL.format(6)] = _pr()
+    ports.tracker.head_oid = head
+    ports.documents.save(
+        {
+            "id": "GH-6",
+            "status": "ready_for_review",
+            "pull_request": URL.format(6),
+            "stack_parent": record,
+            "subtasks": {"only": {"id": "only", "status": "approved", "reviewed_head": head}},
+            "merge_checks": {"head": head, "master": master, "passed": True},
+        }
+    )
+    return poll.assess_merge(
+        ports,
+        "GH-6",
+        ports.documents.load("GH-6"),
+        6,
+        frozenset(),
+        master,
+        cfg=Configuration(product_dir=ports.workspace.product_dir),
+        memo=StackMemo(),
+    )
+
+
+def test_a_stacked_child_launches_on_the_ready_parent_and_lands_through_a_restack(product):
+    cfg = Configuration(product_dir=product)
+    parent_head = _ready_parent(product)
+    ports = _real_ports(product, parent_head)
+    decision = stacked_start.decide("GH-6", 5, None, ports, REPO_NOW.isoformat(), cfg=cfg)
+    assert decision.ref == stacking.Parent(parent_head)
+    record = decision.patch["stack_parent"]
+    child = checkouts.task_checkout({"id": "GH-6", "stack_parent": record}, cfg, ports)
+    base = ports.workspace.base_of(rules.task_branch("GH-6"))
+    assert base is not None and _git("rev-parse", base, cwd=product) == parent_head
+
+    (child.path / "child.txt").write_text("child\n")
+    ports.workspace.commit_all(child.path, "child")
+    head = ports.workspace.full_head(child.path)
+    master = ports.workspace.upstream().sha
+    assert master is not None
+    assessed = _deliver_child(ports, record, head, master)
+    assert assessed.decision.reason == "stack_parent_unmerged"
+
+    before = master
+    _git("merge", "-q", "--no-ff", "-m", "Merge parent", "agentic/GH-5", cwd=product)
+    _git("push", "-q", "origin", "master", cwd=product)
+    landed = _git("rev-parse", "HEAD", cwd=product)
+    ports.tracker.states[5] = IssueState("CLOSED", "COMPLETED", (), landed, ())
+    master = ports.workspace.upstream().sha
+    assert master == landed
+    # a child that was started at the recorded head carries it: nothing to restack
+    assert _deliver_child(ports, record, head, master).decision.kind == "merge"
+
+    # a child whose history lost the recorded head (rebuilt on the old master) is due a restack
+    tree = _git("rev-parse", f"{head}^{{tree}}", cwd=product)
+    rebuilt = _git("commit-tree", tree, "-p", before, "-m", "child rebuilt", cwd=product)
+    _git("reset", "-q", "--hard", rebuilt, cwd=child.path)
+    assessed = _deliver_child(ports, record, rebuilt, master)
+    assert assessed.decision.reason == "stack_restack_due"
+
+    synced = ports.workspace.merge_upstream_into(child.path, master)
+    assert synced.clean
+    assessed = _deliver_child(ports, record, synced.head, master)
+    assert assessed.facts.stack is not None and assessed.facts.stack.child_has_parent is True
+    assert assessed.decision == rules.MergeDecision("merge", None)
+
+
+def test_a_branchless_stacked_child_whose_parent_left_ready_is_held_and_spends_no_retake(product):
+    cfg = Configuration(product_dir=product)
+    parent_head = _ready_parent(product)
+    ports = _real_ports(product, parent_head)
+    decision = stacked_start.decide("GH-6", 5, None, ports, REPO_NOW.isoformat(), cfg=cfg)
+    # the start wrote the record and died before the branch: a dead lock is all that is left
+    ports.documents.save({"id": "GH-6", "status": "developing", **decision.patch})
+    ports.tracker._queue = [6]
+    ports.tracker.states[6] = IssueState("OPEN", "", (), None)
+    assert ports.workspace.branch_head(rules.task_branch("GH-6")) is None
+    ports.documents.save({"id": "GH-5", "status": "developing"})  # the parent left Ready
+    locks = _Locks(
+        {"GH-6": LockRecord(777, "h", "2026-11-27T08:00:00Z", "agentic run", "boot-old")}
+    )
+    queued = {6: ports.documents.load("GH-6")}
+    hold = stack_hold.compute(ports, cfg, locks, queued, ports.workspace.upstream, StackMemo(), [])
+    assert hold.held == {6: "parent_not_ready"}
+
+    lines = stack_hold.write_episodes(
+        ports, locks, hold, queued, REPO_NOW, dry_run=False, space_held=False
+    )
+    assert lines == []
+    notes = [text for task, text in ports.tracker.comments if task == "GH-6"]
+    assert len(notes) == 1 and stack_hold.marker(5, "parent_not_ready", 1) in notes[0]
+
+    # without the hold, the dead lock of the unstarted child is the retake loop this part closes
+    assert poll.gather_retakes(ports, locks, "boot-now", now=REPO_NOW)[0] == [6]
+    spent: dict = {}
+    retakes, said = poll.gather_retakes(
+        ports,
+        locks,
+        "boot-now",
+        now=REPO_NOW,
+        spent=spent,
+        skip=frozenset(hold.held),
+    )
+    assert (retakes, said, spent) == ([], [], {})
+    assert [text for task, text in ports.tracker.comments if task == "GH-6"] == notes
