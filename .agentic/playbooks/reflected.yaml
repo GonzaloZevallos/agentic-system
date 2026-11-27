@@ -1728,3 +1728,5 @@ tasks:
       - GH-1161
   GH-1168@review:
     cost_usd: 0.0
+  GH-1171@review:
+    cost_usd: 0.0385
