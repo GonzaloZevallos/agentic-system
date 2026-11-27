@@ -65,7 +65,7 @@ from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
-from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
+from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker, account
 from .core.process.adapters.github.board import (
     BOARD_WRITE_ATTEMPTS,
     BOARD_WRITE_BACKOFF_S,
@@ -125,6 +125,7 @@ from .core.process.application.stage0_rotate import Prune
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
+from .core.process.domain.gh_calls import GH_CALL_KINDS, GhCallKind
 from .core.process.domain.github_access import GithubAccess
 from .core.process.domain.poller_units import unit_dir
 from .core.process.domain.presubmit import ApiBreakLine
@@ -230,6 +231,30 @@ def process_call_log() -> GhCallLog:
     """The one `GhCallLog` of this process (GH-990): every `gh` adapter the composition builds
     counts into it. The only place `InProcessGhCallLog` is constructed outside tests."""
     return InProcessGhCallLog()
+
+
+BUDGET_READ_TIMEOUT_S = 5
+
+
+class _UncountedGhCalls:
+    """The `GhCallLog` the budget read counts into: it counts nothing, so the read of the
+    account's budget never shows up in a real log (GH-939). Private: only `budget_read`
+    builds it."""
+
+    def record(self, kind: GhCallKind) -> None:
+        return None
+
+    def drain(self) -> Mapping[GhCallKind, int]:
+        return dict.fromkeys(GH_CALL_KINDS, 0)
+
+
+def budget_read(cwd: Path) -> Callable[[], object | None]:
+    """The poller's zero-argument read of `gh api rate_limit` (GH-939): bounded at
+    `BUDGET_READ_TIMEOUT_S` seconds (plus the drain `bounded_run` allows a killed child) and
+    counted in no real `GhCallLog`, so the figure it reads does not include itself. The
+    document, or `None` when `gh` failed or printed no JSON."""
+    run = functools.partial(bounded_run, timeout_s=BUDGET_READ_TIMEOUT_S)
+    return lambda: account.read_rate_limit(run, cwd, calls=_UncountedGhCalls())
 
 
 def default_ports(
