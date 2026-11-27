@@ -17,6 +17,7 @@ classDiagram
     class github__inbox__GhInbox["GhInbox"]
     class github__label_timeline__GhLabelTimeline["GhLabelTimeline"]
     class github__run__GhRetry["GhRetry"]
+    class github__run__RateLimitLatch["RateLimitLatch"]
     class github__run__StreamRead["StreamRead"]
     class github__tracker__GhTracker["GhTracker"]
 ```
