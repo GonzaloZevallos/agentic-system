@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__FormatFiler["FormatFiler"]
     class ports__FormatFixReads["FormatFixReads"]
     class ports__FreeSpace["FreeSpace"]
     class ports__GhCallLog["GhCallLog"]
@@ -33,16 +34,14 @@ classDiagram
     class ports__IssueState["IssueState"]
     class ports__LabelTimeline["LabelTimeline"]
     class ports__LandRecord["LandRecord"]
-    class ports__LaunchAttempt["LaunchAttempt"]
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
-  - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.Inbox`
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.SystemRepo` se asocia con `ports.Inbox`
