@@ -489,3 +489,105 @@ def test_declared_names_never_empty_the_selection() -> None:
     checks = _six()
     logs, _ = _logs(checks, lambda: tuple(c.name for c in checks))
     assert len(logs) == CI_LOG_JOBS
+
+
+# A job cancelled at its time limit (GH-1151): `--log-failed` has nothing, the whole log has the
+# list-reporter lines of what ran.
+
+
+def routed(
+    fake: Fake, *, failed: StreamRead, whole: StreamRead, whole_cap: int = CI_FLAKE_LOG_BYTES
+) -> list[JobLog]:
+    """The logs of `fake` with `--log-failed` answered by `failed` through the plain stream and
+    `--log` by `whole` through the tail stream, each remembering how it was asked."""
+
+    def tail(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+        fake.calls.append((args, max_bytes, timeout_s))
+        return whole
+
+    fake.answer = failed
+    adapter = GhCiLogs(
+        Path("."),
+        fake.ci_report,
+        stream=fake.stream,
+        flake_stream=tail,
+        flake_max_bytes=whole_cap,
+    )
+    return adapter.failed_job_logs(PR, HEAD)
+
+
+NOTHING = StreamRead(b"", 0, 0, False)
+SPEC_LINE = "  ✘  4 [mobile] › e2e/mobile.spec.ts:44:5 › phone standard (7.0m)\n"
+
+
+@pytest.mark.parametrize("conclusion", ["CANCELLED", "TIMED_OUT"])
+def test_a_cut_job_with_nothing_failed_is_read_whole_through_the_tail_stream(
+    conclusion: str,
+) -> None:
+    fake = Fake([check("e2e-shard (1)", conclusion, job=11, run=5)])
+    whole = StreamRead(SPEC_LINE.encode(), 0, 0, False)
+    (log,) = routed(fake, failed=NOTHING, whole=whole)
+    assert (log.job, log.cause, log.text, log.truncated_bytes) == (
+        "e2e-shard (1)",
+        "read",
+        SPEC_LINE,
+        0,
+    )
+    failed_call, whole_call = fake.calls
+    assert list(failed_call[0])[-1] == "--log-failed"
+    assert list(whole_call[0]) == ["gh", "run", "view", "5", "--job", "11", "--log"]
+    assert whole_call[1] == CI_FLAKE_LOG_BYTES
+
+
+def test_a_cut_log_over_the_cap_keeps_its_tail(tmp_path: Path) -> None:
+    stamp = "e2e\tRun e2e\t2026-11-27T10:00:00.0000000Z"
+    rows = [f"{stamp}   ✘  1 [mobile] › e2e/early.spec.ts:3:1 › early (3.0s)"]
+    rows += [f"{stamp}   ✓  {n} [mobile] › e2e/ok.spec.ts:{n}:1 › fine (1.0s)" for n in range(2, 9)]
+    rows.append(f"{stamp}   ✘  9 [mobile] › e2e/mobile.spec.ts:44:5 › phone standard (7.0m)")
+    path = tmp_path / "cut.log"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    fake = Fake([check("e2e-shard (1)", "CANCELLED")])
+    whole = bounded_stream(
+        ["cat", str(path)], cwd=Path("."), max_bytes=400, timeout_s=20, tail=True
+    )
+    (log,) = routed(fake, failed=NOTHING, whole=whole, whole_cap=400)
+    assert log.cause == "read"
+    assert log.truncated_bytes > 0
+    assert len(log.text.encode()) <= 400
+    assert "✘  9 [mobile] › e2e/mobile.spec.ts:44:5" in log.text
+    assert "e2e/early.spec.ts" not in log.text
+
+
+def test_a_failed_job_with_a_log_is_read_as_before_and_never_asks_for_the_whole_log() -> None:
+    fake = Fake([check("e2e-shard (1)", "FAILURE")])
+    (log,) = routed(fake, failed=StreamRead(b"E   boom\n", 0, 0, False), whole=NOTHING)
+    assert (log.cause, log.text) == ("read", "E   boom\n")
+    assert [list(args)[-1] for args, _, _ in fake.calls] == ["--log-failed"]
+
+
+def test_a_cut_job_whose_failed_log_is_not_empty_keeps_that_read() -> None:
+    fake = Fake([check("e2e-shard (1)", "CANCELLED")])
+    (log,) = routed(fake, failed=StreamRead(b"E   boom\n", 0, 0, False), whole=NOTHING)
+    assert (log.cause, log.text) == ("read", "E   boom\n")
+    assert len(fake.calls) == 1
+
+
+def test_a_failure_job_with_an_empty_failed_log_is_still_empty() -> None:
+    fake = Fake([check("e2e-shard (1)", "FAILURE")])
+    (log,) = routed(fake, failed=NOTHING, whole=StreamRead(SPEC_LINE.encode(), 0, 0, False))
+    assert log.cause == "empty"
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("whole", "cause"),
+    [
+        (NOTHING, "empty"),
+        (StreamRead(b"x", 0, -1, True), "timed_out"),
+        (StreamRead(b"", 0, 1, False), "unreadable"),
+    ],
+)
+def test_a_whole_log_that_fails_has_the_same_causes(whole: StreamRead, cause: str) -> None:
+    fake = Fake([check("e2e-shard (1)", "TIMED_OUT")])
+    (log,) = routed(fake, failed=NOTHING, whole=whole)
+    assert (log.cause, log.text) == (cause, "")

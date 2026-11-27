@@ -13,7 +13,11 @@ def ids(text: str) -> list[str]:
 
 
 def test_a_log_cut_mid_run_lists_the_failing_spec_with_its_position() -> None:
-    log = f"  ✓  1 [mobile] › e2e/a.spec.ts:3:1 › fine (1.2s)\n  ✘  2 {SPEC} (7.0m)\n  ✓  3 [mobile] › e2e/b.spec.ts:9:1 › ok (2ms)\n"
+    log = (
+        "  ✓  1 [mobile] › e2e/a.spec.ts:3:1 › fine (1.2s)\n"
+        f"  ✘  2 {SPEC} (7.0m)\n"
+        "  ✓  3 [mobile] › e2e/b.spec.ts:9:1 › ok (2ms)\n"
+    )
     assert ci.scan_headers(log).headers == (ci.FailingHeader(1, SPEC),)
 
 
