@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ...application.ports import GhCallLog
 from ...domain.github_budget import BUDGET_TTL
-from .run import Run, run_gh
+from .run import RateLimitLatch, Run, run_gh
 
 _HOST = "github.com"
 
@@ -74,6 +74,7 @@ def _gh_token(run: Run, cwd: Path, *, calls: GhCallLog) -> str | None:
             not_installed="gh is not installed",
             failed=lambda _: "gh auth token failed",
             log=lambda _: None,
+            latch=RateLimitLatch(),  # nothing reads it: a failed read is `None`
             calls=calls,
         )
     except ValueError:
@@ -90,6 +91,7 @@ def read_rate_limit(run: Run, cwd: Path, *, calls: GhCallLog) -> object | None:
             not_installed="gh is not installed",
             failed=lambda _: "gh api rate_limit failed",
             log=lambda _: None,
+            latch=None,  # the rate_limit read never marks a latch
             calls=calls,
         )
         document: object = json.loads(out)

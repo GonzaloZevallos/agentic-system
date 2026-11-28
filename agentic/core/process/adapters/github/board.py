@@ -53,7 +53,17 @@ from ...application.ports import (
 )
 from ...domain.board import Etapa, Field, FieldWrite
 from ...domain.github_access import GithubAccess
-from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
+from .run import (
+    GH_EXIT_AUTH,
+    GhRetry,
+    RateLimitLatch,
+    Run,
+    bounded_run,
+    graphql_rate_limited,
+    http_status,
+    print_line,
+    run_gh,
+)
 
 BOARD_TIMEOUT_S: float = 30
 """Each Project call's own bound (the tracker's is `GH_TIMEOUT_S`, 60)."""
@@ -179,9 +189,11 @@ class GhBoard:
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
+        latch: RateLimitLatch | None = None,
         access: GithubAccess | None = None,
         calls: GhCallLog | None = None,
     ):
+        self._latch = latch if latch is not None else RateLimitLatch()
         self.cwd = cwd
         self._calls = calls
         self.owner = owner
@@ -209,6 +221,7 @@ class GhBoard:
             if write
             else lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=self.log,
+            latch=self._latch,
             retry=self.retry if write else None,
             access=self.access,
             write=write,
@@ -434,12 +447,13 @@ class GhBoard:
         that names none, or a response that is not parseable, fails the whole request:
         `ValueError` carrying the summary, which `_attempt` logs. When every error blames an
         issue, the summary is logged here, once. A `RATE_LIMITED` error arrives as HTTP 200
-        and ends the write (`_RateLimited`)."""
+        and ends the write: the latch is marked, then `TrackerRateLimited` is raised."""
         body = self._graphql(query, variables, write=write)
         data = body.get("data")
         errors = body.get("errors") or []
-        if any(_rate_limited(error) for error in errors):
-            raise _RateLimited("GitHub's GraphQL rate limit was reached")
+        if graphql_rate_limited(errors):
+            self._latch.mark()
+            raise TrackerRateLimited("GitHub's GraphQL rate limit was reached")
         bad: set[int] = set()
         for error in errors:
             blamed = _blamed(error)
@@ -471,20 +485,8 @@ class _UnreadableBody(ValueError):
     """A write's answer was not a GraphQL response: nothing to attribute, the chunk is split."""
 
 
-class _RateLimited(ValueError):
-    """A GraphQL error of type `RATE_LIMITED`: GitHub's answer to everything that follows."""
-
-
 class _Unauthenticated(TrackerRefused):
     """`gh` exited 4: not signed in. No later request would be any different."""
-
-
-def _rate_limited(error: object) -> bool:
-    if not isinstance(error, dict):
-        return False
-    extensions = error.get("extensions")
-    code = extensions.get("code") if isinstance(extensions, dict) else None
-    return error.get("type") == "RATE_LIMITED" or code == "RATE_LIMITED"
 
 
 def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
@@ -493,7 +495,6 @@ def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
         TrackerTurnRefused,  # before `TrackerTransient`: a refused turn is not worth a split
         TrackerUnreachable,
         TrackerRateLimited,
-        _RateLimited,
         _Unauthenticated,
         OSError,
     )

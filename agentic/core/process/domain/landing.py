@@ -707,6 +707,11 @@ def landing_step(
             # GH-859: one merge of master into the child, never a rebase (the parent's commits
             # stay where they are); past the sync budgets it is the escalation (`exhausted`).
             return _sync(step, exhausted, spent, conflicting=False)
+        case "thread_unread":
+            # The issue thread could not be read this round: nobody's to act on, nothing to spend
+            # or write (no landing entry, no backoff). The next round reads it again; a Head whose
+            # read keeps failing yields by `HEAD_BUDGET`.
+            return step("wait")
         case _:
             # Only a refusal of `HUMAN_OWNED_REFUSALS` gets here (answered above); a new refusal
             # that is neither listed nor given a case fails `test_every_none_refusal_is_owned`.
@@ -1244,6 +1249,7 @@ def slice_facts(
         # GH-784: a slice lands only from the task's own landing, which the merge decision of the
         # task already held when an owner escalation was open; the slice adds no read of it.
         open_escalation=False,
+        # A slice reads no thread, so `thread_unread` keeps its default `False`.
         reviewed_unit_approved=approved,
         reviewed_head=slice_head if reviewed else None,
         open_blocking=sum(1 for row in owned if row["severity"] == "blocking"),

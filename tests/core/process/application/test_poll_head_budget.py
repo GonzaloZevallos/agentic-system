@@ -20,6 +20,7 @@ from tests.core.process.application.test_poll_merge import (
     MASTER,
     URL,
     _ready,
+    _UnreadableThread,
 )
 from tests.core.process.domain.test_rules import ESCALATED_0105, RESET_0540
 from tests.fakes import MemoryStack, MemoryTracker, memory_ports
@@ -96,6 +97,28 @@ def test_a_stuck_head_yields_after_one_budget_of_observed_rounds_and_the_second_
     assert "head_turn_at" not in first
     assert found == [6]
     assert _doc(ports, 6)["head_seen_at"] is not None
+
+
+def test_a_head_whose_thread_stays_unreadable_is_not_a_persons_and_yields_by_the_budget(tmp_path):
+    ports = _ports(tmp_path, 5, 6)
+    ports.tracker.__class__ = _UnreadableThread
+    said: list[str] = []
+    for minute in range(0, 60, 5):
+        found, lines = _round(ports, minute)
+        said += [line for line in lines if "yielded" in line]
+        if minute == 0:
+            # It is the Head (a person's task never is) and a wait starts no merge.
+            assert found == []
+            assert _doc(ports, 5)["head_seen_at"] == T0.isoformat()
+
+    assert said == ["agentic: poll: landing order #5 -> yielded (budget_time) to #6"]
+    assert [(y["head"], y["reason"]) for y in _doc(ports, 5)["head_yields"]] == [
+        (HEAD, "budget_time")
+    ]
+    # The failed read writes no landing entry and no refusal record.
+    for number in (5, 6):
+        assert "landing" not in _doc(ports, number)
+        assert "refusal_noted" not in _doc(ports, number)
 
 
 def test_a_full_save_between_two_yields_does_not_break_the_next_record(tmp_path):

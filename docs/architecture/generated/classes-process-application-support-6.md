@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__QueueEntry["QueueEntry"]
     class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
     class ports__RepoOrigin["RepoOrigin"]
@@ -34,7 +35,6 @@ classDiagram
     class ports__SampleAppHandle["SampleAppHandle"]
     class ports__SchemaGuard["SchemaGuard"]
     class ports__Scratch["Scratch"]
-    class ports__SentEntry["SentEntry"]
 ```
 
 ## Relaciones con otras páginas
@@ -46,5 +46,5 @@ classDiagram
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
-- [application: support (parte 8)](classes-process-application-support-8.md)
+- [application: support (parte 9)](classes-process-application-support-9.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

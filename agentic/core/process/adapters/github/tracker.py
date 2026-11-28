@@ -25,6 +25,7 @@ from ...application.ports import (
     IssueState,
     ListedPullRequest,
     MergeCallFailed,
+    QueueEntry,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -43,7 +44,7 @@ from ...domain.task import (
     TrackerTarget,
 )
 from ...domain.tracker_refs import issue_number, issue_target, pull_request_number
-from .run import GhRetry, bounded_run, print_line, run_gh
+from .run import GhRetry, RateLimitLatch, bounded_run, print_line, run_gh
 
 # The order a merge method is picked in: the first the repository allows.
 _MERGE_METHODS = (
@@ -546,6 +547,32 @@ def _comment_author(comment: dict) -> str:
     return ""
 
 
+def _concatenated_pages(raw: str) -> list[dict]:
+    """The items of what `gh api --paginate` prints without `--slurp`: one JSON array per page,
+    one after the other. All or nothing: a value that is cut, trailing text, a value that is not
+    a list of objects, or no value at all raises `ValueError`; a shorter thread never returns.
+    An explicit `[]` is the only empty thread."""
+    decoder = json.JSONDecoder()
+    items: list[dict] = []
+    end, seen = 0, False
+    while True:
+        while end < len(raw) and raw[end].isspace():
+            end += 1
+        if end == len(raw):
+            break
+        try:
+            page, end = decoder.raw_decode(raw, end)
+        except ValueError as exc:
+            raise ValueError(f"gh api answered unreadable comment pages: {raw[:200]!r}") from exc
+        if not isinstance(page, list) or not all(isinstance(item, dict) for item in page):
+            raise ValueError(f"gh api answered a page that is not a list of objects: {raw[:200]!r}")
+        items.extend(page)
+        seen = True
+    if not seen:
+        raise ValueError("gh api answered no comment page")
+    return items
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -635,11 +662,13 @@ class GhTracker:
         retry: GhRetry | None = None,
         now: Callable[[], str] = _utc_now,
         api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
+        latch: RateLimitLatch | None = None,
         access: GithubAccess | None = None,
         calls: GhCallLog | None = None,
     ):
         self._calls = calls
         self.product_dir = product_dir
+        self._latch = latch if latch is not None else RateLimitLatch()
         # The product's `api_break_line` (GH-610), asked only when a check is red.
         self._api_break_line = api_break_line
         self._now = now
@@ -943,23 +972,27 @@ class GhTracker:
         return body
 
     def issue_comments(self, task_id: str) -> list[str]:
-        if (number := issue_number(task_id)) is None:
-            return []
-        comments = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
-        return [c.get("body") or "" for c in comments.get("comments", [])]
+        return [c.body for c in self.timestamped_comments(task_id)]
 
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
+        """The thread of the task's issue, oldest first, read over REST: one `gh api
+        --paginate`, whose pages are read to the end or the read raises (`_concatenated_pages`)."""
         if (number := issue_number(task_id)) is None:
             return []
-        raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
+        raw = self._gh_read(
+            "api",
+            "--paginate",
+            f"repos/{{owner}}/{{repo}}/issues/{number}/comments?per_page=100",
+            call="issue comments",
+        )
         return [
             IssueComment(
                 body=c.get("body") or "",
-                created_at=c.get("createdAt") or "",
+                created_at=c.get("created_at") or c.get("createdAt") or "",
                 author=_comment_author(c),
-                url=c.get("url") or c.get("html_url") or "",
+                url=c.get("html_url") or c.get("url") or "",
             )
-            for c in raw.get("comments", [])
+            for c in _concatenated_pages(raw)
         ]
 
     def issue_created_at(self, task_id: str) -> str | None:
@@ -970,6 +1003,9 @@ class GhTracker:
         return created if isinstance(created, str) and created else None
 
     def queue(self) -> list[int]:
+        return [entry.number for entry in self.queue_entries()]
+
+    def queue_entries(self) -> list[QueueEntry]:
         raw = self._gh_read(
             "issue",
             "list",
@@ -978,11 +1014,15 @@ class GhTracker:
             "--state",
             "open",
             "--json",
-            "number",
+            "number,updatedAt",
             "--limit",
             "500",
         )
-        return sorted(item["number"] for item in json.loads(raw))
+        entries = []
+        for item in json.loads(raw):
+            stamp = item.get("updatedAt")
+            entries.append(QueueEntry(item["number"], stamp if isinstance(stamp, str) else ""))
+        return sorted(entries, key=lambda entry: entry.number)
 
     def held_issues(self) -> frozenset[int]:
         try:
@@ -1422,6 +1462,7 @@ class GhTracker:
             log=self._log,
             not_installed="gh is not installed; delivering to GitHub needs the CLI",
             failed=failed or (lambda stderr: f"gh {label} failed: {stderr}"),
+            latch=self._latch,
             retry=retry,
             retry_timeouts=retry_timeouts,
             access=self._access,

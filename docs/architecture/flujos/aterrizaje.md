@@ -49,9 +49,15 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:auto_merge_decision` si mergear. Cuando dice que no,
    el motivo es uno de los rechazos de la tabla del ADR-0048: CI sin terminar o roto,
    hallazgos abiertos, cabeza no revisada, master movido, intentos agotados.
-   Uno de ellos es `open_escalation` (GH-784): una escalación al dueño sigue abierta o no se pudo
-   mostrar cerrada (`agentic/core/process/application/merge.py:escalation_hold`). Es del humano:
+   Uno de ellos es `open_escalation` (GH-784): una pausa de tracker, `owner_decision_unbuilt` o un
+   `Escalated:` vivo (`agentic/core/process/application/merge.py:escalation_hold`). Es del humano:
    el aterrizaje no hace nada y el poller imprime `left to the human: open_escalation`.
+   Un hilo del issue que no se pudo leer ya no es `open_escalation`: da `thread_unread`
+   (`agentic/core/process/domain/rules.py:auto_merge_decision`, que lo arma una sola vez en
+   `agentic/core/process/application/poll.py:_merge_facts` solo si el hilo hacía falta). Esa tarea
+   no es de nadie: `agentic/core/process/domain/landing.py:landing_step` da `wait`, no escribe
+   ninguna entrada y la ronda siguiente vuelve a leer; una Cabeza cuya lectura sigue fallando cede
+   por `HEAD_BUDGET`.
    La excepción: mientras el propio aterrizaje tiene una pregunta abierta (el documento está
    `escalated`, o su última escalación no tiene `released_at`) la retención no actúa, porque el
    aterrizaje la libera por el rechazo que la causó.

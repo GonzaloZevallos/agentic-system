@@ -18,6 +18,7 @@ from agentic.core.process.domain.gh_calls import GH_CALL_KINDS, GhCallKind, kind
         (("api", "-i", "-X", "POST"), "api"),
         (("api", "rate_limit"), "api"),
         (("api",), "api"),
+        (("api", "--paginate", "repos/{owner}/{repo}/issues/12/comments?per_page=100"), "api"),
         (("run", "view"), "other"),
         (("issue", "close", "7"), "other"),
         (("issue",), "other"),

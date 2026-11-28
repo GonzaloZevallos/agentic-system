@@ -206,6 +206,7 @@ class World:
             base,
             in_eval_set=False,
             open_escalation=False,
+            thread_unread=False,
             touched_paths=("agentic/x.py",),
             conflicts=True,
             github_conflicting=True,

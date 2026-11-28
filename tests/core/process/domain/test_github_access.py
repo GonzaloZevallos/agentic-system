@@ -428,6 +428,11 @@ _ADAPTER_CALLS = [
     pytest.param(("pr", "view", "7", "--json", "changedFiles"), False),
     pytest.param(("pr", "list", "--state", "all", "--json", "number", "--limit", "500"), False),
     pytest.param(("issue", "view", "7", "--json", "comments"), False),
+    pytest.param(
+        ("api", "--paginate", "repos/{owner}/{repo}/issues/7/comments?per_page=100"),
+        False,
+        id="thread read over paginated REST",
+    ),
     pytest.param(("issue", "list", "--label", "agentic", "--state", "open"), False),
     pytest.param(("repo", "view", "--json", "mergeCommitAllowed"), False),
     pytest.param(

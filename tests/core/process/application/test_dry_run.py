@@ -27,7 +27,8 @@ from agentic.core.process.application.dry_run import (
     read_only_ports,
 )
 from agentic.core.process.domain.notify import NotifiedRecord
-from tests.fakes import memory_ports
+from tests.conformance import tracker_queue_entries_agree_with_queue
+from tests.fakes import MemoryTracker, memory_ports
 
 PORTS = sorted(READS)
 NOW = datetime(2026, 11, 13, tzinfo=UTC)
@@ -150,6 +151,16 @@ def test_a_read_delegates():
     inner = types.SimpleNamespace(queue=lambda: [1, 2])
     wrapped, log = _wrapped(inner, "Tracker")
     assert wrapped.queue() == [1, 2]
+    assert log.writes == [] and log.refused == []
+
+
+def test_the_read_only_tracker_keeps_the_queue_entries_contract():
+    inner = MemoryTracker()
+    inner._queue = [20, 4, 9]
+    inner.queue_updated = {9: "2026-11-28T10:00:00Z"}
+    wrapped, log = _wrapped(inner, "Tracker")
+    tracker_queue_entries_agree_with_queue(wrapped)
+    assert wrapped.queue_entries() == inner.queue_entries()
     assert log.writes == [] and log.refused == []
 
 
