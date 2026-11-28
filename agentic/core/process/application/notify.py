@@ -273,8 +273,7 @@ class _Round:
         digest = digest_event(self.now, tz, hour, self.record, self.product)
         if self.kinds.digest and digest is not None and len(sends) < SENDS_PER_ROUND:
             view = self._view(digest, closed, merged, tray_docs)
-            message = _port(lambda: notify_message.digest_message(view, self.repo))
-            self._send(digest.key, _mail(message))
+            self._send(digest.key, _mail(notify_message.digest_message(view, self.repo)))
             self.digest_sent = digest
         self._save(replace(self.record, activity_read_at=self.cursor()))
 
@@ -287,12 +286,16 @@ class _Round:
         assert self.record is not None
         sends: list[tuple[NotifyKey, Mail]] = []
         tray: dict[int, Doc] = {}
+        if not (self.kinds.waiting or self.kinds.digest):
+            return sends, tray
         for number in _port(self.ports.tracker.queue):
             task_id = self.ports.inbox.task_id(number)
             doc = _port(lambda: self.ports.documents.load(task_id))
             if doc is None:
                 continue
             tray[number] = doc
+            if not self.kinds.waiting:
+                continue
             event = waiting_event(_state(doc), self.product, number, issue_closed=False)
             action = None if event is None else pending(event, self.record, self.now)
             if event is None or action is None:

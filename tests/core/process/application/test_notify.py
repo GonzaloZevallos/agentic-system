@@ -145,6 +145,21 @@ def test_waiting_mail_once_and_superseded_key_without_send() -> None:
     assert s.activity.reads == []
 
 
+def test_waiting_kind_off_sends_no_waiting_mail_and_writes_no_waiting_key() -> None:
+    log = [rules.escalation_entry("questions", _at(30).isoformat())]
+    waiting = _doc("GH-7", escalation_class="questions", escalated="Which one?", pause_log=log)
+    resumed = _doc("GH-8", pause_log=[*log, rules.resumed_entry(at=_at(40).isoformat())])
+    s = Setup(docs={"GH-7": waiting, "GH-8": resumed})
+    s.tracker._queue = {7, 8}
+    assert s.round(kinds=NotifyKinds(False, True, False)) == []
+    assert s.notifier.sent == []
+    assert s.notified.record.keys == {}
+    assert "GH-7" not in s.documents.loaded
+    s.round(NOW + timedelta(hours=1), kinds=NotifyKinds(False, False, True))
+    assert [m.subject for m in s.notifier.sent] == ["[shop] Daily digest 2026-11-20"]
+    assert list(s.notified.record.keys) == [DigestKey("shop", NOW.date())]
+
+
 def test_digest_sent_once_a_day_and_settles_rows_of_its_own_round() -> None:
     s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)], merged=[_row(200, 62)])
     s.activity.closed.append(_row(9, 12 * 60 + 5))
