@@ -868,3 +868,20 @@ def test_two_default_ports_without_calls_share_the_process_call_log(tmp_path, mo
         "issue_list": 1, "issue_view": 1, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
     }  # fmt: skip
     assert fake_gh() == 2
+
+
+def test_the_activity_read_is_not_wired_while_the_notifier_address_is_unset(tmp_path, monkeypatch):
+    # GH-1058: the Activity read exists only with the notifier (AGENTIC_NOTIFY_EMAIL_TO).
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    monkeypatch.delenv("AGENTIC_NOTIFY_EMAIL_TO", raising=False)
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product))
+    assert ports.activity is None and ports.notifier is None
+
+
+def test_the_offline_ports_never_carry_an_activity_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    monkeypatch.setenv("AGENTIC_NOTIFY_EMAIL_TO", "someone@example.com")
+    product = a_repository(tmp_path / "product")
+    ports = composition.offline_ports(Configuration(product_dir=product))
+    assert ports.activity is None and ports.notifier is None and ports.notified is None

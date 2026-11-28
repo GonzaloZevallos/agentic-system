@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -2723,15 +2723,61 @@ class Notified(Protocol):
     def save(self, record: NotifiedRecord) -> None: ...
 
 
+@dataclass(frozen=True)
+class ActivityPage:
+    """What one Activity read returned: `rows` oldest first, ordered by `(instant, number)`,
+    and `cut_at`, the instant of the first matching row that was not returned (the row
+    `limit + 1`, the contract of `domain.notify.advance_read_at`), `None` when none was cut.
+    Every instant is aware UTC; a page that is not is a `ValueError` at construction."""
+
+    rows: tuple[ActivityRow, ...]
+    cut_at: datetime | None
+
+    def __post_init__(self) -> None:
+        for row in self.rows:
+            if not _is_utc(row.instant):
+                raise ValueError("an activity row's instant is not aware UTC")
+        if self.cut_at is not None and not _is_utc(self.cut_at):
+            raise ValueError("an activity page's cut_at is not aware UTC")
+        keys = [(row.instant, row.number) for row in self.rows]
+        if keys != sorted(keys):
+            raise ValueError("an activity page's rows are not sorted by (instant, number)")
+        if self.cut_at is not None and self.rows and self.cut_at < self.rows[-1].instant:
+            raise ValueError("an activity page's cut_at is earlier than its last row")
+
+    @property
+    def cut(self) -> bool:
+        """Whether the read stopped at its limit with matching rows left."""
+        return self.cut_at is not None
+
+
+def _is_utc(instant: datetime) -> bool:
+    offset = instant.utcoffset()
+    return offset is not None and offset == timedelta(0)
+
+
+class ActivityFailed(Exception):
+    """An Activity read that did not go through. `cause` is the type name of the underlying
+    error and nothing else: no message, HTTP status or `gh` output is carried (GH-1056)."""
+
+    def __init__(self, cause: str):
+        super().__init__(cause)
+        self.cause = cause
+
+    def __str__(self) -> str:
+        return self.cause
+
+
 class Activity(Protocol):
     """What happened in the product's repository, for the digest (GH-1056). Both reads return
-    oldest first, ordered by `(instant, number)`, with `since` exclusive."""
+    an `ActivityPage` oldest first, ordered by `(instant, number)`, with `since` exclusive.
+    Both raise only `ActivityFailed`."""
 
-    def merged_prs(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
         """The pull requests merged after `since`, oldest first, at most `limit`."""
         ...
 
-    def closed_issues(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
         """The issues closed after `since`, oldest first, at most `limit`."""
         ...
 

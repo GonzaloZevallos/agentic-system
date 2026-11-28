@@ -20,8 +20,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__MergeCallFailed["MergeCallFailed"]
-    class ports__MergeConflict["MergeConflict"]
     class ports__MergeFailed["MergeFailed"]
     class ports__Notified["Notified"]
     class ports__Notifier["Notifier"]
@@ -34,8 +32,13 @@ classDiagram
     class ports__Presubmit["Presubmit"]
     class ports__ProcessReaper["ProcessReaper"]
     class ports__ProductKnowledge["ProductKnowledge"]
+    class ports__ProductStack["ProductStack"]
+    class ports__Prompts["Prompts"]
+    class ports__RawResult["RawResult"]
     ports__Ports --> ports__ProcessReaper
     ports__Ports --> ports__ProductKnowledge
+    ports__Ports --> ports__ProductStack
+    ports__Ports --> ports__Prompts
 ```
 
 ## Relaciones con otras páginas
@@ -49,16 +52,15 @@ classDiagram
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `ports.Ports` se asocia con `ports.CheckScheduler`
   - `ports.Ports` se asocia con `ports.Commands`
+  - `ports.RawResult` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.Ports` se asocia con `ports.ProductStack`
-  - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
-- [application: support (parte 8)](classes-process-application-support-8.md)
   - `ports.Ports` se asocia con `ports.Tracker`
+- [application: support (parte 8)](classes-process-application-support-8.md)
   - `ports.Ports` se asocia con `ports.Workspace`

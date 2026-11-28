@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__BoardSent["BoardSent"]
     class ports__BoardWritten["BoardWritten"]
     class ports__BranchPullRequest["BranchPullRequest"]
     class ports__BudgetStore["BudgetStore"]
@@ -43,7 +44,6 @@ classDiagram
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.CheckScheduler`
   - `ports.Ports` se asocia con `ports.Commands`
-- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.RawResult` se asocia con `ports.CheckRuns`
-- [application: support (parte 9)](classes-process-application-support-9.md)
+- [application: support (parte 8)](classes-process-application-support-8.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`

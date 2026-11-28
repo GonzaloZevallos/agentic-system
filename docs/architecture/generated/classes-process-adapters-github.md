@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `github` de 
 ```mermaid
 classDiagram
     class github__account__AccountKeys["AccountKeys"]
+    class github__activity__GhActivity["GhActivity"]
     class github__board__GhBoard["GhBoard"]
     class github__ci_logs__GhCiLogs["GhCiLogs"]
     class github__commit_ci__GhCommitCi["GhCommitCi"]

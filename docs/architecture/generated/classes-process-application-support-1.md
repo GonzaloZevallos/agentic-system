@@ -28,12 +28,13 @@ classDiagram
     class format_release__FormatReleaseCarry["FormatReleaseCarry"]
     class limits__RunLimits["RunLimits"]
     class ports__Activity["Activity"]
+    class ports__ActivityFailed["ActivityFailed"]
+    class ports__ActivityPage["ActivityPage"]
     class ports__ActivityRow["ActivityRow"]
     class ports__AddedAdr["AddedAdr"]
     class ports__AddedLine["AddedLine"]
     class ports__AttemptFailed["AttemptFailed"]
     class ports__Board["Board"]
-    class ports__BoardSent["BoardSent"]
 ```
 
 ## Relaciones con otras páginas
