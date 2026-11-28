@@ -430,14 +430,22 @@ def test_with_no_slot_left_the_merge_is_still_spawned(tmp_path):
     assert launcher.spawned == [_merge_argv(5, tmp_path)]
 
 
-def test_a_live_exempt_child_of_another_product_holds_the_merge_back(tmp_path):
-    # Invariant 7 (GH-263): one exempt child live on the machine, whatever its product.
+def test_a_live_exempt_child_of_the_same_product_holds_the_merge_back(tmp_path):
+    # GH-1226: one exempt child per product, so only this product's own live child holds it.
     ports = _ports(5)
-    live = RunRegistration(1, "h", "other", "GH-1", kind="merge")
+    live = RunRegistration(1, "h", ports.stack.product(), "GH-1", kind="merge")
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
     assert launcher.spawned == []
     assert lines != ["agentic: poll: merge #5 -> pid 4242"]
+
+
+def test_a_live_exempt_child_of_another_product_does_not_hold_the_merge_back(tmp_path):
+    ports = _ports(5)
+    live = RunRegistration(1, "h", "other", "GH-1", kind="merge")
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
+    assert launcher.spawned == [_merge_argv(5, tmp_path)]
 
 
 def test_a_live_role_child_does_not_hold_the_merge_back_as_an_exempt_one(tmp_path):
