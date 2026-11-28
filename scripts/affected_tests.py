@@ -49,6 +49,7 @@ class Row(NamedTuple):
 # allowances covers.
 WALKERS = (
     "tests/test_architecture.py",
+    "tests/test_rate_limit_reader.py",
     "tests/test_language.py",
     "tests/test_checkout_creators.py",
     "tests/test_arm_input_single_source.py",
@@ -102,6 +103,17 @@ TABLE: tuple[Row, ...] = (
             "tests/test_conformance_scope.py",
         ),
         "`tests/conformance.py` names it as the only implementation of the `BudgetStore` "
+        "port, and these import `tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
+        "agentic/core/process/adapters/github/rate_limit_watch.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as the only implementation of the `RateLimitWatch` "
         "port, and these import `tests/conformance.py` or read it with the stand-in check",
     ),
     Row(

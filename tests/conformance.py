@@ -219,6 +219,11 @@ UNCOVERED: dict[str, Uncovered] = {
         "no fake implements it yet: nothing reads the port, and the real adapter is its only "
         "implementation",
     ),
+    "RateLimitWatch": Uncovered(
+        (("agentic/core/process/adapters/github/rate_limit_watch.py", "GhRateLimitWatch"),),
+        "no fake implements it yet: nothing reads the port, and the real adapter is its only "
+        "implementation",
+    ),
     "PendingPaths": Uncovered(
         (("agentic/core/process/adapters/git/workspace.py", "GitWorkspace"),),
         "no fake implements it yet: nothing reads the port, and the real adapter is its only "
