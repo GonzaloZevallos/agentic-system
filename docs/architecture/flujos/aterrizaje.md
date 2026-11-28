@@ -120,20 +120,22 @@ sequenceDiagram
    dice una sola línea `landing order #N -> yielded` después de escribir; una ronda retenida no
    observa nada. Los demás PR esperan aprobados, con una
    sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0090). La excepción es
-   el Carril rápido (ADR-0090, adenda GH-681): con la Cabeza reteniendo el turno y un hijo vivo
-   que integra (`land_model` o `role`, `landing_order.py:integrates`), `evaluate_landing_order`
-   lee los hechos con `agentic/core/process/application/landing_lane.py:lane_facts` y vuelve a
-   llamar a `landing_order.py:order`; lo que sale va en `LandingRound.lane` y `lane_reasons`
-   (el predicado y las razones son de `landing_order.py:lane_ready` y `lane_reason`). A lo sumo
-   un miembro, `lane`, entra en `found` junto a la Cabeza con la línea
-   `fast lane behind busy #H (<hijo de la Cabeza>, <decisión admitida>)` (la decisión es una de
-   `landing_order.py:LANE_DECISIONS`) y sigue el camino normal de merge; un miembro limpio sin carril
-   dice la razón en su línea: `waiting (clean, <texto>) behind #H`. Fuera de las decisiones,
+   el Carril rápido (ADR-0090, adenda GH-681; GH-1213 parte 1): con las rutas de la Cabeza conocidas
+   y la Cabeza sin merge en curso (`landing_order.py:_head_obstacle`), `evaluate_landing_order`
+   lee los hechos con `agentic/core/process/application/landing_lane.py:lane_facts` y llama a
+   `landing_order.py:lanes`; lo que sale va en `LandingRound.lanes` y `lane_reasons`
+   (el predicado, el tope `LANES_MAX` y las razones son solo de `landing_order.py`). Hasta tres
+   miembros disjuntos entre sí y de la Cabeza entran en `found` junto a ella, y `lanes_open`
+   los deja fuera si la Cabeza es exenta o está mergeando. La línea es
+   `fast lane beside #H (<hijo de la Cabeza>|idle, <decisión admitida>)` (la decisión es una de
+   `landing_order.py:LANE_DECISIONS`) y sigue el camino normal de merge, de a un merge por ronda;
+   un miembro limpio sin carril dice la razón en su línea: `waiting (clean, <texto>) behind #H`.
+   Fuera de las decisiones,
    en una ronda no retenida `agentic/core/process/application/landing_lane.py` deja un registro
    informativo que ninguna decisión lee (ADR-0090, adenda GH-681, parte 2): `admit` escribe
    `lane_admitted` en el documento del miembro del carril, `record_lane_merges` agrega el merge a
    `lane_merges` del documento de la Cabeza y marca `lane_recorded` en el del miembro, y
-   `clear_admissions` borra la admisión de quien dejó de ser el carril. Ninguno escribe el
+   `clear_admissions` borra la admisión de quien no está entre los carriles abiertos. Ninguno escribe el
    documento de una tarea con un hijo vivo o un lock, ni una clave `head_*`, ni la lista
    `landing`. Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
