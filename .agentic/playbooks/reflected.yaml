@@ -1811,3 +1811,5 @@ tasks:
     decisions: 1
   GH-1215@review:
     cost_usd: 0.0
+  GH-1217@review:
+    cost_usd: 0.039

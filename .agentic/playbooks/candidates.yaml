@@ -2727,3 +2727,13 @@ candidates:
   sources:
   - human_decision
   added_at: '2026-11-28T18:06:09.785+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters a flow, refusal reason, or who owns a state, grep docs/architecture for the old behavior and update those docs in the same change, listing every remaining path.
+  confidence: medium
+  seen_in:
+  - GH-1217
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T19:06:25.758+00:00'
