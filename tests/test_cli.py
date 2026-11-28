@@ -5357,7 +5357,7 @@ def _cached_backfill(monkeypatch, tmp_path, ports, listing, clock, *extra) -> in
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
     monkeypatch.setattr(cli.composition, "task_scorer", lambda product: FakeScorer())
-    monkeypatch.setattr(cli.composition, "GhIssueListing", lambda gh, key: listing)
+    monkeypatch.setattr(cli.composition, "GhIssueListing", lambda gh, key, quota: listing)
     monkeypatch.setattr(cli.composition, "backfill_clock", lambda: clock)
     monkeypatch.setattr(
         "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]

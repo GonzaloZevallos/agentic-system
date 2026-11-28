@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from agentic.core.process.application.ports import (
@@ -34,8 +35,13 @@ _CAUSES: tuple[tuple[type[Exception], PageCause], ...] = (
 
 
 class GhIssueListing:
-    def __init__(self, gh: GhRead, repo: str | None):
+    """`quota` is the `gh api rate_limit` document or `None`: the composition builds it from
+    `read_rate_limit_document`, the one launcher of that read (GH-1157), so this adapter never
+    spells the call out."""
+
+    def __init__(self, gh: GhRead, repo: str | None, quota: Callable[[], object | None]):
         self._gh = gh
+        self._quota = quota
         self._path = f"repos/{repo or '{owner}/{repo}'}/{_QUERY}"
         self._calls = 0
         self._points = 0
@@ -47,7 +53,7 @@ class GhIssueListing:
         """The core quota left; reading it costs no point but is a call."""
         self._calls += 1
         try:
-            payload = json.loads(self._gh(("api", "rate_limit")))
+            payload: Any = self._quota()
             remaining = payload["resources"]["core"]["remaining"]
         except (ValueError, OSError, TypeError, KeyError):
             return QuotaUnreadable()

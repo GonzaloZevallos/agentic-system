@@ -12,10 +12,6 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent.parent / "agentic"
 READER = ("agentic/core/process/adapters/github/run.py", "read_rate_limit_document")
-# The scores backfill's quota read goes through an injected `GhRead` (`backfill_gh_read` in the
-# composition), never through the poller's latch: its latch is a throwaway nobody reads. It is
-# a known second site, named here so a third one cannot arrive unseen.
-ALLOWED = {("agentic/core/measurement/adapters/github/issue_listing.py", "rate_limit")}
 
 
 def _is_rate_limit_tuple(node: ast.AST) -> bool:
@@ -51,8 +47,7 @@ def test_only_read_rate_limit_document_launches_the_rate_limit_read():
         relative = file.relative_to(PACKAGE.parent).as_posix()
         found += launchers(file.read_text(), relative)
     assert READER in found, "the reader no longer holds the literal: update this test"
-    assert set(found) - {READER} == ALLOWED
-    assert found.count(READER) == 1
+    assert found == [READER]
 
 
 def test_the_check_rejects_a_second_launcher():

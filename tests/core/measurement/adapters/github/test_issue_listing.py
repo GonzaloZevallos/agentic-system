@@ -37,9 +37,20 @@ class FakeGh:
         return self.reply
 
 
-def listing(reply):
+def listing(reply, quota=None):
+    """`reply` is what `gh` answers a page; `quota` the rate_limit document (or None, or an
+    exception to raise), as the composition's reader would give it."""
     gh = FakeGh(reply)
-    return GhIssueListing(gh, None), gh
+    return GhIssueListing(gh, None, _quota(quota)), gh
+
+
+def _quota(document):
+    def read():
+        if isinstance(document, BaseException):
+            raise document
+        return document
+
+    return read
 
 
 def test_pages_one_and_two_ask_gh_for_the_literal_placeholders_and_nothing_else():
@@ -115,55 +126,44 @@ def test_each_exception_maps_by_type_to_a_closed_cause_and_page_never_raises(err
 RATE_LIMIT = json.dumps({"resources": {"core": {"remaining": 4321, "limit": 5000}}})
 
 
-def test_rate_limit_asks_gh_for_the_rate_limit_endpoint_only_and_reads_core_remaining():
-    reader, gh = listing(RATE_LIMIT)
+RATE_LIMIT = {"resources": {"core": {"remaining": 4321, "limit": 5000}}}
+
+
+def test_rate_limit_reads_core_remaining_from_the_document_and_calls_gh_for_nothing_else():
+    reader, gh = listing("[]", RATE_LIMIT)
     assert reader.rate_limit() == QuotaReading(4321)
-    assert gh.calls == [("api", "rate_limit")]
+    assert gh.calls == []
 
 
 @pytest.mark.parametrize(
-    "reply",
+    "document",
     [
-        "not json",
-        "[]",
-        "null",
-        '{"resources": {}}',
-        '{"resources": {"core": {}}}',
-        '{"resources": {"graphql": {"remaining": 5}}}',
-        '{"resources": {"core": {"remaining": "5"}}}',
-        '{"resources": {"core": {"remaining": 5.0}}}',
-        '{"resources": {"core": {"remaining": true}}}',
-        '{"resources": {"core": {"remaining": null}}}',
+        None,
+        [],
+        "text",
+        {"resources": {}},
+        {"resources": {"core": {}}},
+        {"resources": {"graphql": {"remaining": 5}}},
+        {"resources": {"core": {"remaining": "5"}}},
+        {"resources": {"core": {"remaining": 5.0}}},
+        {"resources": {"core": {"remaining": True}}},
+        {"resources": {"core": {"remaining": None}}},
+        OSError("gh"),
+        ValueError("bad"),
     ],
 )
-def test_a_bad_rate_limit_shape_is_unreadable(reply):
-    assert listing(reply)[0].rate_limit() == QuotaUnreadable()
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        TrackerRateLimited("x"),
-        TrackerTimedOut("x"),
-        TrackerUnreachable("x"),
-        TrackerTransient("x"),
-        TrackerRefused("x"),
-        ValueError("gh is not installed"),
-        FileNotFoundError("gh"),
-    ],
-)
-def test_a_failing_gh_makes_the_rate_limit_unreadable_and_never_raises(error):
-    assert listing(error)[0].rate_limit() == QuotaUnreadable()
+def test_a_bad_or_missing_rate_limit_document_is_unreadable_and_never_raises(document):
+    assert listing("[]", document)[0].rate_limit() == QuotaUnreadable()
 
 
 def test_spend_counts_every_call_failed_ones_too_and_points_only_for_pages():
-    reader, _ = listing(RATE_LIMIT)
+    reader, _ = listing("not a page", RATE_LIMIT)
     assert reader.spent() == Spend(0, 0)
     reader.rate_limit()
     assert reader.spent() == Spend(1, 0)
     reader.page(1)  # the reply is not a page: unreadable, and still a call and a point
     assert reader.spent() == Spend(2, 1)
-    failing, _ = listing(TrackerTransient("x"))
+    failing, _ = listing(TrackerTransient("x"), None)
     failing.rate_limit()
     failing.page(1)
     assert failing.spent() == Spend(2, 1)
@@ -176,7 +176,10 @@ def test_the_call_is_counted_before_it_is_made():
         seen.append(reader.spent())
         raise TrackerTransient("x")
 
-    reader = GhIssueListing(gh, None)
+    def quota():
+        seen.append(reader.spent())
+
+    reader = GhIssueListing(gh, None, quota)
     reader.rate_limit()
     reader.page(1)
     assert seen == [Spend(1, 0), Spend(2, 1)]
@@ -184,5 +187,5 @@ def test_the_call_is_counted_before_it_is_made():
 
 def test_a_repo_key_names_the_repository_in_the_path_instead_of_the_placeholders():
     gh = FakeGh("[]")
-    GhIssueListing(gh, "o/r").page(2)
+    GhIssueListing(gh, "o/r", _quota(None)).page(2)
     assert gh.calls == [("api", "repos/o/r/" + QUERY + "2")]

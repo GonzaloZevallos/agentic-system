@@ -280,8 +280,10 @@ línea.
   latch. `parse_rate_limit` (`run.py`) la convierte en `RateLimitReading`
   (`agentic/core/process/domain/rate_limit_wait.py`) y `_rate_limit_reset` la usa para el reset.
   `GhTracker.rate_limit` (`adapters/github/tracker.py`) es la misma lectura, sin reintento y sin
-  turno de escritura. `tests/test_rate_limit_reader.py` hace cumplir que no haya otro
-  lanzador, salvo la lectura de cuota del backfill de scores, que nombra.
+  turno de escritura. `GhIssueListing.rate_limit`
+  (`agentic/core/measurement/adapters/github/issue_listing.py`) recibe esa lectura inyectada:
+  `backfill_listing` (`agentic/composition.py`) la arma con `read_rate_limit_document`.
+  `tests/test_rate_limit_reader.py` hace cumplir que no haya otro lanzador, sin excepciones.
 - **El vigilante.** `RateLimitWatch` (`application/ports.py`) tiene `take` y `reading`;
   `GhRateLimitWatch` (`adapters/github/rate_limit_watch.py`) los apoya en un
   `RateLimitLatch` y en un lector de un solo método. `poll_wiring` (`agentic/composition.py`)
@@ -290,8 +292,9 @@ línea.
 ### Sitios que cambian de resultado
 
 Lo que fija `tests/test_rate_limit_sites.py`: ante `TrackerRateLimited` cada sitio termina igual
-que ante `TrackerUnreachable`. Antes, sin política, el límite llegaba como un `ValueError` común
-y el sitio no lo distinguía.
+que ante `TrackerUnreachable`. El antes es el mismo para todos los sitios: sin política, el límite
+llegaba como un `ValueError` común y el sitio no lo distinguía de un fallo cualquiera. La tabla
+da solo el después, que es lo que cada sitio hace ahora.
 
 | Sitio | Después |
 |---|---|

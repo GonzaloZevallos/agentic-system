@@ -86,6 +86,7 @@ from .core.process.adapters.github.run import (
     RateLimitLatch,
     Run,
     bounded_run,
+    read_rate_limit_document,
     run_gh,
 )
 from .core.process.adapters.github.tracker import pull_request_number
@@ -753,7 +754,12 @@ def backfill_listing(product_dir: Path) -> tuple[IssueListing, ReadCache]:
     placeholders and nothing is cached."""
     # `_origin_of` serves the rotation; the backfill reuses it as is.
     key = repo_key(_origin_of(product_dir))
-    listing = GhIssueListing(backfill_gh_read(product_dir), key)
+    listing = GhIssueListing(
+        backfill_gh_read(product_dir),
+        key,
+        # The quota read is the one `read_rate_limit_document`: no policy, no latch, uncounted.
+        lambda: read_rate_limit_document(bounded_run, product_dir, calls=None),
+    )
     if key is None:
         return listing, NoCache()
     return listing, FilesystemReadCache(backfill_cache_root(), key)
