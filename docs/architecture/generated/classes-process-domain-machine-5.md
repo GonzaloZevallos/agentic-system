@@ -33,8 +33,6 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
-    class stage0_rotation__SwitchRecord["SwitchRecord"]
-    class stage0_rotation__Target["Target"]
     class stage0_rotation__Unavailable["Unavailable"]
     class stage0_rotation__Unreadable["Unreadable"]
     class stage0_rotation__WindowEntry["WindowEntry"]

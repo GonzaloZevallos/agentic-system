@@ -47,4 +47,5 @@ classDiagram
     class github_budget__GraphqlReading["GraphqlReading"]
     class github_budget__ResourceBudget["ResourceBudget"]
     class github_budget__Start["Start"]
+    class github_budget__Unmeasured["Unmeasured"]
 ```
