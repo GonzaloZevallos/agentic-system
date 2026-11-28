@@ -2705,6 +2705,15 @@ class NotifyFailed(Exception):
         return self.cause
 
 
+@dataclass(frozen=True)
+class NotifySettings:
+    """What the notifier use case reads of the configuration (GH-1057), raw: `digest_hour` is the
+    hour as written and `events` the kind names as written, `None` for all kinds."""
+
+    digest_hour: str | None
+    events: tuple[str, ...] | None
+
+
 class Notifier(Protocol):
     """Sends the email notices (GH-1056)."""
 
@@ -2923,6 +2932,8 @@ class Ports:
     notifier: Notifier | None = None
     notified: Notified | None = None
     activity: Activity | None = None
+    # The digest hour and the kinds to mail, as configured (GH-1057). `None` with the notifier.
+    notify_settings: NotifySettings | None = None
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None

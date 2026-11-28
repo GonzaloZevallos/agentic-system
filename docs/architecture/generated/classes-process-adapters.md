@@ -7,4 +7,5 @@ Esta página es el índice de los diagramas de clases de `agentic.core.process.a
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
   - [adapters: toplevel](classes-process-adapters-toplevel.md)

@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__TaskDocuments["TaskDocuments"]
     class ports__Tracker["Tracker"]
     class ports__TrackerCallFailed["TrackerCallFailed"]
     class ports__TrackerRateLimited["TrackerRateLimited"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__UpstreamMerge["UpstreamMerge"]
     class ports__Workspace["Workspace"]
     class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
-    class preflight__ScratchInARepository["ScratchInARepository"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
@@ -49,6 +49,7 @@ classDiagram
   - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.UnstageablePath` hereda de `ports.GitError`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
   - `ports.Ports` se asocia con `ports.Workspace`
 - [application: support (parte 7)](classes-process-application-support-7.md)

@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class preflight__ScratchInARepository["ScratchInARepository"]
     class run_role__Escalating["Escalating"]
     class run_role__EstimateCapReached["EstimateCapReached"]
     class run_role__EstimateStop["EstimateStop"]
@@ -45,5 +46,5 @@ classDiagram
   - `plan_carve_out.Judged` se asocia con `run_role.Output`
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
-- [application: support (parte 6)](classes-process-application-support-6.md)
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`
