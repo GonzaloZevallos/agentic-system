@@ -21,6 +21,8 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     REMERGE_DIFF_MIN_GIT,
     Activity,
+    ActivityPage,
+    ActivityRow,
     AddedAdr,
     AddedLine,
     Board,
@@ -49,11 +51,13 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     ListedPullRequest,
     LoadReader,
+    Mail,
     MergeCallFailed,
     MergeConflict,
     MergeFailed,
     Notified,
     Notifier,
+    NotifyFailed,
     NotifySettings,
     OwnerRuleEntry,
     PendingPaths,
@@ -100,6 +104,7 @@ from agentic.core.process.domain.design import Design, NotReady, PrototypeListin
 from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
+from agentic.core.process.domain.notify import NotifiedRecord
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.playbook_land import LandAttempt
@@ -2977,6 +2982,72 @@ def stepping_now(
         return moment.isoformat(timespec="milliseconds")
 
     return now
+
+
+class FakeNotifier:
+    """Keeps every `Mail` sent; `fail` makes the next `send` calls raise `NotifyFailed`."""
+
+    def __init__(self) -> None:
+        self.sent: list[Mail] = []
+        self.calls = 0
+        self.fail = 0
+
+    def send(self, mail: Mail) -> None:
+        self.calls += 1
+        if self.fail:
+            self.fail -= 1
+            raise NotifyFailed("OSError")
+        self.sent.append(mail)
+
+
+class FakeNotified:
+    """The record in memory; `save_fails` lists the 1-based save calls that raise."""
+
+    def __init__(self, record: NotifiedRecord | None = None) -> None:
+        self.record = record or NotifiedRecord(None, None, None, {})
+        self.saves: list[NotifiedRecord] = []
+        self.calls = 0
+        self.save_fails: set[int] = set()
+
+    def load(self) -> NotifiedRecord:
+        return self.record
+
+    def save(self, record: NotifiedRecord) -> None:
+        self.calls += 1
+        if self.calls in self.save_fails:
+            raise OSError("disk full: secret-path")
+        self.saves.append(record)
+        self.record = record
+
+
+class FakeActivity:
+    """Rows seeded per read, answered as the real one does: after `since`, oldest first, cut at
+    `limit`. `error` raises on every read; `reads` records `(kind, since)`."""
+
+    def __init__(
+        self, *, closed: Sequence[ActivityRow] = (), merged: Sequence[ActivityRow] = ()
+    ) -> None:
+        self.closed = list(closed)
+        self.merged = list(merged)
+        self.error: Exception | None = None
+        self.reads: list[tuple[str, datetime]] = []
+
+    def _read(
+        self, kind: str, rows: list[ActivityRow], since: datetime, limit: int
+    ) -> ActivityPage:
+        self.reads.append((kind, since))
+        if self.error is not None:
+            raise self.error
+        later = [r for r in rows if r.instant.tzinfo is None or r.instant > since]
+        ordered = sorted(later, key=lambda r: (r.instant, r.number))
+        cut_at = ordered[limit].instant if len(ordered) > limit else None
+        return ActivityPage(tuple(ordered[:limit]), cut_at)
+
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
+        return self._read("merged", self.merged, since, limit)
+
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
+        return self._read("closed", self.closed, since, limit)
 
 
 def memory_ports(

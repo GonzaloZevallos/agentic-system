@@ -15,6 +15,7 @@ from agentic.core.process.domain.notify_message import (
     WindowedSection,
     clean,
     digest_message,
+    is_repo_url,
     release_message,
     repo_url,
     waiting_message,
@@ -114,7 +115,15 @@ def test_repo_url_rejects(value: str) -> None:
         repo_url(value)
 
 
+@pytest.mark.parametrize(
+    "value", ["", "https://github.com/..", "http://github.com/a/b", REPO + "/"]
+)
+def test_is_repo_url_rejects_what_repo_url_rejects(value: str) -> None:
+    assert not is_repo_url(value)
+
+
 def test_repo_url_accepts_a_repository() -> None:
+    assert is_repo_url(REPO)
     assert repo_url(REPO) == REPO
     assert repo_url("https://github.com/a_b/c.d-e") == "https://github.com/a_b/c.d-e"
 

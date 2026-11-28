@@ -30,6 +30,7 @@ graph TD
     m_application__budget_round["application.budget_round"]
     m_application__carve_out["application.carve_out"]
     m_application__dry_run["application.dry_run"]
+    m_application__notify["application.notify"]
     m_application__plan_carve_out["application.plan_carve_out"]
     m_application__poll["application.poll"]
     m_application__promotion["application.promotion"]
@@ -43,6 +44,8 @@ graph TD
     m_application__carve_out --> g_application__support
     m_application__carve_out --> g_pkg__domain
     m_application__dry_run --> g_application__support
+    m_application__notify --> g_application__support
+    m_application__notify --> g_pkg__domain
     m_application__plan_carve_out --> g_application__support
     m_application__plan_carve_out --> g_pkg__agentic__shared
     m_application__plan_carve_out --> g_pkg__domain

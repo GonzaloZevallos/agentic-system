@@ -115,6 +115,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.landing_sync": "landing",
     "application.limits": "support",
     "application.merge": "landing",
+    "application.notify": "lifecycle",
     "application.owner_rules": "reflection",
     "application.perf": "checks",
     "application.plan": "build",
