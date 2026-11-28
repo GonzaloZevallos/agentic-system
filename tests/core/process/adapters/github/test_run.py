@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.github import run as run_module
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.github.run import (
     GH_DRAIN_S,
     GH_EXEMPT_WAIT_MAX_S,
@@ -21,6 +22,8 @@ from agentic.core.process.adapters.github.run import (
     _rate_limit_reset,
     bounded_run,
     http_status,
+    parse_rate_limit,
+    read_rate_limit_document,
     run_gh,
 )
 from agentic.core.process.application.ports import (
@@ -35,6 +38,7 @@ from agentic.core.process.application.ports import (
     WriteGate,
 )
 from agentic.core.process.domain.github_access import GithubAccess
+from agentic.core.process.domain.rate_limit_wait import RateLimitReading
 from tests.core.process.adapters.github.gh_fake import StubGate, gh_response
 
 
@@ -733,6 +737,8 @@ def test_take_reads_and_clears_in_one_step():
     ("raw", "expected"),
     [
         ("not json", None),
+        ("[]", None),
+        ('{"resources": {"core": {"remaining": 0}}}', None),
         ('{"resources": {"core": {"remaining": 5, "reset": 1}}}', None),
         (
             '{"resources": {"core": {"remaining": 0, "reset": 40},'
@@ -743,6 +749,76 @@ def test_take_reads_and_clears_in_one_step():
 )
 def test_rate_limit_reset_keeps_its_results(raw, expected):
     assert _rate_limit_reset(_script(raw), Path(".")) == expected
+
+
+def test_rate_limit_reset_counts_one_api_call_and_never_marks_a_latch():
+    calls = InProcessGhCallLog()
+    run = _script('{"resources": {"core": {"remaining": 0, "reset": 7}}}')
+    assert _rate_limit_reset(run, Path("."), calls) == 7.0
+    assert calls.drain()["api"] == 1
+    assert run.calls == [["gh", "api", "rate_limit"]]
+
+
+# --- the rate_limit document and its reading (GH-1157) -------------------------------------
+
+
+def test_parse_rate_limit_reads_every_resource():
+    document = {
+        "resources": {
+            "core": {"remaining": 0, "reset": 40, "limit": 5000},
+            "graphql": {"remaining": 12, "reset": 90.5},
+        }
+    }
+    assert parse_rate_limit(document) == RateLimitReading(
+        {"core": (0, 40.0), "graphql": (12, 90.5)}
+    )
+
+
+def test_parse_rate_limit_of_no_resources_is_an_empty_reading():
+    assert parse_rate_limit({"resources": {}}) == RateLimitReading({})
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        None,
+        "text",
+        [],
+        {},
+        {"resources": []},
+        {"resources": {"core": "x"}},
+        {"resources": {"core": {"reset": 1}}},
+        {"resources": {"core": {"remaining": 0}}},
+        {"resources": {"core": {"remaining": "0", "reset": 1}}},
+        {"resources": {"core": {"remaining": 0, "reset": "soon"}}},
+        {"resources": {"core": {"remaining": True, "reset": 1}}},
+        # One good resource does not save a document with a bad one.
+        {"resources": {"core": {"remaining": 0, "reset": 1}, "search": {"remaining": 1}}},
+    ],
+)
+def test_parse_rate_limit_rejects_a_malformed_document_whole(document):
+    assert parse_rate_limit(document) is None
+
+
+def test_read_rate_limit_document_runs_gh_api_rate_limit_once_and_counts_it():
+    run = _script('{"resources": {}}')
+    calls = InProcessGhCallLog()
+    assert read_rate_limit_document(run, Path("."), calls=calls) == {"resources": {}}
+    assert run.calls == [["gh", "api", "rate_limit"]]
+    assert calls.drain()["api"] == 1
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "not json",
+        subprocess.CalledProcessError(1, ["gh"], stderr="API rate limit exceeded (HTTP 403)"),
+        FileNotFoundError(),
+        subprocess.TimeoutExpired(["gh"], 5),
+    ],
+)
+def test_read_rate_limit_document_is_none_when_gh_fails_or_prints_no_json(outcome):
+    assert read_rate_limit_document(_script(outcome), Path("."), calls=None) is None
 
 
 # --- the reset a rate limit carries (GH-1031) ----------------------------------------------

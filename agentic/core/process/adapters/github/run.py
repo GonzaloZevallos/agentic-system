@@ -44,6 +44,7 @@ from ...domain.github_access import (
     split_response,
     wait_from,
 )
+from ...domain.rate_limit_wait import RateLimitReading
 
 # Declared, not measured: a healthy call takes about a second. One constant to change if a
 # real incident shows 60 s too long (no Configuration field, like FETCH_TIMEOUT_S).
@@ -347,12 +348,13 @@ def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     return None
 
 
-def _rate_limit_reset(run: Run, cwd: Path, calls: GhCallLog | None = None) -> float | None:
-    """The largest `reset` (epoch seconds) among the resources `gh api rate_limit` says are
-    spent; `None` when the read fails or none is. Called with no policy: a rate-limited read
-    must not wait on itself. This read decides the wait: it passes `access=None` explicitly,
-    so it is never gated, serialized, budgeted or cached, whatever the caller's access. It
-    counts as one `api` call in the caller's `calls` (GH-990)."""
+def read_rate_limit_document(run: Run, cwd: Path, *, calls: GhCallLog | None) -> object | None:
+    """The `gh api rate_limit` document; `None` when `gh` failed, was not found, timed out or
+    printed no JSON. The only place that launches `("api", "rate_limit")` and the only
+    `json.loads` of its output (GH-1157): it passes `latch=None` and `access=None` explicitly,
+    so the read never marks a latch and is never gated, serialized, budgeted or cached,
+    whatever the caller's access. No policy: a rate-limited read must not wait on itself. It
+    counts as one `api` call in `calls` (GH-990)."""
     try:
         raw = run_gh(
             run,
@@ -365,14 +367,43 @@ def _rate_limit_reset(run: Run, cwd: Path, calls: GhCallLog | None = None) -> fl
             access=None,
             calls=calls,
         )
-        resources = json.loads(raw)["resources"]
-        resets = [
-            float(resource["reset"])
-            for resource in resources.values()
-            if resource["remaining"] == 0
-        ]
-    except (ValueError, KeyError, TypeError, AttributeError):
+        document: object = json.loads(raw)
+    except ValueError:
         return None
+    return document
+
+
+def parse_rate_limit(document: object) -> RateLimitReading | None:
+    """The reading of a `gh api rate_limit` document. Pure, no policy: a document or a
+    resource that is not what `gh` prints (a missing `remaining` or `reset`, a value that is
+    not a number) makes the whole reading `None`, never a partial one."""
+    if not isinstance(document, dict):
+        return None
+    resources = document.get("resources")
+    if not isinstance(resources, dict):
+        return None
+    parsed: dict[str, tuple[int, float]] = {}
+    for name, resource in resources.items():
+        if not isinstance(name, str) or not isinstance(resource, dict):
+            return None
+        remaining = resource.get("remaining")
+        reset = resource.get("reset")
+        if isinstance(remaining, bool) or not isinstance(remaining, int):
+            return None
+        if isinstance(reset, bool) or not isinstance(reset, int | float):
+            return None
+        parsed[name] = (remaining, float(reset))
+    return RateLimitReading(parsed)
+
+
+def _rate_limit_reset(run: Run, cwd: Path, calls: GhCallLog | None = None) -> float | None:
+    """The largest `reset` (epoch seconds) among the resources `gh api rate_limit` says are
+    spent; `None` when the read fails or none is. The read is `read_rate_limit_document`'s:
+    it decides the wait, so it is never gated and counts as one `api` call in `calls`."""
+    reading = parse_rate_limit(read_rate_limit_document(run, cwd, calls=calls))
+    if reading is None:
+        return None
+    resets = [reset for remaining, reset in reading.resources.values() if remaining == 0]
     return max(resets) if resets else None
 
 
@@ -672,7 +703,9 @@ __all__ = [
     "bounded_stream",
     "graphql_rate_limited",
     "http_status",
+    "parse_rate_limit",
     "print_line",
+    "read_rate_limit_document",
     "run_gh",
     "stream_gh",
 ]

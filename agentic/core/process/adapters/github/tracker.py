@@ -36,6 +36,7 @@ from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.github_access import GithubAccess, NotAnHttpResponse, split_response
 from ...domain.hold import HELD_LIMIT, HOLD_LABEL
 from ...domain.presubmit import ApiBreakLine
+from ...domain.rate_limit_wait import RateLimitReading
 from ...domain.task import (
     PullRequest,
     PullRequestCommit,
@@ -43,7 +44,15 @@ from ...domain.task import (
     TrackerTarget,
 )
 from ...domain.tracker_refs import issue_number, issue_target, pull_request_number
-from .run import GhRetry, RateLimitLatch, bounded_run, print_line, run_gh
+from .run import (
+    GhRetry,
+    RateLimitLatch,
+    bounded_run,
+    parse_rate_limit,
+    print_line,
+    read_rate_limit_document,
+    run_gh,
+)
 
 # The order a merge method is picked in: the first the repository allows.
 _MERGE_METHODS = (
@@ -1000,6 +1009,15 @@ class GhTracker:
         raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "createdAt"))
         created = raw.get("createdAt") if isinstance(raw, dict) else None
         return created if isinstance(created, str) and created else None
+
+    def rate_limit(self) -> RateLimitReading | None:
+        """What `gh api rate_limit` says, `None` when the read failed or its answer is not a
+        reading (GH-1157). Not on the `Tracker` port: only the rate-limit watch asks. No policy,
+        no write turn and no retry, whatever this tracker's; it never marks the latch, so a
+        read of the rate limit cannot be the rate limit it reports."""
+        return parse_rate_limit(
+            read_rate_limit_document(self._run, self.product_dir, calls=self._calls)
+        )
 
     def queue(self) -> list[int]:
         raw = self._gh_read(

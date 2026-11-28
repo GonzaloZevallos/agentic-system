@@ -11,14 +11,13 @@ is not asked on every call; a token in the environment is read on every call."""
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 
 from ...application.ports import GhCallLog
 from ...domain.github_budget import BUDGET_TTL
-from .run import RateLimitLatch, Run, run_gh
+from .run import RateLimitLatch, Run, read_rate_limit_document, run_gh
 
 _HOST = "github.com"
 
@@ -83,18 +82,4 @@ def _gh_token(run: Run, cwd: Path, *, calls: GhCallLog) -> str | None:
 
 def read_rate_limit(run: Run, cwd: Path, *, calls: GhCallLog) -> object | None:
     """The `gh api rate_limit` document, `None` when `gh` failed or printed no JSON."""
-    try:
-        out = run_gh(
-            run,
-            ("api", "rate_limit"),
-            cwd=cwd,
-            not_installed="gh is not installed",
-            failed=lambda _: "gh api rate_limit failed",
-            log=lambda _: None,
-            latch=None,  # the rate_limit read never marks a latch
-            calls=calls,
-        )
-        document: object = json.loads(out)
-    except ValueError:
-        return None
-    return document
+    return read_rate_limit_document(run, cwd, calls=calls)

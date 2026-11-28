@@ -31,6 +31,7 @@ from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.playbook_land import LandAttempt
 from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
+from ..domain.rate_limit_wait import RateLimitReading
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -820,6 +821,23 @@ class GhCallLog(Protocol):
     def record(self, kind: GhCallKind) -> None: ...
 
     def drain(self) -> Mapping[GhCallKind, int]: ...
+
+
+class RateLimitWatch(Protocol):
+    """What the poller may ask about the GitHub rate limit (GH-1157), apart from the `Tracker`.
+
+    `take` returns whether a `gh` call, or a board request, ended rate-limited since the last
+    `take`, and clears the mark in the same atomic step: two threads never both see it, and a
+    mark set meanwhile is never lost. Until a consumer exists (all of this part) nobody takes,
+    so the mark stays set for the life of the process; the next part is the one that consumes
+    it.
+
+    `reading` asks `gh api rate_limit` and returns what it says, `None` when that failed. It
+    never marks: the read of the rate limit is not a rate-limited call."""
+
+    def take(self) -> bool: ...
+
+    def reading(self) -> RateLimitReading | None: ...
 
 
 class Commands(Protocol):

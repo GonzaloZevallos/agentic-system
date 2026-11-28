@@ -9,7 +9,8 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github import tracker as tracker_module
-from agentic.core.process.adapters.github.run import GhRetry
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
+from agentic.core.process.adapters.github.run import GhRetry, RateLimitLatch
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
     HeldListMayBeCut,
@@ -33,6 +34,7 @@ from agentic.core.process.domain.ci import (
 from agentic.core.process.domain.github_access import GithubAccess, Turn
 from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
+from agentic.core.process.domain.rate_limit_wait import RateLimitReading
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from tests.core.process.adapters.github.gh_fake import (
     RecordingRun,
@@ -3341,3 +3343,67 @@ def test_a_check_run_with_a_null_name_is_unreadable_naming_the_field(wrap, read)
     got = read(GhTracker(Path("/p"), _scripted(wrap, _commit_page([nameless]))))
     assert got == CiUnreadable("gh_unreadable")
     assert isinstance(got, CiUnreadable) and "check field" in got.detail
+
+
+# --- the rate_limit read (GH-1157) ------------------------------------------------------------
+
+_RATE_LIMITED = "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+
+
+class _CountingGate:
+    cap_s = 30.0
+
+    def __init__(self) -> None:
+        self.taken = 0
+
+    def take(self, remaining_s: float) -> Turn:
+        self.taken += 1
+        return Turn("granted", 0.0)
+
+
+def test_tracker_rate_limit_reads_the_document_into_a_reading():
+    run = _plain('{"resources": {"core": {"remaining": 0, "reset": 90}}}')
+    reading = GhTracker(Path("."), run=run).rate_limit()
+    assert reading == RateLimitReading({"core": (0, 90.0)})
+    assert run.argv == [["gh", "api", "rate_limit"]]
+
+
+def test_tracker_rate_limit_is_none_for_a_failed_or_malformed_read():
+    assert GhTracker(Path("."), run=_plain("not json")).rate_limit() is None
+    assert GhTracker(Path("."), run=_plain('{"resources": {"core": {}}}')).rate_limit() is None
+    failing = RecordingRun("", "gh: Not Found (HTTP 404)", 1)
+    assert GhTracker(Path("."), run=failing).rate_limit() is None
+
+
+def test_tracker_rate_limit_never_marks_the_latch_but_a_rate_limited_read_does():
+    latch = RateLimitLatch()
+    failing = RecordingRun("", _RATE_LIMITED, 1)
+    tracker = GhTracker(Path("."), run=failing, latch=latch, log=lambda line: None)
+    assert tracker.rate_limit() is None
+    assert latch.take() is False
+    # Positive control: the same tracker, the same latch and the same failure through a read.
+    with pytest.raises(TrackerRateLimited):
+        tracker.queue()
+    assert latch.take() is True
+
+
+def test_tracker_rate_limit_never_retries_nor_takes_a_write_turn():
+    gate = _CountingGate()
+    failing = RecordingRun("", _RATE_LIMITED, 1)
+    tracker = GhTracker(
+        Path("."),
+        run=failing,
+        retry=GhRetry(max_wait_s=900, sleep=lambda s: None),
+        access=GithubAccess(gate=gate),
+    )
+    assert tracker.rate_limit() is None
+    assert failing.argv == [["gh", "api", "rate_limit"]]
+    assert gate.taken == 0
+
+
+def test_tracker_rate_limit_counts_one_api_call_and_runs_in_the_trackers_checkout(tmp_path):
+    calls = InProcessGhCallLog()
+    run = _plain('{"resources": {}}')
+    GhTracker(tmp_path, run=run, calls=calls).rate_limit()
+    assert calls.drain()["api"] == 1
+    assert run.kwargs[0]["cwd"] == tmp_path

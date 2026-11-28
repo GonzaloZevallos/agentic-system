@@ -87,6 +87,7 @@ files = [
     "agentic/core/process/adapters/offline.py",
     "agentic/core/process/adapters/github/activity.py",
     "agentic/core/process/adapters/github/board.py",
+    "agentic/core/process/adapters/github/rate_limit_watch.py",
     "agentic/core/process/adapters/github/commit_ci.py",
     "agentic/core/process/adapters/git/master_window.py",
     "agentic/core/process/adapters/git/ancestry.py",
