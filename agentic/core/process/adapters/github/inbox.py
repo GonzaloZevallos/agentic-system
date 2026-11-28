@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from ...application.ports import ListMayBeCut
+from ...application.ports import GhCallLog, ListMayBeCut
 from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
 from .run import bounded_run, print_line, run_gh
@@ -28,8 +28,10 @@ class GhInbox:
         *,
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
+        calls: GhCallLog | None = None,
     ):
         self.product_dir = product_dir
+        self._calls = calls
         self._run = run
         self._log = log
 
@@ -45,6 +47,7 @@ class GhInbox:
             ("issue", "view", str(number), "--json", "title,body"),
             cwd=self.product_dir,
             log=self._log,
+            calls=self._calls,
             not_installed="gh is not installed; --issue needs the GitHub CLI",
             failed=lambda stderr: f"gh could not read issue #{number}: {stderr}",
         )
@@ -78,6 +81,7 @@ class GhInbox:
             ),
             cwd=self.product_dir,
             log=self._log,
+            calls=self._calls,
             not_installed="gh is not installed; a stack review needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )
@@ -107,6 +111,7 @@ class GhInbox:
             ),
             cwd=self.product_dir,
             log=self._log,
+            calls=self._calls,
             not_installed="gh is not installed; filing a flake needs the CLI",
             failed=lambda stderr: f"gh issue list failed: {stderr}",
         )

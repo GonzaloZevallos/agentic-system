@@ -93,6 +93,28 @@ TABLE: tuple[Row, ...] = (
         "directory or name it as the stand-in of the `Heartbeats` port",
     ),
     Row(
+        "agentic/core/process/adapters/filesystem/budget_store.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as the only implementation of the `BudgetStore` "
+        "port, and these import `tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
+        "agentic/core/process/adapters/filesystem/notified.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as a stand-in of the `Notified` port, and these import "
+        "`tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
         "agentic/core/process/adapters/git/workspace.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
@@ -207,6 +229,11 @@ TABLE: tuple[Row, ...] = (
         "the recorded page of the issues listing GhIssueListing parses",
     ),
     Row(
+        "tests/core/process/adapters/github/fixtures/*_[0-9][0-9][0-9]*.json",
+        ("tests/core/process/adapters/github/test_tracker.py",),
+        "the answers of `gh api -i` the moved writes (pr create, comment, edit) are run against",
+    ),
+    Row(
         "tests/core/process/adapters/github/fixtures/commit_ci_synthetic.json",
         ("tests/core/process/adapters/github/test_commit_ci.py",),
         "the synthetic answer to COMMIT_CI_QUERY the by-sha CI reader is run against",
@@ -279,6 +306,48 @@ TABLE: tuple[Row, ...] = (
         "the six spec-path schemas as rendered before the spec subclasses: the golden test and "
         "the sync test read it",
     ),
+    # Scripts that left `affected_fallback` (GH-1068): the targets are the tests that run each
+    # one. The scripts no test runs have no Row: a change to one of them is refused with 9,
+    # which is the full suite.
+    Row(
+        "scripts/ci_flakes.py",
+        ("tests/test_ci_flakes.py",),
+        "that test runs the script as a process over junit fixtures",
+    ),
+    Row(
+        "scripts/docs/check.py",
+        ("tests/test_docs.py",),
+        "that test runs the checker as a process; the other modules of scripts/docs have no Row",
+    ),
+    Row(
+        "scripts/docs/generate.py",
+        ("tests/test_docs.py",),
+        "that test loads the generator and runs it as a process over a temporary root",
+    ),
+    Row(
+        "scripts/gate_concurrency.py",
+        ("tests/test_gate_concurrency.py",),
+        "that test loads the script by path and runs it over recorded transcripts",
+    ),
+    Row(
+        "scripts/poll_waits.py",
+        ("tests/test_poll_waits.py",),
+        "that test loads the script by path and runs it over journal text",
+    ),
+    Row(
+        "scripts/install-poller.sh",
+        ("tests/test_install_poller.py",),
+        "that test runs the installer, and the copy of this script it renders from, in a temp dir",
+    ),
+    Row(
+        "scripts/systemd/*",
+        (
+            "tests/core/process/domain/test_poller_units.py",
+            "tests/test_install_poller.py",
+        ),
+        "the first renders the poller unit template; the second copies the directory and "
+        "renders every template through the installer",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (
@@ -314,6 +383,19 @@ class Empty:
 @dataclass(frozen=True)
 class Refusal:
     reason: str
+
+
+@dataclass(frozen=True)
+class Options:
+    """What the caller asked pytest to run with: `-n <workers>` and `--dist load`, each only
+    when it was given. Nothing else passes through to pytest."""
+
+    workers: int | None
+    dist: str | None
+
+
+RunPytest = Callable[[Sequence[str], Path, Options], int]
+WORKERS = re.compile(r"[1-9][0-9]*", re.ASCII)
 
 
 class Undecided(Exception):
@@ -511,8 +593,28 @@ def select(
     return Selection(chosen)
 
 
-def _run_pytest(files: Sequence[str], root: Path) -> int:
-    argv = [sys.executable, "-m", "pytest", "-m", "not llm and not slow", *files]
+def closure_fraction(glob_files: Iterable[str], graph_: Graph) -> float:
+    """The share of the graph's test files that reaching selects for the worst file of a
+    glob: its import closure. A file outside the graph contributes 0.0, and so do an empty
+    glob and a graph with no tests. The loaders and the Rows are not counted: `select` adds
+    them."""
+    total = sum(1 for path in graph_.paths.values() if is_test(path))
+    if not total:
+        return 0.0
+    return max(
+        (
+            len(reaching([module_name(path)], graph_)) / total
+            for path in glob_files
+            if in_graph(path)
+        ),
+        default=0.0,
+    )
+
+
+def _run_pytest(files: Sequence[str], root: Path, options: Options) -> int:
+    given = [] if options.workers is None else ["-n", str(options.workers)]
+    given += [] if options.dist is None else ["--dist", options.dist]
+    argv = [sys.executable, "-m", "pytest", "-m", "not llm and not slow", *given, *files]
     return subprocess.run(argv, cwd=root, check=False).returncode
 
 
@@ -520,15 +622,37 @@ def _say(kind: str, reason: str) -> None:
     sys.stderr.write(f"affected-tests: {kind}: {' '.join(reason.split())}\n")
 
 
+def parse_options(words: Sequence[str]) -> Options | None:
+    """`[-n <int >= 1>] [--dist load]`, in that form and that order, and nothing else: no
+    prefix, no `=` form, no `auto`. By hand, because argparse would accept those."""
+    rest = list(words)
+    workers: int | None = None
+    dist: str | None = None
+    if rest[:1] == ["-n"]:
+        if len(rest) < 2 or not WORKERS.fullmatch(rest[1]):
+            return None
+        workers = int(rest[1])
+        rest = rest[2:]
+    if rest[:2] == ["--dist", "load"]:
+        dist = "load"
+        rest = rest[2:]
+    return Options(workers, dist) if not rest else None
+
+
 def main(
     argv: Sequence[str],
     *,
     root: Path | None = None,
-    run_pytest: Callable[[Sequence[str], Path], int] = _run_pytest,
+    run_pytest: RunPytest = _run_pytest,
 ) -> int:
     top = root if root is not None else Path(__file__).resolve().parent.parent
-    if len(argv) != 1 or not argv[0] or argv[0].startswith("-"):
-        _say("refused", "expected one base revision that does not start with '-'")
+    options = parse_options(argv[1:])
+    if not argv or not argv[0] or argv[0].startswith("-") or options is None:
+        _say(
+            "refused",
+            "expected one base revision that does not start with '-', then optionally "
+            "-n <integer >= 1> and --dist load, in that form",
+        )
         return REFUSED
     try:
         paths = changed(argv[0], top)
@@ -546,7 +670,7 @@ def main(
     if isinstance(result, Empty):
         _say("empty", result.reason)
         return EMPTY
-    return run_pytest(result.files, top)
+    return run_pytest(result.files, top, options)
 
 
 if __name__ == "__main__":

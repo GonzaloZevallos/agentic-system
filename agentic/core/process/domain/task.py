@@ -45,12 +45,15 @@ from .presubmit import (
     FlakeGate,
     GateForm,
     RedCheck,
+    TimeoutFact,
+    timeout_line,
 )
 from .reaping import ReapedProcess
 from .refusal import OutputRefusal as OutputRefusal
 from .refusal import RefusalRule as RefusalRule
 from .size_budget import ActualSize, PlanSize
 from .spec_delivery import SpecContract, SpecDraftRecord, SpecRefusalRecord
+from .stall import LastEvent
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -107,10 +110,15 @@ FindingCategory = Literal[
     "spec-scope",
     "process-uncommitted",
     "process-suite-red",
+    "process-check-timeout",
     "plan-calibration",
     "plan-invariant",
     "integration-crosscut",
 ]
+# The categories only the system writes (GH-1075): a check that timed out with no failing test is
+# an observation about the machine, not a defect of the branch. No role is offered one, none
+# returns a subtask, and `timeout_rows` is the only place that creates a row with one.
+SYSTEM_CATEGORIES: frozenset[str] = frozenset({"process-check-timeout"})
 # What a text finding is about (the Tech Writer's review): `copy-unwritten` is a person-facing
 # text in the diff that Tech Writer never wrote, `copy-criteria-written` one it wrote that
 # breaks the product's writing criteria, `copy-criteria-changed` one the Developer changed
@@ -221,6 +229,7 @@ MechanicalCause = Literal[
     "ci_gh_unreadable",
     "ci_run_unfinished",
     "delivery_transient",
+    "check_timeout",
 ]
 # The causes of a `questions` pause that resuming after the owner's `Decision:` raises (GH-960):
 # `owner_decision` the decision could not be routed back, `spec_owned` the Spec is the owner's file.
@@ -917,6 +926,7 @@ ScopeCause = Literal[
     "first",
     "no_merge",
     "clean",
+    "regenerated",
     "resolved",
     "rewritten",
     "own_before_merge",
@@ -980,6 +990,54 @@ def add_stack_restacks(existing: list[StackRestack], new: list[StackRestack]) ->
     joined: dict[tuple[str, str], StackRestack] = {}
     for row in (*existing, *new):
         joined.setdefault((row["at"], row["upstream"]), row)
+    return list(joined.values())
+
+
+ReintegrationMode = Literal["mechanical", "session"]
+ReintegrationCause = Literal[
+    "clean", "regenerated", "foreign_conflict", "generate_failed", "checks_red"
+]
+
+
+class ReintegrationRecord(TypedDict):
+    """One attempt to bring a task up to date with its upstream (GH-994): `at` the ISO 8601 UTC
+    instant, `upstream` the master sha it was for, `mode` who did it, `cause` how it ended,
+    `attempt_s` how long the attempt took, `generate_s` how long the generation step took (absent
+    when none ran), `regeneration` the sha of the system regeneration commit it made (absent when
+    it made none) and `resumed` whether it continued an earlier session. `landing.reintegration_row`
+    guards writers against `mechanical` with `resumed`; the loader (`from_frontmatter`) does not
+    validate, so a reader must not assume that pair is impossible. Written only through
+    `add_reintegrations`; never a metric, a label or a span attribute."""
+
+    at: str
+    upstream: str
+    mode: ReintegrationMode
+    cause: ReintegrationCause
+    attempt_s: float
+    generate_s: NotRequired[float]
+    regeneration: NotRequired[str]
+    resumed: bool
+
+
+def _reintegration_key(row: ReintegrationRecord) -> tuple[str, str, str]:
+    """The identity of a reintegration row, shared by the reducer and the patch computation:
+    the `mechanical` and the `session` attempt for one `(at, upstream)` are two rows."""
+    return (row["at"], row["upstream"], row["mode"])
+
+
+def add_reintegrations(
+    existing: list[ReintegrationRecord], new: list[ReintegrationRecord]
+) -> list[ReintegrationRecord]:
+    """The reintegration rows of `existing` and `new` as one list: append-only, one row per
+    `_reintegration_key` (a retried write adds nothing), the first seen kept whole, in arrival
+    order. The only way `reintegrations` is ever written.
+
+    There is no cap, on purpose: a row with `regeneration` is the provenance of that commit, and
+    dropping it would make the commit count as a Developer's own commit. Any later cap must keep
+    every row with `regeneration`."""
+    joined: dict[tuple[str, str, str], ReintegrationRecord] = {}
+    for row in (*existing, *new):
+        joined.setdefault(_reintegration_key(row), row)
     return list(joined.values())
 
 
@@ -1109,6 +1167,16 @@ class LandedSlice(TypedDict, total=False):
     at: str
 
 
+class StallRecord(TypedDict):
+    """How a stalled attempt is told on its `Failure` (GH-978, ADR-0057): the silence in
+    whole seconds, the closed kind of the last event seen and whether a delivery hook was
+    in flight. Only these three, never a message or a log line."""
+
+    seconds: int
+    last_event: LastEvent
+    in_hook: bool
+
+
 class Failure(TypedDict):
     role: str
     attempt: int
@@ -1186,6 +1254,11 @@ class Failure(TypedDict):
     # Written only when something was reaped, so a document with no leak renders as it
     # always did; read with `.get("reaped", [])`.
     reaped: NotRequired[list[ReapedProcess]]
+    # How the stall was told (GH-978), off `AttemptFailed.stall`: written only when the
+    # recorded (narrowed) reason is `stall`; read with `.get("stall")`. Absent on any other
+    # failure and on one recorded before this field existed, which reads as unknown, never
+    # as 0.
+    stall: NotRequired[StallRecord]
     # When this attempt began and when its `AttemptFailed` was caught, ISO-8601 UTC, stamped
     # by `run_role` from its injected clock. Absent on a failure recorded before these fields
     # existed, which reads as unknown (`None`), never as 0.
@@ -1276,6 +1349,16 @@ class GateRecord(TypedDict, total=False):
     peers: int
     priority: str
     overdue: bool
+
+
+# The most timeouts one `RoleRun` keeps: a gate has a handful of checks, so more than this is a
+# runaway, not a record.
+ROLE_TIMEOUTS_MAX = 20
+
+
+def capped_timeouts(timeouts: Sequence[TimeoutFact]) -> list[TimeoutFact]:
+    """The first `ROLE_TIMEOUTS_MAX` of `timeouts`, in the order given."""
+    return list(timeouts[:ROLE_TIMEOUTS_MAX])
 
 
 class RoleRun(TypedDict):
@@ -1419,6 +1502,10 @@ class RoleRun(TypedDict):
     # (`.get`). The merge gate reads the pair; nothing else does.
     perf_verdict: NotRequired[Literal["approved", "returned", "unverified"]]
     perf_head: NotRequired[str]
+    # The checks of the delivering attempt's last gate that timed out with no failing test
+    # (GH-1075), ordered by check and capped at `ROLE_TIMEOUTS_MAX` (`capped_timeouts`).
+    # Absent on a run recorded before this field existed, and on one with no timeout.
+    timeouts: NotRequired[list[TimeoutFact]]
 
 
 class InterviewStats(TypedDict):
@@ -1563,6 +1650,48 @@ class FindingRecord(TypedDict):
     landing_checks: NotRequired[list[str]]
 
 
+def system_written(category: str) -> bool:
+    """Whether `category` is one only the system writes (`SYSTEM_CATEGORIES`)."""
+    return category in SYSTEM_CATEGORIES
+
+
+def returns(category: str) -> bool:
+    """Whether a finding of `category` can return a subtask: false for a system-written one."""
+    return not system_written(category)
+
+
+def timeout_rows(
+    subtask: str, timeouts: Sequence[TimeoutFact], existing_findings: Sequence[FindingRecord]
+) -> list[FindingRecord]:
+    """The rows for the checks that timed out (GH-1075), one per check, in the order given: an
+    `observation` of scope `plan` at `checks:<check>`, with the fixed claim `timeout_line` writes.
+    A check adds none while an `open` row of `subtask` is already at its location, whatever its
+    seconds: the dedup is on `(subtask, location)`, never on the claim. The only place a row
+    with a `SYSTEM_CATEGORIES` category is created; `version` is 0, no review pass raised it."""
+    taken = {
+        (row["subtask"], row["location"]) for row in existing_findings if row["status"] == "open"
+    }
+    rows: list[FindingRecord] = []
+    for fact in timeouts:
+        location = f"checks:{fact['check']}"
+        if (subtask, location) in taken:
+            continue
+        taken.add((subtask, location))
+        rows.append(
+            {
+                "subtask": subtask,
+                "version": 0,
+                "location": location,
+                "claim": timeout_line(fact),
+                "severity": "observation",
+                "scope": "plan",
+                "category": "process-check-timeout",
+                "status": "open",
+            }
+        )
+    return rows
+
+
 class DesignItemRecord(TypedDict):
     """One remark from a lead's (UX Lead's or UI Lead's) walk or comparisons, or from
     PM's consolidation (ADR-0040), as `design_items` keeps it: the role that raised it
@@ -1684,6 +1813,10 @@ class EscalationPauseEntry(TypedDict):
     # Why a spec delivery's `questions` pause was raised (GH-594): written only when the patch
     # carried one, which needs a spec; never `None`, so a pause without a spec reads as before.
     spec_cause: NotRequired[SpecEscalationCause]
+    # The checks that timed out behind a `check_timeout` escalation, and those of the escalation
+    # before it (GH-1075), both ordered by check. Absent on every other entry.
+    timeouts: NotRequired[list[TimeoutFact]]
+    previous_timeouts: NotRequired[list[TimeoutFact]]
 
 
 class FailurePauseEntry(TypedDict):
@@ -2558,7 +2691,9 @@ class TaskState(TaskInput, total=False):
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The parent a stacked task was started on (GH-855). Absent for every task that was not
     # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
-    stack_parent: StackParent
+    # `None` (GH-858, written only by `stacked_start`) is the form that clears the record: the
+    # document never writes the key for it.
+    stack_parent: StackParent | None
     # The wait on an unfetchable stacked head (GH-885); `None` (written by `record_closure`, which
     # cannot delete a key) reads as no record. Written only by `stacking.unfetchable_patch` and
     # read only through `stacking.parse_unfetchable`.
@@ -2786,6 +2921,11 @@ class TaskState(TaskInput, total=False):
     # `.get(..., [])`. Nothing reads them to decide; never a metric, a label or a span attribute.
     stack_restacks: Annotated[list[StackRestack], add_stack_restacks]
     stack_pauses: Annotated[list[StackPause], add_stack_pauses]
+    # The attempts to bring the task up to date with its upstream (GH-994,
+    # `ReintegrationRecord`), `add_reintegrations`: append-only, no cap. Read with
+    # `.get("reintegrations", [])`: a document written before it has none. Only
+    # `add_reintegrations` writes it; never a metric, a label or a span attribute.
+    reintegrations: Annotated[list[ReintegrationRecord], add_reintegrations]
     # The verdicts of the early size check (`EarlySplitRow`), `add_early_split`: append-only, at
     # most `EARLY_SPLIT_ROWS_MAX` rows. Read with `.get("early_split", [])` -- only through
     # `rules.early_measured`; a document written before it has none. The figures are read by no
@@ -2956,6 +3096,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 r for r in value if (r["at"], r["upstream"]) not in held_restacks
             ]:
                 patch[key] = fresh_restacks
+        elif reducer is add_reintegrations:
+            held_reintegrations = {_reintegration_key(r) for r in old}
+            if fresh_reintegrations := [
+                r for r in value if _reintegration_key(r) not in held_reintegrations
+            ]:
+                patch[key] = fresh_reintegrations
         elif reducer is add_stack_pauses:
             held_pauses = {(r["parent"], r["cause"], r["at"]): r for r in old}
             if changed_pauses := [

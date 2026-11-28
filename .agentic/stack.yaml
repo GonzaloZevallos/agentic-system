@@ -28,8 +28,13 @@
 product: agentic-system
 setup:
   deps: uv sync --locked
+# `tests` runs under pytest-xdist (GH-979): `{workers}` is the share of cores the check scheduler
+# (ADR-0070) grants the gate, filled in as an integer before the shell sees it, and `--dist load`
+# hands each idle worker the next test. CI's first run is the same command with `-n 4`, which
+# `tests/test_stack.py` accepts as the one token it matches (a positive integer, never `auto`).
+# A worker that crashes degrades to a red run with no flake block, not to a hang.
 checks:
-  tests: uv run pytest -m "not llm"
+  tests: uv run pytest -m "not llm" -n {workers} --dist load
   lint: uv run ruff check .
   format: uv run ruff format --check .
   types: uv run mypy
@@ -37,6 +42,10 @@ checks:
 # them gave no red that the serial run did not give (ADR-0044, "Evidencia para este repo").
 # Read at a task's base, like every key here: it governs from the task after the merge.
 parallel_checks: true
+# `stacking` (GH-858): the stacked start is on for this repo only; apostrophe leaves the key
+# absent and stays off. It is read at the fetched upstream tip, in the launch judgement and
+# nowhere else (ADR-0104), so it governs from the first round after this change merges.
+stacking: true
 # The affected-only form of the pytest check (ADR-0046), selected by `scripts/affected_tests.py`
 # (ADR-0047): the tests whose import closure reaches the change, an explicit table for what
 # tests read without importing it, and exit 8/9 when it selects nothing or cannot decide.
@@ -44,20 +53,37 @@ parallel_checks: true
 # the full suite (ADR-0046); `tests/test_affected_tests.py` reads this list through the
 # stack parser and fails when a test reads a repo path that nothing here or in the script's
 # table covers. This list lives only here.
+# The same `-n {workers} --dist load` follows the base: the script parses both strictly and
+# passes them to the pytest it runs, on a selection as well as on its way to a verdict.
 affected_checks:
-  tests: uv run python scripts/affected_tests.py {base}
+  tests: uv run python scripts/affected_tests.py {base} -n {workers} --dist load
+# Each entry is kept for a reason and a measurement in ADR-0047, adenda GH-1068 (the fraction
+# and the base sha it was measured at are there, not here). `scripts/*` left the list: the
+# scripts a test runs have a Row in the script's table, the rest are refused with 9.
 affected_fallback:
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - pyproject.toml
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - uv.lock
+  # ADR-0047, adenda GH-1068: always full, it changes what every test sees
   - "*conftest.py"
+  # ADR-0047, adenda GH-1068: closure at or above 50 %
   - "agentic/shared/*"
+  # ADR-0047, adenda GH-1068: closure under 50 %, kept: reads by a built path cannot be ruled out
   - agentic/composition.py
+  # ADR-0047, adenda GH-1068: closure under 50 %, kept: reads by a built path cannot be ruled out
   - agentic/cli.py
+  # ADR-0047, adenda GH-1068: no Row: tests read the prompts by paths the guard cannot see
   - "agentic/*/prompts/*"
+  # ADR-0047, adenda GH-1068: always full, a pinned submodule outside the graph
   - "agentic/plugins/*"
+  # ADR-0047, adenda GH-1068: no Row: the glossaries are read by paths the guard cannot see
   - "*CONTEXT*.md"
+  # ADR-0047, adenda GH-1068: no Row: too many tests read the workflow
   - ".github/*"
-  - "scripts/*"
+  # ADR-0047, adenda GH-1068: always full, it is the check runner
+  - scripts/affected_tests.py
+  # ADR-0047, adenda GH-1068: always full, no test maps to it
   - .env.example
 # `delivery_checks`: the fast tier, the checks every subtask delivery runs. All four names are
 # listed, so the tier is the whole of `checks` and what changes is the form: the delivery gate
@@ -81,8 +107,16 @@ rerun_checks:
 # GH-400, ADR-0076, sets this value). Measured: one `generate.py` run takes about 63 s idle and
 # 154 s with the machine loaded (eleven pyreverse runs, the import of the CLI and the compile of
 # the graph); the budget is the loaded time times 1.5, rounded up.
+# `tests` (GH-979): the full tier's share, read from the scheduler's own `Limits` (ADR-0070) for
+# this machine: 16 cores, a reserve of 4, so `cap(INTEGRATION)` = `cap(LAND)` = 12 workers (a
+# `subtask` gate gets 6). Measured with `uv run pytest -m "not llm" -n 12 --dist load` in this
+# checkout, the machine loaded by a serial `run_check("tests")` running at the same time: 20490
+# passed, 7 skipped, 1 xfailed in 754.83 s (green) and 775.34 s (one load-sensitive wait failed,
+# fixed in `test_graph_parallel.py`). The slower, 775.34 s, x 1.5 rounded up is 1164.
+# Serial, the same suite timed out at 1500 s at 71-95 % in those loaded windows.
 check_budgets:
   docs: 231
+  tests: 1164
 # `docs`: the generated documentation (ADR-0074). `generate` rewrites every file the globs
 # own; the reserved `docs` check runs it and fails when the tree changed, and CI runs the same
 # command through `scripts/docs/check.py`. Hand-written pages never go under these globs.

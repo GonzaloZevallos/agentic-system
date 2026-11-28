@@ -560,6 +560,7 @@ async def run_with_retry(
     floor_bytes: int = 0,
     now: Callable[[], str] | None = None,
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     """`now` is the clock the attempts' instants come from (`Ports.now` in a run; this
@@ -694,6 +695,7 @@ async def run_with_retry(
                     max_turns=turns,
                     declared_checks=declared_checks,
                     now=clock,
+                    refuse=refuse,
                     repair=repair,
                 )
                 ended_at = clock()
@@ -730,6 +732,19 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    # Written only on the reason the record says (the narrowed one), so a
+                    # stall narrowed to `disk_full` carries none.
+                    **(
+                        {
+                            "stall": {
+                                "seconds": exc.stall.seconds,
+                                "last_event": exc.stall.last_event,
+                                "in_hook": exc.stall.in_hook,
+                            }
+                        }
+                        if exc.stall is not None and reason == "stall"
+                        else {}
+                    ),
                     **({"rule": exc.rule} if refused else {}),
                     **({"field": exc.field} if refused and exc.field else {}),
                     **({"value": exc.value} if refused and exc.value is not None else {}),
@@ -1063,6 +1078,7 @@ async def _attempt(
     max_turns: int | None = None,
     declared_checks: Mapping[str, str] | None = None,
     now: Callable[[], str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
 ) -> Output:
     result = await runner.run_once(
@@ -1082,6 +1098,7 @@ async def _attempt(
         max_turns=max_turns,
         declared_checks=declared_checks,
         now=now,
+        refuse=refuse,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -1330,6 +1347,7 @@ async def run_role(
     tiers: str = "",
     extra_input: str = "",
     declared_checks: Mapping[str, str] | None = None,
+    refuse: Callable[[str], str | None] | None = None,
     repair: Mapping[RefusalRule, Repair] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -1459,6 +1477,7 @@ async def run_role(
             floor_bytes=cfg.scratch_floor_bytes,
             now=ports.now,
             declared_checks=declared_checks,
+            refuse=refuse,
             repair=repair,
         )
     except Escalating as exc:
@@ -1532,3 +1551,16 @@ def finish(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
     """Write the document once per role, with the reducers applied, and return the patch."""
     ports.documents.save(apply(state, patch))
     return patch
+
+
+def soft_failure(patch: TaskState) -> tuple[TaskState, bool]:
+    """A role's patch when it delivered nothing, as `(what to keep, whether the node stops)`.
+    A role that failed its attempts is an optional step failing: its failed attempts were paid, so
+    their cost and records are kept and the escalation is not. A cap, or anything that is not
+    a plain failure, stops the node and the patch is the escalation itself."""
+    if patch.get("escalation_class") != "failure":
+        return patch, True
+    kept: TaskState = {"failures": patch["failures"], "cost_usd": patch["cost_usd"]}
+    if "prompts" in patch:
+        kept["prompts"] = patch["prompts"]
+    return kept, False

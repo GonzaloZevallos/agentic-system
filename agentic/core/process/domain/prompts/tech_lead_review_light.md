@@ -127,7 +127,10 @@ Record each finding with:
 - `category`, the same closed list the ordinary review uses: `standard-architecture`,
   `standard-typing-silenced`, `standard-seams`, `standard-other`, `spec-behaviour`,
   `spec-missing-test`, `spec-scope`, `process-uncommitted`, `process-suite-red`,
-  `plan-calibration`, `plan-invariant`, `integration-crosscut`.
+  `plan-calibration`, `plan-invariant`, `integration-crosscut`. The category
+  `process-check-timeout` (a check that ran out of time with no failing test) is not on
+  your list: only the system writes it, as an observation of scope `plan`. Never raise it
+  again, never turn it into `process-suite-red`, and never treat it as a return.
 
 A `## CI` section lists the declared CI checks on this head; a red one is recorded by the system with its run link: do not write a finding for it.
 

@@ -122,7 +122,7 @@ def build(documents: Sequence[Mapping[str, Any]]) -> History:
     return History(buckets, tuple(pairs[-PAIRS:]), tuple(sizes))
 
 
-def size_ratio(history: History) -> tuple[float, float] | None:
+def _proven_ratio(history: History) -> tuple[float, float] | None:
     """The floor on the declared hand-written size once the history proves it (GH-592): the
     p90 of the actual over the planned size, as `(files, lines)`, each at least 1.0. `None`
     while fewer than `size_budget.PROVEN_PAIRS` tasks recorded both sizes -- the caller then
@@ -138,6 +138,13 @@ def size_ratio(history: History) -> tuple[float, float] | None:
     files = sorted(actual.hand_files / planned.hand_files for planned, actual in usable)
     lines = sorted(actual.hand_lines / planned.hand_lines for planned, actual in usable)
     return max(1.0, _p90(files)), max(1.0, _p90(lines))
+
+
+def size_ratio(history: History) -> size_budget.Ratio:
+    """The floor on the declared hand-written size in force: the history's p90 ratio once it
+    proves one, else the fixed `UNPROVEN_RATIO`. The one derivation of the ratio: the prompt,
+    the plan check, the part's fit and the early check all read it (GH-592)."""
+    return _proven_ratio(history) or size_budget.UNPROVEN_RATIO
 
 
 def reference_usd(history: History, n_subtasks: int) -> float | None:

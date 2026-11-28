@@ -264,12 +264,24 @@ def _index(graph: _Graph) -> Page:
         "flechas que llegan a un paquete se leen en la página del paquete que importa."
     )
     return draw.page(
-        INDEX, "Paquetes de process", sentence, None, (), [_key(s) for s in graph.subpackages]
+        INDEX, "Paquetes de process", sentence, None, (), _page_keys(graph, graph.subpackages)
     )
 
 
+def _page_keys(graph: _Graph, subs: Iterable[str]) -> list[str]:
+    """The keys of the pages of `subs`: one each, or one per part for an adapter kind whose
+    page is split."""
+    keys: list[str] = []
+    for sub in subs:
+        if sub in LAYERS:
+            keys.append(_key(sub))
+        else:
+            keys.extend(key for key, _ in _adapter_draws(graph, sub))
+    return keys
+
+
 def _others(graph: _Graph, sub: str) -> list[str]:
-    return [_key(other) for other in graph.subpackages if other != sub]
+    return _page_keys(graph, [other for other in graph.subpackages if other != sub])
 
 
 def _layer_page(graph: _Graph, layer: str) -> Page:
@@ -455,87 +467,60 @@ def _cluster_pages(graph: _Graph, layer: str, cluster: str) -> dict[str, Page]:
     return found
 
 
-def _draw_adapter(
-    graph: _Graph, sub: str, modules: list[str], parts: tuple[int, list[list[str]]] | None
-) -> _Draw:
-    """The drawing of `modules` of an adapter kind: an import inside the kind is a module
-    edge, or a ghost of the other part when `parts` splits the kind; any other target is the
-    ghost of its package."""
+def _adapter_draw(graph: _Graph, sub: str, modules: Sequence[str]) -> _Draw:
+    """The page of `modules`, of the adapter kind `sub`: an import of another module of the
+    kind that is in this page is an edge between nodes; any other target is one ghost."""
     draw = _Draw()
     for source in modules:
         here = _own_end(source)
         draw.node(here)
         for target in graph.targets[source]:
             relative = _relative(target)
-            if relative is not None and subpackage(relative) == sub:
-                if parts is not None and relative not in parts[1][parts[0] - 1]:
-                    draw.edge(here, _part_end(sub, _part_of(parts[1], relative)))
-                else:
-                    draw.edge(here, _own_end(relative))
+            if relative is not None and relative in modules:
+                draw.edge(here, _own_end(relative))
             else:
                 draw.edge(here, graph.sub_end(target))
     return draw
 
 
-def _part_of(runs: list[list[str]], relative: str) -> int:
-    return next(number for number, chunk in enumerate(runs, 1) if relative in chunk)
-
-
-def _part_end(sub: str, number: int) -> End:
-    return node_id("cluster", sub, number), f"{sub} parte {number} (grupo)"
+def _adapter_draws(graph: _Graph, sub: str) -> list[tuple[str, _Draw]]:
+    """The drawn pages of `sub`: one, or, when it is over the budget, `chunks` of consecutive
+    modules (`adapters-filesystem-1`, `adapters-filesystem-2`)."""
+    modules = graph.modules_of(sub)
+    whole = _adapter_draw(graph, sub, modules)
+    if not whole.over() or len(modules) < 2:  # one module cannot be split: `_checked` refuses it
+        return [(_key(sub), whole)]
+    return [
+        (f"{_key(sub)}-{number}", _adapter_draw(graph, sub, run))
+        for number, run in enumerate(chunks(modules), 1)
+    ]
 
 
 def _adapter_pages(graph: _Graph, sub: str) -> dict[str, Page]:
-    """The page of an adapter kind. A kind whose page is over `DIAGRAM_BUDGET` and has more
-    than one module is split by count, as the clusters are: the kind page draws its parts
-    and each part page its modules (`adapters-<kind>-<n>`). A single module that does not fit
-    still raises, naming the page."""
-    modules = graph.modules_of(sub)
     what = (
         "los módulos sueltos de `adapters`, los que no están en ningún tipo de adaptador,"
         if sub == ADAPTERS
         else f"los módulos del adaptador `{sub}`"
     )
-    whole = _draw_adapter(graph, sub, modules, None)
-    if not whole.over() or len(modules) < 2:
+    draws = _adapter_draws(graph, sub)
+    keys = [key for key, _ in draws]
+    others = _others(graph, sub)
+    pages: dict[str, Page] = {}
+    for number, (key, draw) in enumerate(draws, 1):
         sentence = (
-            f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` "
-            f"es otro paquete: {_PACKAGE_NODES}"
-        )
-        return {_key(sub): _checked(whole, _key(sub), sub, sentence, INDEX, _others(graph, sub))}
-    runs = chunks(modules)
-    keys = [f"{_key(sub)}-{number}" for number in range(1, len(runs) + 1)]
-    kind = _Draw()
-    for number in range(1, len(runs) + 1):
-        kind.node(_part_end(sub, number))
-    for number, chunk in enumerate(runs, 1):
-        for source in chunk:
-            for target in graph.targets[source]:
-                relative = _relative(target)
-                if relative is not None and subpackage(relative) == sub:
-                    kind.edge(_part_end(sub, number), _part_end(sub, _part_of(runs, relative)))
-    sentence = (
-        f"Esta página muestra las partes en que se dividieron {what} por cantidad, y una flecha "
-        "por cada parte que importa módulos de otra; cada nodo `<nombre> parte <n> (grupo)` "
-        "tiene su página, con los módulos consecutivos en orden alfabético."
-    )
-    pages = {_key(sub): _checked(kind, _key(sub), sub, sentence, INDEX, _others(graph, sub), keys)}
-    for number, (key, chunk) in enumerate(zip(keys, runs, strict=True), 1):
-        draw = _draw_adapter(graph, sub, chunk, (number, runs))
-        sentence = (
-            f"Esta página muestra la parte {number} de {len(runs)} de {what}, con módulos "
-            "consecutivos en orden alfabético, y los imports que hacen; un nodo "
-            "`<nombre> parte <n> (grupo)` es otra parte del adaptador y `<nombre> (paquete)` "
+            f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` es "
             f"otro paquete: {_PACKAGE_NODES}"
         )
-        pages[key] = _checked(
-            draw,
-            key,
-            f"{sub} (parte {number})",
-            sentence,
-            _key(sub),
-            [other for other in keys if other != key],
-        )
+        title = sub
+        if len(draws) > 1:
+            title = f"{sub} (parte {number})"
+            sentence += (
+                f" El adaptador se dividió por cantidad: esta es la parte {number} de "
+                f"{len(draws)}, con módulos consecutivos en orden alfabético; un import de un "
+                f"módulo de otra parte aparece como el nodo `{sub} (paquete)`."
+            )
+        siblings = [other for other in keys if other != key] + others
+        pages[key] = _checked(draw, key, title, sentence, INDEX, siblings)
     return pages
 
 

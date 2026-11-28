@@ -20,14 +20,14 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
     - [application: landing (parte 2)](packages-process-application-landing-2.md)
     - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
     - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-    - [application: reflection](packages-process-application-reflection.md)
+    - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+    - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
     - [application: support (parte 1)](packages-process-application-support-1.md)
     - [application: support (parte 2)](packages-process-application-support-2.md)
   - [adapters](packages-process-adapters.md)
   - [adapters.claude_sdk](packages-process-adapters-claude_sdk.md)
-  - [adapters.filesystem](packages-process-adapters-filesystem.md)
-    - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
-    - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
+  - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
+  - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
@@ -47,6 +47,7 @@ graph TD
     g_pkg__adapters --> g_pkg__application
     g_pkg__adapters --> g_pkg__domain
     g_pkg__adapters__claude_sdk --> g_pkg__adapters
+    g_pkg__adapters__claude_sdk --> g_pkg__adapters__git
     g_pkg__adapters__claude_sdk --> g_pkg__application
     g_pkg__adapters__claude_sdk --> g_pkg__domain
     g_pkg__adapters__filesystem --> g_pkg__adapters

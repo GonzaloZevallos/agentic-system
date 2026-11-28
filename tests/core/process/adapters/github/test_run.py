@@ -25,10 +25,13 @@ from agentic.core.process.application.ports import (
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
+    Turn,
+    WriteGate,
 )
 from agentic.core.process.domain.github_access import GithubAccess
-from tests.core.process.adapters.github.gh_fake import gh_response
+from tests.core.process.adapters.github.gh_fake import StubGate, gh_response
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -836,7 +839,7 @@ def test_the_nested_rate_limit_read_runs_with_access_none(monkeypatch):
     clock = _Clock(1_000)
     run = _script(_http_failed(403, [], RATE_LIMITED), _reset_json(1_001), "done")
     call, _ = _accessing(
-        run, clock, access=GithubAccess(gate=object(), cache=object(), budget=object())
+        run, clock, access=GithubAccess(gate=StubGate(), cache=object(), budget=object())
     )
     assert call() == "done"
     assert seen == [None]
@@ -918,3 +921,296 @@ def _observed(outcomes, read, access):
 def test_access_on_stdout_that_is_not_http_changes_nothing(case):
     outcomes, read = _PARITY[case]
     assert _observed(outcomes(), read, None) == _observed(outcomes(), read, GithubAccess())
+
+
+# --- the write turn (GH-1107, ADR-0107) ---------------------------------------------------
+
+
+class _FakeGate:
+    """A `WriteGate` that plays a scripted list of turns and records what each `take` got.
+    Its `take` moves the shared clock by the turn's wait, as a real gate's sleep would."""
+
+    def __init__(self, turns, cap_s=30.0, clock=None):
+        self._cap_s = cap_s
+        self.turns = list(turns)
+        self.remaining: list[float] = []
+        self.clock = clock
+
+    @property
+    def cap_s(self) -> float:
+        return self._cap_s
+
+    def take(self, remaining_s: float) -> Turn:
+        self.remaining.append(remaining_s)
+        turn = self.turns.pop(0) if self.turns else Turn("granted", 0.0)
+        if self.clock is not None:
+            self.clock.t += turn.waited_s
+        return turn
+
+
+def _gated(run, gate, *, args=("issue", "comment", "7"), write=None, cap=900, clock=None):
+    clock = _Clock() if clock is None else clock
+    lines: list[str] = []
+    writer: WriteGate = gate
+    call = lambda: run_gh(  # noqa: E731
+        run,
+        args,
+        cwd=Path("."),
+        not_installed="no gh",
+        failed=lambda stderr: f"failed: {stderr}",
+        log=lines.append,
+        retry=_policy(clock, cap=cap),
+        access=GithubAccess(gate=writer),
+        write=write,
+    )
+    return call, lines, clock
+
+
+def test_a_write_takes_a_turn_and_a_read_does_not():
+    gate = _FakeGate([])
+    call, _, _ = _gated(_script("ok"), gate)
+    assert call() == "ok" and gate.remaining == [30.0]
+    gate = _FakeGate([])
+    call, _, _ = _gated(_script("ok"), gate, args=("issue", "view", "7"))
+    assert call() == "ok" and gate.remaining == []
+
+
+def test_write_overrides_is_write_in_both_directions():
+    gate = _FakeGate([])
+    call, _, _ = _gated(_script("ok"), gate, args=("issue", "view", "7"), write=True)
+    call()
+    assert gate.remaining == [30.0]
+    gate = _FakeGate([])
+    call, _, _ = _gated(_script("ok"), gate, write=False)
+    call()
+    assert gate.remaining == []
+
+
+def test_a_retry_takes_a_new_turn_on_the_second_attempt():
+    gate = _FakeGate([])
+    run = _script(_failed(BAD_GATEWAY), "ok")
+    call, _, clock = _gated(run, gate)
+    assert call() == "ok"
+    assert gate.remaining == [30.0, 28.0] and len(run.calls) == 2 and sum(clock.sleeps) == 2
+
+
+@pytest.mark.parametrize("outcome", ["refused", "stopped"])
+def test_a_refused_or_stopped_turn_raises_without_calling_run(outcome):
+    gate = _FakeGate([Turn(outcome, 0.0)])
+    run = _script("never")
+    call, _, _ = _gated(run, gate)
+    with pytest.raises(TrackerTurnRefused) as raised:
+        call()
+    assert isinstance(raised.value, TrackerTransient)
+    assert run.calls == [] and raised.value.status is None
+
+
+def test_the_turn_log_lines_are_exact_and_a_zero_wait_logs_nothing():
+    call, lines, _ = _gated(_script("ok"), _FakeGate([Turn("granted", 0.0)]))
+    call()
+    assert lines == []
+    call, lines, _ = _gated(_script("ok"), _FakeGate([Turn("granted", 2.5)]))
+    call()
+    assert lines == ["agentic: gh issue comment waiting 2.5 s for its write turn"]
+    call, lines, _ = _gated(_script("never"), _FakeGate([Turn("refused", 0.0)], cap_s=30))
+    with pytest.raises(TrackerTurnRefused) as refused:
+        call()
+    assert lines == ["agentic: gh issue comment write turn refused: over the 30 s bound"]
+    assert str(refused.value) == "gh issue comment write turn refused: over the 30 s bound"
+    call, lines, _ = _gated(_script("never"), _FakeGate([Turn("stopped", 1.0)]))
+    with pytest.raises(TrackerTurnRefused):
+        call()
+    assert lines == ["agentic: gh issue comment write turn refused: the wait was stopped"]
+
+
+def test_one_calls_turn_waits_and_sleeps_stay_within_the_cap():
+    clock = _Clock()
+    gate = _FakeGate([Turn("granted", 10.0), Turn("granted", 3.0)], cap_s=30, clock=clock)
+    run = _script(_failed(BAD_GATEWAY), "ok")
+    call, _, _ = _gated(run, gate, clock=clock)
+    assert call() == "ok"
+    assert gate.remaining == [30.0, 18.0]  # 30, then 30 - 10 - 2
+    assert 10 + sum(clock.sleeps) + 3 <= gate.cap_s
+
+
+def test_a_backoff_over_the_remaining_time_raises_the_kinds_error_without_sleeping():
+    clock = _Clock()
+    gate = _FakeGate([Turn("granted", 25.0)], cap_s=30, clock=clock)
+    run = _script(_failed(BAD_GATEWAY), _failed(BAD_GATEWAY), "never")
+    # Attempt 1 waits 2 s; attempt 2 would wait 8 s with 30 - 25 - 2 = 3 s left.
+    call, lines, _ = _gated(run, gate, clock=clock)
+    with pytest.raises(TrackerTransient) as raised:
+        call()
+    assert str(raised.value) == (
+        "gh issue comment met a transient GitHub error; its wait is 8 s, "
+        "over the 3 s left of its 30 s write bound (HTTP 502)"
+    )
+    assert raised.value.status == 502 and not isinstance(raised.value, TrackerTurnRefused)
+    assert clock.sleeps == [1, 1] and len(run.calls) == 2
+    assert not any("retrying in 8" in line for line in lines)
+
+
+def test_a_backoff_with_nothing_left_refuses_before_any_sleep():
+    clock = _Clock()
+    gate = _FakeGate([Turn("granted", 30.0)], cap_s=30, clock=clock)
+    run = _script(_failed(BAD_GATEWAY), "never")
+    call, lines, _ = _gated(run, gate, clock=clock)
+    with pytest.raises(TrackerTransient) as raised:
+        call()
+    assert "over the 0 s left of its 30 s write bound" in str(raised.value)
+    assert clock.sleeps == [] and len(run.calls) == 1
+    assert not any("retrying" in line for line in lines)
+
+
+def test_a_rate_limit_over_the_remaining_time_carries_the_reset_it_read():
+    clock = _Clock(1_000)
+    gate = _FakeGate([], cap_s=30, clock=clock)
+    run = _script(_failed(RATE_LIMITED), _reset_json(1_100), "never")
+    call, lines, _ = _gated(run, gate, clock=clock)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at == datetime.fromtimestamp(1_100, UTC)
+    assert "its wait is 100 s, over the 30 s left of its 30 s write bound" in str(raised.value)
+    assert clock.sleeps == [] and len(run.calls) == 2
+    assert not any("retrying" in line for line in lines)
+
+
+def test_the_rate_limit_read_never_takes_a_turn():
+    clock = _Clock(1_000)
+    gate = _FakeGate([], cap_s=30, clock=clock)
+    run = _script(_failed(RATE_LIMITED), _reset_json(1_005), "ok")
+    call, _, _ = _gated(run, gate, clock=clock)
+    assert call() == "ok"
+    assert len(gate.remaining) == 2 and len(run.calls) == 3  # the read is the middle call
+
+
+def _observed_turnless(outcomes, read, access):
+    queue = list(outcomes)
+    calls: list[tuple[list[str], dict]] = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        outcome = queue.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return subprocess.CompletedProcess(argv, 0, stdout=outcome, stderr="")
+
+    clock = _Clock(1_000)
+    lines: list[str] = []
+    try:
+        result: object = run_gh(
+            run,
+            ("issue", "comment", "7"),
+            cwd=Path("."),
+            not_installed="no gh",
+            failed=lambda stderr: f"failed: {stderr}",
+            log=lines.append,
+            retry=_policy(clock),
+            retry_timeouts=read,
+            access=access,
+        )
+    except Exception as exc:
+        result = (
+            type(exc),
+            str(exc),
+            getattr(exc, "status", None),
+            getattr(exc, "resets_at", None),
+        )
+    return calls, lines, clock.sleeps, result
+
+
+_TURNLESS = {
+    "success": (lambda: ["ok"], False),
+    "refusal": (lambda: [_plain("gh: Not Found (HTTP 404)")], False),
+    "timeout": (lambda: [subprocess.TimeoutExpired(["gh"], 60)], False),
+    "exhausted retry": (lambda: [_plain(BAD_GATEWAY)] * 3, False),
+}
+
+
+@pytest.mark.parametrize("case", list(_TURNLESS))
+def test_without_a_gate_a_write_is_the_same_as_without_access(case):
+    outcomes, read = _TURNLESS[case]
+    assert _observed_turnless(outcomes(), read, None) == _observed_turnless(
+        outcomes(), read, GithubAccess()
+    )
+
+
+# --- the `call` label (GH-1089) --------------------------------------------------------
+
+
+def _labelled(run, args, *, call, retry=None, retry_timeouts=False, access=None):
+    lines: list[str] = []
+    runner = lambda: run_gh(  # noqa: E731
+        run,
+        args,
+        cwd=Path("."),
+        not_installed="no gh",
+        failed=lambda stderr: f"failed: {stderr}",
+        log=lines.append,
+        retry=retry,
+        retry_timeouts=retry_timeouts,
+        access=access,
+        call=call,
+    )
+    return runner, lines
+
+
+_API_ARGS = ("api", "-i", "-X", "POST", "repos/{owner}/{repo}/pulls", "-f", "title=t")
+
+
+def test_a_call_label_names_the_timeout_and_the_unreachable_message_and_line():
+    runner, lines = _labelled(
+        _raising(subprocess.TimeoutExpired(["gh"], 60)), _API_ARGS, call="pr create"
+    )
+    with pytest.raises(TrackerTimedOut) as timed_out:
+        runner()
+    assert str(timed_out.value) == "gh pr create timed out after 60 s"
+    assert lines == [
+        "agentic: gh pr create timed out after 60 s; this read fails and the next round retries"
+    ]
+    runner, lines = _labelled(
+        _raising(_failed("error connecting to api.github.com")), _API_ARGS, call="pr create"
+    )
+    with pytest.raises(TrackerUnreachable) as unreachable:
+        runner()
+    assert str(unreachable.value) == "gh pr create could not reach GitHub (error connecting to)"
+    assert lines == [
+        "agentic: gh pr create could not reach GitHub (error connecting to); "
+        "this read fails and the next round retries"
+    ]
+
+
+def test_a_call_label_names_the_retry_lines_and_the_exhaustion_message():
+    clock = _Clock()
+    run = _script(*[_failed(BAD_GATEWAY)] * 3)
+    runner, lines = _labelled(run, _API_ARGS, call="issue comment", retry=_policy(clock))
+    with pytest.raises(TrackerTransient) as raised:
+        runner()
+    assert str(raised.value).startswith("gh issue comment met a transient GitHub error on each of")
+    assert all(line.startswith("agentic: gh issue comment ") for line in lines)
+
+
+def test_a_call_label_names_the_write_turn_lines():
+    call, lines = _labelled(
+        _script("ok"),
+        _API_ARGS,
+        call="pr create",
+        access=GithubAccess(gate=_FakeGate([Turn("granted", 2.5)])),
+    )
+    call()
+    assert lines == ["agentic: gh pr create waiting 2.5 s for its write turn"]
+
+
+def test_a_call_label_does_not_change_how_the_failure_text_is_built():
+    runner, _ = _labelled(_raising(_failed("boom")), _API_ARGS, call="pr create")
+    with pytest.raises(ValueError, match="^failed: boom$"):
+        runner()
+
+
+def test_without_a_call_label_the_wording_is_the_first_two_arguments():
+    runner, lines = _labelled(_raising(subprocess.TimeoutExpired(["gh"], 60)), _API_ARGS, call=None)
+    with pytest.raises(TrackerTimedOut, match="^gh api -i timed out after 60 s$"):
+        runner()
+    assert lines == [
+        "agentic: gh api -i timed out after 60 s; this read fails and the next round retries"
+    ]

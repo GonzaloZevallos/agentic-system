@@ -219,7 +219,12 @@ def test_pause_kind_is_external_for_mechanical_pauses():
 def test_schedule_and_limit_for_mechanical_causes_and_unchanged_reasons():
     for cause in CAUSES:
         assert rules.schedule_for(cause) == rules.RETAKE_SCHEDULE
-        assert rules.auto_resume_limit({}, cause) == rules.MECHANICAL_RETAKE_MAX
+        expected = (
+            rules.CHECK_TIMEOUT_RETAKES
+            if cause == "check_timeout"
+            else (rules.MECHANICAL_RETAKE_MAX)
+        )
+        assert rules.auto_resume_limit({}, cause) == expected
     assert rules.MECHANICAL_RETAKE_MAX == 3
     assert rules.schedule_for("account_limit") == rules.ACCOUNT_LIMIT_SCHEDULE
     assert rules.schedule_for("network") == rules.RETAKE_SCHEDULE

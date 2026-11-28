@@ -155,8 +155,8 @@ def test_a_raising_check_records_nothing_in_serial_mode_either():
 def test_a_timed_out_check_does_not_stop_the_others_results():
     commands = MemoryCommands(**{"ruff check .": [CommandResult(-1, "partial", timed_out=True)]})
     gate_ = gate(commands, parallel=True)
-    reason = gate_()
-    assert reason is not None and "`lint`" in reason
+    assert gate_() is None  # GH-1075: a timeout with no failing test is no refusal
+    assert [fact["check"] for fact in gate_.timeouts()] == ["lint"]
     results = gate_.results or []
     assert [c["name"] for c in results] == list(CHECKS)
     assert [c["passed"] for c in results] == [True, False, True]

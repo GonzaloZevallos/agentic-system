@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..domain import carve_out, rules
+from ..domain import carve_out, pull_request, rules
 from ..domain.landing import IssueRef
 from ..domain.task import TaskState
 from .ports import IssueState, Ports, TrackerRateLimited, TrackerTimedOut, TrackerUnreachable
@@ -226,6 +226,16 @@ class _Refs:
         return self._refs
 
 
+def _held(task_id: str, carrying: Sequence[int], report_failures: bool) -> list[str] | None:
+    """`None` when no open issue carries the parent's `agentic-closes` marker (GH-1104); else
+    the lines of a parent held back: the carrier's own merge closes it, so the sweep neither
+    re-points, records nor closes it."""
+    if not carrying:
+        return None
+    listed = ", ".join(f"#{n}" for n in carrying)
+    return [f"agentic: split: {task_id}: close held by {listed}"] if report_failures else []
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -246,7 +256,9 @@ def sweep(
     `COMPLETED`. No parent to work on, no tracker call. Never raises. The lines are
     `agentic: split: GH-N: K dependents re-pointed`, `agentic: split: GH-N: parent closed` and
     `agentic: split: GH-N: part K abandoned, escalated`; with `report_failures` also the skipped
-    round and the parent left unfinished."""
+    round, the parent left unfinished and the parent held while an open issue that is none of
+    its parts carries its `agentic-closes` marker (`pull_request.carriers`, GH-1104): such a
+    parent is neither re-pointed, recorded nor closed, and a failed read holds it too."""
     refs = _Refs(ports)
     lines: list[str] = []
     finished: set[str] = set()
@@ -272,6 +284,10 @@ def sweep(
             parent = ports.inbox.issue_of(task_id)
             if parent is None:
                 continue
+            held = _held(task_id, pull_request.carriers(shared, parent, parts), report_failures)
+            if held is not None:
+                lines.extend(held)
+                continue
             where, kept = _with_followups(targets, parts, shared)
             result = repoint_dependents(ports, parent, where, shared, {*kept, parent})
             if result.stopped:
@@ -294,9 +310,11 @@ def sweep(
             continue
         try:
             repointed = document["id"] in finished
-            lines.extend(
-                _judge(ports, document, numbers, verdict, states, refs, repointed, report_failures)
+            judged = _judge(
+                ports, document, numbers, verdict, states, refs, repointed, report_failures
             )
+            # The first stage may have said the same held line already.
+            lines.extend(line for line in judged if line not in lines)
         except _RoundStopped as stopped:
             return [*lines, *_skipped(stopped.name, report_failures)]
         except ROUND_STOPPERS as failed:
@@ -369,16 +387,21 @@ def _close(
     repointed: bool,
     report_failures: bool,
 ) -> list[str]:
-    """Every part merged: one fresh re-point pass (tidiness: once `split_closed_at` is recorded
-    the verdict of a dependent that still names the parent resolves anyway), then the record,
-    and only then the close with its comment. A record that cannot be written means no close."""
+    """Every part merged, and no open issue carrying the parent's marker (`_held`, also for a
+    parent whose `split_closed_at` is recorded): one fresh re-point pass (tidiness: once
+    `split_closed_at` is recorded the verdict of a dependent that still names the parent
+    resolves anyway), then the record, and only then the close with its comment. A record that
+    cannot be written means no close."""
     task_id = state["id"]
     targets, parts = repoint_targets(state) or ([], set())
     parent = ports.inbox.issue_of(task_id)
     if parent is None:
         return []
+    read = refs.get()
+    held = _held(task_id, pull_request.carriers(read, parent, numbers), report_failures)
+    if held is not None:
+        return held
     if not repointed:
-        read = refs.get()
         where, kept = _with_followups(targets, parts, read)
         result = repoint_dependents(ports, parent, where, read, {*kept, parent})
         if result.stopped:

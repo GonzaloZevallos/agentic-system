@@ -806,3 +806,22 @@ Rechazos, un conjunto cerrado: `task_live`, `no_archive`, `no_document`, `not_de
 `pr_head_moved`, `push_refused`, `already_restored`. No toca etiquetas ni el estado del issue.
 Una restauración por tarea; el mismo prefijo en un reintento termina lo que falta.
 
+
+## Adenda (GH-1142): una carpeta de tarea sin su `.git` se aparta y se reconstruye
+
+`GitWorkspace._checkout` ya no confía en que la carpeta exista: una carpeta es un checkout
+válido solo si `guard.require_checkout` pasa y `git rev-parse --show-toplevel`, resuelto, es la
+propia carpeta. Si no lo es:
+
+- La carpeta **se mueve, nunca se borra**, con `os.rename` a
+  `.agentic/kept/<tarea>/orphaned-<nombre>-<UTC>/`; se corre `git worktree prune` y
+  `git worktree add` sobre la rama, y una línea `agentic: moved invalid worktree …` sale por
+  stderr. No hay clase de escalación nueva.
+- Si el movimiento no se puede hacer, o el toplevel sigue sin coincidir tras reconstruir, se
+  levanta `ForeignCheckout` y ningún git corre desde esa carpeta.
+- El integrate se re-deriva de las refs compartidas del repositorio (las ramas de las partes
+  viven en el `.git` común), así que perder la carpeta no pierde commits; solo lo no
+  commiteado queda en la carpeta apartada.
+
+Costo: una carpeta apartada puede pesar varios GB y vive 14 días en `kept/`. El piso de
+espacio libre (ADR-0069/0072) es la única protección de disco para esas carpetas.

@@ -11,11 +11,13 @@ Esta página muestra las clases públicas de los módulos del grupo `github` de 
 
 ```mermaid
 classDiagram
+    class github__account__AccountKeys["AccountKeys"]
     class github__board__GhBoard["GhBoard"]
     class github__ci_logs__GhCiLogs["GhCiLogs"]
     class github__commit_ci__GhCommitCi["GhCommitCi"]
     class github__format_fix_reads__GhFormatFixReads["GhFormatFixReads"]
     class github__format_fix_reads__GhRepoSlug["GhRepoSlug"]
+    class github__gh_call_log__InProcessGhCallLog["InProcessGhCallLog"]
     class github__inbox__GhInbox["GhInbox"]
     class github__label_timeline__GhLabelTimeline["GhLabelTimeline"]
     class github__run__GhRetry["GhRetry"]

@@ -1116,28 +1116,6 @@ def test_a_cluster_of_more_than_fifteen_modules_is_split_by_count(packages: Modu
     assert pages["domain"].children == ("domain-big-1", "domain-big-2")
 
 
-def test_an_adapter_kind_over_budget_is_split_by_count_into_part_pages(
-    packages: ModuleType,
-) -> None:
-    names = [f"adapters.fs.m{n:02d}" for n in range(21)]
-    imports = {name: () for name in names}
-    imports["adapters.fs.m00"] = ("adapters.fs.m20",)
-    pages = packages.build_pages(_world(names), _imports(imports), {})
-    assert "adapters-fs" in pages and pages["adapters-fs"].children == (
-        "adapters-fs-1",
-        "adapters-fs-2",
-    )
-    first, second = pages["adapters-fs-1"], pages["adapters-fs-2"]
-    assert first.parent == "adapters-fs" and first.siblings == ("adapters-fs-2",)
-    assert "adapters.fs parte 2 (grupo)" in _labels(first)
-    assert len(first.nodes) <= 20 and len(second.nodes) <= 20
-    assert "parte 1 de 2" in first.sentence
-    assert _labels(pages["adapters-fs"]) == [
-        "adapters.fs parte 1 (grupo)",
-        "adapters.fs parte 2 (grupo)",
-    ]
-
-
 def test_a_page_still_over_budget_after_the_split_is_refused_naming_the_cluster(
     packages: ModuleType,
 ) -> None:
@@ -1211,8 +1189,9 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # 29 once run_role.py imports drawing and checkouts (GH-766 1a): application.support
     # splits in two.
     # 30 once notify.py (GH-1056 1a) joins the machine cluster: domain.machine splits in two.
-    # 32 once the filesystem adapters (GH-1071 part 5, github_cache.py) pass the node budget:
-    # the kind page stays and gains two part pages.
+    # 31 once budget_store.py (GH-1098) takes adapters.filesystem to 21 nodes: it splits in two.
+    # 32 once board_sync leaves lifecycle (GH-1165): its edge into the second lifecycle part
+    # (resume) took that page to 31 edges, and the cluster it joins takes one page more.
     assert len(pages) <= 32
     texts = render.package_pages(pages)
     for path, text in texts.items():
@@ -1584,3 +1563,25 @@ def test_check_in_validate_mode_fails_a_broken_generator_and_says_nothing_is_to_
     assert "scripts/docs/generate.py" not in done.stdout
     assert "generation failed" in done.stdout
     assert "nothing to commit" in done.stdout
+
+
+def test_an_adapter_kind_over_budget_is_split_in_parts_that_link_each_other(
+    packages: ModuleType,
+) -> None:
+    modules = [f"adapters.git.m{n:02d}" for n in range(21)]
+    pages = packages.build_pages(_world(modules), _imports({f"{m}": () for m in modules}), {})
+    first, second = pages["adapters-git-1"], pages["adapters-git-2"]
+    assert "adapters-git" not in pages
+    assert len(first.nodes) + len(second.nodes) == 21
+    assert "adapters-git-2" in first.siblings and "adapters-git-1" in second.siblings
+    assert "adapters-git-1" in pages["index"].children
+
+
+def test_a_split_adapter_part_still_over_budget_is_refused_naming_the_part(
+    packages: ModuleType,
+) -> None:
+    outside = [f"agentic.p{n:02d}.x" for n in range(35)]
+    modules = ["adapters.git.a", "adapters.git.b"]
+    imports = {f"{PROCESS}.{m}": set(outside) for m in modules}
+    with pytest.raises(ValueError, match="'adapters-git-1' has 36 nodes and 35 edges"):
+        packages.build_pages(_world(modules, outside), imports, {})

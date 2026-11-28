@@ -240,3 +240,20 @@ Otros nodos que GH-989 tocó sin convertir esa excepción:
 
 La tabla de nodos puede envejecer si otro nodo empieza a convertir `TrackerRateLimited`: se
 completa en la misma tarea que lo haga.
+
+## Adenda (GH-990): cada intento de `gh` se cuenta por clase
+
+- Todo arranque de `gh` ocurre en `adapters/github/run.py`, por `run_gh` o por `stream_gh`
+  (la lectura en flujo de `bounded_stream`, con `gh` antepuesto dentro de `run.py`).
+- Cada intento se cuenta por clase (`issue_list`, `issue_view`, `pr_list`, `pr_view`, `api`,
+  `other`; `domain/gh_calls.kind_of`, que lee solo los dos primeros argumentos) a través del
+  puerto `GhCallLog`. Se cuenta el intento de lanzar `gh`, antes de que el proceso arranque,
+  no una petición a GitHub; un `gh` ausente también cuenta, y un turno de escritura rechazado
+  o detenido no cuenta, porque `gh` no se lanza. La sonda `gh api rate_limit` cuenta como
+  `api`. Sin registro (`calls=None`) nada cambia.
+- Una lectura en flujo mantiene stderr cerrado (`DEVNULL`), así que clasificarla como limitada
+  por tasa queda para la parte que haga esperar a una lectura de log.
+- Hasta la parte 2 de GH-990, `ci_logs` sigue llamando a `bounded_stream` directamente y
+  ningún llamador pasa todavía el registro, así que en producción el contador no ve nada.
+- `tests/test_architecture.py::test_nothing_in_the_github_adapter_starts_a_process_outside_run_py`
+  hace cumplir que solo `run.py` arranca `gh`.

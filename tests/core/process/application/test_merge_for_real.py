@@ -19,18 +19,19 @@ from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.application import landing_plan
+from agentic.core.process.application import landing_plan, poll
 from agentic.core.process.application import merge as merge_module
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import (
     GitError,
     MergeCallFailed,
+    TrackerTurnRefused,
     TrackerUnreachable,
     Upstream,
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.size_budget import ActualSize
-from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from agentic.core.process.domain.task import PullRequest, PullRequestCommit, TrackerFailure
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeLabelTimeline, MemoryTracker, eval_set_yaml, memory_ports, real_commands
 
@@ -366,6 +367,30 @@ def test_the_eval_set_helper_reads_upstream_and_refuses_what_it_cannot_read(worl
     assert cli._upstream_eval_set(world.ports, Upstream("HEAD", "a" * 40, "fell back")) is None
 
 
+def test_a_master_ahead_of_the_upstream_refuses_naming_the_local_commits(world):
+    """GH-1142: the refusal id stays `eval_set_unreadable`; the comment and the poll's lines say
+    why: the product checkout has a commit the upstream lacks."""
+    (world.product / "local.txt").write_text("l\n")
+    git("add", "local.txt", cwd=world.product)
+    git("commit", "-q", "-m", "local only", cwd=world.product)
+    local = git("rev-parse", "--short", "HEAD", cwd=world.product)
+    upstream = world.ports.workspace.upstream()
+    sentence = rules.local_commits_note([local])
+    assert upstream.left_out == (local,) and upstream.note == sentence
+    assert cli._upstream_eval_set(world.ports, upstream) is None
+
+    world.merge()
+
+    assert world.tracker.merge_calls == []
+    [(_, comment)] = world.tracker.comments
+    assert comment.startswith(f"Auto-merge refused: {world.head} eval_set_unreadable")
+    assert sentence in comment
+    assert "the product checkout has 1 local commit not on the upstream" in comment
+    lines = poll._upstream_notes(True, lambda: upstream)
+    assert lines == [f"agentic: poll: upstream: {sentence}"]
+    assert poll.eval_set_unread_of(upstream, None) == "local_commits"
+
+
 def test_a_guarded_path_is_no_longer_refused_it_merges_on_the_local_checks(world):
     """GH-239: `guarded_path` left `MergeRefusal`. The change to the standards merges, and
     the decision was the local checks' (`ci_untrusted` is False for it, but no CI is declared
@@ -635,6 +660,66 @@ def test_an_unreachable_pr_merge_is_a_counted_gh_unreadable_and_keeps_the_ambigu
     assert doc["merge_failures"] == {"head": world.head, "count": 1, "failure": "gh_unreadable"}
     assert doc["auto_merge_head"] == ""  # the pull request still reads OPEN: not merged
     assert len(world.tracker.merge_calls) == 1
+
+
+class _TurnRefused(MergingTracker):
+    """`Tracker.merge` as `GhTracker.merge` raises it when the turn of `gh pr merge` is refused."""
+
+    def merge(
+        self, reference: str, head_sha: str, *, method: Literal["merge"] | None = None
+    ) -> str:
+        pull_request_number(reference)
+        self.merge_calls.append((reference, head_sha))
+        raise TrackerTurnRefused("gh pr merge write turn refused: over the 60 s bound")
+
+
+def test_a_refused_pr_merge_turn_withdraws_the_intent_and_counts_nothing(world):
+    world.tracker = _TurnRefused()
+    world.ports = dataclasses.replace(world.ports, tracker=world.tracker)
+    world.deliver()
+    lines: list[str] = []
+
+    result = merge_task(
+        "GH-209",
+        209,
+        world.cfg,
+        world.ports,
+        world.ports.workspace.upstream(),
+        frozenset(),
+        lines.append,
+    )
+
+    assert (result.kind, result.reason) == ("stopped", "turn_refused")
+    doc = world.doc()
+    assert doc["auto_merge_head"] == ""
+    assert "merge_failures" not in doc and "auto_merged_at" not in doc
+    assert "refusal" not in doc and "tracker_failures" not in doc
+    assert world.tracker.merge_calls == [(URL, world.head)]  # called once, not retried
+    assert world.tracker.comments == []
+    assert "write turn was refused" in lines[-1]
+    assert lines[-1].endswith("nothing merged, next round retries")
+    assert "gh_unreadable" not in "".join(lines)
+
+
+class _NoteTurnRefused(MergingTracker):
+    """A merge that went through and a note whose turn is refused: a transient failure row."""
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        return TrackerFailure(target="comment", cls="transient", at="2026-11-26T00:00:00Z")
+
+
+def test_a_merge_that_succeeded_keeps_its_intent_when_the_note_turn_is_refused(world):
+    world.tracker = _NoteTurnRefused()
+    world.ports = dataclasses.replace(world.ports, tracker=world.tracker)
+    world.deliver()
+
+    world.merge()
+
+    doc = world.doc()
+    assert doc["delivery_outcome"] == "auto_merged"
+    assert doc["auto_merge_head"] == world.head
+    assert doc["auto_merged_at"]
+    assert [row["cls"] for row in doc["tracker_failures"]] == ["transient"]
 
 
 def test_an_auto_merge_records_the_files_the_pull_request_changed(world):

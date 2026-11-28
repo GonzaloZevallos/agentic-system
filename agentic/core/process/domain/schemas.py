@@ -38,6 +38,7 @@ from .pull_request import api_break_reason, is_reject_reason
 from .refusal import OutputRefusal, RefusalRule
 from .task import (
     INTEGRATION,
+    SYSTEM_CATEGORIES,
     CopyCategory,
     DiagnosisVerdict,
     FindingCategory,
@@ -578,6 +579,21 @@ class DefinitionSize(PlanSize):
     empty unless it judges the task clearly over the size budget. Shape only: whether the parts
     are acceptable is `early_parts_check`'s call."""
 
+    hand_files: int = Field(
+        ge=0,
+        description="The hand-written non-test files the WHOLE task will change, before any cut "
+        "into parts. What counts as hand-written is the size budget in your prompt",
+    )
+    hand_lines: int = Field(
+        ge=0,
+        description="The hand-written non-test lines the WHOLE task will add, before any cut "
+        "into parts",
+    )
+    test_lines: int = Field(
+        ge=0,
+        description="The test lines the WHOLE task will add, before any cut into parts. The "
+        "size budget in your prompt names what a test is",
+    )
     parts: list[Part] = Field(
         default_factory=list,
         description="Empty unless the task is clearly over the size budget: then the parts it "
@@ -1057,7 +1073,26 @@ class Delivery(RoleOutput):
         return self
 
 
-CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
+# What the reviewer is offered (GH-1075): every `FindingCategory` but the ones only the system
+# writes. A closed literal of its own so the schema's enum lists exactly these; a test pins it to
+# `CATEGORIES`.
+ReviewerCategory = Literal[
+    "standard-architecture",
+    "standard-typing-silenced",
+    "standard-seams",
+    "standard-other",
+    "spec-behaviour",
+    "spec-missing-test",
+    "spec-scope",
+    "process-uncommitted",
+    "process-suite-red",
+    "plan-calibration",
+    "plan-invariant",
+    "integration-crosscut",
+]
+CATEGORIES: tuple[str, ...] = tuple(
+    category for category in get_args(FindingCategory) if category not in SYSTEM_CATEGORIES
+)
 
 
 class Finding(BaseModel):
@@ -1082,7 +1117,7 @@ class Finding(BaseModel):
         "to the task's single follow-up issue. On the integration "
         "branch a problem between subtasks is `subtask`"
     )
-    category: FindingCategory
+    category: ReviewerCategory
     landing_checks: list[str] = Field(
         default_factory=list,
         description="The CI check names, preferably from the landing gate listed in your "
@@ -1304,6 +1339,7 @@ def validate(schema: type[RoleOutput], raw: Any, vocabulary: dict[str, str]) -> 
                 if isinstance(raw.get(name), str)
             },
         }
+    _refuse_system_categories(raw)
     data = schema.model_validate(raw).model_dump()
     if "flags" in data:
         got, expected = set(data["flags"]), set(vocabulary)
@@ -1313,6 +1349,24 @@ def validate(schema: type[RoleOutput], raw: Any, vocabulary: dict[str, str]) -> 
                 f"missing: {sorted(expected - got)}"
             )
     return data
+
+
+def _refuse_system_categories(raw: Any) -> None:
+    """Refuse a role's finding that names a category only the system writes (GH-1075), as an
+    `OutputRefusal` of rule `system_category` on `findings[<n>].category`. The schema's enum
+    never offers one; this is the backstop for a model that writes it anyway."""
+    findings = raw.get("findings") if isinstance(raw, dict) else None
+    if not isinstance(findings, list):
+        return
+    for index, entry in enumerate(findings):
+        category = entry.get("category") if isinstance(entry, dict) else None
+        if isinstance(category, str) and category in SYSTEM_CATEGORIES:
+            raise OutputRefusal(
+                "system_category",
+                f"findings[{index}].category",
+                f"findings[{index}].category is `{category}`, which only the system writes",
+                value=category,
+            )
 
 
 def _lines(text: str) -> list[str]:

@@ -11,13 +11,14 @@ Esta página muestra las clases públicas de los módulos del grupo `filesystem`
 
 ```mermaid
 classDiagram
-    class filesystem__installed_products__SystemdUnitInstalledProducts["SystemdUnitInstalledProducts"]
     class filesystem__liveness__OsRunProcess["OsRunProcess"]
     class filesystem__lock__FilesystemRunLock["FilesystemRunLock"]
+    class filesystem__notified__FilesystemNotified["FilesystemNotified"]
     class filesystem__perf_lock__FilesystemPerfLock["FilesystemPerfLock"]
     class filesystem__prompts__FilesystemPrompts["FilesystemPrompts"]
     class filesystem__run_registry__FilesystemRunRegistry["FilesystemRunRegistry"]
     class filesystem__scratch__FilesystemScratch["FilesystemScratch"]
     class filesystem__stage0_store__FilesystemStage0Store["FilesystemStage0Store"]
     class filesystem__stage0_users__ProcStage0Users["ProcStage0Users"]
+    class filesystem__write_gate__FilesystemWriteGate["FilesystemWriteGate"]
 ```

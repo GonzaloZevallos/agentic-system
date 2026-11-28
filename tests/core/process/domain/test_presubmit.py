@@ -1082,3 +1082,35 @@ def test_a_timeout_then_a_real_failure_of_the_same_check_is_red():
     rows = [_row("tests", False, "x", timed_out=True), _row("tests", False, "FAILED a")]
 
     assert presubmit.gate_verdict(rows) == "red"
+
+
+# -- the prefix of a check command the reviewer's rule is built from (GH-979) -----------------
+
+
+def test_the_rule_prefix_of_the_tests_command_stops_before_the_option_that_owns_the_token():
+    command = 'uv run pytest -m "not llm" -n {workers} --dist load'
+    assert presubmit.rule_prefix(command) == 'uv run pytest -m "not llm"'
+
+
+def test_the_rule_prefix_cuts_at_the_first_system_token_of_any_kind():
+    assert presubmit.rule_prefix("pytest tests {failed_ids}") == "pytest tests"
+    assert presubmit.rule_prefix("run --since {base} -n {workers}") == "run"
+    assert presubmit.rule_prefix("run --jobs={workers}") == "run"
+    assert presubmit.rule_prefix("run -x -n {workers}") == "run -x"
+
+
+def test_the_rule_prefix_of_a_command_without_a_token_is_the_command_as_it_is():
+    assert presubmit.rule_prefix("uv run ruff check .") == "uv run ruff check ."
+    assert presubmit.rule_prefix("uv run pytest -x") == "uv run pytest -x"
+    assert presubmit.rule_prefix("uv run mypy\n") == "uv run mypy\n"
+
+
+def test_the_rule_prefix_of_a_command_that_starts_with_a_token_is_empty():
+    assert presubmit.rule_prefix("{workers} pytest") == ""
+    assert presubmit.rule_prefix("-n {workers}") == ""
+
+
+def test_an_ungranted_workers_command_is_a_named_error_that_says_the_scheduler():
+    error = presubmit.UngrantedWorkers("pytest -n {workers}")
+    assert isinstance(error, Exception) and "check scheduler" in str(error)
+    assert "pytest -n {workers}" in str(error)

@@ -231,7 +231,7 @@ def test_red_then_green_rerun_continues_the_adoption() -> None:
 def test_red_twice_and_red_control_is_unavailable_and_rejects_nothing() -> None:
     world = World({partial(B): [Red(), Red()], A: [Red()]})
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == ["keep: unavailable (control_red)"]
     assert world.store.record == (B, 1, "control_red")
     assert world.store.rejected_set == set()
     assert world.log.index(f"remove_partial {B}") < world.log.index(
@@ -242,7 +242,7 @@ def test_red_twice_and_red_control_is_unavailable_and_rejects_nothing() -> None:
 def test_no_current_never_rejects_and_smokes_no_control() -> None:
     world = World({partial(B): [Red(), Red()]}, current=None)
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == ["keep: unavailable (control_red)"]
     assert world.store.record == (B, 1, "control_red")
     assert world.store.rejected_set == set()
     assert world.candidate.stages_smoked == [partial(B), partial(B)]
@@ -251,7 +251,7 @@ def test_no_current_never_rejects_and_smokes_no_control() -> None:
 def test_timeout_is_unavailable_with_no_rerun() -> None:
     world = World({partial(B): [Unavailable("smoke_timeout")]})
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == ["keep: unavailable (smoke_timeout)"]
     assert world.candidate.stages_smoked == [partial(B)]
     assert world.store.record == (B, 1, "smoke_timeout")
     assert world.store.rejected_set == set()
@@ -261,7 +261,7 @@ def test_timeout_is_unavailable_with_no_rerun() -> None:
 def test_unavailable_rerun_has_no_control_and_records_its_own_cause() -> None:
     world = World({partial(B): [Red(), Unavailable("disk")]})
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == ["keep: unavailable (disk)"]
     assert world.candidate.stages_smoked == [partial(B), partial(B)]
     assert world.store.record == (B, 1, "disk")
     assert world.store.rejected_set == set()
@@ -273,7 +273,7 @@ def test_unavailable_control_records_its_own_cause_and_rejects_nothing(
 ) -> None:
     world = World({partial(B): [Red(), Red()], A: [control]})
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == [f"keep: unavailable ({control.cause})"]
     assert world.store.record == (B, 1, control.cause)
     assert world.store.rejected_set == set()
     assert f"remove_partial {B}" in world.log
@@ -282,7 +282,7 @@ def test_unavailable_control_records_its_own_cause_and_rejects_nothing(
 def test_prepare_failure_is_unavailable_and_counts() -> None:
     world = World({}, prepared=Unavailable("clone"))
     world.run()
-    assert world.out == ["keep: unavailable"]
+    assert world.out == ["keep: unavailable (clone)"]
     assert world.store.record == (B, 1, "clone")
     assert world.store.rejected_set == set()
 
@@ -337,7 +337,7 @@ def test_prepare_failed_removes_partial_records_and_stops() -> None:
     log: list[str] = []
     store = Store(log)
     policy = SmokeFailurePolicy(store, Candidate(log))
-    assert policy.prepare_failed(B, Unavailable("uv")) == Stop("keep: unavailable")
+    assert policy.prepare_failed(B, Unavailable("uv")) == Stop("keep: unavailable (uv)")
     assert log == [f"remove_partial {B}", f"write_unavailable {B} 1 uv"]
 
 

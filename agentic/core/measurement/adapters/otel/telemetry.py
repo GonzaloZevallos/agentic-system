@@ -40,6 +40,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from agentic.core.process.domain.gh_calls import GhCallKind, GhConsumer
+from agentic.core.process.domain.github_budget import Unmeasured
 from agentic.core.process.domain.presubmit import (
     CheckResult,
     check_durations,
@@ -257,7 +259,7 @@ def _playbook_hashes(patch: TaskState) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
-def _counts(pairs: Mapping[str, int | float]) -> tuple[str, ...]:
+def _counts[K: str](pairs: Mapping[K, int | float]) -> tuple[str, ...]:
     """One `"<dimension>=<count>"` string per key, sorted for a deterministic span
     attribute -- the array shape ADR-0008's 2026-09-17 addendum already chose for
     `agentic.role.return_categories`, generalised from one entry per occurrence to one
@@ -301,7 +303,8 @@ def _presubmit_arrays(
     status and the sum of its rows' seconds; with one row per check, which is every
     product that declares no affected form, this is what it always was. A reused row is
     counted but never sampled: a check with only reused rows has no duration entry, and a
-    rerun row (ADR-0066) is never sampled either."""
+    rerun row (ADR-0066) is never sampled either. A kept row (`reused_from`, GH-1125) counts
+    as reused and is never sampled."""
     last = len(invocations) - 1
     counts: dict[str, int] = {}
     durations: list[str] = []
@@ -311,7 +314,7 @@ def _presubmit_arrays(
         verdicts = outcomes(results)
         for check in final_results(results):
             result = "green" if check["passed"] else "red"
-            reused = check.get("reused", False)
+            reused = check.get("reused", False) or "reused_from" in check
             cell = f"{check['name']}/{result}/{final}/{reused}/{verdicts[check['name']]}"
             counts[cell] = counts.get(cell, 0) + 1
             if check["name"] in seconds:
@@ -401,7 +404,13 @@ class TaskRun(Run):
         )
 
     def finish_invocation(
-        self, before: TaskState, after: TaskState, kind: InvocationKind, decision: str | None
+        self,
+        before: TaskState,
+        after: TaskState,
+        kind: InvocationKind,
+        decision: str | None,
+        *,
+        calls: Mapping[GhCallKind, int] | None = None,
     ) -> None:
         """`agentic.invocation.*`, from the delta between the state this invocation
         entered with and the one it left with -- never the task's accumulated figures,
@@ -411,7 +420,11 @@ class TaskRun(Run):
         span to live on: no array, no dimension, just this invocation's own numbers.
         `agentic.task.paused`/`agentic.task.human_decisions` are stamped only when this
         invocation itself caused them -- the same two guards the deleted
-        `agentic.task.paused`/`.human_decisions` gauges used, `new_pause` unchanged."""
+        `agentic.task.paused`/`.human_decisions` gauges used, `new_pause` unchanged.
+
+        `calls` (GH-991) is what this process launched of `gh`, by kind: given, it stamps
+        `agentic.gh.consumer`=`run` and `agentic.gh.calls` (zeros included); left out,
+        nothing changes."""
         patch = delta(before, after)
         cost = max(patch.get("cost_usd", 0.0), 0.0)
         rework = max(system_metrics.rework_cost_usd(patch), 0.0)
@@ -432,6 +445,10 @@ class TaskRun(Run):
             attributes["agentic.task.paused"] = after.get("escalation_class") or "unknown"
         if decision:
             attributes["agentic.task.human_decisions"] = True
+        if calls is not None:
+            run_consumer: GhConsumer = "run"
+            attributes["agentic.gh.consumer"] = run_consumer
+            attributes["agentic.gh.calls"] = _counts(calls)
         self.span.set_attributes(attributes)
 
 
@@ -489,6 +506,10 @@ class RoleRun(Run):
             )
             if any(f.get("cold_fallback", False) for f in failures):
                 attributes["agentic.role.cold_fallback"] = True
+            # The silence of the last stalled attempt (GH-978); absent, never 0, when no
+            # failure carries a record.
+            if stalls := [s for f in failures if (s := f.get("stall")) is not None]:
+                attributes["agentic.role.stall_s"] = stalls[-1]["seconds"]
         # Per rule, from the entries' own `rule` and the runs' `repairs`; never a field.
         refusals = system_metrics.refusals_by_rule(patch.get("failures", []), runs)
         refused: dict[str, int] = {
@@ -645,6 +666,32 @@ def traceparent() -> str | None:
     carrier: dict[str, str] = {}
     TraceContextTextMapPropagator().inject(carrier)
     return carrier.get("traceparent")
+
+
+def gh_budget(
+    consumer: GhConsumer,
+    calls: Mapping[GhCallKind, int],
+    remaining: int | None,
+    round_points: int | Unmeasured,
+) -> None:
+    """One short root span `agentic.gh.budget` (GH-991): who launched `gh` (`consumer`), how
+    often by kind (`agentic.gh.calls`), what GraphQL had left (`agentic.gh.graphql.remaining`,
+    left out when `None`) and the round's points (`agentic.gh.round_points`, left out when
+    `Unmeasured`, never 0). No span when every count is 0 and `remaining` is `None`. A span
+    attribute, never a meter (ADR-0037). The module itself is the `Telemetry`/`BudgetSink`
+    the poller and the commands hand this to; without a provider nothing is exported."""
+    if remaining is None and not any(calls.values()):
+        return
+    attributes: dict[str, str | int | tuple[str, ...]] = {
+        "agentic.gh.consumer": consumer,
+        "agentic.gh.calls": _counts(calls),
+    }
+    if remaining is not None:
+        attributes["agentic.gh.graphql.remaining"] = remaining
+    if not isinstance(round_points, Unmeasured):
+        attributes["agentic.gh.round_points"] = round_points
+    with tracer().start_as_current_span("agentic.gh.budget", attributes=attributes):
+        pass
 
 
 def flush() -> None:

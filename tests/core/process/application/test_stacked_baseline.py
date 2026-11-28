@@ -24,7 +24,7 @@ from tests.core.process.application.test_landing_sync import (
     _document,
 )
 from tests.core.process.application.test_landing_unsynced import _land
-from tests.fakes import MemoryStack, memory_ports
+from tests.fakes import MemoryInbox, MemoryStack, memory_ports
 
 AT = "2026-11-17T00:00:00+00:00"
 
@@ -137,13 +137,16 @@ def test_closed_landing_closes_a_sync_whose_head_lacks_the_upstream(monkeypatch,
     assert closed == [{**_entries()[0], "closed_at": AT, "lacks": MASTER, "cost_usd": 2.5}]
 
 
+BODY = "How is my gym doing.\n\n<!-- agentic-closes: #346 -->"
+
+
 @pytest.mark.anyio
 async def test_the_body_of_a_document_without_stack_parent_is_this_whole_text(tmp_path):
-    ports = memory_ports(stack=MemoryStack())
+    ports = memory_ports(stack=MemoryStack(), inbox=MemoryInbox(unseeded_body=BODY))
     state = {
         "id": "GH-12",
         "title": "Dashboard",
-        "description": "How is my gym doing.\n\n<!-- agentic-closes: #12 -->",
+        "description": BODY,
         "type": "feature",
         "sections": {"PM": "### Consolidated definition\n\nSix numbers."},
     }
@@ -151,5 +154,5 @@ async def test_the_body_of_a_document_without_stack_parent_is_this_whole_text(tm
     await deliver(state, Configuration(product_dir=tmp_path), ports)
 
     assert ports.tracker.pull_requests[0][2] == (
-        "Closes #12\n\n## PM\n\n### Consolidated definition\n\nSix numbers."
+        "Closes #346\n\n## PM\n\n### Consolidated definition\n\nSix numbers."
     )

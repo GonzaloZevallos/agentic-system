@@ -16,6 +16,8 @@ classDiagram
     class evaluation__EvaluationTracker["EvaluationTracker"]
     class evaluation__EvaluationWorkspace["EvaluationWorkspace"]
     class evaluation__EvaluationWrite["EvaluationWrite"]
+    class offline__GithubCalled["GithubCalled"]
+    class offline__NoGithub["NoGithub"]
     class playbook_land_record__FilesystemLandRecord["FilesystemLandRecord"]
     class telemetry__NoTelemetry["NoTelemetry"]
     class telemetry__RoleSpan["RoleSpan"]

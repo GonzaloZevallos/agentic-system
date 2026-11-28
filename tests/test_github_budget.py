@@ -10,13 +10,18 @@ from agentic.core.process.domain.github_budget import (
     BUDGET_TTL,
     UNKNOWN,
     Budget,
+    GraphqlReading,
     ResourceBudget,
     Start,
+    Unmeasured,
     Wait,
     budget_from,
     budget_from_document,
     budget_from_headers,
     can_start,
+    graphql_reading,
+    is_fresh,
+    round_points,
 )
 
 NOW = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
@@ -332,3 +337,83 @@ def test_now_is_validated_before_the_headers_are_read():
     naive = datetime(2026, 11, 23, 12, 0, 0)
     with pytest.raises(ValueError):
         budget_from_headers(Unreadable(), naive)
+
+
+def test_is_fresh_needs_a_fetched_at() -> None:
+    assert not is_fresh(UNKNOWN, NOW)
+
+
+def test_is_fresh_refuses_a_fetched_at_in_the_future() -> None:
+    assert not is_fresh(Budget({}, at(1)), NOW)
+
+
+def test_is_fresh_refuses_a_budget_exactly_the_ttl_old() -> None:
+    assert not is_fresh(Budget({}, NOW - BUDGET_TTL), NOW)
+
+
+def test_is_fresh_accepts_a_budget_just_under_the_ttl_old() -> None:
+    assert is_fresh(Budget({}, NOW - BUDGET_TTL + timedelta(seconds=1)), NOW)
+    assert is_fresh(Budget({}, NOW), NOW)
+
+
+def graphql_doc(**entry_fields: object) -> dict[str, object]:
+    fields: dict[str, object] = {"used": 10, "limit": 5000, "remaining": 4990, "reset": EPOCH}
+    fields.update(entry_fields)
+    return {"resources": {"graphql": fields}}
+
+
+def reading(used: int, reset_in: int = 0) -> GraphqlReading:
+    return GraphqlReading(used, 5000, 5000 - used, at(reset_in))
+
+
+def test_graphql_reading_of_a_valid_document() -> None:
+    assert graphql_reading(graphql_doc()) == GraphqlReading(10, 5000, 4990, at(0))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        [],
+        "text",
+        {},
+        {"resources": []},
+        {"resources": {}},
+        {"resources": {"graphql": "x"}},
+        {"resources": {"graphql": {"used": 1, "limit": 2, "remaining": 1}}},
+        graphql_doc(used="10"),
+        graphql_doc(limit="5000"),
+        graphql_doc(used=True),
+        graphql_doc(remaining=False),
+        graphql_doc(reset=True),
+        graphql_doc(reset="1"),
+        graphql_doc(used=-1),
+        graphql_doc(used=10**30),
+        graphql_doc(reset=10**30),
+        graphql_doc(reset=float("nan")),
+    ],
+)
+def test_graphql_reading_of_a_bad_document_is_none(bad: object) -> None:
+    assert graphql_reading(bad) is None
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        (None, reading(5), Unmeasured.UNMEASURED),
+        (reading(5), None, Unmeasured.UNMEASURED),
+        (None, None, Unmeasured.UNMEASURED),
+        (reading(5), reading(12), 7),
+        (reading(5), reading(5), 0),
+        (reading(5), reading(4), Unmeasured.UNMEASURED),
+        (reading(5, reset_in=0), reading(12, reset_in=3600), Unmeasured.UNMEASURED),
+    ],
+)
+def test_round_points_table(
+    previous: GraphqlReading | None,
+    current: GraphqlReading | None,
+    expected: int | Unmeasured,
+) -> None:
+    got = round_points(previous, current)
+    assert got == expected
+    assert type(got) is type(expected)
