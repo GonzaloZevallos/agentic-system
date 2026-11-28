@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `landing` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 3, con las clases en orden alfabético por módulo y clase. Las relaciones entre las clases de `board` y las demás clases de la capa no se dibujan: pyreverse analizó ese archivo en una corrida aparte.
+Esta página muestra las clases públicas de los módulos del grupo `landing` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 4, con las clases en orden alfabético por módulo y clase. Las relaciones entre las clases de `board` y las demás clases de la capa no se dibujan: pyreverse analizó ese archivo en una corrida aparte.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -8,6 +8,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
+  - [domain: landing (parte 4)](classes-process-domain-landing-4.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
@@ -45,8 +46,6 @@ classDiagram
     class board__FieldWrite["FieldWrite"]
     class board__IssueFacts["IssueFacts"]
     class board__Remembered["Remembered"]
-    class cost_history__Bucket["Bucket"]
-    class cost_history__Floor["Floor"]
-    class cost_history__History["History"]
+    class board_schema__FieldNode["FieldNode"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```
