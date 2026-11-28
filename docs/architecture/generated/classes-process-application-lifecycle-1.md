@@ -28,13 +28,13 @@ classDiagram
     class dry_run__DryRunLog["DryRunLog"]
     class dry_run__DryRunRefused["DryRunRefused"]
     class dry_run__ReadOnly["ReadOnly"]
+    class notify__NotifyCarry["NotifyCarry"]
     class plan_carve_out__Judged["Judged"]
     class plan_carve_out__PlanSteps["PlanSteps"]
     class poll__Abandoned["Abandoned"]
     class poll__CrashRetake["CrashRetake"]
     class poll__LandingRound["LandingRound"]
     class poll__MergeAssessment["MergeAssessment"]
-    class poll__OrderEntry["OrderEntry"]
 ```
 
 ## Relaciones con otras páginas
