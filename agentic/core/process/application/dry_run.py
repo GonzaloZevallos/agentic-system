@@ -206,7 +206,16 @@ UNREACHED = {
 # dropped, not wrapped: a dry round files nothing and releases nothing. The notifier's three
 # (GH-1056) are dropped too: a dry round sends no mail and writes no record.
 _NOT_PORTS = frozenset(
-    {"limits", "now", "format_filing", "format_fixes", "notifier", "notified", "activity"}
+    {
+        "limits",
+        "now",
+        "format_filing",
+        "format_fixes",
+        "notifier",
+        "notified",
+        "activity",
+        "notify_settings",
+    }
 )
 _LABELS = {
     "documents": "TaskDocuments",
@@ -253,6 +262,7 @@ def read_only_ports(
             notifier=None,
             notified=None,
             activity=None,
+            notify_settings=None,
         ),
         _wrap(registry, "RunRegistry", log),
         _wrap(lock, "RunLock", log),
