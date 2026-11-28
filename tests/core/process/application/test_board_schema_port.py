@@ -11,6 +11,20 @@ from agentic.core.process.application.ports import (
     TrackerCallFailed,
     TrackerTransient,
 )
+from agentic.core.process.domain.board_schema import FieldNode, Step
+
+
+class StandInBoardSchema:
+    """What a `BoardSchema` must look like; the gh adapter that implements it is #1200."""
+
+    def fields(self) -> tuple[FieldNode, ...]:
+        return ()
+
+    def apply(self, step: Step) -> None:
+        return None
+
+
+_STAND_IN: BoardSchema = StandInBoardSchema()
 
 
 def methods(protocol: type) -> set[str]:

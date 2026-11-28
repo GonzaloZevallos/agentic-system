@@ -204,6 +204,10 @@ _INLINE = (
 )
 
 UNCOVERED: dict[str, Uncovered] = {
+    "BoardSchema": Uncovered(
+        (("tests/core/process/application/test_board_schema_port.py", "StandInBoardSchema"),),
+        "no adapter yet (GhBoardSchema is #1200): a stand-in beside the port's own test",
+    ),
     "BudgetStore": Uncovered(
         (("agentic/core/process/adapters/filesystem/budget_store.py", "FilesystemBudgetStore"),),
         "no fake implements it yet: nothing reads the port, and the real adapter is its only "
