@@ -2,6 +2,8 @@
 (`plan_settlement`), how the fold applies it (`rules.findings_rows`), the one reader of "PM's
 approval is live" (`rules.pm_final_approved_version`) and the GH-374 ledger it was made for."""
 
+from dataclasses import replace
+
 from agentic.core.process.domain import plan_settlement, rules
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL
 from agentic.core.process.domain.task import PlanSettledRow
@@ -272,3 +274,11 @@ def test_the_gh374_ledger_settled_by_pending_leaves_no_pm_blocker_and_passes_the
 def replace_findings(s):
     """The same ledger without the unrelated subtask row, which the PM settlement never owns."""
     return {**s, "findings": [r for r in s["findings"] if r["location"] == PM]}
+
+
+def test_settleable_does_not_read_an_unreadable_thread():
+    facts = merge_facts(gh374_ledger())
+    for restored in (False, True):
+        assert plan_settlement.settleable(replace(facts, thread_unread=True), restored) == (
+            plan_settlement.settleable(facts, restored)
+        )

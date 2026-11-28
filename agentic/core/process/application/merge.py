@@ -119,6 +119,7 @@ COMMENTED: tuple[str, ...] = (
 # in neither.
 UNCOMMENTED: tuple[str, ...] = (
     "not_ready",
+    "thread_unread",
     "pr_not_open",
     "not_approved",
     "head_not_reviewed",
@@ -1152,7 +1153,8 @@ def settlement_facts(
     the builder `agentic restore` asks `plan_settlement.settleable` over, so a settlement
     and a merge never read a document two ways. No eval set is read (`in_eval_set` is `None`)."""
     # Settling reads no thread (`plan_settlement.settleable` ignores `open_escalation`): without
-    # comments the fact is the unknown one, which no decision over these facts takes for clear.
+    # comments the fact is the unknown one (`thread_unread` while the thread is needed), which no
+    # decision over these facts takes for clear.
     return _merge_facts(task_id, raw, pull_request, None, number, master, comments=None)
 
 

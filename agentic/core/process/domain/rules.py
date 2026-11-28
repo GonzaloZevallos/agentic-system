@@ -6248,6 +6248,7 @@ def head_reviewed(
 
 MergeRefusal = Literal[
     "not_ready",
+    "thread_unread",
     "open_escalation",
     "pr_not_open",
     "adr_number_taken",
@@ -6281,9 +6282,13 @@ MergeRefusal = Literal[
 """Why `auto_merge_decision` refuses, one reason per condition:
 
 - `not_ready`: the task is not `ready_for_review`.
+- `thread_unread`: the issue thread was needed to tell whether an escalation is open and could
+  not be read (`MergeFacts.thread_unread`). Right after `not_ready` and before
+  `open_escalation`, so an unreadable thread is never reported as an owner escalation. Not a
+  person's: the landing waits for the next read and writes nothing.
 - `open_escalation` (GH-784): an owner escalation is still open, or could not be shown closed
-  (`MergeFacts.open_escalation` is not `False`). Right after `not_ready`, so a paused status is
-  still `not_ready`. Left to the human: nothing in the landing resolves it.
+  (`MergeFacts.open_escalation` is not `False`). Right after `thread_unread`, so a paused status
+  is still `not_ready`. Left to the human: nothing in the landing resolves it.
 - `pr_not_open`: the pull request is merged, closed or unreadable. Second, so that a pull
   request that is not open is never reported as a review or findings problem.
 - `adr_number_taken` (GH-229): an ADR the branch's own commits added has a number master
@@ -6484,6 +6489,9 @@ class MergeFacts:
     checks_passed: bool | None
     current_master: str | None
     open_escalation: bool | None
+    # True only when the issue thread was needed to judge `open_escalation` and the read failed;
+    # derived in one place, `poll._merge_facts`, and read only by `auto_merge_decision`.
+    thread_unread: bool = False
     merge_failures: int = 0
     merge_failure: MergeFailure | None = None
     ci_required: tuple[str, ...] = ()
@@ -6841,10 +6849,10 @@ def ci_trusted(untrusted: bool | None, dispatched: bool | None) -> bool:
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
-    first that fails: `not_ready`, `open_escalation` (the fact is not `False`: `None` is never
-    clear, GH-784), `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `drawing_unsettled`
-    (only when `drawing_checked`), `criteria_unreadable`
+    first that fails: `not_ready`, `thread_unread` (the flag is set), `open_escalation` (the fact
+    is not `False`: `None` is never clear, GH-784), `pr_not_open`, `adr_number_taken`,
+    `not_approved`, `head_not_reviewed`, `perf_unverified` (only when `perf_convened`),
+    `drawing_unsettled` (only when `drawing_checked`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `stacking.refusal` (only when `stack` is
     not `None`: `stack_parent_unmerged`, `stack_restack_due` or `stack_base_orphaned`, GH-855; a
@@ -6874,6 +6882,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     of the last failure (`merge_failure`) is never read."""
     if facts.status != "ready_for_review":
         return MergeDecision("refuse", "not_ready")
+    if facts.thread_unread:
+        return MergeDecision("refuse", "thread_unread")
     if facts.open_escalation is not False:
         return MergeDecision("refuse", "open_escalation")
     if facts.pr_state != "OPEN":

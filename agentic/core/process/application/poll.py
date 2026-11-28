@@ -336,14 +336,16 @@ def _merge_facts(
     drawing_checked, drawing_head, drawing_open = rules.drawing_merge_facts(raw)
     # GH-784: the one call of `merge.escalation_hold`, in the assembly the poller and the verb both
     # build their facts on (`merge` imports this module, so the import is late). `comments` is
-    # the issue's thread, `None` when it was not read or could not be.
-    from .merge import escalation_hold
+    # the issue's thread, `None` only when the read failed (a caller that did not read passes `[]`).
+    # The one derivation of `thread_unread`: a failed read counts only when the thread was needed.
+    from .merge import escalation_hold, thread_needed
 
     return rules.MergeFacts(
         task_id=task_id,
         stack=stacking.facts_of(raw),
         status=raw.get("status"),
         open_escalation=escalation_hold(raw, comments),
+        thread_unread=comments is None and thread_needed(raw),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
         close_docs=raw.get("close_docs"),

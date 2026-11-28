@@ -1130,11 +1130,61 @@ def test_the_verb_merges_on_a_readable_thread_whose_last_mark_is_ready(tmp_path)
     assert len(ports.tracker.merge_calls) == 1
 
 
-def test_the_verb_refuses_open_escalation_when_the_comments_cannot_be_read(tmp_path):
+def test_the_verb_refuses_thread_unread_when_the_comments_cannot_be_read(tmp_path):
     ports = _ports(5)
     ports.tracker.__class__ = _UnreadableThread
-    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "open_escalation")
+    before = dict(ports.documents.load("GH-5") or {})
+    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "thread_unread")
     assert ports.tracker.merge_calls == []
+    # Nothing is commented, labelled or written: the next round reads the thread again.
+    assert ports.tracker.comments == []
+    assert ports.tracker.labels == []
+    after = ports.documents.load("GH-5") or {}
+    assert after == before
+    for absent in ("auto_merge_head", "merge_refusal", "merge_failures"):
+        assert absent not in after
+
+
+def test_the_verb_proceeds_to_merge_once_the_thread_is_readable_again(tmp_path):
+    ports = _ports(5)
+    ports.tracker.__class__ = _UnreadableThread
+    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "thread_unread")
+    ports.tracker.__class__ = MemoryTracker
+    assert _verb(ports, tmp_path) == merge.MergeResult("merged", method="squash")
+    assert len(ports.tracker.merge_calls) == 1
+
+
+def test_the_verb_gives_neither_thread_unread_nor_open_escalation_when_the_thread_is_not_needed(
+    tmp_path,
+):
+    # The landing's own open question answers the hold, so the thread is not needed.
+    asked = _ports(5, escalated=True)
+    asked.tracker.__class__ = _UnreadableThread
+    assert _verb(asked, tmp_path).reason not in {"thread_unread", "open_escalation"}
+    # A task that is not ready is `not_ready` whatever the thread.
+    idle = _ports(5, status="developing")
+    idle.tracker.__class__ = _UnreadableThread
+    assert _verb(idle, tmp_path).reason == "not_ready"
+
+
+def test_the_poller_does_not_leave_an_unreadable_thread_to_the_human():
+    ports = _ports(5)
+    ports.tracker.__class__ = _UnreadableThread
+    found, lines = _merges(ports)
+    assert not any("open_escalation" in line for line in lines)
+    assert found == []
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: thread_unread"]
+
+
+def test_the_poller_gives_neither_refusal_for_a_failed_read_the_hold_never_needed():
+    asked = _ports(5, escalated=True)
+    asked.tracker.__class__ = _UnreadableThread
+    _, lines = _merges(asked)
+    assert not any(r in line for line in lines for r in ("thread_unread", "open_escalation"))
+    idle = _ports(5, status="developing")
+    idle.tracker.__class__ = _UnreadableThread
+    _, lines = _merges(idle)
+    assert not any(r in line for line in lines for r in ("thread_unread", "open_escalation"))
 
 
 def test_the_verb_refuses_an_open_escalation_and_comments_it_once_per_head(tmp_path):
