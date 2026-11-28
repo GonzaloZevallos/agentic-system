@@ -444,3 +444,43 @@ def test_a_large_digest_keeps_the_snapshot_and_shows_the_same_sections_in_both_p
     for heading in ("Merged pull requests", "Closed issues"):
         assert (heading in message.text) == (heading in message.html)
     assert _text_lines(message) == _html_paragraphs(message)
+
+
+@pytest.mark.parametrize(
+    ("remote", "url"),
+    [
+        ("https://github.com/o/r", "https://github.com/o/r"),
+        ("https://github.com/o/r.git", "https://github.com/o/r"),
+        ("git@github.com:o/r", "https://github.com/o/r"),
+        ("git@github.com:o/r.git", "https://github.com/o/r"),
+        ("ssh://git@github.com/o/r", "https://github.com/o/r"),
+        ("ssh://git@github.com/o/r.git", "https://github.com/o/r"),
+        ("  https://github.com/o/r.git\n", "https://github.com/o/r"),
+        ("https://github.com/my-org/my.repo_1", "https://github.com/my-org/my.repo_1"),
+    ],
+)
+def test_github_repo_url_converts_the_accepted_remotes(remote: str, url: str) -> None:
+    assert notify_message.github_repo_url(remote) == url
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "https://user@github.com/o/r",
+        "https://user:tok@github.com/o/r.git",
+        "https://tok@github.com/o/r",
+        "https://github.example.com/o/r",
+        "git@github.example.com:o/r.git",
+        "https://gitlab.com/o/r",
+        "http://github.com/o/r",
+        "https://github.com/o",
+        "https://github.com/o/r/extra",
+        "https://github.com/../r",
+        "https://github.com/o/r.git.git/x",
+        "",
+        "   ",
+        "not a url",
+    ],
+)
+def test_github_repo_url_rejects_what_is_not_a_plain_github_remote(remote: str) -> None:
+    assert notify_message.github_repo_url(remote) is None

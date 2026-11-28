@@ -70,6 +70,7 @@ from agentic.core.process.application.ports import (
     Prompts,
     RawResult,
     RemergeDiffUnsupported,
+    RepoOrigin,
     RiskArea,
     RoleRunner,
     RunRegistration,
@@ -3050,6 +3051,22 @@ class FakeActivity:
         return self._read("closed", self.closed, since, limit)
 
 
+class FakeOrigin:
+    """A `RepoOrigin` that answers `remote` (or `None`), raises `error` when set, and counts its
+    reads in `calls`."""
+
+    def __init__(self, remote: str | None = "https://github.com/acme/shop") -> None:
+        self.remote = remote
+        self.error: Exception | None = None
+        self.calls = 0
+
+    def url(self) -> str | None:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.remote
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -3086,6 +3103,7 @@ def memory_ports(
     notified: Notified | None = None,
     activity: Activity | None = None,
     notify_settings: NotifySettings | None = None,
+    origin: RepoOrigin | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -3122,6 +3140,7 @@ def memory_ports(
         notified=notified,
         activity=activity,
         notify_settings=notify_settings,
+        origin=origin,
     )
 
 

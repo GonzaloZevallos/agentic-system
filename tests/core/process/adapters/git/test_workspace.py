@@ -2123,3 +2123,32 @@ def test_a_start_that_does_not_exist_leaves_no_branch_worktree_or_base(product):
     assert git("branch", "--list", "agentic/GH-12", cwd=product) == ""
     assert not (product / ".agentic/worktrees/GH-12").exists()
     assert ws.base_of("agentic/GH-12") is None
+
+
+def test_repo_origin_reads_the_origin_url_and_none_without_one(product, tmp_path):
+    from agentic.core.process.adapters.git.workspace import GitRepoOrigin
+
+    assert GitRepoOrigin(product).url() == str(tmp_path / "remote.git")
+    git("remote", "remove", "origin", cwd=product)
+    assert GitRepoOrigin(product).url() is None
+    assert GitRepoOrigin(tmp_path / "missing").url() is None
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        subprocess.CompletedProcess(["git"], 128, "", "fatal: https://user:tok-SECRET@x/y"),
+        subprocess.TimeoutExpired(["git", "https://user:tok-SECRET@x/y"], 10),
+        OSError("https://user:tok-SECRET@x/y"),
+    ],
+)
+def test_repo_origin_never_raises_nor_carries_the_failure_text(product, monkeypatch, failure):
+    from agentic.core.process.adapters.git.workspace import GitRepoOrigin
+
+    def fail(*args, **kwargs):
+        if isinstance(failure, BaseException):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    assert GitRepoOrigin(product).url() is None

@@ -131,6 +131,10 @@ _C_LOCALE = {"LC_ALL": "C"}
 _REMOTE_REF_GONE = "remote ref does not exist"
 
 
+# How long reading the `origin` URL may take (GH-1205): a hung read costs the notifier a round.
+ORIGIN_TIMEOUT_S: float = 10
+
+
 # Prefix of the line that names a commit in `git log --format`: a control character no
 # path or patch line starts with.
 _COMMIT = "\x01"
@@ -165,6 +169,30 @@ def parse_pending_paths(stdout: str) -> tuple[str, ...]:
                 raise GitError(f"git status gave no original path for {record!r}")
             found[original] = None
     return tuple(found)
+
+
+class GitRepoOrigin:
+    """`RepoOrigin` over `git remote get-url origin` in the product checkout (GH-1205). Reads, never
+    writes, and never raises: any failure is `None`, and neither git's stderr, the command nor an
+    exception message leaves it, because a remote may carry credentials."""
+
+    def __init__(self, product_dir: Path):
+        self.product_dir = product_dir
+
+    def url(self) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=self.product_dir,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=ORIGIN_TIMEOUT_S,
+            )
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
 
 
 class GitWorkspace:
