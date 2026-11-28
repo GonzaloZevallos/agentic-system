@@ -1320,6 +1320,47 @@ class TestThreeLanesBesideTheHead:
             MERGING.format(8),
         ]
 
+    def test_a_head_that_waits_with_no_running_run_opens_the_lanes_until_it_turns_ci_run(
+        self, tmp_path
+    ):
+        ports = _wide_ports()
+        _stale(ports, 5, 6, 7, 8)
+        ports.stack.declared_ci_all = ("web",)
+
+        def report(number):
+            return ci.CiReport(
+                _head_of(number),
+                "master",
+                "9" * 40,
+                "2026-11-03T09:00:00+00:00",
+                (ci.CiCheck("web", "COMPLETED", "SUCCESS", "https://github.com/o/r/runs/1/job/5"),),
+            )
+
+        url = "https://github.com/o/r/pull/{}"
+        # the head has no CI report yet: its decision is `wait` and no run of it is live
+        ports.tracker.ci_reports = {url.format(n): report(n) for n in (5, 6, 8)}
+
+        found, lines = _wide_round(ports, tmp_path, busy=())
+
+        assert found == [5, 6, 8]
+        assert lines[0].startswith("agentic: poll: auto-merge #7 -> waiting: ci unreadable")
+        assert [line for line in lines if "fast lane" in line] == [
+            f"agentic: poll: auto-merge #{n} -> fast lane beside #7 (land_model, ci_run)"
+            for n in (5, 6, 8)
+        ]
+
+        # the head's CI report arrives: its decision is `ci_run`, the verb acts on it
+        ports.tracker.ci_reports[url.format(7)] = report(7)
+
+        later, later_lines = _wide_round(ports, tmp_path, busy=(), now=NOW + timedelta(minutes=1))
+
+        assert later == [7]
+        assert [line for line in later_lines if "waiting" in line] == [
+            MERGING.format(5),
+            MERGING.format(6),
+            MERGING.format(8),
+        ]
+
     def test_a_backed_off_head_keeps_its_backoff_stays_out_of_found_and_opens_the_lanes(
         self, tmp_path
     ):
