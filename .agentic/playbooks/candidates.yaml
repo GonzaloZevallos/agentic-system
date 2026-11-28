@@ -2671,3 +2671,32 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-28T12:02:25.033+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you write a try or except, check the plan's invariants for what it may wrap. Keep it around only the allowed calls, and move pure builders and other logic outside it.
+  confidence: medium
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the input facts could not be read, return the item as not judged and do not advance any cursor. Cover that path with a round-level test at the public seam.
+  confidence: low
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: For each config flag or switch the brief names, read it where the behaviour happens, and add a test with the flag off that asserts nothing is read, sent or written.
+  confidence: medium
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T14:03:18.033+00:00'
