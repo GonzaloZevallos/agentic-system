@@ -2644,3 +2644,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-28T07:53:40.295+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Before writing 'existing tests pass without being edited', check whether the required change alters an exact-value assertion, such as a pinned session env; if so, name those tests as allowed edits.
+  confidence: medium
+  seen_in:
+  - GH-927
+  sources:
+  - human_decision
+  added_at: '2026-11-28T08:23:06.857+00:00'
