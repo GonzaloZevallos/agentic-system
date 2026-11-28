@@ -121,9 +121,7 @@ def test_board_sync_rests_and_writes_nothing_for_both(failure: Exception) -> Non
     )
     now = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
     ports = memory_ports(board=board, board_sent=sent)
-    (line,) = board_sync.mirror(
-        ports, now, live_issues=frozenset(), blockers={}, eval_set=frozenset()
-    )
+    (line,) = board_sync.mirror(ports, now, live_issues=frozenset(), blockers={}, stack_pauses={})
     reason = f"{type(failure).__name__}: {failure}"
     assert line == f"agentic: poll: board: not updated ({reason}), next try in 15 min"
     assert board.written == [] and sent.load().failed_at == now
