@@ -2700,3 +2700,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you document what a component does or does not do, list every branch and output from the code, then check the docs list against it, so no case or field is missing from the list or summary.
+  confidence: low
+  seen_in:
+  - GH-1209
+  sources:
+  - finding
+  added_at: '2026-11-28T17:15:40.379+00:00'
