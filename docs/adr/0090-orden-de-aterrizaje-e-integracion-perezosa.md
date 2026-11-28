@@ -133,3 +133,32 @@ Un pull request de una persona nunca es Cabeza y el verbo de merge no lo toca mi
 - **Sin línea `Landing:`**: el poller nunca publica una línea `Landing:` ni llama a `_announce_step` o `_landing_step`. El paso sale de `landing_plan.step_for` con el `turn` de la propia fila y la frase de cierre solo de `closing_for`; bajo `verdict_sync_due` el comentario no lleva cierre y el poller no anuncia el paso.
 - **Memoria**: el hilo del issue es la memoria; `refusal_noted` solo evita la lectura. El poller salta con `said` (cualquier comentario previo del par, siempre); el verbo de merge solo cuenta el último comentario de negativa. Son dos reglas distintas y deliberadas: con las razones A, B, A en el mismo head hay dos comentarios y tres registros. Un comentario borrado no se repone para un par ya registrado.
 - **Costo**: cero llamadas mientras el par no cambia; una ráfaga única en la primera ronda tras el despliegue, lineal en los pull requests de personas que tienen una de las cuatro razones; después, una lectura por par cambiado y, como mucho, un comentario del poller por razón y head. Una lectura o un comentario fallido se reintenta en la ronda siguiente, a lo sumo una lectura y un comentario por pull request de persona y ronda.
+
+## Adenda GH-1213: hasta tres carriles
+
+El carril de GH-681 y GH-975 casi nunca se abría: el predicado exigía que la Cabeza mantuviera el turno con un hijo vivo que integra, y en el poller de apostrophe, en 24 h, la razón `head not integrating` apareció 1274 veces (contra 140 `clean`, unas 130 `paths overlap` y 103 `not merge ready`). El resultado fue un aterrizaje de un pull request cada una hora y media a dos por producto. Esta adenda reemplaza dos cosas de esas adendas: la condición de una Cabeza que integra (`head_not_integrating`) y el carril único. Todo lo demás de GH-681 y GH-975 se mantiene: las decisiones que entran (`LANE_DECISIONS`), la evidencia fresca del verbo de merge sobre el par (head, master actual), `stack_parent_unmerged`, `waits_on_human` y el registro informativo.
+
+- **Hasta `LANES_MAX` (3) carriles.** `landing_order.lanes` elige, en orden de `(queued_at, issue)`, los miembros que son `lane_ready` y cuyas rutas son disjuntas de las de la Cabeza y de la unión de los carriles ya elegidos (`Order.lanes`). Una ruta desconocida nunca es disjunta. Quien se queda fuera dice por qué con los valores nuevos de `LaneReason`: `lane_overlap` (sus rutas chocan con otro carril ya elegido) y `lanes_full` (ya hay `LANES_MAX`), además de `no_head` y `head_merging`.
+- **Cuándo se abren carriles.** Ya no importa qué hace la Cabeza, sino qué puede todavía hacerle al master (`_head_obstacle`):
+
+| Estado de la Cabeza | ¿Abre carriles? | Razón que dicen los miembros |
+|---|---|---|
+| no hay Cabeza | no | `no_head` |
+| rutas de la Cabeza desconocidas | no | `head_paths_unknown` |
+| le quedan menos de `LANE_SYNCS_MIN` sincronizaciones | no | `head_sync_budget` |
+| `Member.head_merging`: su decisión de merge es una de `LANE_DECISIONS` | no | `head_merging` |
+| un hijo `merge` o `land_checks` suyo en `lands` | no | `head merging` (`lanes_open` con `head_exempt`) |
+| ocupada integrando (`land_model` o `role`) | sí | |
+| ociosa (sin hijo vivo, por ejemplo esperando CI) | sí | |
+
+- **Serialización por la única Corrida exenta.** Los carriles no agregan concurrencia de merges: cada merge sigue siendo un hijo `merge` exento del tope, a lo sumo uno vivo por máquina y uno arrancado por ronda (Cola exenta). Con tres carriles abiertos, los otros esperan su ronda y cada uno se juzga contra el master nuevo en la ronda siguiente.
+- **Protección de la Cabeza.** Si el propio merge de la Cabeza es el hijo exento de la ronda, ningún carril se abre, para que no se lo coma. `poll.py` arma `head_exempt` con `Member.head_merging` (el verbo está por actuar sobre su decisión) o con un hijo suyo en `lands` que `rules.counts_against_cap` dice que no cuenta (`merge`, `land_checks`); `landing_order.lanes_open(lane_issues, head_exempt)` devuelve entonces `()` y los miembros dicen `waiting (clean, head merging) behind #H`.
+- **`LANE_SYNCS_MIN` para toda Cabeza.** El mínimo de dos sincronizaciones ya no es solo de la Cabeza que integra: cada merge de un carril le cuesta una `sync_master`, esté ocupada u ociosa, y otra queda para su propio movimiento. La cadena de saltos la sigue cortando `head_sync_budget`.
+- **Costo.** Lineal en los miembros que esperan (una o dos lecturas locales de git por candidato y ronda: `is_ancestor`, `touched_paths`), más la lectura del pull request de la Cabeza que ya había por ronda. La admisión se refresca por cada par `(pr_head, master)`. Sin candidato no se lee nada.
+- **Observabilidad.** Solo texto del poller, ninguna métrica y ningún documento nuevo. La línea de un carril abierto es `fast lane beside #H (<hijo de la Cabeza>|idle, <decisión admitida>)` (reemplaza a `fast lane behind busy #H`); un miembro limpio sin carril dice `waiting (clean, <texto>) behind #H`, con el texto de `LANE_TEXT` para cada `LaneReason`. `head_not_integrating`, `holds_master_unknown` y `lacks_master` se conservan en el tipo para leer lo ya escrito, pero ya nada las produce.
+
+Riesgos conocidos:
+
+- Rutas disjuntas pueden romperse juntas: con tres carriles en vez de uno, el CI de la Cabeza en su `sync_master` ve más cambios a la vez y el riesgo crece con el número.
+- `paths_overlap` puede seguir dominando: casi toda tarea toca `CONTEXT.md` o `docs/adr/`, y los carriles solo ayudan cuando las rutas realmente no chocan.
+- Cada merge de un carril le cuesta a la Cabeza una `sync_master`, que puede chocar con su resolución en curso; el tope lo pone `LANE_SYNCS_MIN`.

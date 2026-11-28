@@ -145,6 +145,15 @@ sequenceDiagram
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
    de corrida con que se lo lanzó (`land_checks` si no gasta modelo, `land_model` si sí).
+
+   Los carriles rápidos (ADR-0090, adenda GH-1213) se abren junto a la Cabeza sea cual sea su
+   estado, ociosa incluida. Ninguno se abre cuando el propio merge de la Cabeza es el hijo exento
+   de la ronda: `agentic/core/process/domain/landing_order.py:lanes_open`, con el `head_exempt` que
+   arma `agentic/core/process/application/poll.py` a partir de `Member.head_merging` y de
+   `rules.counts_against_cap`, no devuelve ninguno, y esos miembros dicen
+   `waiting (clean, head merging) behind #H`; los que sí se abren dicen
+   `fast lane beside #H (<hijo de la Cabeza>|idle, <decisión admitida>)`. Toda Cabeza necesita
+   `LANE_SYNCS_MIN` sincronizaciones restantes, porque cada merge de un carril le cuesta una.
 3. **Un solo paso, elegido por una tabla.**
    `agentic/core/process/domain/landing.py:landing_step` es el único lugar que decide *qué
    hacer en vez de* mergear. El paso queda en la lista `landing` del documento antes de
