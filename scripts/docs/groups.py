@@ -198,6 +198,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.github_budget": "machine",
     "domain.hold": "landing",
     "domain.hold_record": "state",
+    "domain.instant": "machine",
     "domain.landing": "landing",
     "domain.landing_order": "landing",
     "domain.launch_order": "machine",

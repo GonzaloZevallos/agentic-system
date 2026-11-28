@@ -12,6 +12,7 @@ Esta página muestra los módulos del grupo `checks` de `domain` y los imports q
 
 ```mermaid
 graph TD
+    g_domain__machine["machine (grupo)"]
     g_domain__state["state (grupo)"]
     m_domain__check_results["domain.check_results"]
     m_domain__check_runs["domain.check_runs"]
@@ -29,6 +30,7 @@ graph TD
     m_domain__speculation["domain.speculation"]
     m_domain__suppressions["domain.suppressions"]
     m_domain__check_runs --> m_domain__presubmit
+    m_domain__ci --> g_domain__machine
     m_domain__ci --> g_domain__state
     m_domain__ci --> m_domain__presubmit
     m_domain__master_gain --> m_domain__check_results

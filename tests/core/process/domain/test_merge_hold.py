@@ -61,3 +61,27 @@ def test_open_escalation(comments, resumed_at, released_at, expected):
 def test_the_latest_escalated_is_the_last_in_thread_order_not_the_greatest_instant():
     comments = [("escalated", T2), ("escalated", T0)]
     assert open_escalation(comments, T1_LOCAL, []) is False
+
+
+@pytest.mark.parametrize(
+    ("comments", "resumed_at", "released_at", "expected"),
+    [
+        pytest.param(
+            [("escalated", "2026-11-14T10:05:00")], None, [], None, id="naive-escalated-unknown"
+        ),
+        pytest.param(
+            [("escalated", T1)], "2026-11-14T10:10:00", [], None, id="naive-resumed-unknown"
+        ),
+        pytest.param(
+            [("escalated", "2026-11-14T12:05:00+02:00")],
+            None,
+            [],
+            True,
+            id="offset-escalated-holds",
+        ),
+    ],
+)
+def test_open_escalation_naive_is_unknown_and_offset_holds(
+    comments, resumed_at, released_at, expected
+):
+    assert open_escalation(comments, resumed_at, released_at) is expected

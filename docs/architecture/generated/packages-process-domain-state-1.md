@@ -13,6 +13,7 @@ Esta página muestra los módulos del grupo `state` de `domain` y los imports qu
 ```mermaid
 graph TD
     g_domain__landing["landing (grupo)"]
+    g_domain__machine["machine (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state__2["state parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
@@ -45,6 +46,7 @@ graph TD
     m_domain__experiment --> g_pkg__agentic__shared
     m_domain__format_issue --> g_domain__roles
     m_domain__format_issue --> g_domain__state__2
+    m_domain__hold_record --> g_domain__machine
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
     m_domain__returns --> g_domain__state__2

@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import rules
+from . import instant, rules
 from .rules import GITHUB_RATE_LIMIT_SCHEDULE, RATE_LIMIT_PERSISTED
 from .task import Failure, PauseEntry, TaskState
 
@@ -54,17 +54,6 @@ def reset_offset(product: str) -> timedelta:
     return timedelta(seconds=int.from_bytes(digest[:8], "big") % _OFFSET_SPAN_S)
 
 
-def _instant(value: object) -> datetime | None:
-    """`value` as an aware datetime; `None` when it is not a string, does not parse or is naive."""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else None
-
-
 def _previous_was_github(state: TaskState) -> bool:
     """Whether the epoch the last resume closed ended on a `github_rate_limit` failure (one the
     run did not retry: `rules.terminal_failures`)."""
@@ -99,7 +88,7 @@ def rate_limit_pause_patch(
     if resets_at is not None and resets_at.tzinfo is not None:
         if now < resets_at <= now + RATE_LIMIT_WAIT_MAX:
             failure["resets_at"] = resets_at.isoformat()
-    kept = _instant(state.get("rate_limit_paused_at"))
+    kept = instant.parse_instant(state.get("rate_limit_paused_at"))
     keep = _previous_was_github(state) and kept is not None and kept <= now
     patch = rules.logged({**rules.escalation("failure", _PAUSE_TEXT)}, [failure], at=at)
     patch["rate_limit_paused_at"] = state["rate_limit_paused_at"] if keep else at
@@ -110,7 +99,7 @@ def rate_limit_exhausted(state: TaskState, now: datetime) -> bool:
     """Whether the GitHub limit has held the task for `RATE_LIMIT_WAIT_MAX` since
     `rate_limit_paused_at`. Pure; `False`, never an exception, when the field is absent, not a
     string, unparsable or naive, or when `now` is naive."""
-    paused_at = _instant(state.get("rate_limit_paused_at"))
+    paused_at = instant.parse_instant(state.get("rate_limit_paused_at"))
     if paused_at is None or now.tzinfo is None:
         return False
     return now >= paused_at + RATE_LIMIT_WAIT_MAX
@@ -182,7 +171,7 @@ def pause_at(state: TaskState) -> datetime | None:
     escalations = [entry for entry in log[last_resumed + 1 :] if entry["kind"] == "escalation"]
     if not escalations:
         return None
-    return _instant(escalations[-1].get("at"))
+    return instant.parse_instant(escalations[-1].get("at"))
 
 
 def person_spoke(
