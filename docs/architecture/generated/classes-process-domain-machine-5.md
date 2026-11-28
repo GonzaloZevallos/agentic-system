@@ -44,5 +44,6 @@ classDiagram
     class terminal_states__OpenView["OpenView"]
     class terminal_states__ReadState["ReadState"]
     class terminal_states__TerminalMemo["TerminalMemo"]
+    class thread_memo__ThreadMemo["ThreadMemo"]
     terminal_states__OpenView --> terminal_states__TerminalMemo
 ```

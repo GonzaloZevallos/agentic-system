@@ -255,6 +255,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.task": "state",
     "domain.task_path": "state",
     "domain.terminal_states": "machine",
+    "domain.thread_memo": "machine",
     "domain.tracker_items": "roles",
     "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
