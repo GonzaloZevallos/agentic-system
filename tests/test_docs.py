@@ -1192,7 +1192,8 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # 31 once budget_store.py (GH-1098) takes adapters.filesystem to 21 nodes: it splits in two.
     # 32 once board_sync leaves lifecycle (GH-1165): its edge into the second lifecycle part
     # (resume) took that page to 31 edges, and the cluster it joins takes one page more.
-    assert len(pages) <= 32
+    # 33 once adapters.smtp (GH-1057) is a package of its own: one page more.
+    assert len(pages) <= 33
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path

@@ -20,6 +20,7 @@ from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, She
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     REMERGE_DIFF_MIN_GIT,
+    Activity,
     AddedAdr,
     AddedLine,
     Board,
@@ -51,6 +52,9 @@ from agentic.core.process.application.ports import (
     MergeCallFailed,
     MergeConflict,
     MergeFailed,
+    Notified,
+    Notifier,
+    NotifySettings,
     OwnerRuleEntry,
     PendingPaths,
     PerfLock,
@@ -3007,6 +3011,10 @@ def memory_ports(
     format_filing: FormatFiler | None = None,
     format_fixes: FormatFixReads | None = None,
     pending_paths: PendingPaths | None = None,
+    notifier: Notifier | None = None,
+    notified: Notified | None = None,
+    activity: Activity | None = None,
+    notify_settings: NotifySettings | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -3039,6 +3047,10 @@ def memory_ports(
         format_filing=format_filing,
         format_fixes=format_fixes,
         pending_paths=pending_paths,
+        notifier=notifier,
+        notified=notified,
+        activity=activity,
+        notify_settings=notify_settings,
     )
 
 

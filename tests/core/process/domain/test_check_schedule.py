@@ -5,6 +5,8 @@ capped at 6 and integration and land at 12."""
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.domain.check_schedule import (
     AGING_S,
     CheckPriority,
@@ -14,6 +16,7 @@ from agentic.core.process.domain.check_schedule import (
     alive,
     decide,
     overdue_decision,
+    split,
 )
 
 SUBTASK, INTEGRATION, LAND = CheckPriority.SUBTASK, CheckPriority.INTEGRATION, CheckPriority.LAND
@@ -179,3 +182,23 @@ def test_the_module_reads_neither_the_clock_nor_the_machine():
         if isinstance(node, ast.ImportFrom)
     }
     assert not imported & {"os", "time", "datetime"}
+
+
+@pytest.mark.parametrize(
+    ("share", "concurrent", "expected"),
+    [
+        (10, 3, (4, 3, 3)),  # N > K: the remainder goes to the first checks, in order
+        (6, 6, (1, 1, 1, 1, 1, 1)),  # N = K
+        (2, 5, (1, 1, 1, 1, 1)),  # N < K: each still gets one, the sum is K
+        (6, 1, (6,)),  # K = 1: the whole share
+        (1, 3, (1, 1, 1)),  # share 1, K = 3
+    ],
+)
+def test_split_gives_each_check_at_least_one_and_sums_to_the_larger_of_share_and_checks(
+    share, concurrent, expected
+):
+    counts = split(share, concurrent)
+    assert counts == expected
+    assert sum(counts) == max(share, concurrent)
+    assert all(count >= 1 for count in counts)
+    assert max(counts) - min(counts) <= 1

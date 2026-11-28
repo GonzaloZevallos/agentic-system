@@ -8,6 +8,7 @@ Esta página muestra los módulos del adaptador `adapters.filesystem` y los impo
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [application](packages-process-application.md)
   - [domain](packages-process-domain.md)
@@ -18,6 +19,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_adapters__filesystem__liveness["adapters.filesystem.liveness"]
     m_adapters__filesystem__lock["adapters.filesystem.lock"]
+    m_adapters__filesystem__notified["adapters.filesystem.notified"]
     m_adapters__filesystem__perf_lock["adapters.filesystem.perf_lock"]
     m_adapters__filesystem__prompts["adapters.filesystem.prompts"]
     m_adapters__filesystem__run_registry["adapters.filesystem.run_registry"]
@@ -29,6 +31,7 @@ graph TD
     m_adapters__filesystem__liveness --> g_pkg__domain
     m_adapters__filesystem__lock --> g_pkg__application
     m_adapters__filesystem__lock --> m_adapters__filesystem__liveness
+    m_adapters__filesystem__notified --> g_pkg__domain
     m_adapters__filesystem__perf_lock --> g_pkg__application
     m_adapters__filesystem__perf_lock --> m_adapters__filesystem__liveness
     m_adapters__filesystem__prompts --> g_pkg__domain

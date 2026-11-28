@@ -26,6 +26,7 @@ from ..domain.github_access import Turn as Turn
 from ..domain.github_access import WriteGate as WriteGate
 from ..domain.github_budget import Budget
 from ..domain.landing import IssueRef
+from ..domain.notify import NotifiedRecord
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.playbook_land import LandAttempt
@@ -2675,6 +2676,76 @@ class BoardSent(Protocol):
 
 
 @dataclass(frozen=True)
+class Mail:
+    """One message the notifier sends: a `subject` and a plain-text `body`."""
+
+    subject: str
+    body: str
+
+
+@dataclass(frozen=True)
+class ActivityRow:
+    """One merged pull request or closed issue the activity read found."""
+
+    number: int
+    title: str
+    url: str
+    instant: datetime
+
+
+class NotifyFailed(Exception):
+    """A send that did not go through. `cause` is the type name of the underlying error and
+    nothing else: the message of the original is never carried (GH-1056, ADR-0106)."""
+
+    def __init__(self, cause: str):
+        super().__init__(cause)
+        self.cause = cause
+
+    def __str__(self) -> str:
+        return self.cause
+
+
+@dataclass(frozen=True)
+class NotifySettings:
+    """What the notifier use case reads of the configuration (GH-1057), raw: `digest_hour` is the
+    hour as written and `events` the kind names as written, `None` for all kinds."""
+
+    digest_hour: str | None
+    events: tuple[str, ...] | None
+
+
+class Notifier(Protocol):
+    """Sends the email notices (GH-1056)."""
+
+    def send(self, mail: Mail) -> None:
+        """Sends `mail`. Raises `NotifyFailed` when it did not go through."""
+        ...
+
+
+class Notified(Protocol):
+    """The notifier's memory of what it settled, on disk (GH-1056)."""
+
+    def load(self) -> NotifiedRecord:
+        """The record, empty when the file is missing or unreadable."""
+        ...
+
+    def save(self, record: NotifiedRecord) -> None: ...
+
+
+class Activity(Protocol):
+    """What happened in the product's repository, for the digest (GH-1056). Both reads return
+    oldest first, ordered by `(instant, number)`, with `since` exclusive."""
+
+    def merged_prs(self, since: datetime, limit: int) -> list[ActivityRow]:
+        """The pull requests merged after `since`, oldest first, at most `limit`."""
+        ...
+
+    def closed_issues(self, since: datetime, limit: int) -> list[ActivityRow]:
+        """The issues closed after `since`, oldest first, at most `limit`."""
+        ...
+
+
+@dataclass(frozen=True)
 class CheckRequest:
     """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
     and `token` are `None` on the gate's first call and are the grant's on every later one,
@@ -2856,6 +2927,13 @@ class Ports:
     # What the release of a format hold reads (GH-1067). `None` releases nothing and makes no
     # call, which is how every run went before it existed (dry-run, evaluation).
     format_fixes: FormatFixReads | None = None
+    # The email notifier (GH-1056): what sends, what it remembers and what it reads. `None` for
+    # all three, which is how every run goes until a later part wires them (dry-run, evaluation).
+    notifier: Notifier | None = None
+    notified: Notified | None = None
+    activity: Activity | None = None
+    # The digest hour and the kinds to mail, as configured (GH-1057). `None` with the notifier.
+    notify_settings: NotifySettings | None = None
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None

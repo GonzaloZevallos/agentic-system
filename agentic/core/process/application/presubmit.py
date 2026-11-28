@@ -21,7 +21,7 @@ from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
 from ..domain import presubmit, rules, run_check
-from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
+from ..domain.check_schedule import WAIT_MAX_S, CheckPriority, split
 from ..domain.docs import Docs
 from ..domain.presubmit import (
     AffectedPlan,
@@ -542,6 +542,18 @@ class CheckoutPresubmit:
         except (GitError, OSError):
             return None
 
+    def _slices(self) -> dict[str, int | None]:
+        """The worker count of each check for this gate, decided once before any starts: the
+        share split over the checks that run at once (all of them under `parallel_checks`),
+        or the whole share for each when they run one at a time. `None` without a grant."""
+        names = list(self.checks)
+        grant = self.grant
+        if grant is None:
+            return dict.fromkeys(names)
+        if self.parallel:
+            return dict(zip(names, split(grant.share, len(names)), strict=True))
+        return dict.fromkeys(names, self.whole_share())
+
     def _planned(self, plan: AffectedPlan, head: str) -> dict[str, PlannedForm]:
         """The form each check is planned to run, with the checks that already failed in full
         on this instance taken before anything runs."""
@@ -560,14 +572,20 @@ class CheckoutPresubmit:
         ]
 
     def _run_unplanned(self, abandoned: Callable[[], bool] | None = None) -> list[CheckResult]:
+        slices = self._slices()
         if not self.parallel:
-            return [row for n, c in self.checks.items() for row in self._run_once(n, c, abandoned)]
+            return [
+                row
+                for n, c in self.checks.items()
+                for row in self._run_once(n, c, slices[n], abandoned)
+            ]
         # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
         # the other started checks before the error propagates, so no check outlives
         # the call; nothing is recorded for it, the same as serial.
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
             per_check = pool.map(
-                lambda item: self._run_once(item[0], item[1], abandoned), self.checks.items()
+                lambda item: self._run_once(item[0], item[1], slices[item[0]], abandoned),
+                self.checks.items(),
             )
             return [row for rows in per_check for row in rows]
 
@@ -577,11 +595,15 @@ class CheckoutPresubmit:
         planned: Mapping[str, PlannedForm],
         abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
+        slices = self._slices()
+
         def run(name: str, command: str) -> list[CheckResult]:
+            workers = slices[name]
             return self._with_rerun(
                 name,
                 command,
-                self._planned_rows(name, command, planned[name], plan, abandoned),
+                self._planned_rows(name, command, planned[name], plan, workers, abandoned),
+                workers,
                 abandoned,
             )
 
@@ -597,6 +619,7 @@ class CheckoutPresubmit:
         command: str,
         planned: PlannedForm,
         plan: AffectedPlan,
+        workers: int | None,
         abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
         """One check under a plan: its affected form when it is planned, then the full one
@@ -606,11 +629,11 @@ class CheckoutPresubmit:
         if planned.mode == "affected-only":
             # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
-            first = self._run(name, form, "affected-only", abandoned)
+            first = self._run(name, form, workers, "affected-only", abandoned)
             rows.append(first)
             if first["passed"]:
                 return rows
-        full = self._run(name, command, "full", abandoned)
+        full = self._run(name, command, workers, "full", abandoned)
         rows.append(full)
         stop_if_abandoned(abandoned)  # before `stuck_full`, which the retry reads
         if not full["passed"]:
@@ -618,11 +641,15 @@ class CheckoutPresubmit:
         return rows
 
     def _run_once(
-        self, name: str, command: str, abandoned: Callable[[], bool] | None = None
+        self,
+        name: str,
+        command: str,
+        workers: int | None,
+        abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
         """One check without a plan: its row, and its one rerun when it went red."""
         return self._with_rerun(
-            name, command, [self._run(name, command, None, abandoned)], abandoned
+            name, command, [self._run(name, command, workers, None, abandoned)], workers, abandoned
         )
 
     def _with_rerun(
@@ -630,6 +657,7 @@ class CheckoutPresubmit:
         name: str,
         command: str,
         rows: list[CheckResult],
+        workers: int | None,
         abandoned: Callable[[], bool] | None = None,
     ) -> list[CheckResult]:
         """`rows` and, right after them, the one rerun of the check's last row when the
@@ -641,7 +669,7 @@ class CheckoutPresubmit:
         if rerun_as is None:
             return rows
         if form is None or rerun_as != form.command:
-            again = self._execute(name, rerun_as, last.get("mode"), abandoned)
+            again = self._execute(name, rerun_as, workers, last.get("mode"), abandoned)
             again["rerun"] = True
             return [*rows, again]
         # The form branch compares the unexpanded text above. The ids are read once and serve
@@ -649,14 +677,14 @@ class CheckoutPresubmit:
         # `{workers}` in `_execute` (via `_sized`); `{base}` never applies to a form.
         ids = presubmit.failed_ids(last["output"], form.test_id)
         again = self._execute(
-            name, presubmit.rerun_form_command(form, ids), last.get("mode"), abandoned
+            name, presubmit.rerun_form_command(form, ids), workers, last.get("mode"), abandoned
         )
         again["rerun"] = True
         if presubmit.rerun_resolved(again, ids, form):
             return [*rows, again]
         # The form went red without rerunning what it was asked to: once more, the whole
         # command, and its row stands for the rerun. The form row is dropped (invariant).
-        whole = self._execute(name, command, last.get("mode"), abandoned)
+        whole = self._execute(name, command, workers, last.get("mode"), abandoned)
         whole["rerun"] = True
         return [*rows, whole]
 
@@ -719,7 +747,7 @@ class CheckoutPresubmit:
         checkout = self.path.resolve()
         # The witness gets the grant's environment but its command is never substituted.
         result = self.ports.commands.run(
-            self.path, command, self.check_timeout_s, env=self._grant_env()
+            self.path, command, self.check_timeout_s, env=self._grant_env(self.whole_share())
         )
         stop_if_abandoned(abandoned)  # before `witness_result`, which the retry's call writes
         reason = presubmit.witness_refusal(
@@ -732,20 +760,27 @@ class CheckoutPresubmit:
         }
         return reason
 
-    def _grant_env(self) -> dict[str, str] | None:
-        """The worker count of the share held, as the environment of every command; None
-        without a grant, which is the call of before."""
-        return None if self.grant is None else presubmit.workers_env(self.grant.share)
+    def whole_share(self) -> int | None:
+        """The count of a command that runs alone (the witness, `run_check`): the whole
+        share, through `split` like every other count. `None` without a grant."""
+        return None if self.grant is None else split(self.grant.share, 1)[0]
 
-    def _sized(self, command: str) -> str:
-        """`{workers}` in a declared command, sized to the share held; the command as it is
-        without the placeholder. Without a grant a command that still holds the placeholder
+    @staticmethod
+    def _grant_env(workers: int | None) -> dict[str, str] | None:
+        """The check's worker count as the environment of its commands; None without a
+        grant, which is the call of before."""
+        return None if workers is None else presubmit.workers_env(workers)
+
+    @staticmethod
+    def _sized(command: str, workers: int | None) -> str:
+        """`{workers}` in a declared command, sized to the check's count; the command as it
+        is without the placeholder. Without a grant a command that still holds the placeholder
         raises `UngrantedWorkers`: the shell would take the token as text (GH-979)."""
-        if self.grant is None:
+        if workers is None:
             if presubmit.WORKERS_TOKEN in command:
                 raise presubmit.UngrantedWorkers(command)
             return command
-        return presubmit.workers_command(command, self.grant.share)
+        return presubmit.workers_command(command, workers)
 
     def _prepare_reuse(self, eligible: bool = True) -> None:
         """Decide, once per call, what this clean tree may read from and write to the store.
@@ -820,29 +855,31 @@ class CheckoutPresubmit:
         self,
         name: str,
         command: str,
+        workers: int | None,
         mode: Mode | None = None,
         abandoned: Callable[[], bool] | None = None,
     ) -> CheckResult:
         stop_if_abandoned(abandoned)
         if (stored := self._stored(name, command, mode)) is not None:
             return stored
-        return self._execute(name, command, mode, abandoned)
+        return self._execute(name, command, workers, mode, abandoned)
 
     def _execute(
         self,
         name: str,
         command: str,
+        workers: int | None,
         mode: Mode | None = None,
         abandoned: Callable[[], bool] | None = None,
     ) -> CheckResult:
         stop_if_abandoned(abandoned)  # the one place a command is launched: none after the flag
         started = time.monotonic()
-        declared, command = command, self._sized(command)
+        declared, command = command, self._sized(command, workers)
         self._declared[(name, command)] = declared
         wall = self.walls.get(name, self.check_timeout_s)
         code = self.readiness.exits.get(name) if self.readiness is not None else None
         before = self.readiness.load.one_minute() if self.readiness and code is not None else None
-        result = self.ports.commands.run(self.path, command, wall, env=self._grant_env())
+        result = self.ports.commands.run(self.path, command, wall, env=self._grant_env(workers))
         duration_s = time.monotonic() - started
         output = presubmit.said(result.output, result.timed_out, wall)
         row: CheckResult = {

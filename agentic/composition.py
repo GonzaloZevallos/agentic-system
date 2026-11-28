@@ -56,6 +56,7 @@ from .core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
 from .core.process.adapters.filesystem.installed_products import SystemdUnitInstalledProducts
+from .core.process.adapters.filesystem.notified import FilesystemNotified
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
@@ -97,6 +98,8 @@ from .core.process.adapters.shell import (
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.adapters.shell.stage0_candidate import ShellStage0Candidate
+from .core.process.adapters.smtp import config as smtp_config
+from .core.process.adapters.smtp.notifier import SmtpNotifier
 from .core.process.application.format_issue import FormatFiling
 from .core.process.application.ports import (
     FailurePolicy,
@@ -105,6 +108,9 @@ from .core.process.application.ports import (
     Inbox,
     InstalledProducts,
     LabelTimeline,
+    Notified,
+    Notifier,
+    NotifySettings,
     Ports,
     Stage0Store,
     Stage0Users,
@@ -441,6 +447,10 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         board_sent=None,
         format_filing=None,
         format_fixes=None,
+        notifier=None,
+        notified=None,
+        activity=None,
+        notify_settings=None,
     )
 
 
@@ -526,6 +536,14 @@ def _ports(
         )
     )
     git_workspace = GitWorkspace(cfg.product_dir, cfg.git_identity)
+    # `stack.product()` reads the repository's HEAD, so the record's path is built only when the
+    # notifier is on; off, nothing is read and `notify_members` ignores the placeholder.
+    notify_path = (
+        cfg.run_registry_dir.parent / "notify" / f"{_file_name(stack.product())}.json"
+        if smtp_config.settings(os.environ) is not None
+        else Path(os.devnull)
+    )
+    notifier, notified, notify_settings = notify_members(os.environ, notify_path)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -597,6 +615,9 @@ def _ports(
         else FilesystemBoardSent(
             cfg.run_registry_dir.parent / "board" / f"{_file_name(stack.product())}.json"
         ),
+        notifier=notifier,
+        notified=notified,
+        notify_settings=notify_settings,
         scratch=scratch,
         free_space=free_space,
         # GH-594, part 4b-4: a `Spec:` line in an issue body routes the task. The reader reads
@@ -661,6 +682,22 @@ def backfill_listing(product_dir: Path) -> tuple[IssueListing, ReadCache]:
     if key is None:
         return listing, NoCache()
     return listing, FilesystemReadCache(backfill_cache_root(), key)
+
+
+def notify_members(
+    environ: Mapping[str, str], notified_path: Path
+) -> tuple[Notifier | None, Notified | None, NotifySettings | None]:
+    """The email notifier's three `Ports` members (GH-1057): all `None` while the recipient is
+    unset or blank. Pure: it builds objects and touches no disk, `FilesystemNotified.save`
+    creates the directory."""
+    s = smtp_config.settings(environ)
+    if s is None:
+        return None, None, None
+    return (
+        SmtpNotifier(s),
+        FilesystemNotified(notified_path),
+        NotifySettings(s.digest_hour, s.events),
+    )
 
 
 def _file_name(product: str) -> str:
