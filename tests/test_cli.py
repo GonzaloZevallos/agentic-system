@@ -4314,14 +4314,17 @@ async def test_poll_hands_every_round_the_same_sweep_carry_and_a_dry_round_none(
     monkeypatch, tmp_path
 ):
     """GH-824: the carry is a local of the loop, not a module global; `_dry_round` has none."""
+    from agentic.core.process.application.notify import NotifyCarry
     from agentic.core.process.application.worktree_sweep import SweepCarry
     from agentic.shared.configuration import Configuration
     from tests.fakes import FakeLauncher, MemoryRunRegistry
 
     carries: list[object] = []
+    notify_carries: list[object] = []
 
     def run_once(*args, **kwargs):
         carries.append(kwargs.get("sweep_carry", "absent"))
+        notify_carries.append(kwargs.get("notify_carry", "absent"))
         return ["agentic: poll: nothing to do"]
 
     monkeypatch.setattr(cli.pollmod, "run_once", run_once)
@@ -4349,12 +4352,16 @@ async def test_poll_hands_every_round_the_same_sweep_carry_and_a_dry_round_none(
         )
     first, second = carries
     assert isinstance(first, SweepCarry) and first is second
+    # GH-1205: the notifier's carry is the loop's too, one per process.
+    one, two = notify_carries
+    assert isinstance(one, NotifyCarry) and one is two
 
     carries.clear()
+    notify_carries.clear()
     cli._dry_round(
         Configuration(product_dir=tmp_path), memory_ports(), MemoryRunRegistry(), FakeLock()
     )
-    assert carries == ["absent"]
+    assert carries == ["absent"] and notify_carries == ["absent"]
 
 
 @pytest.mark.anyio

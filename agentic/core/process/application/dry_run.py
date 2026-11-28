@@ -203,8 +203,8 @@ UNREACHED = {
 
 # Ports that are not ports: `Ports` carries the run's limits and its clock beside them. The
 # filing of format refusals (GH-1030) and the reads that release a format hold (GH-1067) are
-# dropped, not wrapped: a dry round files nothing and releases nothing. The notifier's three
-# (GH-1056) are dropped too: a dry round sends no mail and writes no record.
+# dropped, not wrapped: a dry round files nothing and releases nothing. The notifier's five
+# (GH-1056, GH-1205) are dropped too: a dry round sends no mail and writes no record.
 _NOT_PORTS = frozenset(
     {
         "limits",
@@ -214,6 +214,7 @@ _NOT_PORTS = frozenset(
         "notifier",
         "notified",
         "activity",
+        "origin",
         "notify_settings",
     }
 )
@@ -262,6 +263,7 @@ def read_only_ports(
             notifier=None,
             notified=None,
             activity=None,
+            origin=None,
             notify_settings=None,
         ),
         _wrap(registry, "RunRegistry", log),

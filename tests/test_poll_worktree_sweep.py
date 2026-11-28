@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.process.application import poll
+from agentic.core.process.application import notify, poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, SpaceReading
 from agentic.core.process.application.scratch_sweep import TMP_ROOT
 from agentic.core.process.application.worktree_sweep import SweepCarry
@@ -140,7 +140,13 @@ class Round:
                 "description": "a plain description",
             }
 
-    def run(self, carry: SweepCarry | None, *, dry_run: bool = False) -> list[str]:
+    def run(
+        self,
+        carry: SweepCarry | None,
+        *,
+        dry_run: bool = False,
+        notify_carry: notify.NotifyCarry | None = None,
+    ) -> list[str]:
         return poll.run_once(
             self.cfg,
             self.ports,
@@ -154,6 +160,7 @@ class Round:
             current_boot=None,
             dry_run=dry_run,
             sweep_carry=carry,
+            notify_carry=notify_carry,
         )
 
 
@@ -291,3 +298,41 @@ def test_without_a_carry_the_round_says_what_it_said_before_the_change() -> None
     assert not any("worktrees" in line or "agentic: sweep" in line for line in free_lines)
     assert HELD_LINE not in held_lines
     assert free_lines == ["agentic: poll: launch #3 -> pid 4242"]
+
+
+def test_a_round_with_the_notifier_off_says_exactly_what_it_said_without_a_notify_carry() -> None:
+    # GH-1205: the five notifier members are None, so the carry changes no note and no line.
+    for queue in ((), (3,)):
+        plain = Round(on_disk=[], queue=queue).run(SweepCarry())
+        carried = Round(on_disk=[], queue=queue).run(
+            SweepCarry(), notify_carry=notify.NotifyCarry()
+        )
+        assert carried == plain
+    idle = Round(on_disk=[]).run(None, notify_carry=notify.NotifyCarry())
+    assert idle == ["agentic: poll: nothing to do this round"]
+
+
+def test_the_notifier_round_runs_once_per_live_round_held_or_not_and_never_in_a_dry_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, notify.NotifyCarry]] = []
+
+    def spy(ports: object, now: datetime, carry: notify.NotifyCarry) -> list[str]:
+        calls.append((ports, carry))
+        return ["notify: spied"]
+
+    monkeypatch.setattr(notify, "poll_round", spy)
+    carry = notify.NotifyCarry()
+
+    live = Round(on_disk=[])
+    lines = live.run(None, notify_carry=carry)
+    assert len(calls) == 1 and calls[0] == (live.ports, carry)
+    assert lines == ["notify: spied", "agentic: poll: nothing to do this round"]
+
+    held = Round(on_disk=[], holds=(rules.PRODUCT_VOLUME,))
+    held.run(None, notify_carry=carry)
+    assert len(calls) == 2 and calls[1][0] is held.ports
+
+    Round(on_disk=[]).run(None, dry_run=True, notify_carry=carry)
+    Round(on_disk=[]).run(None)  # no carry: the round has nothing to hand it
+    assert len(calls) == 2

@@ -22,6 +22,7 @@ from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.git.workspace import GitRepoOrigin
 from agentic.core.process.adapters.github.activity import GhActivity
 from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
@@ -878,6 +879,7 @@ def test_the_activity_read_is_not_wired_while_the_notifier_address_is_unset(tmp_
     product = a_repository(tmp_path / "product")
     ports = composition.default_ports(Configuration(product_dir=product))
     assert ports.activity is None and ports.notifier is None
+    assert ports.notified is None and ports.origin is None
 
 
 def test_the_activity_read_is_wired_with_the_notifier_and_offline_ports_drop_it(
@@ -888,5 +890,8 @@ def test_the_activity_read_is_wired_with_the_notifier_and_offline_ports_drop_it(
     cfg = Configuration(product_dir=product)
     live = composition.default_ports(cfg)
     assert isinstance(live.activity, GhActivity) and live.notifier is not None
+    # GH-1205: the origin read exists where the notifier does, over the product's checkout.
+    assert isinstance(live.origin, GitRepoOrigin)
     offline = composition.offline_ports(cfg)
     assert offline.activity is None and offline.notifier is None and offline.notified is None
+    assert offline.origin is None and offline.notify_settings is None
