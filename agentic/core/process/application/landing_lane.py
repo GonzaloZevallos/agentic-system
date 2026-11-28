@@ -1,12 +1,14 @@
 """The facts the fast lane needs of a landing round (GH-681): transcribed, never decided.
 
-`lane_facts` reads, for the head of the landing order, its pushed paths and the syncs its budget
-still allows, and for each candidate whether its branch holds master and what it touches. The
-lane predicate and its reasons live in `domain.landing_order` and nowhere else; this module hands
-it `Member`s and takes no part in the decision. A read that fails is `None` in that fact, never
-`False`, `0` or an empty set: the domain reads `None` as "unknown" and never opens a lane on it.
+`lane_facts` reads, for the head of the landing order (whatever it is doing), its pushed paths and
+the syncs its budget still allows, and for each candidate whether its branch holds master and what
+it touches. The lane predicate and its reasons live in `domain.landing_order` and nowhere else;
+this module hands it `Member`s and takes no part in the decision. A read that fails is `None` in
+that fact, never `False`, `0` or an empty set: the domain reads `None` as "unknown" and never opens
+a lane on it.
 
-Local git only, and one `tracker.pull_request` read of the head per round. It imports nothing from
+Local git only, and at most one `tracker.pull_request` read per round (a busy head the round did
+not assess). It imports nothing from
 `application.poll` (which calls it), so it takes plain values and domain types.
 
 It is also the only writer of the fast lane's informative record (GH-681 part 2): `lane_admitted`
@@ -222,9 +224,10 @@ def clear_admissions(
     out: list[str],
 ) -> None:
     """Clear `lane_admitted` (to `None`) from each `(task_id, issue)` of `members` not in the
-    set of the round's opened `lanes`, not at work and whose admission no merge followed (`auto_merged_at` later than
-    `at`, which recording keeps): a deferred admission is then never credited if the member later
-    merges as head. The documents are read fresh. A failed write is one line."""
+    set of the round's opened `lanes`, not at work and whose admission no merge followed
+    (`auto_merged_at` later than `at`, which recording keeps): a deferred admission is then never
+    credited if the member later merges as head. The documents are read fresh. A failed write is
+    one line."""
     for task_id, issue in members:
         if issue in lanes or at_work(task_id):
             continue

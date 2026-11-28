@@ -10,11 +10,10 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.adapters.filesystem.documents import FilesystemTaskDocuments
-from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.application.stack_facts import StackMemo
-from agentic.core.process.domain import adr_numbers, ci, landing_order, rules
+from agentic.core.process.domain import adr_numbers, ci, exempt_queue, landing_order, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_fix import _stranded_ports
@@ -744,7 +743,9 @@ class TestFastLane:
         for number in (5, 6, 7):
             written = dict(with_lane.documents.load(f"GH-{number}"))
             admitted = written.pop("lane_admitted", None)
-            assert written == without.documents.load(f"GH-{number}")
+            other = dict(without.documents.load(f"GH-{number}"))
+            assert other.pop("lane_admitted", None) == admitted
+            assert written == other
             assert (admitted is not None) is (number in (5, 6))
             assert "landing" not in written
 
@@ -820,7 +821,7 @@ class TestFastLaneRecord:
 
         found, _ = _lane_round(ports, tmp_path, held=True)
 
-        assert found == [5]
+        assert found == [5, 6]
         for number in (5, 6, 7):
             document = ports.documents.load(f"GH-{number}")
             assert not {"lane_admitted", "lane_recorded", "lane_merges"} & set(document)
@@ -950,8 +951,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
 
         assert FAST.replace("land_model", "role") in lines
 
-    @pytest.mark.parametrize("child", [None, "merge"])
-    def test_a_head_that_does_not_integrate_still_opens_the_lanes(self, tmp_path, child):
+    def test_a_head_that_does_not_integrate_still_opens_the_lanes(self, tmp_path):
         ports = _lane_ports()
         _unseen_head(ports)
 
@@ -960,7 +960,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
             frozenset(),
             MASTER,
             _Locks(),
-            frozenset({"GH-7"}) if child else frozenset(),
+            frozenset({"GH-7"}),
             Configuration(product_dir=tmp_path),
             NOW,
             integrating={},
@@ -1200,6 +1200,169 @@ class TestLaneBesideAReintegratingHead:
 
         merges = ports.documents.load("GH-7")["lane_merges"]
         assert [(m["issue"], m["decision"]) for m in merges] == [(5, "run_checks")]
+
+
+def _wide_ports():
+    """Head #7 with three clean members of disjoint paths (#5, #6, #8)."""
+    ports = _ports(5, 6, 7, 8)
+    for number, at in ((7, OLD), (5, MID), (6, NEW), (8, "2026-11-10T11:00:00+00:00")):
+        _queued(ports, number, at)
+    _distinct(ports, 5, 6, 7, 8)
+    ports.documents.record_closure("GH-7", {"head_seen_at": HEAD_SEEN, "head_turn_at": HEAD_SEEN})
+    for number, path in ((7, "head.py"), (5, "five.py"), (6, "six.py"), (8, "eight.py")):
+        ports.workspace.ancestors_by_ref[_head_of(number)] = {MASTER}
+        ports.workspace.touched_by[(MASTER, _head_of(number))] = (path,)
+    return ports
+
+
+def _wide_round(ports, tmp_path, lands=None, *, busy=("GH-7",), now=NOW):
+    lines: list[str] = []
+    found = poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        lands,
+        now=now,
+        busy=frozenset(busy),
+        cfg=Configuration(product_dir=tmp_path),
+        integrating={"GH-7": "land_model"},
+        dry_run=False,
+        memo=StackMemo(),
+    )
+    return found, lines
+
+
+class TestThreeLanesBesideTheHead:
+    def test_three_disjoint_members_merge_in_three_rounds_one_exempt_child_each(self, tmp_path):
+        ports = _wide_ports()
+        merged: list[int] = []
+        for round_number in range(3):
+            lands: list[rules.LandCandidate] = []
+            found, _ = _wide_round(
+                ports, tmp_path, lands, now=NOW + timedelta(minutes=round_number)
+            )
+            assert found == [n for n in (5, 6, 8) if n not in merged]
+            candidates = poll._exempt_candidates("product", "key", found, lands, {})
+            first = exempt_queue.ordered(candidates)[0]
+            merged.append(first.issue)
+            ports.documents.record_closure(
+                f"GH-{first.issue}", {"closed_at": "2026-11-11T00:00:00+00:00"}
+            )
+
+        assert merged == [5, 6, 8]
+
+    def test_the_round_plan_starts_at_most_one_exempt_child_for_three_lanes(self, tmp_path):
+        found, _ = _wide_round(_wide_ports(), tmp_path)
+
+        plan = rules.poll_plan(
+            closes=[], resumes=[], launches=[], available_slots=0, now=NOW, merges=found
+        )
+
+        assert found == [5, 6, 8]
+        assert [a.kind for a in plan.actions] == ["merge"]
+        assert len(plan.deferred) == 2
+
+    def test_a_head_with_a_land_checks_candidate_keeps_every_lane_out_of_found(self, tmp_path):
+        ports = _wide_ports()
+        document = ports.documents.load("GH-7")
+        document["merge_checks"] = {"head": _head_of(7), "master": MASTER, "passed": False}
+        ports.documents.save(document)
+        lands: list[rules.LandCandidate] = []
+
+        found, lines = _wide_round(ports, tmp_path, lands, busy=())
+
+        assert lands == [rules.LandCandidate(7, "land_checks")]
+        assert found == []
+        assert [line for line in lines if "waiting" in line] == [
+            MERGING.format(5),
+            MERGING.format(6),
+            MERGING.format(8),
+        ]
+        assert not any(ports.documents.load(f"GH-{n}").get("lane_admitted") for n in (5, 6, 8))
+
+    def test_a_land_model_candidate_of_the_head_keeps_the_lanes_open(self, tmp_path, monkeypatch):
+        ports = _wide_ports()
+        document = ports.documents.load("GH-7")
+        document["merge_checks"] = {"head": _head_of(7), "master": MASTER, "passed": False}
+        ports.documents.save(document)
+        monkeypatch.setattr(poll.landing_rules, "run_kind_of", lambda *args: "land_model")
+        lands: list[rules.LandCandidate] = []
+
+        found, lines = _wide_round(ports, tmp_path, lands, busy=())
+
+        assert lands == [rules.LandCandidate(7, "land_model")]
+        assert found == [5, 6, 8]
+        assert "fast lane beside #7 (land_model, merge)" in lines[1]
+
+    def test_a_head_whose_decision_turns_ci_run_keeps_every_lane_out_of_found(self, tmp_path):
+        ports = _wide_ports()
+        _stale(ports, 5, 6, 7, 8)
+        ports.stack.declared_ci_all = ("web",)
+        ports.tracker.ci_reports = {
+            f"https://github.com/o/r/pull/{number}": ci.CiReport(
+                _head_of(number),
+                "master",
+                "9" * 40,
+                "2026-11-03T09:00:00+00:00",
+                (ci.CiCheck("web", "COMPLETED", "SUCCESS", "https://github.com/o/r/runs/1/job/5"),),
+            )
+            for number in (5, 6, 7, 8)
+        }
+
+        found, lines = _wide_round(ports, tmp_path, busy=())
+
+        assert found == [7]
+        assert [line for line in lines if "waiting" in line] == [
+            MERGING.format(5),
+            MERGING.format(6),
+            MERGING.format(8),
+        ]
+
+    def test_a_backed_off_head_keeps_its_backoff_stays_out_of_found_and_opens_the_lanes(
+        self, tmp_path
+    ):
+        ports = _wide_ports()
+        ports.documents.record_closure(
+            "GH-7",
+            {
+                "merge_refusal": {
+                    "reason": "ci_untrusted_no_dispatch",
+                    "head": _head_of(7),
+                    "master": MASTER,
+                    "at": NOW.isoformat(),
+                }
+            },
+        )
+        backed: list[int] = []
+        ends: dict[int, datetime] = {}
+
+        found, _ = _wide_round_with_backoff(ports, tmp_path, backed, ends)
+
+        # a backed-off head is not `head_merging`: its merge is waiting out the backoff
+        assert backed == [7] and 7 in ends
+        assert found == [5, 6, 8]
+
+
+def _wide_round_with_backoff(ports, tmp_path, backed, ends):
+    lines: list[str] = []
+    found = poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        [],
+        now=NOW,
+        busy=frozenset(),
+        cfg=Configuration(product_dir=tmp_path),
+        backed_off=backed,
+        backoff_ends=ends,
+        dry_run=False,
+        memo=StackMemo(),
+    )
+    return found, lines
 
 
 def test_every_lane_reason_has_its_text():
