@@ -78,6 +78,7 @@ from .core.process.adapters.github.ci_logs import GhCiLogs
 from .core.process.adapters.github.commit_ci import GhCommitCi
 from .core.process.adapters.github.format_fix_reads import GhFormatFixReads, GhRepoSlug
 from .core.process.adapters.github.gh_call_log import InProcessGhCallLog
+from .core.process.adapters.github.rate_limit_watch import GhRateLimitWatch
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -113,6 +114,7 @@ from .core.process.application.ports import (
     Notifier,
     NotifySettings,
     Ports,
+    RateLimitWatch,
     Stage0Store,
     Stage0Users,
     StopFlag,
@@ -271,6 +273,8 @@ def default_ports(
     *,
     gh_retry: GhWait | None = None,
     calls: GhCallLog | None = None,
+    latch: RateLimitLatch | None = None,
+    run: Run = bounded_run,
 ) -> Ports:
     """The ports of a product. `stop_flag` is the one flag `run`/`resume` can mark when a
     signal stops them (GH-355); every other caller leaves it out and gets one that is never
@@ -278,9 +282,18 @@ def default_ports(
     of the tracker's retry policy; left out, the tracker never retries (the poller, `inbox`,
     `close` and every other verb, ADR-0050). `calls` is where every `gh` adapter counts its
     launches; left out, it is `process_call_log()`, so the ports of every node of a process
-    share one log (GH-990)."""
+    share one log (GH-990). `latch` is the rate-limit latch the product's tracker, inbox and
+    board share, and `run` the `gh` runner they use (GH-1157); left out, each keeps its own
+    latch and the runner it always had."""
     flag = stop_flag if stop_flag is not None else NullStopFlag()
-    ports = _ports(cfg, flag, gh_retry, calls=calls if calls is not None else process_call_log())
+    ports = _ports(
+        cfg,
+        flag,
+        gh_retry,
+        calls=calls if calls is not None else process_call_log(),
+        latch=latch,
+        run=run,
+    )
     # GH-470: the root alone decides that a process is wired as an evaluation.
     if evaluation.is_evaluation_root(cfg.product_dir):
         frozen = frozen_input_path(cfg.product_dir)
@@ -292,6 +305,21 @@ def default_ports(
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     return ports
+
+
+def poll_wiring(
+    cfg: Configuration, stop_flag: StopFlag | None = None, *, run: Run = bounded_run
+) -> tuple[Ports, RateLimitWatch]:
+    """The poller's ports and its rate-limit watch (GH-1157). One latch is shared by the
+    product's tracker, inbox and board and by the watch, so the watch's `take` sees a rate
+    limit any of them ended on. The watch reads through its own `GhTracker`, a concrete one on
+    that latch, never one the ports wrap (`evaluation_ports`, `read_only_ports`): its read is
+    `rate_limit`, which never marks. `default_ports` is called once."""
+    latch = RateLimitLatch()
+    calls = process_call_log()
+    ports = default_ports(cfg, stop_flag, calls=calls, latch=latch, run=run)
+    reader = GhTracker(cfg.product_dir, latch=latch, calls=calls, run=run)
+    return ports, GhRateLimitWatch(latch, reader)
 
 
 def label_timeline(cfg: Configuration) -> LabelTimeline:
@@ -497,7 +525,13 @@ def system_repo(access: GithubAccess, calls: GhCallLog) -> SystemRepo:
 
 
 def _ports(
-    cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None, *, calls: GhCallLog
+    cfg: Configuration,
+    stop_flag: StopFlag,
+    gh_retry: GhWait | None = None,
+    *,
+    calls: GhCallLog,
+    latch: RateLimitLatch | None = None,
+    run: Run = bounded_run,
 ) -> Ports:
     # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
     # handle on the same path, and whole lines are what makes that safe to interleave
@@ -534,12 +568,21 @@ def _ports(
     # GH-1083: one access, so one gate, for every tracker and the board of this node.
     access = write_access(cfg, gh_retry, stop_flag)
     tracker = (
-        GhTracker(cfg.product_dir, api_break_line=declared_api_break, access=access, calls=calls)
+        GhTracker(
+            cfg.product_dir,
+            run=run,
+            api_break_line=declared_api_break,
+            latch=latch,
+            access=access,
+            calls=calls,
+        )
         if gh_retry is None
         else GhTracker(
             cfg.product_dir,
+            run=run,
             retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
             api_break_line=declared_api_break,
+            latch=latch,
             access=access,
             calls=calls,
         )
@@ -595,7 +638,7 @@ def _ports(
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
-        inbox=GhInbox(cfg.product_dir, calls=calls),
+        inbox=GhInbox(cfg.product_dir, run=run, latch=latch, calls=calls),
         workspace=git_workspace,
         # The same instance: one adapter answers both, read-only for the second.
         pending_paths=git_workspace,
@@ -628,12 +671,15 @@ def _ports(
         else GhBoard(
             cfg.product_dir,
             *project,
+            # The board's own default runner has a 30 s bound, not `bounded_run`'s 60 s.
+            run=None if run is bounded_run else run,
             retry=GhRetry(
                 max_wait_s=BOARD_WRITE_WAIT_MAX_S,
                 attempts=BOARD_WRITE_ATTEMPTS,
                 backoff_s=BOARD_WRITE_BACKOFF_S,
                 stop=stop_flag,
             ),
+            latch=latch,
             access=access,
             calls=calls,
         ),

@@ -2539,7 +2539,6 @@ class _PortsAsked(BaseException):
         (["merge", "--issue", "9"], "exempt"),
         (["land", "--issue", "9"], "exempt"),
         (["close", "--issue", "9"], None),
-        (["poll"], None),
     ],
 )
 def test_the_cli_asks_for_a_gh_retry_policy_only_from_the_verbs_that_own_a_task(
@@ -2560,6 +2559,27 @@ def test_the_cli_asks_for_a_gh_retry_policy_only_from_the_verbs_that_own_a_task(
     with pytest.raises(_PortsAsked):
         cli.main()
     assert asked == [wanted]
+
+
+def test_poll_builds_its_ports_once_through_poll_wiring_with_no_gh_retry(monkeypatch, tmp_path):
+    """GH-1157: the poller's ports and its rate-limit watch come from `poll_wiring`, which calls
+    `default_ports` once, with the one latch it shares with the watch and no retry policy; the
+    verb never builds a second set of ports beside it."""
+    (tmp_path / ".agentic").mkdir()
+    asked: list[dict[str, object]] = []
+    elsewhere: list[object] = []
+
+    def fake_default_ports(cfg, stop_flag=None, **kwargs):
+        asked.append(kwargs)
+        raise _PortsAsked
+
+    monkeypatch.setattr(cli.composition, "default_ports", fake_default_ports)
+    monkeypatch.setattr(cli, "default_ports", lambda *a, **k: elsewhere.append(a))
+    monkeypatch.setattr("sys.argv", ["agentic", "poll", "--product-dir", str(tmp_path)])
+    with pytest.raises(_PortsAsked):
+        cli.main()
+    assert len(asked) == 1 and elsewhere == []
+    assert asked[0]["latch"] is not None and "gh_retry" not in asked[0]
 
 
 def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):

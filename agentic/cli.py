@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from . import composition
-from .composition import GhWait, bind_task, default_ports, graph
+from .composition import GhWait, bind_task, default_ports, graph, poll_wiring
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.git.eval_roots import GitEvalRoots
@@ -842,11 +842,16 @@ def main() -> None:
             else None
         )
         # The bare call stays the shape of every verb that owns nothing to wait for.
-        ports = (
-            default_ports(cfg)
-            if gh_retry is None
-            else default_ports(cfg, stop_flag, gh_retry=gh_retry)
-        )
+        if args.command == "poll":
+            # GH-1157: one latch for the poller's tracker, inbox and board and its watch; the
+            # watch is not consumed yet.
+            ports, _watch = poll_wiring(cfg, NullStopFlag())
+        else:
+            ports = (
+                default_ports(cfg)
+                if gh_retry is None
+                else default_ports(cfg, stop_flag, gh_retry=gh_retry)
+            )
         if args.command not in (
             "close",
             "eval",
