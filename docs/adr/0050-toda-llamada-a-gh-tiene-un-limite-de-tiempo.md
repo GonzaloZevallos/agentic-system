@@ -257,3 +257,56 @@ completa en la misma tarea que lo haga.
   ningún llamador pasa todavía el registro, así que en producción el contador no ve nada.
 - `tests/test_architecture.py::test_nothing_in_the_github_adapter_starts_a_process_outside_run_py`
   hace cumplir que solo `run.py` arranca `gh`.
+
+## Adenda (GH-1157): el límite de tasa sin política y el vigilante compartido
+
+Cada afirmación nombra el archivo y el símbolo que la sostiene; ninguna cita un número de
+línea.
+
+- **Sin política, el límite primario es `TrackerRateLimited`.** En
+  `agentic/core/process/adapters/github/run.py`, `run_gh` toma la rama `retry is None` con
+  `kind == "rate_limited"`, marca el latch y lanza `TrackerRateLimited`; la clase la decide
+  `_retryable_kind`, solo por el texto de stderr (`GH_RATE_LIMIT_MARKERS`).
+- **El literal de GraphQL ahora se reintenta bajo las políticas.** `GH_RATE_LIMIT_MARKERS`
+  incluye `"api rate limit already exceeded"`, así que `_retryable_kind` lo clasifica como
+  `rate_limited` y, con política, `_retry_wait` espera hasta el reset que da
+  `_rate_limit_reset`. En un cuerpo 200 sin texto de `gh`, lo detectan `graphql_rate_limited`
+  (`run.py`) y `GhBoard._send` (`adapters/github/board.py`), que marca el latch y lanza
+  `TrackerRateLimited`.
+- **Las cotas no cambian.** `GH_RATE_WAIT_MAX_S` (900 s) y `GH_EXEMPT_WAIT_MAX_S` (60 s) en
+  `run.py`; `BOARD_WRITE_WAIT_MAX_S` (30 s) en `board.py`.
+- **Una sola lectura de `gh api rate_limit`.** `read_rate_limit_document` (`run.py`) es el único
+  lugar que la lanza, con `latch=None` y `access=None`: la lectura del límite nunca marca un
+  latch. `parse_rate_limit` (`run.py`) la convierte en `RateLimitReading`
+  (`agentic/core/process/domain/rate_limit_wait.py`) y `_rate_limit_reset` la usa para el reset.
+  `GhTracker.rate_limit` (`adapters/github/tracker.py`) es la misma lectura, sin reintento y sin
+  turno de escritura. `tests/test_rate_limit_reader.py` hace cumplir que no haya otro
+  lanzador, salvo la lectura de cuota del backfill de scores, que nombra.
+- **El vigilante.** `RateLimitWatch` (`application/ports.py`) tiene `take` y `reading`;
+  `GhRateLimitWatch` (`adapters/github/rate_limit_watch.py`) los apoya en un
+  `RateLimitLatch` y en un lector de un solo método. `poll_wiring` (`agentic/composition.py`)
+  comparte un latch entre el tracker, el inbox y el tablero del producto y el vigilante.
+
+### Sitios que cambian de resultado
+
+Lo que fija `tests/test_rate_limit_sites.py`: ante `TrackerRateLimited` cada sitio termina igual
+que ante `TrackerUnreachable`. Antes, sin política, el límite llegaba como un `ValueError` común
+y el sitio no lo distinguía.
+
+| Sitio | Después |
+|---|---|
+| `worktree_sweep.sweep` (`application/worktree_sweep.py`) | corta las lecturas de la ronda; la memoria queda `read_failed` |
+| `poll.read_open_refs` (`application/poll.py`) | imprime `(TrackerCallFailed)` y no devuelve referencias |
+| `split_sweep.ROUND_STOPPERS` (`application/split_sweep.py`) | terminan la ronda, no un padre |
+| `board_sync.mirror` (`application/board_sync.py`) | descansa y no escribe nada |
+| notas del tracker, `tracker_failures` (`GhTracker.note`, `tracker_failure_class` en `application/ports.py`) | registran la clase `rate_limited` |
+| `issue_listing` (`GhIssueListing`, `core/measurement/adapters/github/issue_listing.py`) | la causa de página es `rate_limited` (`_CAUSES`) |
+
+### Riesgos conocidos
+
+- El límite secundario no tiene marcador ni literal capturado (ver el comentario de
+  `GH_TRANSIENT_MARKERS` en `run.py`), así que un 403 secundario sigue siendo un rechazo
+  inmediato, no un `TrackerRateLimited`.
+- El latch del poller queda marcado sin lector: `poll_wiring` construye el vigilante pero
+  ningún código llama a `RateLimitWatch.take` todavía. La marca dura lo que el proceso hasta
+  la parte que lo consuma.
