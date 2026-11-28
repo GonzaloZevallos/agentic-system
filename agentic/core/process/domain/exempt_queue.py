@@ -1,12 +1,13 @@
-"""The queue of the one exempt child the machine allows (GH-500, ADR-0045 addendum).
+"""The queue of the exempt children, one per product (GH-500, GH-1226, ADR-0045 addendum).
 
-A merge and a `land_checks` land take no slot of the cap, but at most one of them runs on the
-whole machine at a time. Picking the lowest issue number every round starved the rest: a merge
-that refuses at once is still a candidate next round and wins again. This module is the pure
-side of the fix: the one order of the candidates (`rank`, `ordered`), the questions that gate
-publishing a wait (`startable`, `behind`), the refusal a poller does not repeat on the same
-head and master (`backed_off`) and the attempt records a fact has made stale (`stale_keys`).
-It reads no file and calls no port; `rules.poll_plan` and the poller call it."""
+A merge and a `land_checks` land take no slot of the cap, but each product runs at most one of
+them at a time and the machine at most `EXEMPT_SLOTS_MAX` together. Picking the lowest issue
+number every round starved the rest: a merge that refuses at once is still a candidate next
+round and wins again. This module is the pure side of the fix: the count of the live exempt
+children (`live_exempt`), the one order of the candidates (`rank`, `ordered`), the questions
+that gate publishing a wait (`startable`, `behind`), the refusal a poller does not repeat on
+the same head and master (`backed_off`) and the attempt records a fact has made stale
+(`stale_keys`). It reads no file and calls no port; `rules.poll_plan` and the poller call it."""
 
 from __future__ import annotations
 
@@ -18,9 +19,13 @@ from typing import Literal, NamedTuple
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
 
+EXEMPT_SLOTS_MAX = 2
+"""How many exempt children may be live on the machine, one per product. It does not protect
+the CPU: the Cupo de chequeo ledger does (ADR-0070). It bounds how many products land at once."""
+
 EXEMPT_WAIT_TTL = timedelta(minutes=15)
-"""How long a published exempt wait holds the other products after its writer last rewrote it:
-a poller that died never holds the shared slot for longer. A live poller rewrites it every
+"""How long a published exempt wait counts against the other products after its writer last
+rewrote it: a poller that died never holds a slot for longer. A live poller rewrites it every
 round while a candidate of its own could start, so it never expires under one."""
 
 EXEMPT_REFUSAL_BACKOFF = timedelta(minutes=30)
@@ -124,25 +129,63 @@ def startable(
     candidate: ExemptCandidate,
     *,
     backed_off: bool,
-    busy: bool,
     held: bool,
     own_live_exempt: bool,
 ) -> bool:
     """Whether `candidate` could start this round, so that its poller may publish a wait for
-    it: not in backoff, not busy (an exempt child live on the machine), not in a `held` round
-    and its own product has no live exempt child. A candidate that could not start is never
-    published, so it never holds another product back."""
-    return not (backed_off or busy or held or own_live_exempt)
+    it: not in backoff, not in a `held` round and its own product has no live exempt child.
+    Another product's live child does not stop it: the slot is per product, so the wait is
+    published (and seen by the others) while that child runs. A candidate that could not start
+    is never published, so it never holds another product back."""
+    return not (backed_off or held or own_live_exempt)
 
 
-def behind(own: ExemptRank | None, others: Sequence[ExemptWait]) -> bool:
-    """Whether this product yields to another product's published wait: some record of
-    `others` (the fresh records of the other roots) ranks before this product's own head
-    (`own`), a tie going to the lower `root_key`. A product with no head of its own (`None`)
-    is behind any fresh record. The oldest wait is behind none, so it starts first."""
+def behind(own: ExemptRank | None, others: Sequence[ExemptWait], free: int) -> bool:
+    """Whether this product yields this round. `free` is how many of the `EXEMPT_SLOTS_MAX`
+    machine slots no live child holds. With none free it yields. Otherwise it yields when the
+    fresh waits of `others` (the other roots) that rank before its own head (`own`, a tie
+    going to the lower `root_key`) fill the free slots: at least `free` of them. A product with
+    no head of its own (`None`) ranks after every wait. The oldest wait is behind none while
+    a slot is free, so it starts first."""
+    return free <= 0 or len(ahead(own, others)) >= free
+
+
+def ahead(own: ExemptRank | None, others: Sequence[ExemptWait]) -> list[ExemptWait]:
+    """The fresh waits of `others` that rank before this product's own head (`own`), all of
+    them when it has none: the one criterion of `behind`, also what the poller names."""
     if own is None:
-        return bool(others)
-    return any((w.since, w.root_key) < (own.since, own.root_key) for w in others)
+        return list(others)
+    mine = (own.since, own.root_key)
+    return [w for w in others if (w.since, w.root_key) < mine]
+
+
+@dataclass(frozen=True)
+class ExemptLive:
+    """The live exempt children `live_exempt` counted: `own` of this product, `machine` of
+    all products, and `holders`, the `(product, task_id, kind)` of those of the other products
+    sorted by product then task."""
+
+    own: int
+    machine: int
+    holders: tuple[tuple[str, str, rules.RunKind], ...]
+
+
+def live_exempt(running: Iterable[tuple[str, str, rules.RunKind]], product: str) -> ExemptLive:
+    """Count the live exempt children (`rules.counts_against_cap` false) of `product` and of
+    the machine from `(product, task_id, kind)` triples: the one place that does. The holders
+    are sorted here, so the result does not depend on the order of `running`."""
+    own = 0
+    machine = 0
+    holders: list[tuple[str, str, rules.RunKind]] = []
+    for who, task_id, kind in running:
+        if rules.counts_against_cap(kind):
+            continue
+        machine += 1
+        if who == product:
+            own += 1
+        else:
+            holders.append((who, task_id, kind))
+    return ExemptLive(own, machine, tuple(sorted(holders, key=lambda h: (h[0], h[1]))))
 
 
 def _written_at(

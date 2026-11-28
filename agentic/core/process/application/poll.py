@@ -3529,19 +3529,26 @@ def _sweep_exempt_attempts(
 
 
 def _exempt_holder(
+    product: str,
     running: Sequence[RunRegistration],
     yielding: Sequence[exempt_queue.ExemptWait],
+    holders: Sequence[tuple[str, str, rules.RunKind]],
     started: str | None,
 ) -> str:
-    """Who holds the exempt slot, in closed fields (GH-500): `yielding to product P` while this
-    product waits for another product's older wait, else the live exempt child (`product P task
-    T kind K`), else the child this very round starts."""
+    """Who holds this product's exempt slot, in closed fields (GH-500, GH-1226): this product's
+    own live exempt child (`product P task T kind K`), else `yielding to product P` while it
+    waits for another product's older wait, else, with the machine cap full, the first live
+    exempt child of another product (`holders`, sorted by product and task), else the child
+    this very round starts."""
+    for r in running:
+        if r.product == product and not rules.counts_against_cap(r.kind):
+            return f"product {r.product} task {r.task_id} kind {r.kind}"
     if yielding:
         first = min(yielding, key=lambda w: (w.since, w.root_key))
         return f"yielding to product {first.product}"
-    for r in running:
-        if not rules.counts_against_cap(r.kind):
-            return f"product {r.product} task {r.task_id} kind {r.kind}"
+    if holders:
+        who, task_id, kind = holders[0]
+        return f"product {who} task {task_id} kind {kind}"
     return started or "the child started this round"
 
 
@@ -3846,8 +3853,10 @@ def run_once(
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
-        exempt_live = len(running) - live
         product = ports.stack.product()
+        counts = exempt_queue.live_exempt(
+            [(r.product, r.task_id, r.kind) for r in running], product
+        )
         busy = frozenset(r.task_id for r in running if r.product == product)
         integrating = {
             r.task_id: r.kind
@@ -4001,7 +4010,9 @@ def run_once(
             *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
         ]
         plan_yielded = exempt_queue.behind(
-            exempt_queue.rank(exempt_head) if exempt_head else None, exempt_others
+            exempt_queue.rank(exempt_head) if exempt_head else None,
+            exempt_others,
+            exempt_queue.EXEMPT_SLOTS_MAX - counts.machine,
         )
         plan = rules.poll_plan(
             closes=closes,
@@ -4014,7 +4025,7 @@ def run_once(
             merges=merges,
             backed_off_merges=backed_off_merges,
             lands=lands,
-            live_exempt=exempt_live,
+            live_exempt=counts.own,
             pace=pace,
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
             closeness=ranks,
@@ -4036,15 +4047,11 @@ def run_once(
         # round that starts it, or that has no such head, removes the record: the child that
         # runs is the claim, and a record of the old `since` would hold the others for nothing.
         started = {(a.issue, a.kind) for a in plan.actions}
-        own_exempt_live = any(
-            r.product == product and not rules.counts_against_cap(r.kind) for r in running
-        )
         could_start = exempt_head is not None and exempt_queue.startable(
             exempt_head,
             backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
-            busy=exempt_live > 0,
             held=starts_nothing,
-            own_live_exempt=own_exempt_live,
+            own_live_exempt=counts.own > 0,
         )
         registry.publish_exempt_wait(
             tasks_root,
@@ -4062,8 +4069,12 @@ def run_once(
             exempt_records,
             now,
             lambda: _exempt_holder(
+                product,
                 running,
-                exempt_others if exempt_head and plan_yielded else [],
+                exempt_queue.ahead(exempt_queue.rank(exempt_head), exempt_others)
+                if exempt_head and plan_yielded
+                else [],
+                counts.holders if plan_yielded else (),
                 f"product {product} task {ports.inbox.task_id(starting.issue)} kind {starting.kind}"
                 if starting
                 else None,

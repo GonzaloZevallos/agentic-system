@@ -70,26 +70,102 @@ def test_rank_since_is_the_last_attempt_then_the_first_seen_then_never():
 
 def test_a_candidate_is_startable_only_when_nothing_holds_it():
     cand = _cand(1)
-    free = {"backed_off": False, "busy": False, "held": False, "own_live_exempt": False}
+    free = {"backed_off": False, "held": False, "own_live_exempt": False}
     assert eq.startable(cand, **free) is True
     for reason in free:
         assert eq.startable(cand, **{**free, reason: True}) is False
 
 
+def test_startable_no_longer_asks_whether_the_machine_is_busy():
+    free = {"backed_off": False, "held": False, "own_live_exempt": False, "busy": True}
+    with pytest.raises(TypeError):
+        eq.startable(_cand(1), **free)
+
+
+def test_the_machine_allows_two_exempt_children_one_per_product():
+    assert eq.EXEMPT_SLOTS_MAX == 2
+
+
+def _wait(root, since):
+    return eq.ExemptWait("q", root, NOW, since)
+
+
+EARLIER = NOW - timedelta(minutes=1)
+LATER = NOW + timedelta(minutes=1)
+
+
 def test_behind_yields_to_an_earlier_fresh_wait_and_ties_go_to_the_lower_root_key():
     own = eq.rank(_cand(1, root="r5", last=NOW))
-    earlier = eq.ExemptWait("q", "r9", NOW, NOW - timedelta(minutes=1))
-    later = eq.ExemptWait("q", "r1", NOW, NOW + timedelta(minutes=1))
-    assert eq.behind(own, [earlier]) is True
-    assert eq.behind(own, [later]) is False
-    assert eq.behind(own, []) is False
-    assert eq.behind(own, [eq.ExemptWait("q", "r1", NOW, NOW)]) is True
-    assert eq.behind(own, [eq.ExemptWait("q", "r9", NOW, NOW)]) is False
+    assert eq.behind(own, [_wait("r9", EARLIER)], 1) is True
+    assert eq.behind(own, [_wait("r1", LATER)], 1) is False
+    assert eq.behind(own, [], 1) is False
+    assert eq.behind(own, [_wait("r1", NOW)], 1) is True
+    assert eq.behind(own, [_wait("r9", NOW)], 1) is False
 
 
 def test_a_product_with_no_head_is_behind_any_fresh_wait():
-    assert eq.behind(None, [eq.ExemptWait("q", "r1", NOW, NOW)]) is True
-    assert eq.behind(None, []) is False
+    assert eq.behind(None, [_wait("r1", NOW)], 1) is True
+    assert eq.behind(None, [], 1) is False
+
+
+def test_behind_with_no_free_machine_slot_yields_whatever_the_waits():
+    own = eq.rank(_cand(1, root="r5", last=NOW))
+    assert eq.behind(own, [], 0) is True
+    assert eq.behind(own, [_wait("r9", LATER)], 0) is True
+    assert eq.behind(None, [], 0) is True
+
+
+def test_behind_yields_only_when_enough_earlier_waits_fill_the_free_slots():
+    own = eq.rank(_cand(1, root="r5", last=NOW))
+    one, two = [_wait("r1", EARLIER)], [_wait("r1", EARLIER), _wait("r2", EARLIER)]
+    later = _wait("r3", LATER)
+    # two free slots: one earlier wait still leaves a slot for this product
+    assert eq.behind(own, [], 2) is False
+    assert eq.behind(own, one, 2) is False
+    assert eq.behind(own, [*one, later], 2) is False
+    assert eq.behind(own, two, 2) is True
+    # one free slot: the earlier wait takes it
+    assert eq.behind(own, one, 1) is True
+    assert eq.behind(own, [later], 1) is False
+
+
+def test_with_a_single_product_and_a_free_machine_nothing_is_behind():
+    own = eq.rank(_cand(1, last=NOW))
+    assert eq.behind(own, [], eq.EXEMPT_SLOTS_MAX) is False
+    assert eq.behind(None, [], eq.EXEMPT_SLOTS_MAX) is False
+
+
+def test_live_exempt_counts_the_own_and_the_machine_children_by_kind():
+    running = [
+        ("a", "GH-1", "merge"),
+        ("a", "GH-2", "role"),
+        ("b", "GH-3", "land_checks"),
+        ("b", "GH-4", "land_model"),
+    ]
+    live = eq.live_exempt(running, "a")
+    assert (live.own, live.machine) == (1, 2)
+    assert eq.live_exempt(running, "b").own == 1
+    assert eq.live_exempt(running, "c") == eq.ExemptLive(
+        0, 2, (("a", "GH-1", "merge"), ("b", "GH-3", "land_checks"))
+    )
+    assert eq.live_exempt([], "a") == eq.ExemptLive(0, 0, ())
+    assert eq.live_exempt([("a", "GH-2", "role")], "a") == eq.ExemptLive(0, 0, ())
+
+
+def test_live_exempt_holders_leave_out_the_own_product_and_sort_by_product_then_task():
+    running = [
+        ("z", "GH-1", "merge"),
+        ("b", "GH-20", "merge"),
+        ("a", "GH-9", "merge"),
+        ("b", "GH-3", "land_checks"),
+    ]
+    expected = (
+        ("b", "GH-20", "merge"),
+        ("b", "GH-3", "land_checks"),
+        ("z", "GH-1", "merge"),
+    )
+    assert eq.live_exempt(running, "a").holders == expected
+    assert eq.live_exempt(list(reversed(running)), "a").holders == expected
 
 
 def _refusal(**more):

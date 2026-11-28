@@ -91,9 +91,11 @@ def test_the_roles_are_unchanged_beside_the_merge_when_a_slot_is_free(tmp_path):
     assert lines == ["agentic: poll: launch #9 -> pid 4242", "agentic: poll: merge #5 -> pid 4242"]
 
 
-def test_a_live_exempt_child_defers_a_second_one_and_the_round_is_not_idle(tmp_path):
+def test_a_live_exempt_child_of_the_product_defers_a_second_one_and_the_round_is_not_idle(
+    tmp_path,
+):
     ports = _ports(5)
-    live = _child("merge", "GH-9", product="other-product")
+    live = _child("merge", "GH-9", product=_product_of(ports))
     launcher = FakeLauncher()
 
     lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry([live]), launcher, ESCALATED_AT)
@@ -103,28 +105,40 @@ def test_a_live_exempt_child_defers_a_second_one_and_the_round_is_not_idle(tmp_p
     assert NO_WORK not in lines
 
 
-def test_a_live_checks_land_defers_a_merge_the_same_way(tmp_path):
+def test_a_live_checks_land_of_the_product_defers_a_merge_the_same_way(tmp_path):
     ports = _ports(5)
-    live = _child("land_checks", "GH-9", product="other-product")
+    live = _child("land_checks", "GH-9", product=_product_of(ports))
 
     lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry([live]), FakeLauncher(), ESCALATED_AT)
 
     assert lines == [poll.deferred_line(rules.Deferred("merge", 5, "exempt_busy"))]
 
 
-def test_a_live_exempt_child_of_another_product_on_a_shared_registry_defers(tmp_path):
+def test_a_live_exempt_child_of_another_product_does_not_hold_this_ones_merge(tmp_path):
+    for kind in ("merge", "land_checks"):
+        ports = _ports(5)
+        live = _child(kind, "GH-9", product="other-product")
+        launcher = FakeLauncher()
+
+        lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry([live]), launcher, ESCALATED_AT)
+
+        assert launcher.spawned == [_merge_argv(5, tmp_path)], kind
+        assert lines == ["agentic: poll: merge #5 -> pid 4242"], kind
+
+
+def test_a_live_exempt_child_of_another_product_on_a_shared_registry_does_not_defer(tmp_path):
     first = _ports(5)
     second = dataclasses.replace(_ports(6), stack=MemoryStack(product="second"))
     registry = MemoryRunRegistry()
     launcher = FakeLauncher()
 
-    _round(_cfg(tmp_path), first, registry, launcher, ESCALATED_AT)
+    _round(_cfg(tmp_path / "first"), first, registry, launcher, ESCALATED_AT)
     # What the spawned `agentic merge` registers, which the fake launcher does not.
     registry.entries.append(_child("merge", "GH-5", product=_product_of(first)))
-    lines = _round(_cfg(tmp_path), second, registry, launcher, ESCALATED_AT)
+    lines = _round(_cfg(tmp_path / "second"), second, registry, launcher, ESCALATED_AT)
 
-    assert [argv[3] for argv in launcher.spawned] == ["5"]
-    assert lines == [poll.deferred_line(rules.Deferred("merge", 6, "exempt_busy"))]
+    assert [argv[3] for argv in launcher.spawned] == ["5", "6"]
+    assert lines == ["agentic: poll: merge #6 -> pid 4242"]
 
 
 def test_no_second_child_starts_for_a_task_that_already_has_one(tmp_path):
@@ -509,7 +523,7 @@ def _two_products(tmp_path):
     return a, b, _cfg(tmp_path / "a"), _cfg(tmp_path / "b")
 
 
-def test_the_product_whose_candidate_waited_longer_makes_the_other_yield(tmp_path):
+def test_two_products_with_a_waiting_merge_each_start_theirs_in_the_same_round(tmp_path):
     a_ports, b_ports, a_cfg, b_cfg = _two_products(tmp_path)
     registry = MemoryRunRegistry()
     registry.record_exempt_seen("b", 5, "merge", _at(4))
@@ -521,14 +535,89 @@ def test_the_product_whose_candidate_waited_longer_makes_the_other_yield(tmp_pat
 
     lines = _round(b_cfg, b_ports, registry, launcher, _at(6))
 
-    assert launcher.spawned == []
-    assert "agentic: poll: merge #5 waits: exempt_busy" in lines
-    # B's own candidate could start, so it is published behind A's, and A never yields to it.
-    assert {w.product for w in registry.exempt_waits(_at(6))[0]} == {"a", "b"}
+    # One slot per product: the older wait of A does not hold B while the machine has a slot free.
+    assert _merged_issues(launcher) == ["5"]
+    assert lines == ["agentic: poll: merge #5 -> pid 4242"]
     a_launcher = FakeLauncher()
     _round(a_cfg, a_ports, registry, a_launcher, _at(7))
     assert _merged_issues(a_launcher) == ["5"]
-    assert [w.product for w in registry.exempt_waits(_at(7))[0]] == ["b"]
+
+
+def _three_products(tmp_path):
+    """Roots a, b and c, each with one merge candidate #5, on one shared registry."""
+    names = ("a", "b", "c")
+    ports = {n: dataclasses.replace(_ports(5), stack=MemoryStack(product=n)) for n in names}
+    return ports, {n: _cfg(tmp_path / n) for n in names}
+
+
+def test_a_product_publishes_its_wait_while_the_machine_cap_is_full_of_other_products(tmp_path):
+    ports, cfgs = _three_products(tmp_path)
+    registry = MemoryRunRegistry(
+        [_child("merge", "GH-1", product="a", pid=1), _child("land_checks", "GH-2", "b", pid=2)]
+    )
+    registry.record_exempt_seen("c", 5, "merge", T0)
+    launcher = FakeLauncher()
+
+    lines = _round(cfgs["c"], ports["c"], registry, launcher, _at(5))
+
+    assert launcher.spawned == []
+    assert lines == [poll.deferred_line(rules.Deferred("merge", 5, "exempt_busy"))]
+    # C could start, so its wait is published even though A and B have live children.
+    assert [w.product for w in registry.exempt_waits(_at(5))[0]] == ["c"]
+
+
+def test_the_starved_line_names_the_first_holder_when_the_machine_cap_is_full(tmp_path):
+    ports, cfgs = _three_products(tmp_path)
+    registry = MemoryRunRegistry(
+        [_child("merge", "GH-7", product="b", pid=2), _child("merge", "GH-1", product="a", pid=1)]
+    )
+    registry.record_exempt_seen("c", 5, "merge", T0)
+    minutes = int(exempt_queue.EXEMPT_STARVED_AFTER.total_seconds() // 60) + 1
+
+    lines = _round(cfgs["c"], ports["c"], registry, FakeLauncher(), _at(minutes))
+
+    assert _starved(lines) == [
+        f"agentic: poll: merge #5 starved: {minutes} min behind product a task GH-1 kind merge"
+    ]
+
+
+def test_a_product_yields_to_an_older_wait_once_the_cap_leaves_one_slot(tmp_path):
+    ports, cfgs = _three_products(tmp_path)
+    # A's child ended: only B's is live, so one slot is free and C's older wait takes it.
+    registry = MemoryRunRegistry([_child("merge", "GH-7", product="b", pid=2)])
+    registry.record_exempt_seen("a", 5, "merge", _at(10))
+    registry.record_exempt_seen("c", 5, "merge", T0)
+    c_key = rules.root_key(str(_tasks_root(cfgs["c"])))
+    older = exempt_queue.ExemptCandidate("merge", "c", c_key, 5, first_seen=T0)
+    registry.publish_exempt_wait(_tasks_root(cfgs["c"]), "c", older, _at(11))
+    launcher = FakeLauncher()
+
+    lines = _round(cfgs["a"], ports["a"], registry, launcher, _at(12))
+
+    assert launcher.spawned == []
+    assert lines == [poll.deferred_line(rules.Deferred("merge", 5, "exempt_busy"))]
+    c_launcher = FakeLauncher()
+    _round(cfgs["c"], ports["c"], registry, c_launcher, _at(13))
+    assert _merged_issues(c_launcher) == ["5"]
+
+
+def test_a_single_product_plans_and_reports_as_before_the_per_product_slot(tmp_path):
+    cfg, ports, registry = _cfg(tmp_path), _ports(478), MemoryRunRegistry()
+    registry.record_exempt_seen("product", 478, "merge", T0)
+    launcher = FakeLauncher()
+
+    first = _round(cfg, ports, registry, launcher, _at(5))
+    registry.entries.append(_child("merge", "GH-9", product="product"))
+    second = _round(cfg, ports, registry, FakeLauncher(), _at(30))
+
+    assert first == ["agentic: poll: merge #478 -> pid 4242"]
+    assert _merged_issues(launcher) == ["478"]
+    # Its own live child holds it, names that child, and says so once, in the closed shape.
+    assert second == [
+        poll.deferred_line(rules.Deferred("merge", 478, "exempt_busy")),
+        "agentic: poll: merge #478 starved: 25 min behind product product task GH-9 kind merge",
+    ]
+    assert registry.exempt_waits(_at(30))[0] == []
 
 
 def test_a_held_round_removes_its_wait_so_the_other_product_starts(tmp_path):
@@ -578,9 +667,9 @@ def _starved(lines) -> list[str]:
     return [line for line in lines if " starved: " in line]
 
 
-def test_a_merge_waiting_behind_a_live_exempt_child_is_reported_once_naming_it(tmp_path):
+def test_a_merge_waiting_behind_its_products_live_exempt_child_is_reported_once_naming_it(tmp_path):
     cfg, ports, registry = _cfg(tmp_path), _ports(5), MemoryRunRegistry()
-    registry.entries.append(_child("merge", "GH-9", product="other", pid=7))
+    registry.entries.append(_child("merge", "GH-9", product="product", pid=7))
     registry.record_exempt_seen("product", 5, "merge", T0)
     minutes = int(exempt_queue.EXEMPT_STARVED_AFTER.total_seconds() // 60)
 
@@ -591,14 +680,15 @@ def test_a_merge_waiting_behind_a_live_exempt_child_is_reported_once_naming_it(t
     assert _starved(early) == [] and _starved(again) == []
     assert _starved(first) == [
         f"agentic: poll: merge #5 starved: {minutes + 1} min behind "
-        "product other task GH-9 kind merge"
+        "product product task GH-9 kind merge"
     ]
     assert registry.exempt_attempts("product")[(5, "merge")].starved_reported
 
 
 def test_a_merge_yielding_to_another_product_is_reported_naming_that_product(tmp_path):
     a_ports, b_ports, a_cfg, b_cfg = _two_products(tmp_path)
-    registry = MemoryRunRegistry()
+    # One slot is full, so the older wait of A takes the other: B yields to it.
+    registry = MemoryRunRegistry([_child("merge", "GH-9", product="z", pid=7)])
     registry.record_exempt_seen("b", 5, "merge", T0)
     a_key = rules.root_key(str(_tasks_root(a_cfg)))
     older = exempt_queue.ExemptCandidate("merge", "a", a_key, 5, first_seen=_at(-10))
@@ -617,7 +707,7 @@ def test_the_time_a_merge_spent_in_backoff_does_not_count_toward_starvation(tmp_
     """GH-500 finding: a `ci_untrusted_no_dispatch` backoff outlasts `EXEMPT_STARVED_AFTER`, so
     the first `exempt_busy` round after it ended reported the merge as starved at once."""
     cfg, ports, registry = _cfg(tmp_path), _ports(5), MemoryRunRegistry()
-    registry.entries.append(_child("merge", "GH-9", product="other", pid=7))
+    registry.entries.append(_child("merge", "GH-9", product="product", pid=7))
     registry.record_exempt_attempt("product", 5, "merge", T0)
     ports.documents.record_closure(
         "GH-5",
@@ -640,5 +730,5 @@ def test_the_time_a_merge_spent_in_backoff_does_not_count_toward_starvation(tmp_
     assert _starved(inside) == [] and _starved(just_out) == []
     assert _starved(waited) == [
         f"agentic: poll: merge #5 starved: {after + 1} min behind "
-        "product other task GH-9 kind merge"
+        "product product task GH-9 kind merge"
     ]
