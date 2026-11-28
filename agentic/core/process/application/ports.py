@@ -2714,6 +2714,15 @@ class NotifySettings:
     events: tuple[str, ...] | None
 
 
+class RepoOrigin(Protocol):
+    """Where the product's repository says it lives (GH-1205), read for the notifier's links."""
+
+    def url(self) -> str | None:
+        """The text of the `origin` remote, `None` when it cannot be read. Never raises, and
+        nothing of a failure travels: a remote may carry credentials."""
+        ...
+
+
 class Notifier(Protocol):
     """Sends the email notices (GH-1056)."""
 
@@ -2980,6 +2989,8 @@ class Ports:
     activity: Activity | None = None
     # The digest hour and the kinds to mail, as configured (GH-1057). `None` with the notifier.
     notify_settings: NotifySettings | None = None
+    # Where the notifier's links point (GH-1205). `None` with the notifier.
+    origin: RepoOrigin | None = None
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None

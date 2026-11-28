@@ -741,3 +741,26 @@ def test_digest_instant_reads_the_spring_forward_gap_and_rejects_bad_input():
         notify.digest_instant(datetime(2026, 11, 21, 2), NY, 20)
     with pytest.raises(ValueError):
         notify.digest_instant(_utc(2026, 11, 21, 2), NY, 24)
+
+
+@pytest.mark.parametrize(
+    ("events", "expected", "unknown"),
+    [
+        (None, (True, True, True), False),
+        ((), (False, False, False), False),
+        (("waiting",), (True, False, False), False),
+        (("release",), (False, True, False), False),
+        (("digest",), (False, False, True), False),
+        (("digest", "digest", "waiting"), (True, False, True), False),
+        (("waiting", "bogus"), (True, False, False), True),
+        (("bogus",), (False, False, False), True),
+        (("Waiting", "DIGEST"), (False, False, False), True),
+        (("",), (False, False, False), True),
+    ],
+)
+def test_notify_kinds_reads_exact_names_and_reports_unknown_ones(
+    events: tuple[str, ...] | None, expected: tuple[bool, bool, bool], unknown: bool
+) -> None:
+    kinds, saw_unknown = notify.notify_kinds(events)
+    assert (kinds.waiting, kinds.release, kinds.digest) == expected
+    assert saw_unknown is unknown

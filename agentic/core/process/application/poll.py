@@ -77,6 +77,7 @@ from . import (
     format_hold,
     landing_lane,
     landing_plan,
+    notify,
     preflight,
     reflect_run,
     release,
@@ -3658,6 +3659,7 @@ def run_once(
     sweep_carry: worktree_sweep.SweepCarry | None = None,
     format_release_carry: FormatReleaseCarry | None = None,
     terminal_memo: TerminalMemo | None = None,
+    notify_carry: notify.NotifyCarry | None = None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -4154,6 +4156,8 @@ def run_once(
             blockers=blockers_by_issue,
             stack_pauses=_stack_pauses(stack_view),
         )
+        if notify_carry is not None:
+            notes += notify.poll_round(ports, now, notify_carry)
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     # A held round starts no child at all, and the reflect child is one.

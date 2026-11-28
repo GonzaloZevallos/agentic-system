@@ -304,9 +304,16 @@ def test_a_dry_round_never_carries_the_notifier_its_record_or_its_activity_read(
         def closed_issues(self, since: datetime, limit: int) -> ports.ActivityPage:
             raise AssertionError("a dry round must not read")
 
-    filled = dataclasses.replace(memory_ports(), notifier=Stub(), notified=Stub(), activity=Stub())
+    class Origin:
+        def url(self) -> str | None:
+            raise AssertionError("a dry round must not read the origin")
+
+    filled = dataclasses.replace(
+        memory_ports(), notifier=Stub(), notified=Stub(), activity=Stub(), origin=Origin()
+    )
     assert filled.notifier is not None and filled.notified is not None
-    assert filled.activity is not None
+    assert filled.activity is not None and filled.origin is not None
 
     world, *_ = read_only_ports(filled, Raises(), Raises(), None)
     assert (world.notifier, world.notified, world.activity) == (None, None, None)
+    assert world.origin is None

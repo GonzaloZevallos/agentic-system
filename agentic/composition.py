@@ -65,7 +65,7 @@ from .core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE, Filesy
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
-from .core.process.adapters.git.workspace import WORKTREES
+from .core.process.adapters.git.workspace import WORKTREES, GitRepoOrigin
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker, account
 from .core.process.adapters.github.activity import GhActivity
 from .core.process.adapters.github.board import (
@@ -434,6 +434,7 @@ def offline_ports(cfg: Configuration) -> Ports:
         notifier=None,
         notified=None,
         activity=None,
+        origin=None,
         notify_settings=None,
     )
 
@@ -456,6 +457,7 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         notifier=None,
         notified=None,
         activity=None,
+        origin=None,
         notify_settings=None,
     )
 
@@ -566,6 +568,8 @@ def _ports(
             calls=calls,
         )
     )
+    # GH-1205: the origin read, over the same checkout, exists where the notifier does too.
+    origin = None if notifier is None else GitRepoOrigin(cfg.product_dir)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -640,6 +644,7 @@ def _ports(
         notifier=notifier,
         notified=notified,
         activity=activity,
+        origin=origin,
         notify_settings=notify_settings,
         scratch=scratch,
         free_space=free_space,

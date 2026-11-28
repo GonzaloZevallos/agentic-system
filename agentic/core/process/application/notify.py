@@ -1,5 +1,6 @@
-"""The email notifier's round (GH-1055, part 3b-1): what to send now and where the activity read
-resumes, over ports. Nothing calls `notify` yet: the poll does in part 3b-2.
+"""The email notifier's round (GH-1055): what to send now and where the activity read resumes,
+over ports. `poll_round` is what the poll calls: it builds `notify`'s arguments from the settings
+and the repository's origin, and nothing it does crosses the poll as an exception.
 
 One round: gate on `retry_due`, prune, save `started_at`, then up to `SENDS_PER_ROUND` mails in the
 order waiting, releases, digest, each saved before the next. Waiting events come from the open
@@ -20,6 +21,7 @@ from typing import Any
 
 from ..domain import escalation_prompts, notify_message, rules, tracker_refs
 from ..domain.notify import (
+    NOTIFY_RETRY_AFTER,
     SENDS_PER_ROUND,
     DigestEvent,
     EventKey,
@@ -32,6 +34,8 @@ from ..domain.notify import (
     SplitFacts,
     advance_read_at,
     digest_event,
+    digest_hour,
+    notify_kinds,
     pending,
     prune,
     release_event,
@@ -44,7 +48,7 @@ from ..domain.stack_signals import MERGED_OUTCOMES
 from ..domain.task import TaskState
 from .ports import ActivityPage, ActivityRow, Mail, Ports
 
-__all__ = ["NotifyCarry", "notify", "split_facts_of"]
+__all__ = ["NotifyCarry", "notify", "poll_round", "split_facts_of"]
 
 SHOWN = 50
 """Rows of one Activity read that are used; the read asks for one more, to know where it cut."""
@@ -59,6 +63,13 @@ class NotifyCarry:
     dropped_said: bool = False
     repo_said: bool = False
     skipped_said: set[tuple[int, str]] = field(default_factory=set)
+    # What `poll_round` reads once per process: the product's name, the repository URL ('' when
+    # the origin is not a GitHub repository, never read again) and when the origin last failed.
+    product: str | None = None
+    repo: str | None = None
+    origin_failed_at: datetime | None = None
+    kinds_said: bool = False
+    origin_said: bool = False
 
 
 class _Stop(Exception):
@@ -475,4 +486,58 @@ def notify(
         run.run(carry, lines, tz, hour)
     except _Stop as stop:
         run.fail(lines, stop.cause)
+    return lines
+
+
+def poll_round(
+    ports: Ports, now: datetime, carry: NotifyCarry, tz: tzinfo | None = None
+) -> list[str]:
+    """The poll's notifier round (GH-1205): `[]` without a read while any of the five notifier
+    members is `None`. Otherwise `notify` over the kinds and digest hour of the settings, the
+    product's name and the repository URL of `origin`, each read once per `carry`; an origin that
+    cannot be read is tried again after `NOTIFY_RETRY_AFTER`. Any exception becomes one line with
+    only its type name; no environment value, message or remote text is ever a line."""
+    settings, notifier, notified = ports.notify_settings, ports.notifier, ports.notified
+    activity, origin = ports.activity, ports.origin
+    if settings is None or notifier is None or notified is None or activity is None:
+        return []
+    if origin is None:
+        return []
+    lines: list[str] = []
+    try:
+        kinds, unknown = notify_kinds(settings.events)
+        if unknown and not carry.kinds_said:
+            carry.kinds_said = True
+            lines.append("notify: unknown event kind ignored")
+        if not (kinds.waiting or kinds.release or kinds.digest):
+            return lines
+        hour = digest_hour(settings.digest_hour)
+        zone = tz if tz is not None else now.astimezone().tzinfo
+        assert zone is not None
+        if carry.product is None:
+            carry.product = ports.stack.product()
+        if carry.repo is None:
+            failed = carry.origin_failed_at
+            if failed is not None and now - failed < NOTIFY_RETRY_AFTER:
+                return lines
+            remote = origin.url()
+            if remote is None:
+                carry.origin_failed_at = now
+                if not carry.origin_said:
+                    carry.origin_said = True
+                    lines.append("notify: repo origin unreadable")
+                return lines
+            carry.repo = notify_message.github_repo_url(remote) or ""
+        lines += notify(
+            ports,
+            now,
+            carry=carry,
+            kinds=kinds,
+            tz=zone,
+            hour=hour,
+            product=carry.product,
+            repo=carry.repo,
+        )
+    except Exception as exc:
+        lines.append(f"notify: round failed ({type(exc).__name__})")
     return lines

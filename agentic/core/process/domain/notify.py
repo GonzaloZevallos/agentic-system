@@ -44,6 +44,7 @@ __all__ = [
     "digest_hour",
     "digest_instant",
     "due",
+    "notify_kinds",
     "pending",
     "prune",
     "release_event",
@@ -415,6 +416,19 @@ def pending(
     if _unrecorded_due(event.key, event.key.instant, record, now):
         return event.action
     return None
+
+
+def notify_kinds(events: tuple[str, ...] | None) -> tuple[NotifyKinds, bool]:
+    """The enabled kinds from the raw `events` setting, and whether any name was unknown.
+    `None` enables waiting, release and digest; `()` none. Names are exact and case-sensitive;
+    a repeated name changes nothing."""
+    if events is None:
+        return NotifyKinds(waiting=True, release=True, digest=True), False
+    names = set(events)
+    kinds = NotifyKinds(
+        waiting="waiting" in names, release="release" in names, digest="digest" in names
+    )
+    return kinds, bool(names - {"waiting", "release", "digest"})
 
 
 def digest_hour(raw: object) -> int:
