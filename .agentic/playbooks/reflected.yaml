@@ -1801,3 +1801,6 @@ tasks:
       - GH-1204
   GH-1073@review:
     cost_usd: 0.0
+  GH-1205@review:
+    cost_usd: 0.0494
+    decisions: 1
