@@ -43,15 +43,18 @@ from tests.core.process.adapters.github.gh_fake import (
 
 
 class Recorder:
-    def __init__(self, stdout="https://github.com/o/r/pull/7\n", fail=False):
+    def __init__(self, stdout="https://github.com/o/r/pull/7\n", fail=False, fail_output=None):
         self.calls = []
+        self.cwds = []
         self.stdout = stdout
         self.fail = fail
+        self.fail_output = fail_output
 
     def __call__(self, args, cwd, capture_output, text, check):
         self.calls.append(args)
+        self.cwds.append(cwd)
         if self.fail:
-            raise subprocess.CalledProcessError(1, args, stderr="no auth")
+            raise subprocess.CalledProcessError(1, args, output=self.fail_output, stderr="no auth")
         return subprocess.CompletedProcess(args, 0, self.stdout, "")
 
 
@@ -767,15 +770,15 @@ def test_pull_request_unparseable_url_raises_a_value_error():
 
 
 def test_a_resume_unlabels_and_reads_the_comments():
-    run = Recorder(stdout='{"comments": [{"body": "Escalated: x"}, {"body": "Use USD."}]}')
+    run = Recorder(stdout='[{"body": "Escalated: x"}, {"body": "Use USD."}]')
     tracker = GhTracker(Path("/p"), run)
     tracker.unlabel("GH-12", "needs-human")
     assert tracker.issue_comments("GH-12") == ["Escalated: x", "Use USD."]
     assert run.calls == [
         ["gh", "issue", "edit", "12", "--remove-label", "needs-human"],
-        ["gh", "issue", "view", "12", "--json", "comments"],
+        _COMMENTS_ARGV,
     ]
-    assert GhTracker(Path("/p"), Recorder(stdout='{"comments": []}')).issue_comments("GH-1") == []
+    assert GhTracker(Path("/p"), Recorder(stdout="[]")).issue_comments("GH-1") == []
     assert tracker.issue_comments("T-abc") == [] and len(run.calls) == 2
 
 
@@ -784,12 +787,10 @@ def test_a_resume_unlabels_and_reads_the_comments():
 
 def test_timestamped_comments_carries_each_bodys_own_timestamp():
     stdout = json.dumps(
-        {
-            "comments": [
-                {"body": "Escalated: x", "createdAt": "2026-10-02T19:30:00Z"},
-                {"body": "Auto-resumed: account limit", "createdAt": "2026-10-02T19:46:00Z"},
-            ]
-        }
+        [
+            {"body": "Escalated: x", "created_at": "2026-10-02T19:30:00Z"},
+            {"body": "Auto-resumed: account limit", "created_at": "2026-10-02T19:46:00Z"},
+        ]
     )
     tracker = GhTracker(Path("/p"), Recorder(stdout=stdout))
     comments = tracker.timestamped_comments("GH-19")
@@ -800,38 +801,127 @@ def test_timestamped_comments_carries_each_bodys_own_timestamp():
 
 
 def test_timestamped_comments_carries_each_comments_author_and_url():
-    # `gh issue view --json comments` names the author under `author.login` and the
-    # `#issuecomment-<id>` address under `url`; the REST shape says `user.login` and
-    # `html_url`. A comment saying neither reads as empty strings, never a crash.
+    # The REST shape names the author under `user.login`, the `#issuecomment-<id>` address
+    # under `html_url`, the time under `created_at`. A comment saying none reads as empty
+    # strings, never a crash.
     stdout = json.dumps(
-        {
-            "comments": [
-                {
-                    "body": "Owner's rule: x",
-                    "createdAt": "2026-10-28T10:00:00Z",
-                    "author": {"login": "GonzaloZevallos"},
-                    "url": "https://github.com/o/r/issues/19#issuecomment-111",
-                },
-                {
-                    "body": "rest shape",
-                    "createdAt": "2026-10-28T11:00:00Z",
-                    "user": {"login": "someone"},
-                    "html_url": "https://github.com/o/r/issues/19#issuecomment-222",
-                },
-                {"body": "bare", "createdAt": "2026-10-28T12:00:00Z", "author": None},
-            ]
-        }
+        [
+            {
+                "body": "rest shape",
+                "created_at": "2026-10-28T11:00:00Z",
+                "user": {"login": "someone"},
+                "html_url": "https://github.com/o/r/issues/19#issuecomment-222",
+            },
+            {"body": "bare", "created_at": "2026-10-28T12:00:00Z", "user": None},
+            {"body": None},
+        ]
     )
     comments = GhTracker(Path("/p"), Recorder(stdout=stdout)).timestamped_comments("GH-19")
     assert [(c.author, c.url) for c in comments] == [
-        ("GonzaloZevallos", "https://github.com/o/r/issues/19#issuecomment-111"),
         ("someone", "https://github.com/o/r/issues/19#issuecomment-222"),
+        ("", ""),
+        ("", ""),
+    ]
+    assert [(c.body, c.created_at) for c in comments][1:] == [
+        ("bare", "2026-10-28T12:00:00Z"),
         ("", ""),
     ]
 
 
-def test_timestamped_comments_of_a_task_without_an_issue_is_empty():
-    assert GhTracker(Path("/p"), Recorder()).timestamped_comments("T-abc") == []
+_COMMENTS_ARGV = ["gh", "api", "--paginate", "repos/{owner}/{repo}/issues/12/comments?per_page=100"]
+
+
+def test_timestamped_comments_reads_the_thread_over_paginated_rest_in_the_product_dir():
+    run = Recorder(stdout="[]")
+    tracker = GhTracker(Path("/p"), run)
+    assert tracker.timestamped_comments("GH-12") == []
+    assert run.calls == [_COMMENTS_ARGV] and run.cwds == [Path("/p")]
+    assert tracker.timestamped_comments("T-abc") == [] and len(run.calls) == 1
+
+
+def test_the_old_and_the_new_item_shape_map_to_the_same_comment():
+    old = {
+        "body": "b",
+        "createdAt": "2026-10-28T10:00:00Z",
+        "author": {"login": "me"},
+        "url": "https://github.com/o/r/issues/12#issuecomment-1",
+    }
+    new = {
+        "body": "b",
+        "created_at": "2026-10-28T10:00:00Z",
+        "user": {"login": "me"},
+        "html_url": "https://github.com/o/r/issues/12#issuecomment-1",
+    }
+    read = [
+        GhTracker(Path("/p"), Recorder(stdout=json.dumps([item]))).timestamped_comments("GH-12")
+        for item in (old, new)
+    ]
+    assert read[0] == read[1] and len(read[0]) == 1
+    assert read[0][0].url.endswith("#issuecomment-1") and read[0][0].author == "me"
+
+
+def test_an_item_with_only_a_url_gives_that_url():
+    stdout = json.dumps([{"body": "b", "url": "https://x/1"}])
+    [comment] = GhTracker(Path("/p"), Recorder(stdout=stdout)).timestamped_comments("GH-12")
+    assert comment.url == "https://x/1"
+
+
+def test_two_concatenated_pages_give_every_comment_in_order():
+    first = json.dumps([{"body": f"c{i}"} for i in range(100)])
+    second = json.dumps([{"body": "c100"}])
+    tracker = GhTracker(Path("/p"), Recorder(stdout=first + second + "\n"))
+    assert [c.body for c in tracker.timestamped_comments("GH-12")] == [f"c{i}" for i in range(101)]
+    assert tracker.issue_comments("GH-12") == [f"c{i}" for i in range(101)]
+
+
+def test_a_truncated_second_page_raises_instead_of_a_shorter_thread():
+    stdout = json.dumps([{"body": "a"}]) + '[{"body": "b"}, {"bod'
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), Recorder(stdout=stdout)).timestamped_comments("GH-12")
+
+
+def test_a_gh_that_fails_after_printing_a_full_page_returns_no_comments():
+    run = Recorder(fail=True, fail_output=json.dumps([{"body": "page 1"}]))
+    with pytest.raises(ValueError, match="^gh issue comments failed"):
+        GhTracker(Path("/p"), run).timestamped_comments("GH-12")
+
+
+def test_a_comment_read_that_times_out_raises_tracker_timed_out_under_its_own_name():
+    class Stalls:
+        def __call__(self, args, cwd, capture_output, text, check):
+            raise subprocess.TimeoutExpired(args, 60)
+
+    with pytest.raises(TrackerTimedOut, match="gh issue comments timed out"):
+        GhTracker(Path("/p"), Stalls(), log=lambda line: None).timestamped_comments("GH-12")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[]", 0),
+        ("[][]", 0),
+        ('[{"a": 1}] [{"a": 2}]', 2),
+        ('[{"a": 1}]\n\n[{"a": 2}]\n', 2),
+        ('\n[{"a": 1}][{"a": 2}][]', 2),
+    ],
+)
+def test_concatenated_pages_reads_one_or_several_arrays(raw, expected):
+    assert len(tracker_module._concatenated_pages(raw)) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "\n", "  \n", "[{}]{", '{"a":1}', "[1]", '[{"a": 1}] garbage', '[{"a": 1}][', "[{}] null"],
+)
+def test_concatenated_pages_raises_on_anything_it_cannot_read_to_the_end(raw):
+    with pytest.raises(ValueError):
+        tracker_module._concatenated_pages(raw)
+
+
+def test_concatenated_pages_error_does_not_embed_the_whole_raw():
+    with pytest.raises(ValueError) as raised:
+        tracker_module._concatenated_pages("[1]" + "x" * 5000)
+    assert len(str(raised.value)) < 400
 
 
 def test_issue_created_at_reads_the_issues_own_creation_time():

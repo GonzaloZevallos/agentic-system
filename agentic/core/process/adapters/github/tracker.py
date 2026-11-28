@@ -546,6 +546,32 @@ def _comment_author(comment: dict) -> str:
     return ""
 
 
+def _concatenated_pages(raw: str) -> list[dict]:
+    """The items of what `gh api --paginate` prints without `--slurp`: one JSON array per page,
+    one after the other. All or nothing: a value that is cut, trailing text, a value that is not
+    a list of objects, or no value at all raises `ValueError`; a shorter thread never returns.
+    An explicit `[]` is the only empty thread."""
+    decoder = json.JSONDecoder()
+    items: list[dict] = []
+    end, seen = 0, False
+    while True:
+        while end < len(raw) and raw[end].isspace():
+            end += 1
+        if end == len(raw):
+            break
+        try:
+            page, end = decoder.raw_decode(raw, end)
+        except ValueError as exc:
+            raise ValueError(f"gh api answered unreadable comment pages: {raw[:200]!r}") from exc
+        if not isinstance(page, list) or not all(isinstance(item, dict) for item in page):
+            raise ValueError(f"gh api answered a page that is not a list of objects: {raw[:200]!r}")
+        items.extend(page)
+        seen = True
+    if not seen:
+        raise ValueError("gh api answered no comment page")
+    return items
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -945,23 +971,27 @@ class GhTracker:
         return body
 
     def issue_comments(self, task_id: str) -> list[str]:
-        if (number := issue_number(task_id)) is None:
-            return []
-        comments = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
-        return [c.get("body") or "" for c in comments.get("comments", [])]
+        return [c.body for c in self.timestamped_comments(task_id)]
 
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
+        """The thread of the task's issue, oldest first, read over REST: one `gh api
+        --paginate`, whose pages are read to the end or the read raises (`_concatenated_pages`)."""
         if (number := issue_number(task_id)) is None:
             return []
-        raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
+        raw = self._gh_read(
+            "api",
+            "--paginate",
+            f"repos/{{owner}}/{{repo}}/issues/{number}/comments?per_page=100",
+            call="issue comments",
+        )
         return [
             IssueComment(
                 body=c.get("body") or "",
-                created_at=c.get("createdAt") or "",
+                created_at=c.get("created_at") or c.get("createdAt") or "",
                 author=_comment_author(c),
-                url=c.get("url") or c.get("html_url") or "",
+                url=c.get("html_url") or c.get("url") or "",
             )
-            for c in raw.get("comments", [])
+            for c in _concatenated_pages(raw)
         ]
 
     def issue_created_at(self, task_id: str) -> str | None:
