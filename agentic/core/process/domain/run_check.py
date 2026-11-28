@@ -7,7 +7,7 @@ here reads a clock, a file or a port."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -154,6 +154,51 @@ class CheckRun:
 
 def unknown_check(name: str, declared: Sequence[str]) -> str:
     return f"unknown check {name!r}: the declared checks are {', '.join(declared) or 'none'}"
+
+
+# The share of cores a hand run of an affected form is told to use: the gate's own share is
+# decided by the scheduler, a hand run in Bash has none, so it is sized for one worker.
+HAND_WORKERS = 1
+
+
+def suite_refusal(
+    name: str,
+    *,
+    delivery: Collection[str],
+    affected: Mapping[str, str],
+    verifications: Collection[str],
+    red: Collection[str],
+    base: str,
+    stores: bool | None,
+) -> str | None:
+    """Why a hand run of the declared check `name` is refused, or None to run it (ADR-0065,
+    addendum 2026-11-25). The delivery gate runs `delivery` on its own, so a hand run of one
+    of those is a second run of the same suite. Never refused: a verification, a check the
+    gate never runs, and a check in `red` (the gate or the full tier failed on it, and the
+    Developer is reproducing it). A check with an affected form is refused whatever `stores`
+    says; one without is refused only when this call's pass would not be stored (`stores is
+    False`), because a stored pass is what the gate reuses. `stores` is None for a caller that
+    never stores (the Bash hook): only the first rule is judged there. Pure: the caller reads
+    the tree and gives the answer."""
+    if name in verifications or name not in delivery or name in red:
+        return None
+    command = affected.get(name)
+    if command is not None:
+        shown = presubmit.workers_command(presubmit.affected_command(command, base), HAND_WORKERS)
+        return (
+            f"`{name}` is run by the delivery gate when you deliver, so it is not run in full "
+            f"by hand. While you work, run its affected form with Bash: `{shown}` (or one test "
+            f"file or test id), then commit and deliver; the gate runs the suite. If the gate "
+            f"later fails on `{name}`, `run_check` will run it in full."
+        )
+    if stores is False:
+        return (
+            f"`{name}` is run by the delivery gate when you deliver, and a run now would not "
+            f"be stored: the tree is not committed and clean. Commit, then run it through "
+            f"`run_check` (the gate reuses that pass); or run one test file or test id with "
+            f"Bash; or deliver and let the gate run it."
+        )
+    return None
 
 
 def unrecorded_reason(

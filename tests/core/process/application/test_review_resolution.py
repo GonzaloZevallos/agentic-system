@@ -8,6 +8,7 @@ import pytest
 from agentic.core.process.application import review_scope
 from agentic.core.process.application.review import review
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.rules import Commit
 from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
@@ -324,3 +325,17 @@ async def test_the_shadow_reviews_of_the_integration_write_only_the_deciding_sco
     [entry] = patch["review_scopes"]
     assert (entry["unit"], entry["scope"], entry["cause"]) == (INTEGRATION, "full", "first")
     assert workspace.first_parent_asks == []
+
+
+async def test_a_chain_with_a_covered_regeneration_records_full_regenerated():
+    # The merge is clean and the system's recorded regeneration touches only `docs.paths`.
+    line = [Commit(MERGE, (TIP, BROUGHT)), Commit(LATER, (MERGE,))]
+    ports, runner, st = scenario(line, resolutions={LATER: LATER_DIFF})
+    st = {**st, "reintegrations": [{"regeneration": LATER}]}
+    ports.workspace.touched_by = {(MERGE, LATER): ("docs/gen/a.md",)}
+    ports.stack.declared_docs = Docs("make docs", ("docs/gen/**",))
+
+    patch, _ = await run(ports, runner, st)
+
+    assert recorded(patch) == ("full", "regenerated")
+    assert patch["review_scopes"][0]["base"] == TIP

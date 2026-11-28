@@ -2021,7 +2021,14 @@ def test_early_parts_check_keeps_the_structure_check_of_parts_check():
 
 
 def test_definition_size_validates_with_parts_absent_and_with_parts_present():
-    base = {"markdown": "m", "estimated_cost_usd": 3.0, "estimated_files": 4}
+    base = {
+        "markdown": "m",
+        "estimated_cost_usd": 3.0,
+        "estimated_files": 4,
+        "hand_files": 2,
+        "hand_lines": 80,
+        "test_lines": 120,
+    }
     assert schemas.validate(schemas.DefinitionSize, base, {})["parts"] == []
     parts = [{**_piece(), "body": _body()}, {**_piece(depends_on=[1]), "body": _body()}]
     sized = schemas.validate(schemas.DefinitionSize, {**base, "parts": parts}, {})

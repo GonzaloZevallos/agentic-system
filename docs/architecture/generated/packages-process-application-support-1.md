@@ -12,7 +12,8 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: reflection](packages-process-application-reflection.md)
+  - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+  - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
   - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
@@ -20,6 +21,7 @@ graph TD
     g_application__checks["checks (grupo)"]
     g_application__landing["landing (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
+    g_application__reflection["reflection (grupo)"]
     g_application__support__2["support parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
@@ -33,6 +35,7 @@ graph TD
     m_application__format_release["application.format_release"]
     m_application__github_budget["application.github_budget"]
     m_application__landing_body["application.landing_body"]
+    m_application__checkouts --> g_application__reflection
     m_application__checkouts --> g_application__support__2
     m_application__checkouts --> g_pkg__agentic__shared
     m_application__checkouts --> g_pkg__domain

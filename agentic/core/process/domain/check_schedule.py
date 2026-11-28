@@ -194,3 +194,17 @@ def overdue_decision(
     if share:
         return Decision(granted=True, share=share)
     return Decision(granted=True, share=limits.floor(request.priority), overdue=True)
+
+
+def split(share: int, concurrent: int) -> tuple[int, ...]:
+    """The worker count of each of `concurrent` checks that run at once under one `share`.
+
+    As even as it can be, the remainder going to the first checks in declared order. Each check
+    gets at least one, so the sum is `max(share, concurrent)`: when `concurrent > share` it is
+    `concurrent`, above what the ledger reserves for the gate, and that is accepted (a check
+    with no worker cannot run). `split(share, 1)` is `(share,)`: the serial path, the witness
+    and `run_check` keep the whole share through it. No checks, no counts."""
+    if concurrent < 1:
+        return ()
+    base, extra = divmod(max(share, concurrent), concurrent)
+    return tuple(base + (1 if i < extra else 0) for i in range(concurrent))

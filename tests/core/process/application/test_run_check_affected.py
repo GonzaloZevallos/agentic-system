@@ -256,10 +256,10 @@ def test_timeout_counts_the_affected_run_of_a_check_that_has_one():
 def test_timeout_with_a_declared_wall_counts_three_runs_of_it_when_a_check_has_a_plan():
     handler, _, _, _, _ = tool()
     gate = handler.gate
-    gate.timeouts = {"tests": 900.0}
+    gate.walls = {"tests": 900.0}
     assert handler.timeout_s >= 3 * 900.0 + 2 * gate.wait_max_s
     planless, _, _, _, _ = tool(plan=None)
-    planless.gate.timeouts = {"tests": 900.0}
+    planless.gate.walls = {"tests": 900.0}
     assert planless.timeout_s == max(
         30.0 * (1 + 4) + gate.wait_max_s, 2 * 900.0 + 2 * gate.wait_max_s
     )
@@ -286,6 +286,18 @@ class CallingRunner(ScriptedRunner):
         return await super().run_once(role, prompt, **kwargs)
 
 
+RED_TESTS = {
+    "subtask": "other",
+    "version": 1,
+    "location": "full_checks:tests",
+    "claim": "the full tier is red",
+    "severity": "blocking",
+    "scope": "subtask",
+    "category": "correctness",
+    "status": "open",
+}
+
+
 async def developed(tmp_path, names, *, developer=None, gateless=False):
     runner = CallingRunner(names, gateless=gateless, developer=developer or [delivered()])
     stack = MemoryStack(
@@ -297,6 +309,10 @@ async def developed(tmp_path, names, *, developer=None, gateless=False):
     ports.workspace.diff_paths = ("src/a.py",)
     state, checkout = building(ports)
     ports.workspace.record_setup_tree(checkout.path)
+    # `tests` is a delivery check with an affected form, which the tool refuses (GH-1070) unless
+    # the full tier is red on it: an open `full_checks:tests` finding opens it, as for a Developer
+    # reproducing a red.
+    state = {**state, "findings": [RED_TESTS]}
     return await develop(state, Configuration(product_dir=tmp_path), ports), ports
 
 

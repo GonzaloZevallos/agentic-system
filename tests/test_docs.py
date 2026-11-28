@@ -1190,11 +1190,13 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
     # splits in two.
     # 30 once notify.py (GH-1056 1a) joins the machine cluster: domain.machine splits in two.
     # 31 once budget_store.py (GH-1098) takes adapters.filesystem to 21 nodes: it splits in two.
-    # 32 once application/run_check.py (GH-1096) imports `presubmit` and `GateForm` from the
+    # 32 once board_sync leaves lifecycle (GH-1165): its edge into the second lifecycle part
+    # (resume) took that page to 31 edges, and the cluster it joins takes one page more.
+    # 33 once application/run_check.py (GH-1096) imports `presubmit` and `GateForm` from the
     # domain and `CheckoutPresubmit` from application/presubmit.py: the application.checks page
     # goes over DIAGRAM_BUDGET and splits in two (checks-1, checks-2). The cap was raised by a
     # person's decision; run_check.py's imports were not shrunk.
-    assert len(pages) <= 32
+    assert len(pages) <= 33
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path

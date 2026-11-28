@@ -1573,3 +1573,10 @@ async def test_a_ready_for_review_delivery_removes_the_rate_limit_clock(cfg):
     assert patch["status"] == "ready_for_review"
     assert patch["rate_limit_paused_at"] is None
     assert not ports.documents.last.get("rate_limit_paused_at")
+
+
+def test_a_refused_write_turn_is_transient_for_a_delivery():
+    from agentic.core.process.application.deliver import _transient
+    from agentic.core.process.application.ports import TrackerTurnRefused
+
+    assert _transient(TrackerTurnRefused("gh pr create write turn refused: over the 900 s bound"))

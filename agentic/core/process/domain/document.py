@@ -712,6 +712,7 @@ def render(
         # there is a row, so a document that was never stacked is byte-identical to one written
         # before; parsed back under the same names, nothing reads them to decide.
         **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
+        **({"reintegrations": r} if (r := state.get("reintegrations")) else {}),
         **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # The verdicts of the early size check: written only when there is a row, so every
         # document written before it is byte-identical; parsed back under the same name, and

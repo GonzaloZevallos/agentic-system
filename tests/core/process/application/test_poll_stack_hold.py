@@ -5,11 +5,12 @@ git."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, get_args
 
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, LockRecord
 from agentic.core.process.application.stack_facts import StackMemo
+from agentic.core.process.domain import stacking
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.task import StackParent
 from tests.core.process.application.test_poll import _cfg, _Locks, _no_sleep, _round, _seed_body
@@ -96,6 +97,7 @@ def test_a_second_round_writes_no_second_note(tmp_path):
 
 def test_the_cause_clearing_resumes_the_child_and_stamps_resumed_at(tmp_path):
     ports = _world(CHILD)
+    ports.workspace.existing_branches[f"agentic/GH-{CHILD}"] = ("a" * 7, "base")
     _go(tmp_path, ports)
     ports.documents.save({"id": f"GH-{PARENT}"})  # the parent is not escalated any more
     later = NOW + timedelta(minutes=5)
@@ -234,7 +236,9 @@ def test_a_round_with_no_stacked_document_makes_the_reads_it_made_without_the_ho
 
 
 def _working_child(ports, **more: Any) -> LockRecord:
-    """The child as a run left it: mid-development, in the tray, its lock from a boot gone."""
+    """The child as a run left it: mid-development, in the tray, with its task branch, its lock
+    from a boot gone."""
+    ports.workspace.existing_branches[f"agentic/GH-{CHILD}"] = ("a" * 7, "base")
     ports.documents.save(
         {
             "id": f"GH-{CHILD}",
@@ -346,3 +350,30 @@ def test_arm_counts_and_launch_weights_with_a_held_child_equal_the_round_without
     # one slot: #5 launches, with the arm that is behind (control holds the child's one)
     assert [argv[3:6] for argv in held[2]] == [["5", "--arm", "light"]]
     assert len(_notes(held[3], CHILD)) == 1 and _notes(free[3], CHILD) == []
+
+
+def test_a_branchless_child_of_a_parent_that_left_ready_is_held_and_spends_no_retake(tmp_path):
+    ports = _world(escalated=False)
+    ports.tracker._queue = [CHILD]
+    ports.tracker.states[CHILD] = IssueState("OPEN", "", (), None)
+    ports.documents.save({"id": f"GH-{PARENT}", "status": "planning"})  # not Ready any more
+    ports.documents.save(
+        {"id": f"GH-{CHILD}", "stack_parent": dict(_record()), "status": "developing"}
+    )
+    dead = LockRecord(777, "h", "2026-11-16T08:00:00Z", "agentic run", "boot-old")
+    locks = _Locks({f"GH-{CHILD}": dead})
+    for minutes in (0, 5):
+        _, launcher = _go(tmp_path, ports, NOW + timedelta(minutes=minutes), lock=locks)
+        assert launcher.spawned == []  # held: no retake, so no Retakes spent
+    (row,) = ports.documents.load(f"GH-{CHILD}")["stack_pauses"]
+    assert (row["parent"], row["cause"], row["resumed_at"]) == (PARENT, "parent_not_ready", None)
+    assert len(_notes(ports, CHILD)) == 1
+    assert "is no longer ready for review" in _notes(ports, CHILD)[0]
+    assert not any(poll.RetakesSpent.__name__ in text for _, text in ports.tracker.comments)
+    assert "retakes" not in ports.documents.load(f"GH-{CHILD}")
+
+
+def test_every_holding_cause_but_unreadable_is_noted_and_every_noted_cause_has_its_text():
+    holding = set(get_args(stacking.PauseCause)) - {"none", "unreadable"}
+    assert set(get_args(stacking.NotedCause)) == holding
+    assert set(stacking._NOTE_TEXT) == set(get_args(stacking.NotedCause))

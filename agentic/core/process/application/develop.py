@@ -18,7 +18,7 @@ import anyio
 from agentic.shared.configuration import Configuration
 
 from ..domain import check_results as reuse_rules
-from ..domain import check_runs, coverage, presubmit, restart, rules
+from ..domain import check_runs, coverage, presubmit, restart, rules, run_check, task
 from ..domain.gate_priority import gate_priority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
@@ -173,6 +173,20 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         cfg.check_timeout_s,
         cfg.verification_wall_max_s,
     )
+    # What opens a full hand run: a check the delivery gate last saw red (a timed-out row is red
+    # too) or a `full_checks:` finding still open, for any subtask. Never the model's text.
+    by_folded = {name.casefold(): name for name in checks}
+    opened: set[str] = set()
+    for row in rules.open_findings(state):
+        where = rules.finding_key(row["location"], "")[0]
+        if where.startswith(rules.FULL_CHECKS_PREFIX):
+            opened.add(by_folded.get(where.removeprefix(rules.FULL_CHECKS_PREFIX), ""))
+    opened.discard("")
+
+    def red() -> frozenset[str]:
+        rows = presubmit.final_results(delivery_presubmit.results or [])
+        return opened | {row["name"] for row in rows if not row["passed"]}
+
     check_tool = (
         RunCheck(
             CheckoutPresubmit(
@@ -196,6 +210,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 via="tool",
             ),
             verifications=verifications,
+            delivery=tuple(fast),
+            affected=affected_commands,
+            base=base,
+            red=red,
             # The system's own `LoadReader` and the Cupo de chequeo's cores, so a line for a
             # verification carries the load and the cores even when the product declared no
             # `not_ready_exit` (the gate's classification is then not in play).
@@ -208,6 +226,23 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         and checks
         else None
     )
+
+    def hand_run_refusal(command: str) -> str | None:
+        """The Bash hook's share of `suite_refusal`: an exact call of a declared full command."""
+        found = check_runs.match(command, checks)
+        if found is None or found.check is None:
+            return None
+        return run_check.suite_refusal(
+            found.check,
+            delivery=tuple(fast),
+            affected=affected_commands,
+            verifications=verifications,
+            red=red(),
+            base=base,
+            stores=None,
+        )
+
+    refuse = hand_run_refusal if check_tool is not None else None
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so
     # every other caller of it is untouched. `None`/empty is the explicit no-op, wired
@@ -283,6 +318,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         declared_checks=check_runs.declared_forms(
             checks, ports.stack.affected_checks(base), ports.stack.rerun_checks(base)
         ),
+        refuse=refuse,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
         if fast_names
         else "",
@@ -327,6 +363,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         if dropped:
             recorded["forms_dropped"] = dropped
         patch["runs"] = [*patch["runs"][:-1], recorded]
+    if (timeouts := task.capped_timeouts(delivery_presubmit.timeouts())) and patch.get("runs"):
+        # The checks that timed out with no failing test on the head this gate checked
+        # (GH-1075): the review turns them into observation rows.
+        patch["runs"] = [*patch["runs"][:-1], {**patch["runs"][-1], "timeouts": timeouts}]
     if flakes := delivery_presubmit.flakes():
         # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
         # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head

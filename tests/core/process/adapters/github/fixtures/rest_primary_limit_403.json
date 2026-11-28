@@ -1,0 +1,24 @@
+{
+  "note": "DERIVED, not captured: the 403 GitHub answers when the primary rate limit is spent, shaped from its docs (rate limits for the REST API: x-ratelimit-remaining 0 and x-ratelimit-reset in epoch seconds) and the message the marker run.py cites as GH_RATE_LIMIT_MARKER.",
+  "status": 403,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-ratelimit-limit",
+      "5000"
+    ],
+    [
+      "x-ratelimit-remaining",
+      "0"
+    ],
+    [
+      "x-ratelimit-reset",
+      "1060"
+    ]
+  ],
+  "body": "{\"message\": \"API rate limit exceeded for user ID 1.\", \"documentation_url\": \"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api\"}",
+  "stderr": "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+}

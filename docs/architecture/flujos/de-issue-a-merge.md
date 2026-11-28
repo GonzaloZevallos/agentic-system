@@ -59,7 +59,19 @@ sequenceDiagram
    falla, la ronda no arranca nada y dice `holds unread`; los cierres y los barridos siguen.
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
-   `agentic/composition.py:graph`.
+   `agentic/composition.py:graph`. Antes de archivar y de escribir cualquier documento,
+   `agentic/cli.py:_stack_gate` consulta la puerta del arranque apilado
+   (`agentic/core/process/application/stacked_start.py:decide`) cuando hay una pista de
+   lanzamiento o, con `--fresh`, un `stack_parent` legible en el documento anterior. Un
+   `Wait` en la puerta termina la corrida con `STACK_WAIT_EXIT` (3) y una línea por stderr,
+   sin invocar el grafo. Un `Wait` al crear la rama (`StackWait` atrapada en
+   `agentic/cli.py:_invoke`, ya iniciado el grafo) termina igual. Ninguno escala.
+   Con `stacking: true` (agentic-system), una parte cuyo único bloqueante es un padre listo
+   para revisión arranca sobre la cabeza del padre (ADR-0104, profundidad 1). Si ese hijo ya
+   tiene `stack_parent` pero todavía no rama, y el padre dejó de estar listo, el poller lo
+   retiene como `parent_not_ready` (`agentic/core/process/application/stack_hold.py`, ADR-0103):
+   no se lanza ni se retoma, no gasta retomas y deja una sola nota por episodio. La retención no
+   lee el interruptor.
 4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
    (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
    `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del
@@ -68,7 +80,9 @@ sequenceDiagram
    como algo que no es feature, escala `spec_type` después de su corrida. `classify` (PjM) elige
    el tipo: feature, bug o platform enhancement
    (README.md, sección 2). Una feature pasa por `define` (Product Analyst) y `validate`
-   (PM) antes de `plan` (Tech Lead); un bug reemplaza la definición por `diagnose`; un
+   (PM) antes de `plan` (Tech Lead); apenas PM aprueba el PRD, `early_size`
+   (`agentic/core/process/application/early_size.py:early_size`, ADR-0110) decide si una feature
+   claramente sobre el presupuesto se parte antes del diseño y del plan; un bug reemplaza la definición por `diagnose`; un
    platform enhancement la salta. Una feature o un bug en el camino ligero (`path: light`,
    ver `agentic/core/process/domain/task_path.py:path_of`) va de `classify` directo a `plan`
    (`agentic/core/process/domain/rules.py:after_classify`); una promoción a `full` lo manda de

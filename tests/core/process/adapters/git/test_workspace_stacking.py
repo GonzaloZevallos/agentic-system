@@ -4,7 +4,7 @@ the child built on it. The facts are always read, never built by hand."""
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -17,6 +17,7 @@ from agentic.core.process.application.stack_facts import StackMemo, stack_facts
 from agentic.core.process.domain import stacking
 from agentic.core.process.domain.task import StackParent
 from agentic.shared.configuration import Configuration
+from tests.fakes import MemoryStack
 
 IDENTITY = Configuration(product_dir=Path("/tmp/p")).git_identity
 
@@ -50,6 +51,7 @@ class _Tracker:
 class _Ports:
     workspace: GitWorkspace
     tracker: _Tracker
+    stack: MemoryStack = field(default_factory=MemoryStack)
 
 
 @dataclass
@@ -79,6 +81,7 @@ class Stack:
 
     def scope(self, reviewed: str, head: str) -> str:
         state: dict[str, Any] = {
+            "id": "GH-7",
             "subtasks": {"a": {"reviewed_head": reviewed}},
             "landing": [{"upstream": self.merge}],
         }

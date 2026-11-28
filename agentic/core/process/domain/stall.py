@@ -5,9 +5,10 @@ One pure verdict over one snapshot: the adapter and the runner only feed it and 
 The runner keeps one mark of activity per attempt, `last_activity`, and the attempt is
 stalled when it is older than the threshold. What renews the mark: every message of the
 stream (the runner does that, it is not a snapshot fact), the output of a delivery hook,
-a hook still in flight and, only while a main-thread tool call is pending, the CPU or
-the state R/D of a marked child of the attempt. A fact that could not be read (`None`)
-counts as activity: nothing is killed without evidence.
+a hook still in flight (only until the ceiling it declared on entering; past it the whole
+threshold runs from the last renewed tick) and, only while a main-thread tool call is
+pending, the CPU or the state R/D of a marked child of the attempt. A fact that could not
+be read (`None`) counts as activity: nothing is killed without evidence.
 """
 
 from __future__ import annotations
@@ -36,22 +37,26 @@ class ChildActivity:
 
 @dataclass(frozen=True)
 class Stall:
-    """How a stalled attempt is told: the silence in seconds and the last event seen."""
+    """How a stalled attempt is told: the silence in seconds, the last event seen and
+    whether a hook was still in flight when it fired."""
 
     seconds: int
     last_event: LastEvent
+    in_hook: bool
 
 
 @dataclass(frozen=True)
 class StallSnapshot:
     """The facts of one tick, on one monotonic clock. `hooks_in_flight` and
-    `last_hook_exit` are the delivery hooks of this attempt alone."""
+    `last_hook_exit` are the delivery hooks of this attempt alone; `hook_expires` is the
+    latest ceiling among the live hooks, None when none is live or any has no ceiling."""
 
     now: float
     last_activity: float
     pending_tools: int
     hooks_in_flight: int
     last_hook_exit: float | None
+    hook_expires: float | None
     child: ChildActivity | None
     previous_child: ChildActivity | None
     timeout_s: float
@@ -68,9 +73,13 @@ def judge(snapshot: StallSnapshot) -> Verdict:
     last = snapshot.last_activity
     if snapshot.last_hook_exit is not None:
         last = max(last, snapshot.last_hook_exit)
-    if snapshot.hooks_in_flight > 0 or (
-        snapshot.pending_tools > 0 and _child_is_working(snapshot.child, snapshot.previous_child)
-    ):
+    hook_alive = snapshot.hooks_in_flight > 0 and (
+        snapshot.hook_expires is None or snapshot.now <= snapshot.hook_expires
+    )
+    child_alive = snapshot.pending_tools > 0 and _child_is_working(
+        snapshot.child, snapshot.previous_child
+    )
+    if hook_alive or child_alive:
         last = snapshot.now
     return Verdict(last_activity=last, stalled=snapshot.now - last > snapshot.timeout_s)
 

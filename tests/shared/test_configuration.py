@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.composition import backfill_cache_root
 from agentic.shared.configuration import (
     ARM_SWITCHES,
     EXPERIMENT_KEYS,
@@ -111,6 +112,29 @@ def test_scratch_dir_falls_back_to_the_home_dot_cache(monkeypatch):
     assert cfg.scratch_dir == Path("/home/t/.cache/agentic/scratch")
 
 
+def test_github_dir_is_the_same_for_two_configurations_of_one_environment(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+    first = Configuration.from_sources(PRODUCT, {})
+    second = Configuration(product_dir=Path("/tmp/p"))
+    assert first.github_dir == second.github_dir == Path("/tmp/cache/agentic/github")
+
+
+def test_github_dir_shares_its_root_with_the_backfill_cache(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.github_dir.parent.parent == backfill_cache_root().parent.parent
+
+
+def test_an_empty_xdg_cache_home_puts_every_cache_under_home_dot_cache(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    cfg = Configuration.from_sources(PRODUCT, {})
+    root = Path("/home/t/.cache/agentic")
+    assert cfg.scratch_dir == root / "scratch"
+    assert cfg.github_dir == root / "github"
+    assert backfill_cache_root() == root / "scores-reads"
+
+
 def test_scratch_dir_is_overridable_by_the_environment():
     cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_DIR": "/var/scratch"})
     assert cfg.scratch_dir == Path("/var/scratch")
@@ -131,8 +155,8 @@ def test_defaults():
     assert cfg.agentic_dir == Path("/tmp/p/.agentic")
 
 
-def test_stall_timeout_defaults_to_forty_minutes_and_reads_its_environment():
-    assert Configuration.from_sources(PRODUCT, {}).stall_timeout_s == 2400
+def test_stall_timeout_defaults_to_thirty_minutes_and_reads_its_environment():
+    assert Configuration.from_sources(PRODUCT, {}).stall_timeout_s == 1800
     env = {"AGENTIC_STALL_TIMEOUT_S": "900"}
     assert Configuration.from_sources(PRODUCT, env).stall_timeout_s == 900
 

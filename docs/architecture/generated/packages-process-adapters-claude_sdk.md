@@ -15,6 +15,7 @@ Esta página muestra los módulos del adaptador `adapters.claude_sdk` y los impo
 ```mermaid
 graph TD
     g_pkg__adapters["adapters (paquete)"]
+    g_pkg__adapters__git["adapters.git (paquete)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
@@ -29,6 +30,7 @@ graph TD
     m_adapters__claude_sdk__check_server --> g_pkg__application
     m_adapters__claude_sdk__check_server --> g_pkg__domain
     m_adapters__claude_sdk__check_server --> m_adapters__claude_sdk__hooks
+    m_adapters__claude_sdk__hooks --> g_pkg__adapters__git
     m_adapters__claude_sdk__hooks --> g_pkg__application
     m_adapters__claude_sdk__hooks --> g_pkg__domain
     m_adapters__claude_sdk__hooks --> m_adapters__claude_sdk__check_run_log

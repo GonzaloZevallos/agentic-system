@@ -12,6 +12,8 @@ import pytest
 
 from agentic.core.process.adapters.filesystem.budget_store import FilesystemBudgetStore
 from agentic.core.process.adapters.github.account import AccountKeys, read_rate_limit
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
+from agentic.core.process.domain.gh_calls import GH_CALL_KINDS
 from agentic.core.process.domain.github_budget import UNKNOWN
 
 T = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
@@ -39,7 +41,7 @@ def _reset():
 
 
 def _keys(environ: dict[str, str]) -> AccountKeys:
-    return AccountKeys(_fake_run, Path("."), environ, lambda: _now[0])
+    return AccountKeys(_fake_run, Path("."), environ, lambda: _now[0], calls=InProcessGhCallLog())
 
 
 def _digest(token: str) -> str:
@@ -122,7 +124,7 @@ def test_the_token_never_leaks(where, tmp_path, caplog, capsys):
         claim = store.claim(key, T)
         assert claim is not None
         store.put(key, claim, UNKNOWN)
-    read_rate_limit(_fake_run, Path("."))
+    read_rate_limit(_fake_run, Path("."), calls=InProcessGhCallLog())
     shown = [key or "", caplog.text, repr(vars(keys)), *(str(p) for p in tmp_path.iterdir())]
     shown += [p.read_text() for p in tmp_path.iterdir()]
     captured = capsys.readouterr()
@@ -133,12 +135,20 @@ def test_the_token_never_leaks(where, tmp_path, caplog, capsys):
 
 def test_read_rate_limit_runs_gh_api_rate_limit_and_parses_it():
     _answer["stdout"] = '{"resources": {}}'
-    assert read_rate_limit(_fake_run, Path(".")) == {"resources": {}}
+    assert read_rate_limit(_fake_run, Path("."), calls=InProcessGhCallLog()) == {"resources": {}}
     assert _calls == [["gh", "api", "rate_limit"]]
 
 
 def test_read_rate_limit_is_none_on_a_failure_and_on_bad_json():
     _answer["stdout"] = "not json"
-    assert read_rate_limit(_fake_run, Path(".")) is None
+    assert read_rate_limit(_fake_run, Path("."), calls=InProcessGhCallLog()) is None
     _answer["returncode"] = 1
-    assert read_rate_limit(_fake_run, Path(".")) is None
+    assert read_rate_limit(_fake_run, Path("."), calls=InProcessGhCallLog()) is None
+
+
+def test_the_rate_limit_read_and_the_token_read_count_into_the_given_log():
+    log = InProcessGhCallLog()
+    read_rate_limit(_fake_run, Path("."), calls=log)
+    assert dict(log.drain()) == {**dict.fromkeys(GH_CALL_KINDS, 0), "api": 1}
+    AccountKeys(_fake_run, Path("."), {}, lambda: _now[0], calls=log).key()
+    assert sum(log.drain().values()) == 1

@@ -6,6 +6,11 @@ among siblings) and answers the map the poller filters by; `write_episodes` tell
 issue once per episode and keeps the `stack_pauses` rows. Both are the poller's alone: the manual
 verbs and `assess_merge` never read this module, and the gate on merging stays `stacking.refusal`.
 
+A child that has no task branch yet is read a second time (`_unstarted`, GH-1163): a parent that
+left Ready, or whose branch no longer carries the recorded head, holds it as `parent_not_ready`
+so that no retake is spent on a start that waits. The branch and the parent's facts are read only
+after `pause_cause` answered `none` for a parent that has not landed.
+
 An episode is the stretch a child waits on `(parent, cause)`. It opens with one `Tracker.note`
 (the `pause_note` text and a marker that makes a retry idempotent) and one open row, and ends with
 `resumed_at` stamped when the cause reads `none`. The child is written to only when
@@ -24,9 +29,10 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import stacking
+from ..domain import rules, stacking
 from ..domain.stacking import NotedCause, PauseCause
 from ..domain.task import (
+    StackParent,
     StackPause,
     TaskState,
     TrackerFailureRecord,
@@ -34,7 +40,7 @@ from ..domain.task import (
     add_tracker_failures,
 )
 from . import stack_facts
-from .ports import Ports, RunLock, RunRegistration, Upstream
+from .ports import GitError, Ports, RunLock, RunRegistration, Upstream
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ class StackHold:
     lines: list[str] = field(default_factory=list)
     causes: dict[int, PauseCause] = field(default_factory=dict)
     parents: dict[int, int] = field(default_factory=dict)
+    culprits: dict[int, int] = field(default_factory=dict)
     busy: frozenset[str] = frozenset()
 
 
@@ -78,15 +85,48 @@ def compute(
     tip = upstream().sha or "HEAD"
     for number, record in children.items():
         chain = stack_facts.parent_chain(ports, cfg, lock, record, tip, memo)
-        cause = stacking.pause_cause(chain)
+        cause, culprit = stacking.pause_link(chain)
+        if cause == "none" and chain[0].in_upstream is False:
+            cause = _unstarted(ports, cfg, number, record, chain[0], memo)
+            culprit = record["issue"] if cause == "parent_not_ready" else None
         hold.causes[number] = cause
         hold.parents[number] = record["issue"]
         if cause == "none":
             continue
         hold.held[number] = cause
+        if culprit is not None:
+            hold.culprits[number] = culprit
         if cause == "unreadable":
             hold.lines.append(f"agentic: poll: #{number} held (stacked, parent unreadable)")
     return hold
+
+
+def _unstarted(
+    ports: Ports,
+    cfg: Configuration,
+    number: int,
+    record: StackParent,
+    link: stacking.ParentLink,
+    memo: stack_facts.StackMemo,
+) -> PauseCause:
+    """The second step (GH-1163): the chain says nothing holds the child, yet its parent has not
+    landed. A child with a task branch is a run's to judge, and makes no remote read. One without
+    would start at the recorded head, so the cause is what `start_ref` says of the parent's facts
+    at that head, read through the window's memo. A failed read is `unreadable`, never `none`."""
+    try:
+        if ports.workspace.branch_head(rules.task_branch(ports.inbox.task_id(number))) is not None:
+            return "none"
+        facts = stack_facts.parent_facts(
+            cfg,
+            ports,
+            record["issue"],
+            head=record["head"],
+            paused=bool(link.waits_on_human or link.stopped),
+            memo=memo,
+        )
+    except (GitError, OSError, ValueError):
+        return "unreadable"
+    return stacking.unstarted_cause(stacking.start_ref(record["issue"], facts))
 
 
 def free_writer(task_id: str, busy: Collection[str], lock: RunLock) -> bool:
@@ -215,7 +255,7 @@ def write_episodes(
                         _write(ports, task_id, gone, None)
                     except (ValueError, OSError):
                         lines.append(f"agentic: poll: #{number} stack pause not recorded")
-            case "parent_escalated" | "parent_stopped" | "parent_abandoned":
+            case "parent_escalated" | "parent_stopped" | "parent_abandoned" | "parent_not_ready":
                 parent = hold.parents[number]
                 if any(
                     (r["parent"], r["cause"]) == (parent, cause) and r["resumed_at"] is None

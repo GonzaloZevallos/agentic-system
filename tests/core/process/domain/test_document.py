@@ -1283,6 +1283,31 @@ def test_reaped_at_cleanup_renders_and_parses_back_equal():
     assert document.render(document.parse(text) | {"sections": {}}) == text
 
 
+_STALL_ROW = {
+    "role": "Developer",
+    "attempt": 1,
+    "error": "stalled: no sign of life for 3000s, last event system",
+    "cost_usd": 0.0,
+    "session_id": "s-1",
+    "reason": "stall",
+}
+
+
+def test_a_stall_failure_row_without_the_stall_key_loads_and_reads_unknown():
+    """GH-978: an older row has no record; it loads, and reads as unknown, never as 0."""
+    text = document.render(_bare(failures=[_STALL_ROW]))
+    (row,) = document.parse(text)["failures"]
+    assert row == _STALL_ROW and row.get("stall") is None
+
+
+def test_a_stall_record_on_a_failure_row_round_trips():
+    record = {"seconds": 3000, "last_event": "system", "in_hook": True}
+    text = document.render(_bare(failures=[_STALL_ROW | {"stall": record}]))
+    (row,) = document.parse(text)["failures"]
+    assert row["stall"] == record
+    assert type(row["stall"]["seconds"]) is int and row["stall"]["in_hook"] is True
+
+
 def test_a_state_without_an_estimate_renders_without_the_estimate_keys():
     state = {"id": "T-1", "title": "t", "description": "d"}
     text = document.render(state)

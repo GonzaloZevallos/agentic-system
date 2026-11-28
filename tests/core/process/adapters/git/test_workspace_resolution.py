@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.application.ports import GitError, RemergeDiffUnsupported
+from agentic.core.process.domain.landing import diff_paths
 from agentic.shared.configuration import Configuration
 
 IDENTITY = Configuration(product_dir=Path("/tmp/p")).git_identity
@@ -87,3 +88,33 @@ def test_an_old_or_unknown_git_is_refused_without_running_the_command(repo, monk
     with pytest.raises(RemergeDiffUnsupported):
         ws.merge_resolution("HEAD")
     assert ran == []
+
+
+def _conflicted_merge(repo: Path, name: str, resolve: str | None) -> str:
+    """A merge of master into `task` where both sides edited `name`; `resolve` is what the
+    resolution leaves (`None` deletes the file). Returns the merge sha."""
+    commit(repo, name, "one\n", "add")
+    git("checkout", "-q", "-b", "task", cwd=repo)
+    commit(repo, name, "mine\n", "own edit")
+    git("checkout", "-q", "master", cwd=repo)
+    commit(repo, name, "theirs\n", "master edit")
+    git("checkout", "-q", "task", cwd=repo)
+    subprocess.run(["git", "merge", "--no-ff", "-q", "master"], cwd=repo, capture_output=True)
+    if resolve is None:
+        git("rm", "-q", "-f", name, cwd=repo)
+    else:
+        (repo / name).write_text(resolve)
+        git("add", name, cwd=repo)
+    git("commit", "-q", "-m", "merge master", cwd=repo)
+    return git("rev-parse", "HEAD", cwd=repo)
+
+
+@pytest.mark.parametrize(
+    ("name", "resolve"),
+    [("docs/gen.md", "theirs\n"), ("gone.md", None), ("a dir/with space.md", "merged\n")],
+    ids=["settled-from-upstream", "deleted", "space-in-path"],
+)
+def test_the_real_resolution_of_a_merge_parses_to_its_paths(repo, name, resolve):
+    (repo / Path(name).parent).mkdir(parents=True, exist_ok=True)
+    resolution = workspace(repo).merge_resolution(_conflicted_merge(repo, name, resolve))
+    assert diff_paths(resolution) == (name,)

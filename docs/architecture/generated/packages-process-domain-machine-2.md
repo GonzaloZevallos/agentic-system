@@ -23,6 +23,7 @@ graph TD
     m_domain__stage0_rotation["domain.stage0_rotation"]
     m_domain__stage0_window["domain.stage0_window"]
     m_domain__stall["domain.stall"]
+    m_domain__terminal_states["domain.terminal_states"]
     m_domain__rate_limit --> g_domain__state
     m_domain__refusal_retry --> g_domain__state
     m_domain__stage0_rotation --> g_domain__state

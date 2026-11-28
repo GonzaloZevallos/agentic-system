@@ -16,10 +16,13 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
   - [application: support (parte 8)](classes-process-application-support-8.md)
+  - [application: support (parte 9)](classes-process-application-support-9.md)
 
 ```mermaid
 classDiagram
     class archive__ArchiveResult["ArchiveResult"]
+    class budget_round__BudgetCarry["BudgetCarry"]
+    class budget_round__BudgetSink["BudgetSink"]
     class carve_out__CarveData["CarveData"]
     class carve_out__CarveRefused["CarveRefused"]
     class dry_run__DryRunLog["DryRunLog"]
@@ -32,10 +35,9 @@ classDiagram
     class poll__LandingRound["LandingRound"]
     class poll__MergeAssessment["MergeAssessment"]
     class poll__OrderEntry["OrderEntry"]
-    class poll__OrderLock["OrderLock"]
 ```
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 8)](classes-process-application-support-8.md)
+- [application: support (parte 9)](classes-process-application-support-9.md)
   - `plan_carve_out.Judged` se asocia con `run_role.Output`

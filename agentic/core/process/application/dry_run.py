@@ -130,7 +130,7 @@ READS = {
         """adr_naming affected_checks affected_fallback api_break_line check_budgets
         check_timeouts checks ci ci_covers ci_dispatch delivery_checks design docs docs_pathspecs
         forbidden generated merge_inert not_ready_exit parallel_checks performance product
-        prototype_files rerun_checks risk_areas setup verifications witness"""
+        prototype_files rerun_checks risk_areas setup stacking verifications witness"""
     ),
     "ExperimentFile": _names("read"),
     "Launcher": frozenset(),
@@ -203,8 +203,11 @@ UNREACHED = {
 
 # Ports that are not ports: `Ports` carries the run's limits and its clock beside them. The
 # filing of format refusals (GH-1030) and the reads that release a format hold (GH-1067) are
-# dropped, not wrapped: a dry round files nothing and releases nothing.
-_NOT_PORTS = frozenset({"limits", "now", "format_filing", "format_fixes"})
+# dropped, not wrapped: a dry round files nothing and releases nothing. The notifier's three
+# (GH-1056) are dropped too: a dry round sends no mail and writes no record.
+_NOT_PORTS = frozenset(
+    {"limits", "now", "format_filing", "format_fixes", "notifier", "notified", "activity"}
+)
 _LABELS = {
     "documents": "TaskDocuments",
     "stack": "ProductStack",
@@ -242,7 +245,15 @@ def read_only_ports(
     }
     return (
         # GH-1030: a dry round files no issue of a format refusal, whatever the ports carry.
-        _replace(ports, **wrapped, format_filing=None, format_fixes=None),
+        _replace(
+            ports,
+            **wrapped,
+            format_filing=None,
+            format_fixes=None,
+            notifier=None,
+            notified=None,
+            activity=None,
+        ),
         _wrap(registry, "RunRegistry", log),
         _wrap(lock, "RunLock", log),
         _wrap(launcher, "Launcher", log),

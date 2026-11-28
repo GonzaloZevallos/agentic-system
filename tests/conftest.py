@@ -52,6 +52,17 @@ def isolated_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_process_call_log():
+    """`composition.process_call_log` is cached for the process: each test starts with a new
+    one, so a count recorded by one test never reaches another (GH-990)."""
+    from agentic import composition
+
+    composition.process_call_log.cache_clear()
+    yield
+    composition.process_call_log.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def no_real_run_registry(tmp_path, monkeypatch):
     """GH-137: `Configuration.run_registry_dir` defaults under `XDG_STATE_HOME`
     (`_default_run_registry_dir`'s own `default_factory`, read by pydantic directly --

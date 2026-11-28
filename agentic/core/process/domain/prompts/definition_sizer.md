@@ -24,6 +24,10 @@ top. Give the TOTAL cost of the task in USD, from its start to its merge, in
 `estimated_cost_usd`, and the files the pull request would change in `estimated_files`. When
 the table is empty, say so in `markdown` and estimate from the scope alone.
 
+Declare the size of the WHOLE task, before any cut, as the size budget counts it: `hand_files`,
+`hand_lines` and `test_lines`. They are what decides whether the task is cut, so give them even
+when the task fits.
+
 Write `parts` only when you judge the task clearly over the size budget, not merely close to
 it. A task that fits, or is close, returns `parts` empty: the plan will size it with the code
 in front of it. When you do cut it, how a slice is cut:
@@ -57,6 +61,7 @@ Everything goes in the structured output, in one call:
 
 - `estimated_cost_usd`: the total cost, a number of zero or more.
 - `estimated_files`: the files the pull request changes, an integer of zero or more.
+- `hand_files`, `hand_lines`, `test_lines`: the size of the whole task, integers of zero or more.
 - `parts`: empty, or the parts the task is cut into.
 - `markdown`: two lines, the bucket you read and why you sit above or below its median, and
   whether you cut the task and why.

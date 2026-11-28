@@ -4,6 +4,7 @@ in force (`domain.copy`), and how the findings table reads them (`rules`)."""
 from agentic.core.process.domain import copy, playbook, roles, rules
 from agentic.core.process.domain.schemas import CopyFinding, CopyReview
 from agentic.core.process.domain.task import INTEGRATION
+from tests.fakes import measured
 
 
 def finding(location="a.py:3", claim="Too long", **over):
@@ -280,8 +281,8 @@ def test_copy_comes_after_the_design_branch_and_its_consolidation():
 
 def test_resume_at_definition_ready_with_only_touches_copy_lands_on_write_copy():
     state = {**feature("touches_copy", runs=[run("Product Analyst")]), "status": "definition_ready"}
-    assert rules.resume_target(state) == "write_copy"
-    assert rules.resume_target({**feature(), "status": "definition_ready"}) == "plan"
+    assert rules.resume_target(measured(state)) == "write_copy"
+    assert rules.resume_target(measured({**feature(), "status": "definition_ready"})) == "plan"
 
 
 def approved_state(*flags, review_runs=(), unit="api"):

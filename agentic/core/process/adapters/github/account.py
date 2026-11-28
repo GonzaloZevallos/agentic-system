@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 
+from ...application.ports import GhCallLog
 from ...domain.github_budget import BUDGET_TTL
 from .run import Run, run_gh
 
@@ -29,7 +30,10 @@ class AccountKeys:
         cwd: Path,
         environ: Mapping[str, str],
         clock: Callable[[], datetime],
+        *,
+        calls: GhCallLog,
     ):
+        self._calls = calls
         self._run = run
         self._cwd = cwd
         self._environ = environ
@@ -50,7 +54,7 @@ class AccountKeys:
         memo = self._memo
         if memo is not None and memo[0] <= now and now - memo[0] < BUDGET_TTL:
             return memo[1]
-        key = _key_of(_gh_token(self._run, self._cwd))
+        key = _key_of(_gh_token(self._run, self._cwd, calls=self._calls))
         self._memo = (now, key)
         return key
 
@@ -61,7 +65,7 @@ def _key_of(token: str | None) -> str | None:
     return f"{_HOST}-{hashlib.sha256(token.encode()).hexdigest()[:16]}"
 
 
-def _gh_token(run: Run, cwd: Path) -> str | None:
+def _gh_token(run: Run, cwd: Path, *, calls: GhCallLog) -> str | None:
     try:
         return run_gh(
             run,
@@ -70,12 +74,13 @@ def _gh_token(run: Run, cwd: Path) -> str | None:
             not_installed="gh is not installed",
             failed=lambda _: "gh auth token failed",
             log=lambda _: None,
+            calls=calls,
         )
     except ValueError:
         return None
 
 
-def read_rate_limit(run: Run, cwd: Path) -> object | None:
+def read_rate_limit(run: Run, cwd: Path, *, calls: GhCallLog) -> object | None:
     """The `gh api rate_limit` document, `None` when `gh` failed or printed no JSON."""
     try:
         out = run_gh(
@@ -85,6 +90,7 @@ def read_rate_limit(run: Run, cwd: Path) -> object | None:
             not_installed="gh is not installed",
             failed=lambda _: "gh api rate_limit failed",
             log=lambda _: None,
+            calls=calls,
         )
         document: object = json.loads(out)
     except ValueError:

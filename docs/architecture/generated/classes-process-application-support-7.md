@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 7 de 8, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 7 de 9, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
@@ -16,41 +16,31 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
   - [application: support (parte 5)](classes-process-application-support-5.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 8)](classes-process-application-support-8.md)
+  - [application: support (parte 9)](classes-process-application-support-9.md)
 
 ```mermaid
 classDiagram
-    class ports__TrackerCallFailed["TrackerCallFailed"]
-    class ports__TrackerRateLimited["TrackerRateLimited"]
-    class ports__TrackerRefused["TrackerRefused"]
-    class ports__TrackerTimedOut["TrackerTimedOut"]
-    class ports__TrackerTransient["TrackerTransient"]
-    class ports__TrackerUnreachable["TrackerUnreachable"]
-    class ports__UnstageablePath["UnstageablePath"]
-    class ports__Upstream["Upstream"]
-    class ports__UpstreamMerge["UpstreamMerge"]
-    class ports__Workspace["Workspace"]
-    class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
-    class preflight__ScratchInARepository["ScratchInARepository"]
-    class run_role__Escalating["Escalating"]
-    class run_role__EstimateCapReached["EstimateCapReached"]
-    class run_role__EstimateStop["EstimateStop"]
-    ports__TrackerRateLimited --|> ports__TrackerCallFailed
-    ports__TrackerTimedOut --|> ports__TrackerCallFailed
-    ports__TrackerTransient --|> ports__TrackerCallFailed
-    ports__TrackerUnreachable --|> ports__TrackerCallFailed
-    run_role__EstimateCapReached --|> run_role__Escalating
+    class ports__Scratch["Scratch"]
+    class ports__SentEntry["SentEntry"]
+    class ports__SentMemory["SentMemory"]
+    class ports__SpecReader["SpecReader"]
+    class ports__SpecUnreadable["SpecUnreadable"]
+    class ports__SpecValidator["SpecValidator"]
+    class ports__StackHint["StackHint"]
+    class ports__Stage0Candidate["Stage0Candidate"]
+    class ports__Stage0Escalation["Stage0Escalation"]
+    class ports__Stage0Store["Stage0Store"]
+    class ports__Stage0Users["Stage0Users"]
+    class ports__StopFlag["StopFlag"]
+    class ports__SystemRepo["SystemRepo"]
+    class ports__TaskDocuments["TaskDocuments"]
 ```
 
 ## Relaciones con otras páginas
 
-- [application: landing](classes-process-application-landing.md)
-  - `landing_plan.LandingContext` se asocia con `ports.Upstream`
 - [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
-  - `ports.UnstageablePath` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
-  - `ports.Ports` se asocia con `ports.Workspace`
+  - `ports.SystemRepo` se asocia con `ports.Inbox`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.TaskDocuments`
 - [application: support (parte 8)](classes-process-application-support-8.md)
-  - `run_role.PromptFailure` hereda de `run_role.Escalating`
-  - `run_role.RoleFailure` hereda de `run_role.Escalating`
-  - `run_role.TaskCapReached` hereda de `run_role.Escalating`
+  - `ports.SystemRepo` se asocia con `ports.Tracker`

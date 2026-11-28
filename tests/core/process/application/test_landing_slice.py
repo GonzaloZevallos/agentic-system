@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing
-from agentic.core.process.application.ports import RawResult, Upstream
+from agentic.core.process.application.ports import RawResult, TrackerTurnRefused, Upstream
 from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.presubmit import ApiBreakLine
@@ -268,6 +269,33 @@ def test_a_slice_waiting_for_its_ci_stays_open_and_merges_the_same_pull_request_
     assert len(ports.workspace.slice_builds) == 1  # the same pull request, not rebuilt
     assert [s["units"] for s in _doc(ports)["landed_slices"]] == [["a", "b"]]
     assert _doc(ports)["landing"][-1]["resolved_at"]
+
+
+def test_a_refused_write_turn_on_the_slice_merge_refuses_nothing_and_the_next_round_merges():
+    ports = _world(frozenset({"integration.py"}))
+    real_merge = ports.tracker.merge
+    turn_refused = [True]
+
+    def merge(reference, head_sha, *, method=None):
+        pull_request_number(reference)
+        if turn_refused:
+            raise TrackerTurnRefused("gh pr merge write turn refused: over the 60 s bound")
+        return real_merge(reference, head_sha, method=method)
+
+    ports.tracker.merge = merge
+    _land(ports)
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["slice_pull_request"] == SLICE_URL
+    assert "resolved_at" not in entry and "closed_at" not in entry and "refused" not in str(entry)
+    assert ports.tracker.closed_pull_requests == []  # `_refuse` closes the slice: it was not called
+    assert _doc(ports).get("landed_slices", []) == []
+
+    turn_refused.clear()
+    _land(ports)
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+    assert [s["units"] for s in _doc(ports)["landed_slices"]] == [["a", "b"]]
 
 
 def test_a_crash_between_the_merge_and_the_record_does_not_land_the_slice_twice():
