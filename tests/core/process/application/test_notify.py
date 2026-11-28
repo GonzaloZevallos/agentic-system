@@ -1,15 +1,26 @@
 """GH-1059 part 3b-1: the notify round over fake Notifier, Notified and Activity ports."""
 
 import ast
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from agentic.core.process.application.notify import NotifyCarry, notify, split_facts_of
-from agentic.core.process.application.ports import ActivityPage, ActivityRow, Ports
+from agentic.core.process.application.notify import (
+    NotifyCarry,
+    notify,
+    poll_round,
+    split_facts_of,
+)
+from agentic.core.process.application.ports import (
+    ActivityPage,
+    ActivityRow,
+    NotifySettings,
+    Ports,
+)
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.notify import (
     NOTIFY_RETRY_AFTER,
@@ -17,12 +28,15 @@ from agentic.core.process.domain.notify import (
     EventKey,
     NotifiedRecord,
     NotifyKinds,
+    digest_instant,
 )
 from tests.fakes import (
     FakeActivity,
     FakeNotified,
     FakeNotifier,
+    FakeOrigin,
     MemoryDocuments,
+    MemoryStack,
     MemoryTracker,
     memory_ports,
 )
@@ -79,6 +93,9 @@ class Setup:
         self.activity = FakeActivity(**rows)
         self.tracker = MemoryTracker()
         self.carry = NotifyCarry()
+        self.settings: NotifySettings | None = NotifySettings(None, ("release",))
+        self.origin = FakeOrigin()
+        self.stack = MemoryStack(product="shop")
 
     @property
     def ports(self) -> Ports:
@@ -88,6 +105,9 @@ class Setup:
             notifier=self.notifier,
             notified=self.notified,
             activity=self.activity,
+            stack=self.stack,
+            notify_settings=self.settings,
+            origin=self.origin,
         )
 
     def round(self, now: datetime = NOW, kinds: NotifyKinds = RELEASE) -> list[str]:
@@ -441,3 +461,105 @@ def test_nothing_imports_the_notify_use_case_yet() -> None:
     ]:
         assert _imports_notify_use_case(Path(folder) / "other.py", ast.parse(source)), source
     assert not _imports_notify_use_case(Path("x/other.py"), ast.parse("import os"))
+
+
+def _poll(s: Setup, now: datetime = NOW) -> list[str]:
+    return poll_round(s.ports, now, s.carry, TZ)
+
+
+@pytest.mark.parametrize("off", ["notify_settings", "notifier", "notified", "activity", "origin"])
+def test_poll_round_is_empty_and_reads_nothing_when_a_notifier_member_is_none(off: str) -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    ports = replace(s.ports, **{off: None})
+    assert poll_round(ports, NOW, s.carry, TZ) == []
+    assert s.origin.calls == 0 and s.activity.reads == [] and s.documents.loaded == []
+    assert s.notified.calls == 0 and s.notifier.calls == 0 and s.stack.revisions == []
+    assert s.carry == NotifyCarry()
+
+
+def test_poll_round_sends_once_with_the_origin_repo_and_reads_the_origin_once() -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    assert _poll(s) == []
+    assert [m.subject for m in s.notifier.sent] == ["[shop] Released #5: AB"]
+    assert _poll(s, NOW + timedelta(minutes=1)) == []
+    assert s.origin.calls == 1
+    assert (s.carry.product, s.carry.repo) == ("shop", REPO)
+
+
+def test_poll_round_with_no_kind_enabled_reads_nothing_and_unknown_names_are_said_once() -> None:
+    s = Setup(closed=[_row(5, 61)])
+    s.settings = NotifySettings(None, ())
+    assert _poll(s) == [] and s.origin.calls == 0 and s.activity.reads == []
+    s.settings = NotifySettings(None, ("Release", f"x-{SECRET}"))
+    assert _poll(s) == ["notify: unknown event kind ignored"]
+    assert _poll(s, NOW + timedelta(minutes=1)) == []
+    assert s.activity.reads == []
+
+
+@pytest.mark.parametrize("where", ["stack", "origin"])
+def test_poll_round_turns_a_raising_port_into_one_type_name_line(where: str) -> None:
+    s = Setup(closed=[_row(5, 61)])
+    if where == "stack":
+        s.stack = MemoryStack(product=None)
+    else:
+        s.origin.error = KeyError(SECRET)
+    lines = _poll(s)
+    assert lines == [
+        "notify: round failed (ValueError)"
+        if where == "stack"
+        else "notify: round failed (KeyError)"
+    ]
+    assert s.notifier.sent == [] and s.carry.repo is None
+    assert s.carry.product is None or where == "origin"
+
+
+@pytest.mark.parametrize("where", ["activity", "documents", "send"])
+def test_poll_round_does_not_raise_when_a_notify_port_fails(where: str) -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    if where == "activity":
+        s.activity.error = RuntimeError(SECRET)
+    elif where == "documents":
+        s.documents.error = RuntimeError(SECRET)
+    else:
+        s.notifier.fail = 1
+    lines = _poll(s)
+    assert len(lines) == 1 and lines[0].startswith("notify: round failed (")
+    assert SECRET not in lines[0]
+
+
+def test_a_failing_origin_is_read_once_per_rest_and_again_after_it() -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    s.origin.remote = None
+    assert _poll(s) == ["notify: repo origin unreadable"]
+    assert _poll(s) == []
+    assert _poll(s, NOW + NOTIFY_RETRY_AFTER - timedelta(seconds=1)) == []
+    assert s.origin.calls == 1 and s.notifier.sent == []
+    s.origin.remote = REPO
+    assert _poll(s, NOW + NOTIFY_RETRY_AFTER) == []
+    assert s.origin.calls == 2 and len(s.notifier.sent) == 1
+
+
+@pytest.mark.parametrize(
+    "remote", ["https://user:tok@github.com/acme/shop.git", "https://gitlab.com/acme/shop"]
+)
+def test_a_remote_that_is_not_a_plain_github_url_sends_nothing_and_leaks_nothing(
+    remote: str,
+) -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    s.origin.remote = remote
+    lines = [*_poll(s), *_poll(s, NOW + NOTIFY_RETRY_AFTER)]
+    assert lines == ["notify: repo is not a GitHub repository URL"]
+    assert s.notifier.sent == [] and s.origin.calls == 1
+    assert "tok" not in "".join(lines) and s.carry.repo == ""
+
+
+def test_the_digest_instant_on_a_daylight_saving_day_with_a_zone_fixed_the_day_before() -> None:
+    # Documentation of the accepted risk: the default zone is the local offset at `now`, a fixed
+    # offset. On the day the clocks go back (Madrid, 2026-10-25) the digest at 20:00 local is
+    # 19:00 UTC with the real zone, and an hour early when the offset is the summer one.
+    day = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    assert digest_instant(day, ZoneInfo("Europe/Madrid"), 20) == datetime(
+        2026, 10, 25, 19, tzinfo=UTC
+    )
+    summer = timezone(timedelta(hours=2))
+    assert digest_instant(day, summer, 20) == datetime(2026, 10, 25, 18, tzinfo=UTC)
