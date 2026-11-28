@@ -159,29 +159,31 @@ def ahead(own: ExemptRank | None, others: Sequence[ExemptWait]) -> list[ExemptWa
     return [w for w in others if (w.since, w.root_key) < mine]
 
 
-type ExemptLive = tuple[int, int, tuple[tuple[str, str, rules.RunKind], ...]]
-"""What `live_exempt` counted, `(own, machine, holders)`: `own` live exempt children of this
-product, `machine` of all products, and `holders`, the `(product, task_id, kind)` of those of
-the other products sorted by product then task. A plain tuple, so the generated class diagrams
-under `docs/architecture/generated/` stay as they are."""
+type ExemptHolder = tuple[str, str, rules.RunKind]
+type ExemptLive = tuple[int, int, tuple[ExemptHolder, ...], tuple[ExemptHolder, ...]]
+"""What `live_exempt` counted, `(own, machine, holders, mine)`: `own` live exempt children of
+this product, `machine` of all products, `holders` the `(product, task_id, kind)` of those of
+the other products and `mine` of this product's, each sorted by product then task. A plain
+tuple, so the generated class diagrams under `docs/architecture/generated/` stay as they are."""
+
+
+def _by_product_task(children: Iterable[ExemptHolder]) -> tuple[ExemptHolder, ...]:
+    return tuple(sorted(children, key=lambda h: (h[0], h[1])))
 
 
 def live_exempt(running: Iterable[tuple[str, str, rules.RunKind]], product: str) -> ExemptLive:
     """Count the live exempt children (`rules.counts_against_cap` false) of `product` and of
-    the machine from `(product, task_id, kind)` triples: the one place that does. The holders
-    are sorted here, so the result does not depend on the order of `running`."""
-    own = 0
+    the machine from `(product, task_id, kind)` triples, and list them: the one place that
+    does. The lists are sorted here, so the result does not depend on the order of `running`."""
     machine = 0
-    holders: list[tuple[str, str, rules.RunKind]] = []
+    holders: list[ExemptHolder] = []
+    mine: list[ExemptHolder] = []
     for who, task_id, kind in running:
         if rules.counts_against_cap(kind):
             continue
         machine += 1
-        if who == product:
-            own += 1
-        else:
-            holders.append((who, task_id, kind))
-    return own, machine, tuple(sorted(holders, key=lambda h: (h[0], h[1])))
+        (mine if who == product else holders).append((who, task_id, kind))
+    return len(mine), machine, _by_product_task(holders), _by_product_task(mine)
 
 
 def _written_at(

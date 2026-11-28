@@ -100,7 +100,6 @@ from .ports import (
     LockRecord,
     Ports,
     RunLock,
-    RunRegistration,
     RunRegistry,
     StackHint,
     TrackerCallFailed,
@@ -3529,20 +3528,19 @@ def _sweep_exempt_attempts(
 
 
 def _exempt_holder(
-    product: str,
-    running: Sequence[RunRegistration],
+    mine: Sequence[exempt_queue.ExemptHolder],
     yielding: Sequence[exempt_queue.ExemptWait],
-    holders: Sequence[tuple[str, str, rules.RunKind]],
+    holders: Sequence[exempt_queue.ExemptHolder],
     started: str | None,
 ) -> str:
     """Who holds this product's exempt slot, in closed fields (GH-500, GH-1226): this product's
-    own live exempt child (`product P task T kind K`), else `yielding to product P` while it
-    waits for another product's older wait, else, with the machine cap full, the first live
+    own live exempt child (`mine`, the first by product and task: `product P task T kind K`),
+    else `yielding to product P` while it waits for another product's older wait, else, with the machine cap full, the first live
     exempt child of another product (`holders`, sorted by product and task), else the child
     this very round starts."""
-    for r in running:
-        if r.product == product and not rules.counts_against_cap(r.kind):
-            return f"product {r.product} task {r.task_id} kind {r.kind}"
+    if mine:
+        who, task_id, kind = mine[0]
+        return f"product {who} task {task_id} kind {kind}"
     if yielding:
         first = min(yielding, key=lambda w: (w.since, w.root_key))
         return f"yielding to product {first.product}"
@@ -3854,7 +3852,7 @@ def run_once(
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
         product = ports.stack.product()
-        own_exempt, machine_exempt, exempt_holders = exempt_queue.live_exempt(
+        own_exempt, machine_exempt, exempt_holders, own_holders = exempt_queue.live_exempt(
             [(r.product, r.task_id, r.kind) for r in running], product
         )
         busy = frozenset(r.task_id for r in running if r.product == product)
@@ -4069,8 +4067,7 @@ def run_once(
             exempt_records,
             now,
             lambda: _exempt_holder(
-                product,
-                running,
+                own_holders,
                 exempt_queue.ahead(exempt_queue.rank(exempt_head), exempt_others)
                 if exempt_head and plan_yielded
                 else [],

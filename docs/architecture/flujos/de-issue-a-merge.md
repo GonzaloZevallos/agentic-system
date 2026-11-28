@@ -48,8 +48,9 @@ sequenceDiagram
    ronda para contar dependientes), y cada listo que no sale queda con una razón en el
    diario. `agentic/core/process/application/poll.py:execute` lanza un hijo por cada
    lanzamiento del plan, `agentic run --issue N --detach`, por medio de `agentic/cli.py:SpawnLauncher`. El poller
-   no corre ningún rol. El único hijo exento (merge o `land_checks`) que la máquina permite
-   no va al número de issue más bajo: `poll_plan` elige al candidato que más tiempo lleva
+   no corre ningún rol. Cada producto tiene un hijo exento (merge o `land_checks`) propio y la máquina
+   permite a lo sumo `EXEMPT_SLOTS_MAX` entre todos (`agentic/core/process/domain/exempt_queue.py:live_exempt`,
+   `behind`); el de cada producto no va al número de issue más bajo: `poll_plan` elige al candidato que más tiempo lleva
    sin intento (`agentic/core/process/domain/exempt_queue.py:rank`, la Cola exenta), y un
    merge rechazado por `ci_untrusted_no_dispatch` sobre el mismo head y master queda en
    `backoff` hasta que uno se mueva. Un issue con la etiqueta `agentic-hold` no se lanza,
