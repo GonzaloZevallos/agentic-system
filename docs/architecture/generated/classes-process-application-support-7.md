@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SpecReader["SpecReader"]
     class ports__SpecUnreadable["SpecUnreadable"]
     class ports__SpecValidator["SpecValidator"]
     class ports__StackHint["StackHint"]
@@ -34,10 +35,8 @@ classDiagram
     class ports__TrackerCallFailed["TrackerCallFailed"]
     class ports__TrackerRateLimited["TrackerRateLimited"]
     class ports__TrackerRefused["TrackerRefused"]
-    class ports__TrackerTimedOut["TrackerTimedOut"]
     ports__SystemRepo --> ports__Tracker
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
-    ports__TrackerTimedOut --|> ports__TrackerCallFailed
 ```
 
 ## Relaciones con otras páginas
@@ -49,5 +48,6 @@ classDiagram
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
 - [application: support (parte 8)](classes-process-application-support-8.md)
+  - `ports.TrackerTimedOut` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerTransient` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`

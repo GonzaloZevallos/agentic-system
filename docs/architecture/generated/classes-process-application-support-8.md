@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__TrackerTimedOut["TrackerTimedOut"]
     class ports__TrackerTransient["TrackerTransient"]
     class ports__TrackerTurnRefused["TrackerTurnRefused"]
     class ports__TrackerUnreachable["TrackerUnreachable"]
@@ -34,10 +35,8 @@ classDiagram
     class run_role__EstimateStop["EstimateStop"]
     class run_role__GuardChain["GuardChain"]
     class run_role__Output["Output"]
-    class run_role__PromptFailure["PromptFailure"]
     ports__TrackerTurnRefused --|> ports__TrackerTransient
     run_role__EstimateCapReached --|> run_role__Escalating
-    run_role__PromptFailure --|> run_role__Escalating
 ```
 
 ## Relaciones con otras páginas
@@ -55,8 +54,10 @@ classDiagram
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`
 - [application: support (parte 7)](classes-process-application-support-7.md)
+  - `ports.TrackerTimedOut` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerTransient` hereda de `ports.TrackerCallFailed`
   - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`
 - [application: support (parte 9)](classes-process-application-support-9.md)
+  - `run_role.PromptFailure` hereda de `run_role.Escalating`
   - `run_role.RoleFailure` hereda de `run_role.Escalating`
   - `run_role.TaskCapReached` hereda de `run_role.Escalating`

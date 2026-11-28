@@ -24,6 +24,7 @@ classDiagram
     class ports__Notified["Notified"]
     class ports__Notifier["Notifier"]
     class ports__NotifyFailed["NotifyFailed"]
+    class ports__NotifySettings["NotifySettings"]
     class ports__OwnerRuleEntry["OwnerRuleEntry"]
     class ports__PendingPaths["PendingPaths"]
     class ports__PerfLock["PerfLock"]
@@ -34,7 +35,6 @@ classDiagram
     class ports__ProductKnowledge["ProductKnowledge"]
     class ports__ProductStack["ProductStack"]
     class ports__Prompts["Prompts"]
-    class ports__RawResult["RawResult"]
     ports__Ports --> ports__ProcessReaper
     ports__Ports --> ports__ProductKnowledge
     ports__Ports --> ports__ProductStack
@@ -52,7 +52,6 @@ classDiagram
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `ports.Ports` se asocia con `ports.CheckScheduler`
   - `ports.Ports` se asocia con `ports.Commands`
-  - `ports.RawResult` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
   - `ports.Ports` se asocia con `ports.Inbox`

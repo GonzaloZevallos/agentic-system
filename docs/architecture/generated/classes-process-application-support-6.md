@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
     class ports__RiskArea["RiskArea"]
     class ports__RoleRunner["RoleRunner"]
@@ -34,11 +35,12 @@ classDiagram
     class ports__Scratch["Scratch"]
     class ports__SentEntry["SentEntry"]
     class ports__SentMemory["SentMemory"]
-    class ports__SpecReader["SpecReader"]
 ```
 
 ## Relaciones con otras páginas
 
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ports.RawResult` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 5)](classes-process-application-support-5.md)

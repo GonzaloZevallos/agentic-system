@@ -10,6 +10,7 @@ applications; only adapters see adapters and the frameworks. Only the root
 
 import ast
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -576,4 +577,149 @@ def test_the_log_construction_scan_rejects_a_second_place_that_builds_it(tmp_pat
     assert _log_constructions(tmp_path, ("composition.py", "process_call_log")) == [
         "composition.py:4",
         "elsewhere.py:1",
+    ]
+
+
+# GH-1057, ADR-0106: `smtplib` and the `AGENTIC_NOTIFY_` variables live in the SMTP adapter, and
+# only the composition root reaches the adapter.
+SMTP_HOME = Path("core") / "process" / "adapters" / "smtp"
+SMTP_CONFIG = SMTP_HOME / "config.py"
+SMTP_STDLIB = frozenset(sys.stdlib_module_names)
+SMTP_ALLOWED_PROJECT = "agentic.core.process.application.ports"
+SMTP_OWN = "agentic.core.process.adapters.smtp"
+NOTIFY_LITERAL = "AGENTIC_NOTIFY_"
+
+
+def _within(name: str, module: str) -> bool:
+    """`name` is `module` or something inside it, on a dot boundary."""
+    return name == module or name.startswith(module + ".")
+
+
+def _smtp_foreign_imports(package: Path) -> list[str]:
+    """What the SMTP adapter imports that is neither standard library nor `application.ports`,
+    nor one of its own modules."""
+    found: set[str] = set()
+    for path in sorted((package / SMTP_HOME).glob("*.py")):
+        for name in imports.imports_of(path, package.parent):
+            top = name.split(".")[0]
+            own = _within(name, SMTP_OWN)
+            # The ports module or what it exports; no package above it, no sibling by prefix.
+            ports = _within(name, SMTP_ALLOWED_PROJECT)
+            if top in SMTP_STDLIB or own or ports:
+                continue
+            found.add(f"{path.name}: {name}")
+    return sorted(found)
+
+
+def _imports_smtp_adapter(package: Path) -> list[str]:
+    adapter = "agentic.core.process.adapters.smtp"
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if (package / SMTP_HOME) not in p.parents
+        and p != package / "composition.py"
+        and any(
+            n == adapter or n.startswith(adapter + ".")
+            for n in imports.imports_of(p, package.parent)
+        )
+    )
+
+
+def _imports_smtplib_outside_the_adapter(package: Path) -> list[str]:
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if (package / SMTP_HOME) not in p.parents
+        and any(n.split(".")[0] == "smtplib" for n in imports.imports_of(p, package.parent))
+    )
+
+
+def _names_the_notify_literal_outside_config(package: Path) -> list[str]:
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if p != package / SMTP_CONFIG and NOTIFY_LITERAL in p.read_text(encoding="utf-8")
+    )
+
+
+def _smtp_package(root: Path) -> Path:
+    package = root / "agentic"
+    (package / SMTP_HOME).mkdir(parents=True)
+    return package
+
+
+def test_the_smtp_adapter_imports_only_the_standard_library_and_the_ports():
+    assert _smtp_foreign_imports(PACKAGE) == []
+    assert imports.imports_of(PACKAGE / SMTP_HOME / "notifier.py", PACKAGE.parent) >= {
+        "smtplib",
+        SMTP_ALLOWED_PROJECT,
+    }
+
+
+def test_the_smtp_import_guard_rejects_a_foreign_import(tmp_path):
+    package = _smtp_package(tmp_path)
+    (package / SMTP_HOME / "notifier.py").write_text(
+        "import smtplib\nimport requests\nfrom agentic.core.process.domain import notify\n"
+        "from agentic.core.process.application.ports import Mail\n"
+        "from agentic.core.process.application.ports_x import Other\n"
+        "import agentic.core.process.application\n"
+        "import agentic.core.process.adapters.smtp_x\n"
+    )
+    assert _smtp_foreign_imports(package) == [
+        "notifier.py: agentic.core.process.adapters.smtp_x",
+        "notifier.py: agentic.core.process.application",
+        "notifier.py: agentic.core.process.application.ports_x",
+        "notifier.py: agentic.core.process.application.ports_x.Other",
+        "notifier.py: agentic.core.process.domain",
+        "notifier.py: agentic.core.process.domain.notify",
+        "notifier.py: requests",
+    ]
+
+
+def test_only_the_composition_root_imports_the_smtp_adapter():
+    assert _imports_smtp_adapter(PACKAGE) == []
+    assert any(
+        n.startswith("agentic.core.process.adapters.smtp")
+        for n in imports.imports_of(PACKAGE / "composition.py", PACKAGE.parent)
+    )
+
+
+def test_the_smtp_adapter_guard_rejects_any_other_importer(tmp_path):
+    package = _smtp_package(tmp_path)
+    (package / "composition.py").write_text("from agentic.core.process.adapters import smtp\n")
+    (package / "cli.py").write_text(
+        "from .core.process.adapters.smtp.notifier import SmtpNotifier\n"
+    )
+    (package / "core" / "process" / "application").mkdir(parents=True)
+    (package / "core" / "process" / "application" / "x.py").write_text(
+        "import agentic.core.process.adapters.smtp.config\n"
+    )
+    assert _imports_smtp_adapter(package) == ["cli.py", "core/process/application/x.py"]
+
+
+def test_only_the_smtp_adapter_imports_smtplib():
+    assert _imports_smtplib_outside_the_adapter(PACKAGE) == []
+
+
+def test_the_smtplib_guard_rejects_a_module_outside_the_adapter(tmp_path):
+    package = _smtp_package(tmp_path)
+    (package / SMTP_HOME / "notifier.py").write_text("import smtplib\n")
+    (package / "composition.py").write_text("from smtplib import SMTP\n")
+    (package / "other.py").write_text("import smtplib.x\n")
+    assert _imports_smtplib_outside_the_adapter(package) == ["composition.py", "other.py"]
+
+
+def test_the_notify_variables_are_named_only_in_the_smtp_config():
+    assert _names_the_notify_literal_outside_config(PACKAGE) == []
+    assert NOTIFY_LITERAL in (PACKAGE / SMTP_CONFIG).read_text(encoding="utf-8")
+
+
+def test_the_notify_literal_guard_rejects_any_other_file(tmp_path):
+    package = _smtp_package(tmp_path)
+    (package / SMTP_CONFIG).write_text('X = "AGENTIC_NOTIFY_EMAIL_TO"\n')
+    (package / SMTP_HOME / "notifier.py").write_text('Y = "AGENTIC_NOTIFY_SMTP_HOST"\n')
+    (package / "composition.py").write_text('os.environ["AGENTIC_NOTIFY_EVENTS"]\n')
+    assert _names_the_notify_literal_outside_config(package) == [
+        "composition.py",
+        "core/process/adapters/smtp/notifier.py",
     ]

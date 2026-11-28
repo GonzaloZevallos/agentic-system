@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class run_role__PromptFailure["PromptFailure"]
     class run_role__RoleFailure["RoleFailure"]
     class run_role__TaskCapReached["TaskCapReached"]
     class spec_guard__Changed["Changed"]
@@ -32,5 +33,6 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [application: support (parte 8)](classes-process-application-support-8.md)
+  - `run_role.PromptFailure` hereda de `run_role.Escalating`
   - `run_role.RoleFailure` hereda de `run_role.Escalating`
   - `run_role.TaskCapReached` hereda de `run_role.Escalating`

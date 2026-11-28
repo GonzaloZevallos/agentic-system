@@ -22,6 +22,7 @@ from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.github.activity import GhActivity
 from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
@@ -879,9 +880,13 @@ def test_the_activity_read_is_not_wired_while_the_notifier_address_is_unset(tmp_
     assert ports.activity is None and ports.notifier is None
 
 
-def test_the_offline_ports_never_carry_an_activity_read(tmp_path, monkeypatch):
-    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+def test_the_activity_read_is_wired_with_the_notifier_and_offline_ports_drop_it(
+    tmp_path, monkeypatch
+):
+    product = _committed_product(tmp_path, monkeypatch, "product: demo\nchecks:\n  tests: 'true'\n")
     monkeypatch.setenv("AGENTIC_NOTIFY_EMAIL_TO", "someone@example.com")
-    product = a_repository(tmp_path / "product")
-    ports = composition.offline_ports(Configuration(product_dir=product))
-    assert ports.activity is None and ports.notifier is None and ports.notified is None
+    cfg = Configuration(product_dir=product)
+    live = composition.default_ports(cfg)
+    assert isinstance(live.activity, GhActivity) and live.notifier is not None
+    offline = composition.offline_ports(cfg)
+    assert offline.activity is None and offline.notifier is None and offline.notified is None
