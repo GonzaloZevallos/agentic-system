@@ -1,9 +1,8 @@
-Esta página muestra los módulos del grupo `landing` de `domain` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El grupo se dividió por cantidad: esta es la parte 1 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
+Esta página muestra los módulos del grupo `landing` de `domain` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera.
 
 - Padre: [domain](packages-process-domain.md)
 - Hermanas:
   - [domain: checks](packages-process-domain-checks.md)
-  - [domain: landing (parte 2)](packages-process-domain-landing-2.md)
   - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
   - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
   - [domain: playbook](packages-process-domain-playbook.md)
@@ -14,31 +13,47 @@ Esta página muestra los módulos del grupo `landing` de `domain` y los imports 
 ```mermaid
 graph TD
     g_domain__checks["checks (grupo)"]
-    g_domain__landing__2["landing parte 2 (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state["state (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_domain__adr_dated["domain.adr_dated"]
     m_domain__adr_numbers["domain.adr_numbers"]
     m_domain__board["domain.board"]
-    m_domain__board_schema["domain.board_schema"]
     m_domain__cost_history["domain.cost_history"]
     m_domain__gate_priority["domain.gate_priority"]
     m_domain__hold["domain.hold"]
     m_domain__landing["domain.landing"]
+    m_domain__landing_order["domain.landing_order"]
+    m_domain__merge_hold["domain.merge_hold"]
+    m_domain__plan_revision["domain.plan_revision"]
+    m_domain__plan_route["domain.plan_route"]
+    m_domain__plan_settlement["domain.plan_settlement"]
+    m_domain__plan_view["domain.plan_view"]
+    m_domain__pull_request["domain.pull_request"]
+    m_domain__stacking["domain.stacking"]
     m_domain__adr_dated --> m_domain__adr_numbers
-    m_domain__board --> g_domain__landing__2
     m_domain__board --> g_domain__roles
     m_domain__board --> g_domain__state
     m_domain__board --> m_domain__hold
-    m_domain__board_schema --> m_domain__board
+    m_domain__board --> m_domain__stacking
     m_domain__cost_history --> g_domain__state
     m_domain__cost_history --> g_pkg__agentic__shared
     m_domain__gate_priority --> g_domain__checks
     m_domain__gate_priority --> g_domain__state
     m_domain__landing --> g_domain__checks
-    m_domain__landing --> g_domain__landing__2
     m_domain__landing --> g_domain__roles
     m_domain__landing --> g_domain__state
     m_domain__landing --> m_domain__adr_numbers
+    m_domain__landing --> m_domain__landing_order
+    m_domain__landing --> m_domain__pull_request
+    m_domain__landing --> m_domain__stacking
+    m_domain__landing_order --> g_domain__state
+    m_domain__plan_revision --> g_domain__state
+    m_domain__plan_settlement --> g_domain__roles
+    m_domain__plan_settlement --> g_domain__state
+    m_domain__plan_view --> g_domain__roles
+    m_domain__plan_view --> g_domain__state
+    m_domain__pull_request --> g_domain__state
+    m_domain__pull_request --> m_domain__landing
+    m_domain__stacking --> g_domain__state
 ```

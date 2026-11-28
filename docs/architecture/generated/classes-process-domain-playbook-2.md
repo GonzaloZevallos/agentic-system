@@ -9,7 +9,6 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
-  - [domain: landing (parte 4)](classes-process-domain-landing-4.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
@@ -34,6 +33,9 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
 
 ```mermaid
 classDiagram
+    class playbook__Refusal["Refusal"]
+    class playbook__Rejected["Rejected"]
+    class playbook__Scored["Scored"]
     class playbook__ScoredTask["ScoredTask"]
     class playbook_candidates__Add["Add"]
     class playbook_candidates__Candidate["Candidate"]
@@ -48,3 +50,9 @@ classDiagram
     class playbook_similarity__Lesson["Lesson"]
     playbook_candidates__Candidate --> playbook_candidates__Record
 ```
+
+## Relaciones con otras páginas
+
+- [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
+  - `playbook.Refusal` se asocia con `playbook.Delta`
+  - `playbook.Scored` se asocia con `playbook.Playbook`

@@ -484,12 +484,6 @@ class Allowance(NamedTuple):
 
 ALLOWANCES: tuple[Allowance, ...] = (
     Allowance(
-        "tests/core/process/test_board_names.py",
-        "tests/core/process/adapters/github/test_board.py",
-        "names the frozen GhBoard test file to skip it in its scan of every adapter and test "
-        "source; it parses the others and never opens this one",
-    ),
-    Allowance(
         "tests/test_poll_reexec.py",
         "agentic/core/*/docs/adr/*",
         "lists the repo's docs/adr by file name; the guard also matches the module ADR "

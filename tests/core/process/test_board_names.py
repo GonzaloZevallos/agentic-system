@@ -18,9 +18,10 @@ from agentic.core.process.domain.board_schema import (
 ROOT = Path(__file__).resolve().parents[3]
 SCANNED = (ROOT / "agentic" / "core" / "process" / "adapters", ROOT / "tests")
 NAMES = KNOWN_ETAPAS | {MOTIVO_FIELD, PREVIOUS_MOTIVO_FIELD}
-# GhBoard's own tests are frozen (GH-1166 invariant: the file is not modified); they spell the
-# Motivo field the way the Project does.
-FROZEN = {ROOT / "tests" / "core" / "process" / "adapters" / "github" / "test_board.py"}
+# GhBoard's own tests are frozen (invariant 6: the file is not modified) and spell the Motivo
+# field the way the Project does, which invariant 1 forbids: the two cannot both hold. The
+# scan skips that one file, found by its name and its directory.
+FROZEN_NAME, FROZEN_DIR = "test_board.py", "github"
 
 
 def docstrings(tree: ast.AST) -> set[int]:
@@ -54,7 +55,7 @@ def test_no_adapter_or_test_repeats_a_board_name() -> None:
         f"{path.relative_to(ROOT)}:{line}: {value!r}"
         for root in SCANNED
         for path in root.rglob("*.py")
-        if path not in FROZEN
+        if (path.name, path.parent.name) != (FROZEN_NAME, FROZEN_DIR)
         for line, value in flagged(path)
     }
     assert not found, sorted(found)
