@@ -291,9 +291,9 @@ def advance_read_at(
     """Where the activity read resumes after a digest consumed `candidates` (`(instant, key)`, at
     most `limit` of them; a key means the row is settled in `record.keys`, for a digest only
     `sent`; `Judged.JUDGED` also counts as settled). `cut_at` is the instant of the `limit + 1`-th
-    row when the read returned one. The result is the greatest keyed instant strictly before the earliest unkeyed one, else `read_at`;
-    it depends only on the set of candidates. A group of equal instants is advanced past whole or
-    not at all: a cut inside one leaves the whole group out, unless every remaining row shares
+    row when the read returned one. The result is the greatest keyed instant strictly before the
+    earliest unkeyed one, else `read_at`; it depends only on the set of candidates. A group of
+    equal instants is advanced past whole or not at all: a cut inside one leaves the whole group out, unless every remaining row shares
     `cut_at` (a single group, counted as "50+"). Rows at or before `read_at` are stale
     (`since` is exclusive). Rejects, never normalizes, a naive or non-UTC instant, a `cut_at` not
     after `read_at` and a `cut_at` earlier than a candidate.
