@@ -1762,6 +1762,16 @@ class IssueComment:
 
 
 @dataclass(frozen=True)
+class QueueEntry:
+    """One queued issue as the queue call returns it (GH-1212): its `number` and the
+    `updated_at` stamp GitHub gave in that same call. `updated_at` is `""` when GitHub gave
+    none -- never `None` -- so a reader compares strings only."""
+
+    number: int
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class ListedPullRequest:
     """One pull request of the product as the playbook delivery reads it (ADR-0043):
     `state` is `OPEN`, `MERGED` or `CLOSED`, `merge_commit` the commit a merge made (empty
@@ -1996,6 +2006,12 @@ class Tracker(Protocol):
         ascending (GH-137): the poller's own candidate pool, so "primero el número más
         bajo" is decided here and not left to however `gh issue list` happens to order
         a page today."""
+        ...
+
+    def queue_entries(self) -> list[QueueEntry]:
+        """The same pool as `queue()`, from the same single call, each issue with the
+        `updatedAt` stamp that call returned (GH-1212): ascending by number, `updated_at`
+        `""` when GitHub gave none. `queue()` is these numbers."""
         ...
 
     def held_issues(self) -> frozenset[int]:

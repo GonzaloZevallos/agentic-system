@@ -14,6 +14,7 @@ from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
     HeldListMayBeCut,
     MergeCallFailed,
+    QueueEntry,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -34,6 +35,7 @@ from agentic.core.process.domain.github_access import GithubAccess, Turn
 from agentic.core.process.domain.hold import HELD_LIMIT, HOLD_LABEL
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from tests.conformance import tracker_queue_entries_agree_with_queue
 from tests.core.process.adapters.github.gh_fake import (
     RecordingRun,
     ScriptedRun,
@@ -871,11 +873,66 @@ def test_queue_is_every_open_agentic_issue_sorted_ascending():
             "--state",
             "open",
             "--json",
-            "number",
+            "number,updatedAt",
             "--limit",
             "500",
         ]
     ]
+
+
+QUEUE_ARGV = [
+    "gh",
+    "issue",
+    "list",
+    "--label",
+    "agentic",
+    "--state",
+    "open",
+    "--json",
+    "number,updatedAt",
+    "--limit",
+    "500",
+]
+
+
+def test_queue_entries_and_queue_each_make_one_call_asking_for_number_and_updated_at():
+    body = json.dumps([{"number": 2, "updatedAt": "2026-11-28T10:00:00Z"}])
+    entries_run = Recorder(stdout=body)
+    GhTracker(Path("/p"), entries_run).queue_entries()
+    assert entries_run.calls == [QUEUE_ARGV]
+    queue_run = Recorder(stdout=body)
+    GhTracker(Path("/p"), queue_run).queue()
+    assert queue_run.calls == [QUEUE_ARGV]
+
+
+def test_queue_entries_are_ascending_and_carry_each_updated_at():
+    run = Recorder(
+        stdout=json.dumps(
+            [
+                {"number": 20, "updatedAt": "2026-11-28T12:00:00Z"},
+                {"number": 4, "updatedAt": "2026-11-28T10:00:00Z"},
+                {"number": 9},
+            ]
+        )
+    )
+    assert GhTracker(Path("/p"), run).queue_entries() == [
+        QueueEntry(4, "2026-11-28T10:00:00Z"),
+        QueueEntry(9, ""),
+        QueueEntry(20, "2026-11-28T12:00:00Z"),
+    ]
+
+
+@pytest.mark.parametrize("stamp", [{}, {"updatedAt": None}, {"updatedAt": 5}])
+def test_a_missing_null_or_numeric_updated_at_is_an_empty_string(stamp):
+    run = Recorder(stdout=json.dumps([{"number": 3, **stamp}]))
+    assert GhTracker(Path("/p"), run).queue_entries() == [QueueEntry(3, "")]
+
+
+def test_the_gh_tracker_keeps_the_queue_entries_contract():
+    run = Recorder(
+        stdout=json.dumps([{"number": 20, "updatedAt": "2026-11-28T12:00:00Z"}, {"number": 4}])
+    )
+    tracker_queue_entries_agree_with_queue(GhTracker(Path("/p"), run))
 
 
 HELD_ARGV = [

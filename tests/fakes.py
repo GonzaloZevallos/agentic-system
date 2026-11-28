@@ -68,6 +68,7 @@ from agentic.core.process.application.ports import (
     ProductKnowledge,
     ProductStack,
     Prompts,
+    QueueEntry,
     RawResult,
     RemergeDiffUnsupported,
     RepoOrigin,
@@ -1821,6 +1822,8 @@ class MemoryTracker:
         # GH-137: the poller's own candidate pool, and the structured facts per issue
         # number a test scripts with `states`.
         self._queue: list[int] = []
+        # GH-1212: the `updatedAt` stamp `queue_entries` gives each queued number (absent: "").
+        self.queue_updated: dict[int, str] = {}
         # GH-344: the task ids `close_issue` closed, and the exceptions it raises first.
         self.closed_issues: list[str] = []
         # GH-619: the comment each `close_issue` carried, by task id (absent when none).
@@ -2173,9 +2176,12 @@ class MemoryTracker:
         return self.issue_created.get(task_id)
 
     def queue(self) -> list[int]:
+        return [e.number for e in self.queue_entries()]
+
+    def queue_entries(self) -> list[QueueEntry]:
         if self.queue_error is not None:
             raise self.queue_error
-        return sorted(self._queue)
+        return [QueueEntry(n, self.queue_updated.get(n, "")) for n in sorted(self._queue)]
 
     def held_issues(self) -> frozenset[int]:
         if self.held_issues_error is not None:

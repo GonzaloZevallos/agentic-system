@@ -25,6 +25,7 @@ from ...application.ports import (
     IssueState,
     ListedPullRequest,
     MergeCallFailed,
+    QueueEntry,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -970,6 +971,9 @@ class GhTracker:
         return created if isinstance(created, str) and created else None
 
     def queue(self) -> list[int]:
+        return [entry.number for entry in self.queue_entries()]
+
+    def queue_entries(self) -> list[QueueEntry]:
         raw = self._gh_read(
             "issue",
             "list",
@@ -978,11 +982,15 @@ class GhTracker:
             "--state",
             "open",
             "--json",
-            "number",
+            "number,updatedAt",
             "--limit",
             "500",
         )
-        return sorted(item["number"] for item in json.loads(raw))
+        entries = []
+        for item in json.loads(raw):
+            stamp = item.get("updatedAt")
+            entries.append(QueueEntry(item["number"], stamp if isinstance(stamp, str) else ""))
+        return sorted(entries, key=lambda entry: entry.number)
 
     def held_issues(self) -> frozenset[int]:
         try:
