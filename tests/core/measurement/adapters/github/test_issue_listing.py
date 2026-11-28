@@ -123,9 +123,6 @@ def test_each_exception_maps_by_type_to_a_closed_cause_and_page_never_raises(err
     assert listing(error)[0].page(1) == PageUnreadable(cause)
 
 
-RATE_LIMIT = json.dumps({"resources": {"core": {"remaining": 4321, "limit": 5000}}})
-
-
 RATE_LIMIT = {"resources": {"core": {"remaining": 4321, "limit": 5000}}}
 
 
