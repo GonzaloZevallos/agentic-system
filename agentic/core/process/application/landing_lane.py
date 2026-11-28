@@ -1,12 +1,14 @@
 """The facts the fast lane needs of a landing round (GH-681): transcribed, never decided.
 
-`lane_facts` reads, for the head of the landing order, its pushed paths and the syncs its budget
-still allows, and for each candidate whether its branch holds master and what it touches. The
-lane predicate and its reasons live in `domain.landing_order` and nowhere else; this module hands
-it `Member`s and takes no part in the decision. A read that fails is `None` in that fact, never
-`False`, `0` or an empty set: the domain reads `None` as "unknown" and never opens a lane on it.
+`lane_facts` reads, for the head of the landing order (whatever it is doing), its pushed paths and
+the syncs its budget still allows, and for each candidate whether its branch holds master and what
+it touches. The lane predicate and its reasons live in `domain.landing_order` and nowhere else;
+this module hands it `Member`s and takes no part in the decision. A read that fails is `None` in
+that fact, never `False`, `0` or an empty set: the domain reads `None` as "unknown" and never opens
+a lane on it.
 
-Local git only, and one `tracker.pull_request` read of the head per round. It imports nothing from
+Local git only, and at most one `tracker.pull_request` read per round (a busy head the round did
+not assess). It imports nothing from
 `application.poll` (which calls it), so it takes plain values and domain types.
 
 It is also the only writer of the fast lane's informative record (GH-681 part 2): `lane_admitted`
@@ -17,7 +19,7 @@ into a `landing` list or a `head_*` key: the head's budget and `rules.landing_pa
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -34,12 +36,16 @@ class LaneHead:
     """The head of the order as `lane_facts` reads it: its `issue`, the `reference` of its pull
     request (the URL its document stores), its document `raw` (for the syncs it has spent) and
     whether a live child of an integrating kind runs on it (`landing_order.integrates`, which the
-    caller applies)."""
+    caller applies). `pr_head` is the head sha the round assessed for it (`None`: the round has
+    none) and `busy` that a child works on it, so the round assessed nothing: only then is the
+    pull request read for its sha."""
 
     issue: int
     reference: str
     raw: Mapping[str, object]
     integrating: bool
+    pr_head: str | None = None
+    busy: bool = False
 
 
 def _head_oid(ports: Ports, reference: str) -> str | None:
@@ -71,16 +77,17 @@ def _syncs_left(raw: Mapping[str, object], head_oid: str) -> int | None:
 def _head_member(
     ports: Ports, current_master: str, head: LaneHead, member: landing_order.Member
 ) -> landing_order.Member:
-    """`member` (the head) with its own facts: nothing is read for a head that does not
-    integrate, and nothing else than the pull request when its head sha is unknown."""
-    if not head.integrating:
-        return replace(member, integrating=False)
-    head_oid = _head_oid(ports, head.reference)
+    """`member` (the head) with its own facts, whatever child works on it (GH-1213): its paths
+    and the syncs it has left, from the sha the round assessed. The pull request is read only for
+    a busy head the round did not assess; a head with no sha at all reads as unknown (`None`)."""
+    head_oid = head.pr_head
+    if head_oid is None and head.busy:
+        head_oid = _head_oid(ports, head.reference)
     if head_oid is None:
-        return replace(member, integrating=True, paths=None, head_syncs_left=None)
+        return replace(member, integrating=head.integrating, paths=None, head_syncs_left=None)
     return replace(
         member,
-        integrating=True,
+        integrating=head.integrating,
         paths=_touched(ports, current_master, head_oid),
         head_syncs_left=_syncs_left(head.raw, head_oid),
     )
@@ -138,9 +145,9 @@ def lane_facts(
     decision each holds; a member the caller lists in only one of the two, or in neither, comes
     back unchanged: nothing is made up for it.
 
-    A head that does not integrate is read for nothing, and the candidates still carry their
-    `lane_decision` and `clean` but no master or path fact. No candidate is read when the head's
-    paths are `None`: the lane cannot open on them."""
+    The head is read whatever child works on it. No candidate is read when the head's paths are
+    `None`: the lane cannot open on them, so they carry their `lane_decision` and `clean` but no
+    master or path fact."""
     result: list[landing_order.Member] = []
     read_head: landing_order.Member | None = None
     for member in members:
@@ -149,7 +156,7 @@ def lane_facts(
             result.append(read_head)
         else:
             result.append(member)
-    readable = read_head is not None and read_head.integrating and read_head.paths is not None
+    readable = read_head is not None and read_head.paths is not None
     for index, member in enumerate(result):
         pr_head = candidates.get(member.issue)
         decision = decisions.get(member.issue)
@@ -185,13 +192,16 @@ def admit(
     at_work: Callable[[str], bool],
     out: list[str],
 ) -> None:
-    """Record on the lane member's own document that the poller let it merge beside the busy head
+    """Record on the lane member's own document that the poller let it merge beside the head
     `head_issue`, on pull request head `pr_head` and `master`, under the admitted `decision`.
-    Idempotent per `pr_head`: an admission already holding that sha is left as it is, with its
-    `at`. A task at work is not written; a failed write is one line and the next round tries
-    again."""
+    Idempotent per `(pr_head, master)`: an admission already holding both is left as it is, with
+    its `at`; when either changed it is written again with a fresh `at`, so the record carries
+    the pair of the round that last wrote it. A task at work is not written; a failed write is
+    one line and the next round tries again."""
     held = _admission(raw)
-    if (held is not None and held.get("pr_head") == pr_head) or at_work(task_id):
+    if (
+        held is not None and held.get("pr_head") == pr_head and held.get("master") == master
+    ) or at_work(task_id):
         return
     admitted: LaneAdmitted = {
         "head_issue": head_issue,
@@ -209,16 +219,17 @@ def admit(
 def clear_admissions(
     ports: Ports,
     members: Iterable[tuple[str, int]],
-    lane: int | None,
+    lanes: Collection[int],
     at_work: Callable[[str], bool],
     out: list[str],
 ) -> None:
-    """Clear `lane_admitted` (to `None`) from each `(task_id, issue)` of `members` that is not the
-    round's `lane`, is not at work and whose admission no merge followed (`auto_merged_at` later
-    than `at`, which recording keeps): a deferred admission is then never credited if the member
-    later merges as head. The documents are read fresh. A failed write is one line."""
+    """Clear `lane_admitted` (to `None`) from each `(task_id, issue)` of `members` not in the
+    set of the round's opened `lanes`, not at work and whose admission no merge followed
+    (`auto_merged_at` later than `at`, which recording keeps): a deferred admission is then never
+    credited if the member later merges as head. The documents are read fresh. A failed write is
+    one line."""
     for task_id, issue in members:
-        if issue == lane or at_work(task_id):
+        if issue in lanes or at_work(task_id):
             continue
         raw = _load(ports, task_id)
         admitted = _admission(raw) if raw is not None else None
