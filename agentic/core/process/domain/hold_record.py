@@ -1,6 +1,6 @@
 """The holds record a closed task's document keeps (GH-839): the intervals the issue spent under
 the hold label. Pure: no I/O, and nothing outside the standard library and the domain's one
-instant parser (`instant.parse_instant`, ADR-0108: an instant with no offset is unreadable).
+instant parser (`instant.parse_instant`, ADR-0111: an instant with no offset is unreadable).
 
 Either the intervals, `{intervals: [{start, end}]}` (an empty list is read, no holds), or why they
 are not known, `{unknown: unreadable | unpaired}`. This module is the one builder and the one
@@ -52,7 +52,7 @@ def from_events(events: Sequence[LabelEvent], merged_at: str) -> dict[str, Any]:
     are ignored; each addition pairs with the next removal; a hold open at the merge ends at
     `merged_at`. A removal with no open addition is `unpaired`; an addition while one is already
     open is ignored (the hold stays open); an instant that does not parse, `merged_at` included,
-    is `unreadable`, and so is one with no offset (ADR-0108)."""
+    is `unreadable`, and so is one with no offset (ADR-0111)."""
     merged = parse_instant(merged_at)
     if merged is None:
         return _unknown("unreadable")

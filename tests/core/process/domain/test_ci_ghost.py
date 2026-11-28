@@ -156,7 +156,7 @@ NOW = "2026-11-13T10:05:00+00:00"  # 300 s after the fact's dispatched_at, of a 
         ({**_fact(), "dispatched_at": "not an instant"}, HEAD, NOW, False),
         (_fact(), HEAD, "not an instant", False),
         (None, HEAD, NOW, False),
-        # ADR-0108: an instant with no offset is unreadable, so not in force (it was read as UTC
+        # ADR-0111: an instant with no offset is unreadable, so not in force (it was read as UTC
         # and in force while young); the same instant with `Z` or an offset is in force.
         ({**_fact(), "dispatched_at": "2026-11-13T10:00:00"}, HEAD, NOW, False),
         (_fact(), HEAD, "2026-11-13T10:05:00", False),

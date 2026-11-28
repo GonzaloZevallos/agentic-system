@@ -453,7 +453,7 @@ def test_the_same_run_id_falls_back_to_completed_at_and_keeps_both_when_nothing_
 
 
 def test_a_naive_instant_cannot_order_a_rerun_so_both_runs_stay_current() -> None:
-    """ADR-0108: `current_runs` kept only the later of two runs of one id when the instants were
+    """ADR-0111: `current_runs` kept only the later of two runs of one id when the instants were
     read as UTC; an instant with no offset is unreadable, so the older red stays and decides."""
     red = _at(job("docs", "FAILURE", NEW), "2026-11-12T05:00:00")
     green = _at(job("docs", "SUCCESS", NEW), "2026-11-12T06:00:00Z")

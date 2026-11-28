@@ -1,4 +1,4 @@
-"""The one public parser of ISO-8601 instants of the process domain (ADR-0108).
+"""The one public parser of ISO-8601 instants of the process domain (ADR-0111).
 
 A leaf module: it imports only from `datetime` and reads no clock. An instant without an
 offset is unreadable (`None`), never UTC: it cannot be ordered against an aware one, and

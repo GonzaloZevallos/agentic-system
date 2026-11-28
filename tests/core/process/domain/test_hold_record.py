@@ -41,7 +41,7 @@ def test_the_intervals_read_as_aware_pairs_in_the_zone_they_were_written():
     )
 
 
-# --- a naive instant is unreadable (ADR-0108): old reading UTC, now `HoldUnknown` ---------------
+# --- a naive instant is unreadable (ADR-0111): old reading UTC, now `HoldUnknown` ---------------
 
 
 @pytest.mark.parametrize("bound", ["start", "end"])

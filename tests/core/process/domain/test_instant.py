@@ -1,4 +1,4 @@
-"""`instant.parse_instant` (ADR-0108): the one reading of an ISO-8601 instant of the process
+"""`instant.parse_instant` (ADR-0111): the one reading of an ISO-8601 instant of the process
 domain. An instant without an offset is unreadable, never UTC; the source zone is kept."""
 
 from __future__ import annotations

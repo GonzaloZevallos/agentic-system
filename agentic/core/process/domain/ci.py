@@ -271,7 +271,7 @@ def _is_red(check: CiCheck) -> bool:
 
 def _order_key(check: CiCheck) -> datetime | None:
     """When a check run began (`started_at`), else when it ended (`completed_at`); `None` when
-    GitHub gave neither or it cannot be read (an instant with no offset is unreadable, ADR-0108)."""
+    GitHub gave neither or it cannot be read (an instant with no offset is unreadable, ADR-0111)."""
     return parse_instant(check.started_at) or parse_instant(check.completed_at)
 
 
@@ -742,7 +742,7 @@ def ghost_fact_in_force(
     """Whether a recorded ghost dispatch (GH-601) is still being waited on: it is for this very
     commit, not escalated, and its `dispatched_at` is readable and younger than `bound_s` as of
     `now_iso`, both instants of this machine. An unreadable instant, one with no offset included
-    (ADR-0108), is not in force. It never reads an instant GitHub gave; it is the only rule that
+    (ADR-0111), is not in force. It never reads an instant GitHub gave; it is the only rule that
     decides to wait on a recorded dispatch."""
     if fact is None or fact["escalated"] or not rules.same_commit(fact["head"], head):
         return False
@@ -764,7 +764,7 @@ def waited_seconds(timing: CiTiming, until: str | None = None) -> tuple[float | 
     """The CI wait of `timing` (GH-467), the only place it is derived: `max(0, end - max(
     pushed_at, node_started_at))`, where `end` is `run_ended_at` or, when that is `None`, `until`.
     The flag `clamped` is true when the raw difference was negative. `(None, False)` when a bound
-    is missing or unreadable (no offset included, ADR-0108): unknown, never 0.
+    is missing or unreadable (no offset included, ADR-0111): unknown, never 0.
 
     Two caveats. The machine's instants (`pushed_at`, `node_started_at`) and GitHub's
     (`run_ended_at`) are subtracted across two clocks, so a skew between them can show as a
@@ -793,7 +793,7 @@ def timing(
     is the earliest start, `run_ended_at` the latest end among the checks that finished, both
     `None` when none gave one, always for a `no_verdict`. `jobs` lists each finished check's
     duration, and is omitted when empty. An unreadable
-    `pushed_at` (no offset included, ADR-0108) admits no check, and a check whose `started_at`
+    `pushed_at` (no offset included, ADR-0111) admits no check, and a check whose `started_at`
     is unreadable is left out whole."""
     result = CiTiming(
         pushed_at=pushed_at,

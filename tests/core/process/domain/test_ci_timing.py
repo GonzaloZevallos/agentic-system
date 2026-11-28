@@ -123,7 +123,7 @@ def test_an_unreadable_push_instant_reads_the_run_unknown():
     assert built["run_ended_at"] is None
 
 
-# -- an instant with no offset is unreadable (ADR-0108); one row per call site --------------------
+# -- an instant with no offset is unreadable (ADR-0111); one row per call site --------------------
 
 NAIVE_PUSH = "2026-11-06T10:00:00"
 

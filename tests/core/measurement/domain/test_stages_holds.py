@@ -200,7 +200,7 @@ def test_a_malformed_holds_record_is_unknown_not_a_dropped_interval(record):
 
 @pytest.mark.parametrize("bound", ["start", "end"])
 def test_a_holds_interval_with_a_naive_bound_is_hold_unknown_where_it_read_as_utc(bound):
-    """ADR-0108: the entry that reads the record (`stage_split`, through `hold_record.read`)
+    """ADR-0111: the entry that reads the record (`stage_split`, through `hold_record.read`)
     excludes the task, never counts it as zero held minutes. The same record with `Z` or an
     offset splits."""
     zoned = {"start": at(10), "end": at(40)}
