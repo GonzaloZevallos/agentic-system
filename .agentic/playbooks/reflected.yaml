@@ -1772,3 +1772,5 @@ tasks:
     cost_usd: 0.0491
   GH-1027@review:
     cost_usd: 0.056
+  GH-1062@review:
+    cost_usd: 0.0482

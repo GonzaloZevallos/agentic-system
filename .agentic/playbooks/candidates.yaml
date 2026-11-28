@@ -2634,3 +2634,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-28T05:05:16.948+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a field or Protocol to a shared contract such as Ports, find and update every mirror and inventory that tracks it (test fakes, conformance lists), then run the full declared tests check before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1062
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T07:53:40.295+00:00'
