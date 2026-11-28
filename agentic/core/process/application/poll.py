@@ -3535,9 +3535,9 @@ def _exempt_holder(
 ) -> str:
     """Who holds this product's exempt slot, in closed fields (GH-500, GH-1226): this product's
     own live exempt child (`mine`, the first by product and task: `product P task T kind K`),
-    else `yielding to product P` while it waits for another product's older wait, else, with the machine cap full, the first live
-    exempt child of another product (`holders`, sorted by product and task), else the child
-    this very round starts."""
+    else `yielding to product P` while it waits for another product's older wait, else, with
+    the machine cap full, the first live exempt child of another product (`holders`, sorted by
+    product and task), else the child this very round starts."""
     if mine:
         who, task_id, kind = mine[0]
         return f"product {who} task {task_id} kind {kind}"
