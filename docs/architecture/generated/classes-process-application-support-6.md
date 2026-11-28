@@ -22,6 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 classDiagram
     class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
+    class ports__RepoOrigin["RepoOrigin"]
     class ports__RiskArea["RiskArea"]
     class ports__RoleRunner["RoleRunner"]
     class ports__RunLock["RunLock"]
@@ -34,7 +35,6 @@ classDiagram
     class ports__SchemaGuard["SchemaGuard"]
     class ports__Scratch["Scratch"]
     class ports__SentEntry["SentEntry"]
-    class ports__SentMemory["SentMemory"]
 ```
 
 ## Relaciones con otras páginas

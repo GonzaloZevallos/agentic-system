@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SentMemory["SentMemory"]
     class ports__SpecReader["SpecReader"]
     class ports__SpecUnreadable["SpecUnreadable"]
     class ports__SpecValidator["SpecValidator"]
@@ -34,7 +35,6 @@ classDiagram
     class ports__Tracker["Tracker"]
     class ports__TrackerCallFailed["TrackerCallFailed"]
     class ports__TrackerRateLimited["TrackerRateLimited"]
-    class ports__TrackerRefused["TrackerRefused"]
     ports__SystemRepo --> ports__Tracker
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
 ```
