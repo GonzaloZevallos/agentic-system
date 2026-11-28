@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SchemaGuard["SchemaGuard"]
     class ports__Scratch["Scratch"]
     class ports__SentEntry["SentEntry"]
     class ports__SentMemory["SentMemory"]
@@ -33,14 +34,13 @@ classDiagram
     class ports__Stage0Users["Stage0Users"]
     class ports__StopFlag["StopFlag"]
     class ports__SystemRepo["SystemRepo"]
-    class ports__TaskDocuments["TaskDocuments"]
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.SystemRepo` se asocia con `ports.Inbox`
-- [application: support (parte 5)](classes-process-application-support-5.md)
-  - `ports.Ports` se asocia con `ports.TaskDocuments`
 - [application: support (parte 8)](classes-process-application-support-8.md)
   - `ports.SystemRepo` se asocia con `ports.Tracker`
+- [application: support (parte 9)](classes-process-application-support-9.md)
+  - `run_role.GuardChain` agrega a `ports.SchemaGuard`
