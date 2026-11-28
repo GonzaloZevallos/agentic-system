@@ -164,6 +164,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.adr_dated": "landing",
     "domain.adr_numbers": "landing",
     "domain.board": "landing",
+    "domain.board_schema": "landing",
     "domain.boot": "machine",
     "domain.carve_out": "state",
     "domain.check_results": "checks",

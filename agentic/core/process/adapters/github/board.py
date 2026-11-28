@@ -52,6 +52,16 @@ from ...application.ports import (
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
+from ...domain.board_schema import (
+    DEFAULT_OPTION_COLOR,
+    DEFAULT_OPTION_DESCRIPTION,
+    ETAPA_FIELD,
+    MOTIVO_FIELD,
+    STATUS_FIELD,
+    FieldNode,
+    OptionNode,
+    etapa_field,
+)
 from ...domain.github_access import GithubAccess
 from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
 
@@ -78,8 +88,8 @@ ERROR_SUMMARY_CHARS = 300
 ERRORS_SHOWN = 2
 
 _FIELD_NAMES: dict[Field, str] = {
-    "etapa": "Etapa",
-    "motivo": "Motivo",
+    "etapa": ETAPA_FIELD,
+    "motivo": MOTIVO_FIELD,
     "costo": "Costo USD",
     "inicio": "Inicio",
     "fin": "Fin",
@@ -568,9 +578,27 @@ def _options_of(node: Mapping[str, Any]) -> dict[str, str]:
     return {str(o["name"]): str(o["id"]) for o in node.get("options", [])}
 
 
-def _single_select(nodes: Sequence[Mapping[str, Any]], title: str) -> Mapping[str, Any] | None:
-    found = [n for n in nodes if n.get("name") == title and n.get("dataType") == "SINGLE_SELECT"]
-    return found[0] if found else None
+def _field_nodes(raw_nodes: Sequence[Mapping[str, Any]]) -> tuple[FieldNode, ...]:
+    """The identity query's field nodes as the domain reads them: empty nodes skipped, a
+    missing colour or description the default, missing options none."""
+    return tuple(
+        FieldNode(
+            id=str(raw.get("id", "")),
+            name=str(raw.get("name", "")),
+            data_type=str(raw.get("dataType", "")),
+            options=tuple(
+                OptionNode(
+                    id=None if opt.get("id") is None else str(opt["id"]),
+                    name=str(opt.get("name", "")),
+                    color=str(opt.get("color") or DEFAULT_OPTION_COLOR),
+                    description=str(opt.get("description") or DEFAULT_OPTION_DESCRIPTION),
+                )
+                for opt in raw.get("options") or []
+            ),
+        )
+        for raw in raw_nodes
+        if raw
+    )
 
 
 def _first_missing_etapa(node: Mapping[str, Any]) -> str | None:
@@ -581,24 +609,29 @@ def _first_missing_etapa(node: Mapping[str, Any]) -> str | None:
 def _etapa_field(nodes: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
     """The field node that carries the Etapa options: the SINGLE_SELECT `Etapa`, even when it
     is incomplete (no fallback then), else the built-in `Status` when it has all five."""
-    etapa_node = _single_select(nodes, "Etapa")
-    if etapa_node is not None:
-        missing = _first_missing_etapa(etapa_node)
-        if missing is not None:
-            raise ValueError(f"the board project {name} has no Etapa option {missing!r}")
-        return etapa_node
-    status_node = _single_select(nodes, "Status")
-    if status_node is None:
+    picked = etapa_field(_field_nodes(nodes))
+    if picked is None:
         raise ValueError(
-            f"the board project {name} has no SINGLE_SELECT field 'Etapa' "
-            "nor a SINGLE_SELECT field 'Status'"
+            f"the board project {name} has no SINGLE_SELECT field {ETAPA_FIELD!r} "
+            f"nor a SINGLE_SELECT field {STATUS_FIELD!r}"
         )
-    missing = _first_missing_etapa(status_node)
+    node = next(
+        n
+        for n in nodes
+        if n
+        and str(n.get("id", "")) == picked.id
+        and n.get("name") == picked.name
+        and n.get("dataType") == picked.data_type
+    )
+    missing = _first_missing_etapa(node)
+    if missing is not None and picked.name == ETAPA_FIELD:
+        raise ValueError(f"the board project {name} has no {ETAPA_FIELD} option {missing!r}")
     if missing is not None:
         raise ValueError(
-            f"the board project {name} has no Etapa option {missing!r} on its Status field"
+            f"the board project {name} has no {ETAPA_FIELD} option {missing!r} "
+            f"on its {STATUS_FIELD} field"
         )
-    return status_node
+    return node
 
 
 def _adds(

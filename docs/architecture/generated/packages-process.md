@@ -3,7 +3,8 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
 - Páginas:
   - [domain](packages-process-domain.md)
     - [domain: checks](packages-process-domain-checks.md)
-    - [domain: landing](packages-process-domain-landing.md)
+    - [domain: landing (parte 1)](packages-process-domain-landing-1.md)
+    - [domain: landing (parte 2)](packages-process-domain-landing-2.md)
     - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
     - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
     - [domain: playbook](packages-process-domain-playbook.md)

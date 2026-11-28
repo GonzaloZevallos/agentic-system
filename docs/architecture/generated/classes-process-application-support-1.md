@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 8, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 9, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
   - [application: support (parte 8)](classes-process-application-support-8.md)
+  - [application: support (parte 9)](classes-process-application-support-9.md)
 
 ```mermaid
 classDiagram
@@ -30,10 +31,9 @@ classDiagram
     class ports__AddedLine["AddedLine"]
     class ports__AttemptFailed["AttemptFailed"]
     class ports__Board["Board"]
+    class ports__BoardSchema["BoardSchema"]
+    class ports__BoardSchemaRejected["BoardSchemaRejected"]
     class ports__BoardSent["BoardSent"]
-    class ports__BoardWritten["BoardWritten"]
-    class ports__BranchPullRequest["BranchPullRequest"]
-    class ports__BudgetStore["BudgetStore"]
 ```
 
 ## Relaciones con otras páginas
