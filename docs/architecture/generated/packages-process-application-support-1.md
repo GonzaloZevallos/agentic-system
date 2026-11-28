@@ -11,7 +11,8 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: reflection](packages-process-application-reflection.md)
+  - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+  - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
   - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid

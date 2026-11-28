@@ -67,7 +67,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.adr_collision": "landing",
     "application.api_break": "checks",
     "application.archive": "lifecycle",
-    "application.board_sync": "lifecycle",
+    "application.board_sync": "reflection",
     "application.budget_round": "lifecycle",
     "application.carve_out": "lifecycle",
     "application.checkouts": "support",

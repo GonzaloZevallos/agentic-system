@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
+    class landing_order__Member["Member"]
     class landing_order__Order["Order"]
     class landing_order__Yield["Yield"]
     class plan_view__PartEdge["PartEdge"]
@@ -46,11 +47,10 @@ classDiagram
     class stacking__Unreadable["Unreadable"]
     class stacking__Upstream["Upstream"]
     class stacking__Wait["Wait"]
+    landing_order__Yield --> landing_order__Member
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: landing (parte 2)](classes-process-domain-landing-2.md)
-  - `landing_order.Yield` se asocia con `landing_order.Member`
 - [domain: state (parte 9)](classes-process-domain-state-9.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`

@@ -268,23 +268,30 @@ def _link_cause(link: ParentLink) -> PauseCause | None:
     return None
 
 
-def pause_cause(chain: Sequence[ParentLink]) -> PauseCause:
-    """Why a stacked child waits on its parents, `none` when it does not. The links are read in
+def pause_link(chain: Sequence[ParentLink]) -> tuple[PauseCause, int | None]:
+    """Why a stacked child waits on its parents, `none` when it does not, and the issue of the
+    link whose `_link_cause` decided it: the one walk of the chain. The links are read in
     order, each by `_link_cause`; a repeated issue or an 11th link is `unreadable`, and so is a
     chain that ends with a parent still to read. Anything not known is `unreadable`, never
-    `none`. It decides nothing about merging: that is `refusal`'s."""
+    `none`. The issue is `None` for `none` and for `unreadable`, which name no link. It decides
+    nothing about merging: that is `refusal`'s."""
     seen: set[int] = set()
     for position, link in enumerate(chain):
         issue = link.record["issue"]
         if position >= PAUSE_DEPTH or issue in seen:
-            return "unreadable"
+            return "unreadable", None
         seen.add(issue)
         cause = _link_cause(link)
         if cause is not None:
-            return cause
+            return cause, issue if cause not in ("none", "unreadable") else None
         if isinstance(link.next_record, Absent):
-            return "none"
-    return "none" if not chain else "unreadable"
+            return "none", None
+    return "none" if not chain else "unreadable", None
+
+
+def pause_cause(chain: Sequence[ParentLink]) -> PauseCause:
+    """The cause of `pause_link`, which decides it."""
+    return pause_link(chain)[0]
 
 
 def pause_note(parent: int, cause: NotedCause) -> str:

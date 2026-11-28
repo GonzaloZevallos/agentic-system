@@ -52,5 +52,6 @@ aplican al orquestar.
 
 ## Tablero
 
-El espejo en GitHub Project muestra Etapa (el campo Status) y Bloqueo. Una tarea trabada
-aparece como Trabada, con lo que espera.
+El espejo en GitHub Project muestra, para cada issue, su Etapa (el campo Status) y su Motivo,
+que dice por qué la tarjeta está ahí; Hecho no lleva Motivo y deja de verse a los 7 días.
+Etapas: Te necesita, En curso, Próximo, En pausa, Hecho.

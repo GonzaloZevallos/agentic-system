@@ -281,15 +281,20 @@ _Avoid_: dashboard, sincronización, tablero de verdad
 _Campo_: sin término de arte
 
 **Etapa**:
-El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano. El adaptador la encuentra como el campo SINGLE_SELECT `Etapa` o, si no existe, como el `Status` incorporado cuando trae las siete opciones; solo `_etapa_field` la resuelve.
+El estado de una Tarjeta, uno de cinco: Te necesita, En curso, Próximo, En pausa, Hecho. Se decide por precedencia (limpiada, Hecho, En curso, Te necesita, En pausa, Próximo) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Una Tarjeta sin Etapa (`None`) es la de un padre dividido o un issue cerrado hace más de siete días (`HECHO_DAYS`): el espejo limpia su Etapa y nunca le agrega un ítem. El adaptador la encuentra como el campo SINGLE_SELECT `Etapa` o, si no existe, como el `Status` incorporado cuando trae las cinco opciones; solo `_etapa_field` la resuelve.
 _Avoid_: estado, status, columna
 _Campo_: `Status` de GitHub Projects; la API conserva el nombre `Status` al renombrarlo
 
 **Tarjeta**:
-Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Bloqueo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.
+Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Motivo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.
 En el código es `board.Card`.
 _Avoid_: ítem, fila, entrada
 _Campo_: ítem de GitHub Projects
+
+**Motivo**:
+Por qué una Tarjeta está en su Etapa, como texto corto (por ejemplo `corriendo` o `espera #N`); nunca lo lleva Hecho. Reemplaza al antiguo Bloqueo, que solo cubría las tarjetas trabadas.
+_Avoid_: Bloqueo, razón, causa
+_Campo_: sin término de arte
 
 **Cercanía**:
 Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último, y su orden propio es el Orden de lanzamiento). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.

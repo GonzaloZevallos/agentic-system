@@ -483,6 +483,54 @@ def test_a_repeated_issue_is_unreadable():
     assert stacking.pause_cause(chain) == "unreadable"
 
 
+def test_pause_link_names_the_grandparent_when_the_cause_is_on_the_second_link():
+    chain = [_link(7, next_record=_record_of(8)), _link(8, waits=True)]
+    assert stacking.pause_link(chain) == ("parent_escalated", 8)
+
+
+def test_pause_link_names_the_direct_parent_of_a_one_link_chain():
+    assert stacking.pause_link([_link(7, stopped=True)]) == ("parent_stopped", 7)
+    assert stacking.pause_link([_link(7, state="CLOSED", reason="NOT_PLANNED")]) == (
+        "parent_abandoned",
+        7,
+    )
+
+
+@pytest.mark.parametrize(
+    ("chain", "cause"),
+    [
+        pytest.param([], "none", id="empty"),
+        pytest.param([_link()], "none", id="idle"),
+        pytest.param([_link(in_upstream=True, waits=True)], "none", id="merged"),
+        pytest.param([_link(in_upstream=None)], "unreadable", id="ancestry unread"),
+        pytest.param([_link(state=None)], "unreadable", id="fact unread"),
+        pytest.param([_link(7, next_record=_record_of(8))], "unreadable", id="cut short"),
+        pytest.param(_chain(11), "unreadable", id="depth"),
+        pytest.param(
+            [_link(7, next_record=_record_of(8)), _link(8, next_record=_record_of(7)), _link(7)],
+            "unreadable",
+            id="repeated issue",
+        ),
+    ],
+)
+def test_pause_link_names_no_link_for_none_or_unreadable(
+    chain: list[stacking.ParentLink], cause: str
+):
+    assert stacking.pause_link(chain) == (cause, None)
+
+
+def test_pause_cause_is_the_cause_of_pause_link():
+    chains = [
+        [],
+        [_link(waits=True)],
+        [_link(7, next_record=_record_of(8)), _link(8, stopped=True)],
+        [_link(in_upstream=None)],
+        _chain(10),
+    ]
+    for chain in chains:
+        assert stacking.pause_cause(chain) == stacking.pause_link(chain)[0]
+
+
 def test_the_pause_note_says_the_cause_and_when_it_ends():
     assert stacking.pause_note(7, "parent_escalated") == (
         "Paused: stacked on #7, which escalated. Resumes when #7 moves again."

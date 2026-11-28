@@ -107,6 +107,8 @@ INVENTORY: list[tuple[str, str, str]] = [
     ("poll._SHAPE_TEXT", "rebuilt_each_round", "a constant table, built on import, never mutated"),
     ("exempt_queue._KIND_RANK", "rebuilt_each_round", "a constant table, built on import"),
     ("board._STATUSES", "rebuilt_each_round", "a constant table, built on import"),
+    ("board._ENDS", "rebuilt_each_round", "a constant table, built on import"),
+    ("board.FALLBACK_MOTIVO", "rebuilt_each_round", "a constant table, built on import"),
     # the per-round modules
     ("exempt_queue.waits", "on_disk", "published by the run registry: publish_exempt_wait"),
     ("exempt_queue.attempts", "on_disk", "the run registry's exempt attempt records"),
