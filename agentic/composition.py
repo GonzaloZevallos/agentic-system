@@ -440,6 +440,7 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         board_sent=None,
         format_filing=None,
         format_fixes=None,
+        # GH-1056, GH-1058: the notifier's three ports are never live offline.
         notifier=None,
         notified=None,
         activity=None,
