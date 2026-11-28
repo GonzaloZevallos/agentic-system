@@ -2115,3 +2115,625 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-17T03:04:06.173+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you write a reducer or merge, check each stated invariant (commutativity, normalisation, identity) on every branch, including an empty side, and test both argument orders.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change behaviour that a hand-written flow doc describes, grep the docs for the old behaviour and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-863
+  sources:
+  - finding
+  added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan says reads go through a shared memo or cache, route every new read through it, keyed at the granularity the invariant names, and add a test with doubles that counts the calls.
+  confidence: medium
+  seen_in:
+  - GH-898
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T18:33:25.133+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change adds or alters a persisted key, a read or write, or a flow that a doc under docs/architecture describes, update that doc in the same change and grep every function name it cites.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you write a new key into a persisted record, declare it in that record's typed definition and in the helper that copies the record, so a later rewrite does not drop it and readers need no untyped access.
+  confidence: medium
+  seen_in:
+  - GH-893
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T01:15:31.985+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: On the integrated head, run the full test directories of every package the subtasks touched, and update test fakes or stubs of any shared seam that one subtask now calls and the other subtask's tests fake.
+  confidence: medium
+  seen_in:
+  - GH-647
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T04:27:03.824+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test enforces a rule by inspecting source, put the check in a helper and add a case that feeds it a violating input and shows it rejects; make the match exact, not a prefix.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test comment or name claims to check all calls of a kind, assert the full list of those calls, not just a count of one; remove helpers you wrote and left unused.
+  confidence: medium
+  seen_in:
+  - GH-899
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-18T13:35:32.144+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant, enumerate every branch or refusal it covers, check each one against the invariant's exact wording, and assert that wording in a test per branch before you claim it in the coverage map.
+  confidence: medium
+  seen_in:
+  - GH-983
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-19T21:55:06.914+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a field or change a shared structure, grep the tests for suites that pin it (expected sets, schemas, snapshots) and run those whole test files before you deliver, not only the new tests.
+  confidence: medium
+  seen_in:
+  - GH-1008
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T02:40:16.605+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add an entry to a registry, cluster map or other ordered table, keep it in its sorted place and run the tests that cover that table, such as the docs tests, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Keep every tracker item's text at most 240 characters; put longer detail in the task document and link it, so the TechPlan output validates.
+  confidence: medium
+  seen_in:
+  - GH-935
+  sources:
+  - human_decision
+  added_at: '2026-11-21T06:49:06.049+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you write a helper, look for an existing one with the same logic and call or reuse it, even if it is private to another module, rather than copying its body where the two can drift.
+  confidence: low
+  seen_in:
+  - GH-1009
+  sources:
+  - finding
+  added_at: '2026-11-21T07:19:34.113+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: When a plan adds a repair or fallback branch, trace the real validation path to confirm an earlier guard does not make it unreachable, and require a test that reaches it through that path.
+  confidence: medium
+  seen_in:
+  - GH-1016
+  sources:
+  - finding
+  added_at: '2026-11-21T08:56:05.723+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, module or public boundary, update the hand-written architecture docs (port and component tables) in the same change; regenerated diagrams alone do not cover them.
+  confidence: medium
+  seen_in:
+  - GH-1030
+  sources:
+  - finding
+  added_at: '2026-11-21T11:59:28.800+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow's behaviour, update the architecture docs that describe it in the same change, then run the docs generator so the docs check stays green.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T15:37:38.600+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you add a parameter or flag, grep every call site on the path to the entry point and pass it through each one. Do not stop at the function that consumes it.
+  confidence: medium
+  seen_in:
+  - GH-1032
+  sources:
+  - finding
+  added_at: '2026-11-21T15:37:38.600+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When you change a port contract or a flow, update the matching docs/architecture pages in the same change, and grep them for the flow's steps and the port's name before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1038
+  sources:
+  - finding
+  added_at: '2026-11-21T22:50:00.511+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you route a new case into an existing code path, read what that path emits (comments, labels, side effects) and check it against each plan invariant before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1038
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-21T22:50:00.511+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before a brief demands that an existing test pass unchanged, check that test against the new spec; if the spec makes it false, name the test and the allowed edit in the brief.
+  confidence: medium
+  seen_in:
+  - GH-878
+  sources:
+  - finding
+  added_at: '2026-11-22T00:50:47.366+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When code copies, merges or patches stored records, add a test where the record already holds the key you write, so a second application updates it instead of crashing.
+  confidence: medium
+  seen_in:
+  - GH-1047
+  sources:
+  - finding
+  added_at: '2026-11-22T02:57:22.636+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a doc sentence cites a limit, cap, threshold or notice, name the symbol that sets it with its module and give its current value from the code. Do not name only the classifier that reads it.
+  confidence: medium
+  seen_in:
+  - GH-1033
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-22T03:48:37.175+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant of the form 'never neither A nor B', order the steps so the fallback is released only after the replacement lands, and test the case where the replacing step fails.
+  confidence: medium
+  seen_in:
+  - GH-1048
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-22T18:42:10.817+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep your diff for each invariant in the brief and confirm no code reads guarded data directly. Use only the accessors the invariant names, or add a public reader.
+  confidence: medium
+  seen_in:
+  - GH-1060
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T07:45:00.604+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: 'For each test you write, check that it can fail: make sure the fake''s output depends on the input you set up, so the assertion would break if the behavior under test were removed.'
+  confidence: low
+  seen_in:
+  - GH-1092
+  sources:
+  - finding
+  added_at: '2026-11-23T17:15:37.098+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you edit a shared config or attribute file, find and run the existing tests that guard it, by searching the tests for its name, even if the full suite times out before reaching them. Quote the result.
+  confidence: medium
+  seen_in:
+  - GH-1090
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T18:05:22.226+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant or brief gives an exact command, run and report it verbatim; do not append flags such as -q or -p no:cacheprovider. If you need a variant, say so and also run the exact form.
+  confidence: medium
+  seen_in:
+  - GH-1076
+  sources:
+  - finding
+  added_at: '2026-11-23T21:57:26.224+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you edit a shared test registry or conformance table, run the repo's read-coverage and affected-tests guard tests on the real tree before you deliver, not only the tests for your own seam.
+  confidence: medium
+  seen_in:
+  - GH-1093
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T22:12:08.252+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief states an ordering or invariant for every public function (such as which helper runs first), check each public function you write against it before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1097
+  sources:
+  - finding
+  added_at: '2026-11-23T22:42:22.218+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, re-read the brief and check each literal requirement, such as a title, header or name, against the deliverable. Do not settle for the same content appearing elsewhere in the file.
+  confidence: medium
+  seen_in:
+  - GH-1091
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-23T23:50:08.237+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant says a function must return a safe value on bad input, guard every numeric parameter for finiteness (NaN, inf), not only the parsed one, and add a test case for each parameter.
+  confidence: medium
+  seen_in:
+  - GH-1106
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:06:05.628+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief says to read a value from a named source, read it there and cite it; never substitute a guessed or assumed value, and do not leave a comment admitting you did not read it.
+  confidence: medium
+  seen_in:
+  - GH-1077
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:54:05.108+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, tick off every evidence item the brief asks for (counts, forced-failure demos, reruns) and record each one in your section; do not deliver with an item missing.
+  confidence: medium
+  seen_in:
+  - GH-1077
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T07:54:05.108+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: Before you deliver, run every declared check a new module can affect, such as docs generation and registries, not only the tests you touched. Fix any budget or generated-output failure before handing off.
+  confidence: medium
+  seen_in:
+  - GH-1098
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-24T08:47:01.801+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When a change adds or splits modules or generated pages, run the tests that cap or count them by name, and do not rely on a full run that may time out. Show those tests green before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1107
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-26T10:15:32.092+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Check each plan invariant against every exit path, including errors raised by helpers you call, not only the main path. Add a test for each failure path before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1089
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-26T16:06:02.640+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add files of a new kind, such as fixtures or data, run the declared affected-only tests check on your head before you deliver, and add the mapping row it asks for.
+  confidence: medium
+  seen_in:
+  - GH-1089
+  sources:
+  - finding
+  added_at: '2026-11-26T16:06:02.640+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a rule, limit or flow, search the docs for the old behavior and update every page that describes it in the same change, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1114
+  sources:
+  - finding
+  added_at: '2026-11-26T16:51:25.926+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never loosen a guard (cap, threshold, allowlist) outside the brief's seams to make a check pass. Fit the change within the limit, or record the check output showing it cannot hold under Decisions and assumptions.
+  confidence: medium
+  seen_in:
+  - GH-1129
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-26T19:57:26.059+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a component, step or adapter, search the hand-written docs for it and update them in the same change. Regenerating the generated pages does not cover them.
+  confidence: medium
+  seen_in:
+  - GH-1152
+  sources:
+  - finding
+  added_at: '2026-11-26T23:49:05.013+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: Before you approve the integration, check that hand-written docs describing the changed components, steps or adapters were updated. Do not accept updates to the generated pages alone.
+  confidence: medium
+  seen_in:
+  - GH-1152
+  sources:
+  - finding
+  added_at: '2026-11-26T23:49:05.013+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When you add or keep an entry in a list the plan or an ADR invariant says must be documented, update that record in the same change and check every invariant against your diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1081
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T04:50:16.331+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, adapter or module, update every hand-written doc that inventories them (such as architecture port tables) in the same change, even if the port has no callers yet.
+  confidence: medium
+  seen_in:
+  - GH-1158
+  sources:
+  - finding
+  added_at: '2026-11-27T08:30:22.372+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters what a component does or how it is wired, grep the hand-written docs (architecture tables, component notes) for its names and update every stale statement in the same change.
+  confidence: medium
+  seen_in:
+  - GH-1159
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T13:06:25.196+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: 'When a loop reads paged or partial data, check every exit path against the documented contract: a page missing its cursor or an early stop must mark the result incomplete, never whole.'
+  confidence: medium
+  seen_in:
+  - GH-1151
+  sources:
+  - finding
+  added_at: '2026-11-27T15:21:30.184+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: At integration, re-read the docstrings and ADR addenda of the code you merge and test each loop exit path against them, especially paths where a partial result could be reported as complete.
+  confidence: low
+  seen_in:
+  - GH-1151
+  sources:
+  - finding
+  added_at: '2026-11-27T15:21:30.184+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep the code for each plan invariant your change touches. When a dependency is missing, skip the step instead of adding a fallback that wires it in a second place.
+  confidence: medium
+  seen_in:
+  - GH-1183
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T17:15:50.364+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change alters a key flow (what a loop or round does, or who consumes a shared resource), update the matching docs/architecture pages in the same change, with file and symbol references.
+  confidence: medium
+  seen_in:
+  - GH-1183
+  sources:
+  - finding
+  added_at: '2026-11-27T17:15:50.364+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a run flow (a new gate, exit code or step), update the matching docs/architecture flow page in the same change, and check that each claim in it holds for every path.
+  confidence: medium
+  seen_in:
+  - GH-1162
+  sources:
+  - finding
+  added_at: '2026-11-27T20:01:18.148+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief says to reuse an existing fixture or helper, search the test tree for it and import it before writing any new one; add only the small extra step the scenario needs, at the call site.
+  confidence: medium
+  seen_in:
+  - GH-1163
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-27T22:19:34.099+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: In tests, build expected user-facing texts from the domain constants the code defines, never as literals. Before you deliver, grep the tests for the literal text and fix every hit.
+  confidence: medium
+  seen_in:
+  - GH-1165
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, turn each plan invariant into a grep over your whole diff, tests included, and run it. If a value has a domain constant, use the constant, never a repeated literal.
+  confidence: medium
+  seen_in:
+  - GH-1164
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: On the integrated branch, run the grep each plan invariant implies over production code and tests. Fix any repeated literal of a domain value by using the domain constant or function.
+  confidence: medium
+  seen_in:
+  - GH-1164
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a node or edge to a shared flow, search the whole test suite for every test that drives the flow through it, not just the neighbouring directory, and run those tests before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1027
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T05:05:16.948+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a field or Protocol to a shared contract such as Ports, find and update every mirror and inventory that tracks it (test fakes, conformance lists), then run the full declared tests check before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1062
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T07:53:40.295+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Before writing 'existing tests pass without being edited', check whether the required change alters an exact-value assertion, such as a pinned session env; if so, name those tests as allowed edits.
+  confidence: medium
+  seen_in:
+  - GH-927
+  sources:
+  - human_decision
+  added_at: '2026-11-28T08:23:06.857+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Before you edit a test or limit outside your declared seams, such as a raised cap, stop and get the plan to declare it. Do not change it silently, even when the new work forces it.
+  confidence: medium
+  seen_in:
+  - GH-1057
+  sources:
+  - finding
+  added_at: '2026-11-28T10:14:29.934+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before the plan relies on another issue to bring a piece (wiring, adapter, constructor call), read what that issue actually delivers and name who constructs the new component, or plan that wiring yourself.
+  confidence: medium
+  seen_in:
+  - GH-1058
+  sources:
+  - finding
+  added_at: '2026-11-28T12:02:25.033+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you write a try or except, check the plan's invariants for what it may wrap. Keep it around only the allowed calls, and move pure builders and other logic outside it.
+  confidence: medium
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the input facts could not be read, return the item as not judged and do not advance any cursor. Cover that path with a round-level test at the public seam.
+  confidence: low
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: For each config flag or switch the brief names, read it where the behaviour happens, and add a test with the flag off that asserts nothing is read, sent or written.
+  confidence: medium
+  seen_in:
+  - GH-1204
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T14:03:18.033+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you document what a component does or does not do, list every branch and output from the code, then check the docs list against it, so no case or field is missing from the list or summary.
+  confidence: low
+  seen_in:
+  - GH-1209
+  sources:
+  - finding
+  added_at: '2026-11-28T17:15:40.379+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Import test fakes and helpers from the shared tests/fakes package, never from another test module, so test files stay decoupled and setup stays cheap.
+  confidence: medium
+  seen_in:
+  - GH-996
+  sources:
+  - finding
+  added_at: '2026-11-28T18:06:09.785+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Check the plan's hand-written file count against the 15 file cap before you submit it; when over, split shared port and adapter work into a follow-up issue instead of escalating to a narrow decision.
+  confidence: medium
+  seen_in:
+  - GH-996
+  sources:
+  - human_decision
+  added_at: '2026-11-28T18:06:09.785+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters a flow, refusal reason, or who owns a state, grep docs/architecture for the old behavior and update those docs in the same change, listing every remaining path.
+  confidence: medium
+  seen_in:
+  - GH-1217
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T19:06:25.758+00:00'
