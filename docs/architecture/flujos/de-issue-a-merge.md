@@ -69,7 +69,7 @@ sequenceDiagram
    el tipo: feature, bug o platform enhancement
    (README.md, sección 2). Una feature pasa por `define` (Product Analyst) y `validate`
    (PM) antes de `plan` (Tech Lead); apenas PM aprueba el PRD, `early_size`
-   (`agentic/core/process/application/early_size.py:early_size`, ADR-0109) decide si una feature
+   (`agentic/core/process/application/early_size.py:early_size`, ADR-0110) decide si una feature
    claramente sobre el presupuesto se parte antes del diseño y del plan; un bug reemplaza la definición por `diagnose`; un
    platform enhancement la salta. Una feature o un bug en el camino ligero (`path: light`,
    ver `agentic/core/process/domain/task_path.py:path_of`) va de `classify` directo a `plan`

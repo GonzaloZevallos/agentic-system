@@ -1,4 +1,4 @@
-"""The early size check (GH-999, ADR-0109): right after PM approves a feature's PRD, a cheap
+"""The early size check (GH-999, ADR-0110): right after PM approves a feature's PRD, a cheap
 tool-less read of it decides whether the task is so clearly over the size budget that it splits
 before the design ladder and the Tech Lead. The decision is `early_split.verdict`; this node
 only runs the sizer, judges the parts it proposes and writes the one patch.

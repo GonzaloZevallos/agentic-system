@@ -70,7 +70,7 @@ Rol sin herramientas que lee el pedido y estima el costo y los archivos de la ta
 _Campo_: sin término de arte
 
 **Dimensionador temprano**:
-Llamada sin herramientas (`DEFINITION_SIZER`) que corre justo después de que PM aprueba el PRD de una función, antes del diseño y del plan, y decide si la tarea es claramente enorme (más de dos veces un tope) y se parte ya, con partes que citan el PRD. Lo que decidió queda en `early_split` del documento: filas con veredicto (`split` o `go`) y causa (`over`, `fits`, `close`, `sizer_failed`, `parts_refused`). Si sigue pendiente lo dice `rules.early_size_due`; `rules.after_definition` elige entre él, el diseño y el plan, y el nodo `early_size` lo ejecuta. Falla abierta: una falla o unas partes rechazadas dan `go`, una segunda falla cierra la medición y solo el tope de la tarea escala (ADR-0109).
+Llamada sin herramientas (`DEFINITION_SIZER`) que corre justo después de que PM aprueba el PRD de una función, antes del diseño y del plan, y decide si la tarea es claramente enorme (más de dos veces un tope) y se parte ya, con partes que citan el PRD. Lo que decidió queda en `early_split` del documento: filas con veredicto (`split` o `go`) y causa (`over`, `fits`, `close`, `sizer_failed`, `parts_refused`). Si sigue pendiente lo dice `rules.early_size_due`; `rules.after_definition` elige entre él, el diseño y el plan, y el nodo `early_size` lo ejecuta. Falla abierta: una falla o unas partes rechazadas dan `go`, una segunda falla cierra la medición y solo el tope de la tarea escala (ADR-0110).
 _Campo_: sin término de arte
 
 **Ruta de planificación**:

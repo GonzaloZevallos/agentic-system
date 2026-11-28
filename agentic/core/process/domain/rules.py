@@ -2744,7 +2744,7 @@ def _design_or_plan(state: TaskState) -> str:
 
 def after_definition(state: TaskState) -> str | None:
     """Where a task whose PRD PM approved (`definition_ready`) goes: nowhere when escalated; the
-    plan on the light path; the early size check while it is due (`early_size_due`, ADR-0109);
+    plan on the light path; the early size check while it is due (`early_size_due`, ADR-0110);
     else the design branch or the plan. The one function `after_validate` and `resume_target`
     both read, so a resume lands where the live routing would have."""
     if state.get("escalated"):
