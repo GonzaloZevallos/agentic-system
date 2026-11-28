@@ -21,7 +21,7 @@ from tests.core.process.adapters.langgraph.test_graph import (
     script_for,
     technical,
 )
-from tests.fakes import MemoryCommands, MemorySampleApp, MemoryStack, MemoryTracker
+from tests.fakes import Measured, MemoryCommands, MemorySampleApp, MemoryStack, MemoryTracker
 
 pytestmark = pytest.mark.anyio
 
@@ -71,7 +71,7 @@ def build(script, fakes):
         return ports
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)
-    return graph.compile(checkpointer=InMemorySaver()), built
+    return Measured(graph.compile(checkpointer=InMemorySaver())), built
 
 
 def untouched(real_tracker, real_workspace):

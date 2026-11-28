@@ -281,6 +281,7 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
     from agentic.core.process.adapters.langgraph.graph import build_graph
     from agentic.shared.configuration import Configuration
     from tests.fakes import (
+        MeasuredBuilder,
         MemoryWorkspace,
         ScriptedRunner,
         answers,
@@ -307,7 +308,9 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
     )
     ports = memory_ports(script)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
-    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports, arm_for=composition._arm_for))
+    monkeypatch.setattr(
+        cli, "graph", MeasuredBuilder(build_graph(lambda cfg: ports, arm_for=composition._arm_for))
+    )
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
     cfg = Configuration.from_sources({}, os.environ)
@@ -351,6 +354,7 @@ async def test_a_checkpointed_decided_task_is_still_decided_after_a_resume(
     from agentic.core.process.adapters.langgraph.graph import build_graph
     from agentic.shared.configuration import Configuration
     from tests.fakes import (
+        MeasuredBuilder,
         MemoryWorkspace,
         ScriptedRunner,
         answers,
@@ -377,7 +381,7 @@ async def test_a_checkpointed_decided_task_is_still_decided_after_a_resume(
     )
     ports = memory_ports(script)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
-    app = build_graph(lambda cfg: ports, arm_for=composition._arm_for)
+    app = MeasuredBuilder(build_graph(lambda cfg: ports, arm_for=composition._arm_for))
     monkeypatch.setattr(cli, "graph", app)
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
@@ -517,6 +521,7 @@ async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     from agentic.core.process.adapters.langgraph.graph import build_graph
     from agentic.shared.configuration import Configuration
     from tests.fakes import (
+        MeasuredBuilder,
         MemoryWorkspace,
         ScriptedRunner,
         answers,
@@ -543,7 +548,9 @@ async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     )
     ports = memory_ports(script)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
-    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports, arm_for=composition._arm_for))
+    monkeypatch.setattr(
+        cli, "graph", MeasuredBuilder(build_graph(lambda cfg: ports, arm_for=composition._arm_for))
+    )
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
     cfg = Configuration.from_sources({}, os.environ)

@@ -80,7 +80,9 @@ sequenceDiagram
    como algo que no es feature, escala `spec_type` después de su corrida. `classify` (PjM) elige
    el tipo: feature, bug o platform enhancement
    (README.md, sección 2). Una feature pasa por `define` (Product Analyst) y `validate`
-   (PM) antes de `plan` (Tech Lead); un bug reemplaza la definición por `diagnose`; un
+   (PM) antes de `plan` (Tech Lead); apenas PM aprueba el PRD, `early_size`
+   (`agentic/core/process/application/early_size.py:early_size`, ADR-0110) decide si una feature
+   claramente sobre el presupuesto se parte antes del diseño y del plan; un bug reemplaza la definición por `diagnose`; un
    platform enhancement la salta. Una feature o un bug en el camino ligero (`path: light`,
    ver `agentic/core/process/domain/task_path.py:path_of`) va de `classify` directo a `plan`
    (`agentic/core/process/domain/rules.py:after_classify`); una promoción a `full` lo manda de

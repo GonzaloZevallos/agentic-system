@@ -69,6 +69,10 @@ _Campo_: sin término de arte
 Rol sin herramientas que lee el pedido y estima el costo y los archivos de la tarea antes de que exista el plan. Corre en toda tarea cuya asignación nombra `plan_review`, para medir el control en la misma escala. No es un rol de la lista. Si falla, la tarea va a la entrevista.
 _Campo_: sin término de arte
 
+**Dimensionador temprano**:
+Llamada sin herramientas (`DEFINITION_SIZER`) que corre justo después de que PM aprueba el PRD de una función, antes del diseño y del plan, y decide si la tarea es claramente enorme (más de dos veces un tope) y se parte ya, con partes que citan el PRD. Lo que decidió queda en `early_split` del documento: filas con veredicto (`split` o `go`) y causa (`over`, `fits`, `close`, `sizer_failed`, `parts_refused`). Si sigue pendiente lo dice `rules.early_size_due`; `rules.after_definition` elige entre él, el diseño y el plan, y el nodo `early_size` lo ejecuta. Falla abierta: una falla o unas partes rechazadas dan `go`, una segunda falla cierra la medición y solo el tope de la tarea escala (ADR-0110).
+_Campo_: sin término de arte
+
 **Ruta de planificación**:
 La decisión de qué etapa de solución toma una tarea, `interview` o `critic`, y lo que quedó registrado en `plan_route` del documento: estimación previa, umbral, ruta, si estuvo mal ruteada y cómo salió el crítico (`ran`, `failed` o `skipped`). `route` decide antes del plan con la estimación previa; `regate` lo repite con la estimación del borrador y manda a la entrevista a la que lo alcanza. Son funciones puras de `plan_route`; el nodo del plan solo las llama.
 _Campo_: sin término de arte

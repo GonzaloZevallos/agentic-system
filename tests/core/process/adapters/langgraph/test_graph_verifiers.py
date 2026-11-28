@@ -36,6 +36,7 @@ from tests.core.process.adapters.langgraph.test_graph_full_checks import (
 from tests.fakes import (
     FakePerfLock,
     FakePerfRunner,
+    Measured,
     MemoryCommands,
     MemoryInbox,
     MemorySampleApp,
@@ -208,7 +209,7 @@ def _performance_graph(script, stack, perf):
         )
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)
-    return graph.compile(checkpointer=InMemorySaver()), runner
+    return Measured(graph.compile(checkpointer=InMemorySaver())), runner
 
 
 async def test_two_verifiers_that_return_reopen_one_unit_with_both_reasons(config):

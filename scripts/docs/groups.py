@@ -31,6 +31,7 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "define",
         "diagnose",
         "discard",
+        "early_size",
         "validate",
     ),
     "design": (
@@ -91,6 +92,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.discard": "definition",
     "application.docs_settlement": "support",
     "application.dry_run": "lifecycle",
+    "application.early_size": "reflection",
     "application.escalate": "build",
     "application.evaluated": "build",
     "application.final_validation": "definition",

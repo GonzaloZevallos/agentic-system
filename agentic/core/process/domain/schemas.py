@@ -579,6 +579,21 @@ class DefinitionSize(PlanSize):
     empty unless it judges the task clearly over the size budget. Shape only: whether the parts
     are acceptable is `early_parts_check`'s call."""
 
+    hand_files: int = Field(
+        ge=0,
+        description="The hand-written non-test files the WHOLE task will change, before any cut "
+        "into parts. What counts as hand-written is the size budget in your prompt",
+    )
+    hand_lines: int = Field(
+        ge=0,
+        description="The hand-written non-test lines the WHOLE task will add, before any cut "
+        "into parts",
+    )
+    test_lines: int = Field(
+        ge=0,
+        description="The test lines the WHOLE task will add, before any cut into parts. The "
+        "size budget in your prompt names what a test is",
+    )
     parts: list[Part] = Field(
         default_factory=list,
         description="Empty unless the task is clearly over the size budget: then the parts it "

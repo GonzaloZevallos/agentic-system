@@ -2731,8 +2731,41 @@ def after_validate(state: TaskState) -> str | None:
     if status == "returned":
         return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        return "plan" if skips_definition(state) else (design_step(state) or "plan")
+        return after_definition(state)
     return {"discarded": "discard"}.get(status)
+
+
+def _design_or_plan(state: TaskState) -> str:
+    """Where a task goes once PRD approval is settled: the plan on the light path, else the next
+    design node, else the plan. The one fall-through `after_definition` and `after_early_size`
+    share, so the early check never changes where the task goes when it does not split."""
+    return "plan" if skips_definition(state) else (design_step(state) or "plan")
+
+
+def after_definition(state: TaskState) -> str | None:
+    """Where a task whose PRD PM approved (`definition_ready`) goes: nowhere when escalated; the
+    plan on the light path; the early size check while it is due (`early_size_due`, ADR-0110);
+    else the design branch or the plan. The one function `after_validate` and `resume_target`
+    both read, so a resume lands where the live routing would have."""
+    if state.get("escalated"):
+        return None
+    if skips_definition(state):
+        return "plan"
+    if early_size_due(state):
+        return "early_size"
+    return _design_or_plan(state)
+
+
+def after_early_size(state: TaskState) -> str | None:
+    """Where the task goes after the early size check: nowhere when escalated (a task cap); the
+    split when it wrote parts and has no subtasks yet; else the design branch or the plan. It
+    never reads `after_definition`: one `sizer_failed` row leaves the check due, and that would
+    loop. The one retry is a later invocation's."""
+    if state.get("escalated"):
+        return None
+    if state.get("parts") and not state.get("subtasks"):
+        return "split"
+    return _design_or_plan(state)
 
 
 def after_ux_flow(state: TaskState) -> str | None:
@@ -4091,13 +4124,11 @@ def resume_target(state: TaskState) -> str | None:
     if status == "returned":
         return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        # Through the design branch first, on a feature PM flagged `touches_ui`
-        # (ADR-0040): the same one function `after_validate` and every design node's
-        # own `after_*` already call, so a resume lands exactly where the live routing
-        # would have, however many lead returns or PRD versions came before the pause.
-        if skips_definition(state):
-            return "plan"
-        return design_step(state) or "plan"
+        # The early size check while it is due, then the design branch on a feature PM flagged
+        # `touches_ui` (ADR-0040): the same `after_definition` that `after_validate` calls, so a
+        # resume lands exactly where the live routing would have, however many lead returns or
+        # PRD versions came before the pause.
+        return after_definition(state)
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
 
