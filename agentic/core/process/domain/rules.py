@@ -5923,15 +5923,16 @@ def poll_plan(
     The children that do not count (`merge`, `land_checks`) are bounded per product instead
     (GH-1226): `live_exempt` is how many of this product's are live right now, and at most
     one is live and at most one starts per round -- the one that has waited longest since its
-    last attempt (GH-500, `exempt_queue.ordered`; `exempt_attempts` holds the instants per `(issue, kind)`),
-    and with no record at all the lowest merge if there is one, otherwise the lowest
-    `land_checks` land. A merge that just refused has the latest attempt, so it goes to the
-    back. `backed_off_merges` are merges whose refusal still holds on their head and master:
+    last attempt (GH-500, `exempt_queue.ordered`; `exempt_attempts` holds the instants per
+    `(issue, kind)`), and with no record at all the lowest merge if there is one, otherwise
+    the lowest `land_checks` land. A merge that just refused has the latest attempt, so it goes
+    to the back. `backed_off_merges` are merges whose refusal still holds on their head and master:
     each is `Deferred(backoff)` and never starts. `exempt_yield` is true while the machine
     cap (`exempt_queue.EXEMPT_SLOTS_MAX`) leaves no slot for this product, because it is full or
     because other products' published waits that outrank this product's fill what is free
     (`exempt_queue.behind`): no exempt child starts and every candidate is `exempt_busy`. They
-    come last in `actions`, after every action that takes a slot, so the wait for a child to register never delays a role action.
+    come last in `actions`, after every action that takes a slot, so the wait for a child to
+    register never delays a role action.
 
     Everything held back is in `PollPlan.deferred`: a `land_model` land with no slot is
     `no_slot`, one held by an account-limit pause is `pause_waiting`; every merge or
