@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class etag_cache__CacheEntry["CacheEntry"]
     class exempt_queue__ExemptAttempt["ExemptAttempt"]
     class exempt_queue__ExemptCandidate["ExemptCandidate"]
     class exempt_queue__ExemptFacts["ExemptFacts"]
@@ -46,5 +47,4 @@ classDiagram
     class github_budget__Budget["Budget"]
     class github_budget__GraphqlReading["GraphqlReading"]
     class github_budget__ResourceBudget["ResourceBudget"]
-    class github_budget__Start["Start"]
 ```

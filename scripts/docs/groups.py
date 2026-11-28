@@ -185,6 +185,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.drawing_answer": "state",
     "domain.early_split": "state",
     "domain.escalation_prompts": "state",
+    "domain.etag_cache": "machine",
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",
     "domain.finding_location": "state",

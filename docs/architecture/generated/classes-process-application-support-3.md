@@ -29,11 +29,11 @@ classDiagram
     class ports__FreeSpace["FreeSpace"]
     class ports__GhCallLog["GhCallLog"]
     class ports__GitError["GitError"]
+    class ports__GithubCache["GithubCache"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
     class ports__Inbox["Inbox"]
-    class ports__InstalledProducts["InstalledProducts"]
 ```
 
 ## Relaciones con otras páginas

@@ -33,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class github_budget__Start["Start"]
     class github_budget__Unmeasured["Unmeasured"]
     class github_budget__Wait["Wait"]
     class notify__DigestEvent["DigestEvent"]
@@ -46,7 +47,6 @@ classDiagram
     class notify_message__AcceptedDeparture["AcceptedDeparture"]
     class notify_message__DigestRow["DigestRow"]
     class notify_message__DigestView["DigestView"]
-    class notify_message__Message["Message"]
     notify__DigestEvent --> notify__DigestKey
     notify__ReleaseEvent --> notify__EventKey
     notify__WaitingEvent --> notify__EventKey

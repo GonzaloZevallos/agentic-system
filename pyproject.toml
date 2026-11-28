@@ -76,6 +76,7 @@ files = [
     "agentic/core/process/adapters/filesystem/write_gate.py",
     "agentic/core/process/adapters/filesystem/check_ledger.py",
     "agentic/core/process/adapters/filesystem/check_results.py",
+    "agentic/core/process/adapters/filesystem/github_cache.py",
     "agentic/core/process/adapters/filesystem/board_sent.py",
     "agentic/core/process/adapters/filesystem/notified.py",
     "agentic/core/process/adapters/smtp/__init__.py",

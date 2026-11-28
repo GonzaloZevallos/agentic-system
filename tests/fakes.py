@@ -86,7 +86,7 @@ from agentic.core.process.application.ports import (
     Workspace,
 )
 from agentic.core.process.domain import check_results as check_results_domain
-from agentic.core.process.domain import exempt_queue, rules
+from agentic.core.process.domain import etag_cache, exempt_queue, rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import (
@@ -98,6 +98,7 @@ from agentic.core.process.domain.ci import (
 )
 from agentic.core.process.domain.design import Design, NotReady, PrototypeListing
 from agentic.core.process.domain.docs import Ancestry, Docs
+from agentic.core.process.domain.etag_cache import CacheEntry
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
@@ -2215,6 +2216,30 @@ class MemoryCheckResults:
         self.puts.append((key, row, now))
         if row["passed"]:
             self.entries[key] = (row, now)
+
+
+class MemoryGithubCache:
+    """GH-1071: the GitHub response store as a dict. It keeps the rule the real one keeps
+    (an unstorable entry is not stored, an entry unread for `READ_TTL_S` is a miss, a read
+    renews it) and records every call."""
+
+    def __init__(self) -> None:
+        self.entries: dict[str, tuple[CacheEntry, float]] = {}
+        self.gets: list[tuple[str, float]] = []
+        self.puts: list[tuple[CacheEntry, float]] = []
+
+    def get(self, key: str, now: float) -> CacheEntry | None:
+        self.gets.append((key, now))
+        found = self.entries.get(key)
+        if found is None or etag_cache.expired(found[1], now):
+            return None
+        self.entries[key] = (found[0], now)
+        return found[0]
+
+    def put(self, entry: CacheEntry, now: float) -> None:
+        self.puts.append((entry, now))
+        if etag_cache.storable(entry):
+            self.entries[entry.key] = (entry, now)
 
 
 class MemoryRunRegistry:

@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__MasterWindow["MasterWindow"]
     class ports__MergeCallFailed["MergeCallFailed"]
     class ports__MergeConflict["MergeConflict"]
     class ports__MergeFailed["MergeFailed"]

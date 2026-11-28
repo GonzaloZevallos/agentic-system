@@ -262,6 +262,10 @@ class Configuration(BaseModel):
     # disk, outside every repository, built like `check_results_dir` but from the cache
     # home, since it is regenerable.
     scratch_dir: Path = Field(default_factory=lambda: _default_scratch_dir())
+    # Where the per-product stores of GitHub REST responses live (GH-1071): under the cache
+    # home, since every entry is regenerable by asking GitHub again. The adapter receives
+    # this resolved root and never reads the environment itself.
+    github_cache_dir: Path = Field(default_factory=lambda: _default_github_cache_dir())
     # The free space, in MB, under which a volume holding scratch (the product's disk, or
     # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
     # Declared, not measured: a few parallel runs' worth of build and test scratch.
@@ -474,6 +478,10 @@ def _default_github_dir() -> Path:
 
 def _default_github_budget_dir() -> Path:
     return _default_cache_root() / "agentic" / "github" / "budget"
+
+
+def _default_github_cache_dir() -> Path:
+    return _default_cache_root() / "agentic" / "github"
 
 
 def _default_perf_lock_path() -> Path:

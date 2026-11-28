@@ -20,6 +20,7 @@ classDiagram
     class filesystem__experiment_file__FilesystemExperimentFile["FilesystemExperimentFile"]
     class filesystem__file_inbox__FileInbox["FileInbox"]
     class filesystem__free_space__StatvfsFreeSpace["StatvfsFreeSpace"]
+    class filesystem__github_cache__FilesystemGithubCache["FilesystemGithubCache"]
     class filesystem__heartbeats__FilesystemHeartbeats["FilesystemHeartbeats"]
     class filesystem__installed_products__SystemdUnitInstalledProducts["SystemdUnitInstalledProducts"]
 ```
