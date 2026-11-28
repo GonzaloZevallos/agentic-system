@@ -75,6 +75,7 @@ EXPECTED = {
     "ci_unknown_names": "escalate",
     "ci_untrusted_no_dispatch": "none",
     "open_escalation": "none",
+    "thread_unread": "wait",
     "ci_stale_exhausted": "sync_master",
     "ci_no_verdict": "escalate",
     "not_approved": "re_review",

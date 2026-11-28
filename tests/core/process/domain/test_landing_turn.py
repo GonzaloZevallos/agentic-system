@@ -132,6 +132,15 @@ def test_the_head_turn_is_the_table_as_it_was(refusal):
     assert _step(refusal, "head").kind == EXPECTED[refusal]
 
 
+@pytest.mark.parametrize("turn", ["head", "waiting"])
+@pytest.mark.parametrize("spent", [_spent(), EXHAUSTED], ids=["fresh", "exhausted"])
+def test_an_unreadable_thread_waits_at_either_turn_and_never_spends_a_budget(turn, spent):
+    step = _step("thread_unread", turn, spent)
+    assert step == LandingStep("wait", "thread_unread")
+    assert step.kind not in {"exhausted", "pass_", "diagnose", "restart"}
+    assert step.restart_why is None
+
+
 def test_turn_has_no_default():
     with pytest.raises(TypeError, match="turn"):
         landing.landing_step("merge_conflict", _facts(), _spent(), ())  # type: ignore[call-arg]

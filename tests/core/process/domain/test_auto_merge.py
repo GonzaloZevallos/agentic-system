@@ -57,6 +57,7 @@ REFUSALS = [
     ("checks_failed", {"checks_passed": False}),
     ("merge_failed", {"merge_failures": rules.MERGE_CALLS_MAX}),
     ("open_escalation", {"open_escalation": True}),
+    ("thread_unread", {"thread_unread": True}),
 ]
 
 
@@ -110,6 +111,22 @@ def test_an_open_escalation_that_could_not_be_read_is_never_read_as_clear():
         "refuse", "open_escalation"
     )
     assert rules.auto_merge_decision(_facts(open_escalation=False)) == MergeDecision("merge", None)
+
+
+@pytest.mark.parametrize("open_escalation", [None, True])
+def test_an_unreadable_thread_is_refused_as_thread_unread_before_any_open_escalation(
+    open_escalation,
+):
+    assert rules.auto_merge_decision(
+        _facts(thread_unread=True, open_escalation=open_escalation)
+    ) == MergeDecision("refuse", "thread_unread")
+
+
+@pytest.mark.parametrize("status", ["escalated", "developing"])
+def test_not_ready_wins_over_an_unreadable_thread(status):
+    assert rules.auto_merge_decision(
+        _facts(status=status, thread_unread=True, open_escalation=None)
+    ) == MergeDecision("refuse", "not_ready")
 
 
 @pytest.mark.parametrize("open_escalation", [True, None])

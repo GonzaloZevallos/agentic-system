@@ -9,7 +9,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application import merge, refusal_note
-from agentic.core.process.domain import exempt_queue, landing, rules
+from agentic.core.process.domain import exempt_queue, landing, landing_order, rules
 from agentic.core.process.domain.landing import LandingSpent
 from agentic.core.process.domain.rules import MergeFacts
 
@@ -103,3 +103,15 @@ def test_every_human_owned_refusal_is_a_known_refusal_with_text_and_stack_ones_h
     assert all(r in merge.COMMENTED or r in merge.UNCOMMENTED for r in landing.HUMAN_OWNED_REFUSALS)
     for refusal in landing.HUMAN_OWNED_REFUSALS & set(STACK):
         assert landing.STACK_ESCALATION[refusal]
+
+
+def test_an_unreadable_thread_is_uncommented_and_in_no_list_that_acts_on_it():
+    # It is waited on, never a person's, never noted, never backed off, never a lane merge.
+    assert "thread_unread" in ALL
+    assert "thread_unread" in merge.UNCOMMENTED
+    assert "thread_unread" not in merge.COMMENTED
+    assert "thread_unread" not in landing.HUMAN_OWNED_REFUSALS
+    assert "thread_unread" not in refusal_note.POLLER_NOTED
+    assert "thread_unread" not in exempt_queue.BACKOFF_REASONS
+    assert all(reason != "thread_unread" for _, reason in landing_order.LANE_DECISIONS)
+    assert landing.landing_step("thread_unread", _facts(), _spent(), (), turn="head").kind == "wait"

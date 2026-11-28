@@ -122,6 +122,15 @@ def test_an_open_escalation_leaves_the_task_to_a_person_and_the_head_step_is_non
     ]
 
 
+def test_an_unreadable_thread_is_nobodys_and_the_set_is_not_grown_for_it():
+    assert "thread_unread" not in HUMAN_OWNED_REFUSALS
+    assert not _waits(refusal="thread_unread")
+    assert landing.landing_step("thread_unread", _facts(), _spent(), (), turn="head").kind == "wait"
+    # Were it in the set, the order would drop the task: the same check that must reject a growth.
+    assert _waits(refusal="open_escalation")
+    assert "thread_unread" not in _none_refusals_not_owned(HUMAN_OWNED_REFUSALS)
+
+
 def test_the_check_rejects_a_none_refusal_the_set_forgot():
     assert _none_refusals_not_owned(HUMAN_OWNED_REFUSALS - {"eval_set"}) == ["eval_set"]
 
