@@ -167,12 +167,13 @@ class RunCheck:
             witness_reason = (
                 gate._run_witness(gate.witness, abandoned) if gate.witness is not None else None
             )
-            row = gate._run(name, command, None, abandoned)
+            workers = gate.whole_share()
+            row = gate._run(name, command, workers, None, abandoned)
             after = self._read_load() if measured else None
             outcome: Outcome | None = None
             retry: Retry | None = None
             if self._classified(name):
-                row, outcome, retry = self._settle(name, command, row, abandoned)
+                row, outcome, retry = self._settle(name, command, row, workers, abandoned)
         stop_if_abandoned(abandoned)  # no call is recorded, no pass stored, for nobody awaiting it
         if verification is not None:
             return self._verified(name, row, witness_reason, outcome, (before, after), retry)
@@ -237,6 +238,7 @@ class RunCheck:
         name: str,
         command: str,
         first: CheckResult,
+        workers: int | None,
         abandoned: Callable[[], bool] | None = None,
     ) -> tuple[CheckResult, Outcome, Retry | None]:
         """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
@@ -250,7 +252,7 @@ class RunCheck:
         spent = Retry(
             first.get("duration_s", 0.0), first.get("load_before"), first.get("load_after")
         )
-        again = self.gate._execute(name, command, None, abandoned)
+        again = self.gate._execute(name, command, workers, None, abandoned)
         if presubmit.flake_verdict(first, again) == "flake":
             return again, Outcome.PASSED, spent
         failed = Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED

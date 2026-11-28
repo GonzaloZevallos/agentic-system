@@ -509,6 +509,18 @@ def workers_env(workers: int) -> dict[str, str]:
     return {"CHECK_WORKERS": str(workers), "PYTEST_XDIST_AUTO_NUM_WORKERS": str(workers)}
 
 
+# The worker budget of a role session (GH-927). A role reproduces one test or one check, not a
+# suite, and with several tasks in parallel its Bash must not compete with the gates' shares.
+ROLE_WORKERS = 2
+
+
+def role_workers_env() -> dict[str, str]:
+    """What every role session gets in its environment: `workers_env` at `ROLE_WORKERS` plus
+    the variable vitest reads. Never an `AGENTIC_*` name, for the reason `workers_env` gives.
+    The gate never sees it: its env is built from the grant, not from a role's."""
+    return {**workers_env(ROLE_WORKERS), "VITEST_MAX_WORKERS": str(ROLE_WORKERS)}
+
+
 def affected_prefix(command: str) -> str:
     """The literal text before the first token the system fills in (`{base}`, or `{workers}`
     when it comes first), for the reviewer's `Bash(prefix:*)` rule: text past a token that is
