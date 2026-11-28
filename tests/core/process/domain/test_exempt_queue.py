@@ -142,14 +142,16 @@ def test_live_exempt_counts_the_own_and_the_machine_children_by_kind():
         ("b", "GH-3", "land_checks"),
         ("b", "GH-4", "land_model"),
     ]
-    live = eq.live_exempt(running, "a")
-    assert (live.own, live.machine) == (1, 2)
-    assert eq.live_exempt(running, "b").own == 1
-    assert eq.live_exempt(running, "c") == eq.ExemptLive(
-        0, 2, (("a", "GH-1", "merge"), ("b", "GH-3", "land_checks"))
+    own, machine, _ = eq.live_exempt(running, "a")
+    assert (own, machine) == (1, 2)
+    assert eq.live_exempt(running, "b")[0] == 1
+    assert eq.live_exempt(running, "c") == (
+        0,
+        2,
+        (("a", "GH-1", "merge"), ("b", "GH-3", "land_checks")),
     )
-    assert eq.live_exempt([], "a") == eq.ExemptLive(0, 0, ())
-    assert eq.live_exempt([("a", "GH-2", "role")], "a") == eq.ExemptLive(0, 0, ())
+    assert eq.live_exempt([], "a") == (0, 0, ())
+    assert eq.live_exempt([("a", "GH-2", "role")], "a") == (0, 0, ())
 
 
 def test_live_exempt_holders_leave_out_the_own_product_and_sort_by_product_then_task():
@@ -164,8 +166,8 @@ def test_live_exempt_holders_leave_out_the_own_product_and_sort_by_product_then_
         ("b", "GH-3", "land_checks"),
         ("z", "GH-1", "merge"),
     )
-    assert eq.live_exempt(running, "a").holders == expected
-    assert eq.live_exempt(list(reversed(running)), "a").holders == expected
+    assert eq.live_exempt(running, "a")[2] == expected
+    assert eq.live_exempt(list(reversed(running)), "a")[2] == expected
 
 
 def _refusal(**more):

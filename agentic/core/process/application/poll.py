@@ -3854,7 +3854,7 @@ def run_once(
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
         product = ports.stack.product()
-        counts = exempt_queue.live_exempt(
+        own_exempt, machine_exempt, exempt_holders = exempt_queue.live_exempt(
             [(r.product, r.task_id, r.kind) for r in running], product
         )
         busy = frozenset(r.task_id for r in running if r.product == product)
@@ -4012,7 +4012,7 @@ def run_once(
         plan_yielded = exempt_queue.behind(
             exempt_queue.rank(exempt_head) if exempt_head else None,
             exempt_others,
-            exempt_queue.EXEMPT_SLOTS_MAX - counts.machine,
+            exempt_queue.EXEMPT_SLOTS_MAX - machine_exempt,
         )
         plan = rules.poll_plan(
             closes=closes,
@@ -4025,7 +4025,7 @@ def run_once(
             merges=merges,
             backed_off_merges=backed_off_merges,
             lands=lands,
-            live_exempt=counts.own,
+            live_exempt=own_exempt,
             pace=pace,
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
             closeness=ranks,
@@ -4051,7 +4051,7 @@ def run_once(
             exempt_head,
             backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
             held=starts_nothing,
-            own_live_exempt=counts.own > 0,
+            own_live_exempt=own_exempt > 0,
         )
         registry.publish_exempt_wait(
             tasks_root,
@@ -4074,7 +4074,7 @@ def run_once(
                 exempt_queue.ahead(exempt_queue.rank(exempt_head), exempt_others)
                 if exempt_head and plan_yielded
                 else [],
-                counts.holders if plan_yielded else (),
+                exempt_holders if plan_yielded else (),
                 f"product {product} task {ports.inbox.task_id(starting.issue)} kind {starting.kind}"
                 if starting
                 else None,

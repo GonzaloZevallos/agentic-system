@@ -159,15 +159,11 @@ def ahead(own: ExemptRank | None, others: Sequence[ExemptWait]) -> list[ExemptWa
     return [w for w in others if (w.since, w.root_key) < mine]
 
 
-@dataclass(frozen=True)
-class ExemptLive:
-    """The live exempt children `live_exempt` counted: `own` of this product, `machine` of
-    all products, and `holders`, the `(product, task_id, kind)` of those of the other products
-    sorted by product then task."""
-
-    own: int
-    machine: int
-    holders: tuple[tuple[str, str, rules.RunKind], ...]
+type ExemptLive = tuple[int, int, tuple[tuple[str, str, rules.RunKind], ...]]
+"""What `live_exempt` counted, `(own, machine, holders)`: `own` live exempt children of this
+product, `machine` of all products, and `holders`, the `(product, task_id, kind)` of those of
+the other products sorted by product then task. A plain tuple, so the generated class diagrams
+under `docs/architecture/generated/` stay as they are."""
 
 
 def live_exempt(running: Iterable[tuple[str, str, rules.RunKind]], product: str) -> ExemptLive:
@@ -185,7 +181,7 @@ def live_exempt(running: Iterable[tuple[str, str, rules.RunKind]], product: str)
             own += 1
         else:
             holders.append((who, task_id, kind))
-    return ExemptLive(own, machine, tuple(sorted(holders, key=lambda h: (h[0], h[1]))))
+    return own, machine, tuple(sorted(holders, key=lambda h: (h[0], h[1])))
 
 
 def _written_at(
