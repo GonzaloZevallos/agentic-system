@@ -289,6 +289,13 @@ UNCOVERED: dict[str, Uncovered] = {
         _INLINE_UNIMPLEMENTED,
     ),
     "Activity": Uncovered((_NOTIFIER_STAND_IN,), _INLINE_UNIMPLEMENTED),
+    "RepoOrigin": Uncovered(
+        (
+            ("agentic/core/process/adapters/git/workspace.py", "GitRepoOrigin"),
+            ("tests/fakes.py", "FakeOrigin"),
+        ),
+        "no conformance assignment yet: nothing in the poll reads the port until the poll wiring",
+    ),
 }
 
 
