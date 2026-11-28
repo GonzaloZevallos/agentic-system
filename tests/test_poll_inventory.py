@@ -79,6 +79,13 @@ INVENTORY: list[tuple[str, str, str]] = [
         "harmless_loss",
         "the budget line's step and its carry: losing them prints one `round points: unmeasured`",
     ),
+    (
+        "_poll.rate_limited_until",
+        "harmless_loss",
+        "the instant a GitHub rate limit lets rounds run again: losing it costs one round that "
+        "meets the limit again and sets it anew",
+    ),
+    ("_poll.until", "rebuilt_each_round", "the skip instant `round_skip` gives, per round"),
     ("_poll.upstream", "rebuilt_each_round", "read again by every round"),
     ("_poll.notice", "rebuilt_each_round", "the lines of one round, printed in it"),
     ("_poll.line", "rebuilt_each_round", "the loop variable over one round's lines"),

@@ -1854,9 +1854,10 @@ async def _poll(
                 until = round_skip(datetime.now(UTC), rate_limited_until)
                 if until is not None:
                     # GH-1214: no read, no round, no step: only the beats, one line, the sleep.
-                    when = until.isoformat()
                     print(
-                        f"agentic: poll: round skipped: GitHub rate limit until {when}", flush=True
+                        "agentic: poll: round skipped: GitHub rate limit until "
+                        f"{until.isoformat()}",
+                        flush=True,
                     )
                     beat("end")
                     await sleep(interval_s)
