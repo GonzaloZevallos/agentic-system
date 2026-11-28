@@ -2653,3 +2653,12 @@ candidates:
   sources:
   - human_decision
   added_at: '2026-11-28T08:23:06.857+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Before you edit a test or limit outside your declared seams, such as a raised cap, stop and get the plan to declare it. Do not change it silently, even when the new work forces it.
+  confidence: medium
+  seen_in:
+  - GH-1057
+  sources:
+  - finding
+  added_at: '2026-11-28T10:14:29.934+00:00'

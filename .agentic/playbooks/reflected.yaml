@@ -1777,3 +1777,13 @@ tasks:
   GH-927@review:
     cost_usd: 0.0678
     decisions: 1
+  GH-1057@review:
+    cost_usd: 0.0422
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-1057
