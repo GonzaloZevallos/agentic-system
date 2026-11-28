@@ -350,6 +350,33 @@ def test_affected_check_rules_is_one_prefix_rule_per_command_before_the_base_tok
     )
 
 
+def test_check_rules_for_the_tests_command_is_the_serial_prefix_with_no_system_token():
+    from agentic.core.process.domain.roles import check_rules
+
+    rules = check_rules(
+        {
+            "tests": 'uv run pytest -m "not llm" -n {workers} --dist load',
+            "lint": "uv run ruff check .",
+        }
+    )
+    assert rules == ('Bash(uv run pytest -m "not llm":*)', "Bash(uv run ruff check .:*)")
+
+
+@pytest.mark.parametrize("command", ["{workers} pytest", "-n {workers}", "{base} x", ""])
+def test_check_rules_gives_no_rule_to_a_command_whose_cut_is_empty(command: str):
+    from agentic.core.process.domain.roles import check_rules
+
+    assert check_rules({"tests": command}) == ()
+
+
+def test_affected_check_rules_of_the_sized_affected_command_is_unchanged():
+    from agentic.core.process.domain.roles import affected_check_rules
+
+    assert affected_check_rules(
+        {"tests": "uv run python scripts/affected_tests.py {base} -n {workers} --dist load"}
+    ) == ("Bash(uv run python scripts/affected_tests.py:*)",)
+
+
 def test_affected_check_rules_of_nothing_is_nothing():
     from agentic.core.process.domain.roles import affected_check_rules
 

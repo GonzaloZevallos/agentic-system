@@ -123,8 +123,11 @@ from .task import (
     Subtask,
     TaskInput,
     TaskState,
+    TimeoutFact,
     TrackerPosted,
     apply,
+    returns,
+    timeout_rows,
 )
 
 # The return-limit decision and the count it reads live in `restart` (GH-593); every caller asks
@@ -163,8 +166,13 @@ def archivable_document(relative: str, task_id: str) -> bool:
     return relative == relative_path(task_id).as_posix()
 
 
-def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
-    """The `returns` patch after one more return of `pair`."""
+def record_return(state: TaskState, pair: Pair, *, category: str | None = None) -> dict[str, int]:
+    """The `returns` patch after one more return of `pair`. A caller added from GH-1075 on passes
+    `category=`, the category of the finding behind the return: a category no finding can return
+    a subtask with (`task.returns`, the `SYSTEM_CATEGORIES`) is a `ValueError`, a programming
+    error. Without one it behaves as it always did."""
+    if category is not None and not returns(category):
+        raise ValueError(f"a {category!r} finding returns no subtask: it cannot count a return")
     return {pair.key: state.get("changes_requested", {}).get(pair.key, 0) + 1}
 
 
@@ -173,7 +181,10 @@ def change_entry(
 ) -> ChangesRequested:
     """One entry of the return history: who returned, in which category, and the reason,
     so README §3's "same motive between the same roles" is computable. `attempt` (GH-593) is
-    written only above 1, on a return of a restarted attempt (`restart.attempt`)."""
+    written only above 1, on a return of a restarted attempt (`restart.attempt`). A `category` no
+    finding can return a subtask with (`task.returns`) is a `ValueError`."""
+    if not returns(category):
+        raise ValueError(f"a {category!r} finding returns no subtask: it has no change entry")
     entry: ChangesRequested = {"pair": pair.key, "category": category, "reason": reason}
     if attempt > 1:
         entry["attempt"] = attempt
@@ -986,8 +997,17 @@ def design_applies(state: TaskState) -> bool:
 
 def copy_applies(state: TaskState) -> bool:
     """Whether this task has its texts written and reviewed (README.md, 4): a feature, with
-    `touches_copy` among the validated flags. The only reader of that flag."""
+    `touches_copy` among the validated flags. The only reader of that flag that gates the copy
+    branch; `touches_person` reads it with no type filter, for the notifier."""
     return state.get("type") == "feature" and bool(state.get("flags", {}).get("touches_copy"))
+
+
+def touches_person(state: TaskState) -> bool:
+    """Whether the validated flags say the task touches UI or copy, whatever its type: what a
+    person notices when it lands. The one reader the notifier uses (GH-1056)."""
+    # Today only features carry these flags, so no type filter is needed.
+    flags = state.get("flags", {})
+    return bool(flags.get("touches_ui") or flags.get("touches_copy"))
 
 
 def _latest_index(state: TaskState, section: str) -> int | None:
@@ -2711,8 +2731,41 @@ def after_validate(state: TaskState) -> str | None:
     if status == "returned":
         return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        return "plan" if skips_definition(state) else (design_step(state) or "plan")
+        return after_definition(state)
     return {"discarded": "discard"}.get(status)
+
+
+def _design_or_plan(state: TaskState) -> str:
+    """Where a task goes once PRD approval is settled: the plan on the light path, else the next
+    design node, else the plan. The one fall-through `after_definition` and `after_early_size`
+    share, so the early check never changes where the task goes when it does not split."""
+    return "plan" if skips_definition(state) else (design_step(state) or "plan")
+
+
+def after_definition(state: TaskState) -> str | None:
+    """Where a task whose PRD PM approved (`definition_ready`) goes: nowhere when escalated; the
+    plan on the light path; the early size check while it is due (`early_size_due`, ADR-0110);
+    else the design branch or the plan. The one function `after_validate` and `resume_target`
+    both read, so a resume lands where the live routing would have."""
+    if state.get("escalated"):
+        return None
+    if skips_definition(state):
+        return "plan"
+    if early_size_due(state):
+        return "early_size"
+    return _design_or_plan(state)
+
+
+def after_early_size(state: TaskState) -> str | None:
+    """Where the task goes after the early size check: nowhere when escalated (a task cap); the
+    split when it wrote parts and has no subtasks yet; else the design branch or the plan. It
+    never reads `after_definition`: one `sizer_failed` row leaves the check due, and that would
+    loop. The one retry is a later invocation's."""
+    if state.get("escalated"):
+        return None
+    if state.get("parts") and not state.get("subtasks"):
+        return "split"
+    return _design_or_plan(state)
 
 
 def after_ux_flow(state: TaskState) -> str | None:
@@ -4071,13 +4124,11 @@ def resume_target(state: TaskState) -> str | None:
     if status == "returned":
         return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        # Through the design branch first, on a feature PM flagged `touches_ui`
-        # (ADR-0040): the same one function `after_validate` and every design node's
-        # own `after_*` already call, so a resume lands exactly where the live routing
-        # would have, however many lead returns or PRD versions came before the pause.
-        if skips_definition(state):
-            return "plan"
-        return design_step(state) or "plan"
+        # The early size check while it is due, then the design branch on a feature PM flagged
+        # `touches_ui` (ADR-0040): the same `after_definition` that `after_validate` calls, so a
+        # resume lands exactly where the live routing would have, however many lead returns or
+        # PRD versions came before the pause.
+        return after_definition(state)
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
 
@@ -4396,7 +4447,7 @@ def logged(
     return {**patch, "pause_log": entries}
 
 
-def _current_epoch(state: TaskState) -> list[PauseEntry]:
+def current_epoch(state: TaskState) -> list[PauseEntry]:
     """The entries `rules.auto_resumable`/`rules.auto_resume_limit` read: everything
     after the last `"resumed"` entry (a human's decision, or the poller's own retake),
     or the whole log when the task has never been resumed."""
@@ -4406,6 +4457,28 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
         if entry["kind"] == "resumed":
             last_resumed = i
     return log[last_resumed + 1 :]
+
+
+def previous_epoch(state: TaskState) -> list[PauseEntry]:
+    """The entries strictly between the second-to-last and the last `resumed` entry: the epoch
+    the last resume closed. Empty with no `resumed`; with exactly one, everything before it."""
+    log = state.get("pause_log", [])
+    resumed = [i for i, entry in enumerate(log) if entry["kind"] == "resumed"]
+    if not resumed:
+        return []
+    start = resumed[-2] + 1 if len(resumed) > 1 else 0
+    return list(log[start : resumed[-1]])
+
+
+def escalation_at(entries: Sequence[PauseEntry]) -> datetime | None:
+    """The `at` of the last `escalation` entry of `entries`, in UTC: the instant that pause was
+    written. `None` when there is no escalation entry or its `at` is missing, unparsable or
+    carries no offset."""
+    escalations = [entry for entry in entries if entry["kind"] == "escalation"]
+    if not escalations:
+        return None
+    at = _instant(escalations[-1].get("at"))
+    return None if at is None else at.astimezone(UTC)
 
 
 def terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
@@ -4462,7 +4535,7 @@ def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
 def format_epoch_entries(state: TaskState) -> list[PauseEntry]:
     """The current epoch's terminal failures: what `format_retakes` reads (GH-1019). The one
     composition every caller passes it."""
-    return terminal_failures(_current_epoch(state))
+    return terminal_failures(current_epoch(state))
 
 
 def format_epoch(state: TaskState) -> bool:
@@ -4507,14 +4580,130 @@ def format_hold_released(
     return contained is True
 
 
+def format_fix_facts(
+    issue_state: Literal["OPEN", "CLOSED"], closing_merge_commit: str | None
+) -> tuple[bool, str | None]:
+    """The two facts of a refusal issue that `format_hold_released` reads (GH-1020), from what
+    the tracker said of it: whether it is `closed`, and the commit that closed it. An open issue
+    names no commit, whatever `gh` carried. The one place the tracker's words become those facts,
+    so the poller compares no state itself."""
+    closed = issue_state == "CLOSED"
+    return closed, closing_merge_commit if closed else None
+
+
 def auto_resumable(state: TaskState) -> ResumeKey | None:
     """Whether the poller may retake this pause on its own, and with which key (issue #137,
     GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,
     not `escalated`'s own text, not any `failures[].error`. It reads the current epoch
-    (`_current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
+    (`current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
     escalation carries a `MechanicalCause` (with no failure at all), or a mix of both. A pair at
-    its return limit, or any escalation with no cause that is not a `failure` one, is a human's."""
-    return _resume_key(_current_epoch(state))
+    its return limit, or any escalation with no cause that is not a `failure` one, is a human's.
+
+    A `check_timeout` key (GH-1075) is returned only when `check_timeout_retake` holds over the
+    last such escalation's `timeouts` and `previous_timeouts`; `spent` counts the `check_timeout`
+    escalations of the whole `pause_log` strictly before it, `CHECK_TIMEOUT_RETAKES` of them or
+    more. `pause_kind` is unaffected: it reads `_resume_key`, so the pause stays external."""
+    key = _resume_key(current_epoch(state))
+    if key != "check_timeout":
+        return key
+    earlier = _check_timeout_escalations(state)
+    current = earlier.pop()
+    spent = len(earlier) >= CHECK_TIMEOUT_RETAKES
+    held = check_timeout_retake(
+        current.get("timeouts", []), current.get("previous_timeouts", []), spent
+    )
+    return key if held else None
+
+
+def poller_retakes(state: TaskState) -> bool:
+    """Whether the poller retakes this pause on its own, the one source of the board's
+    "se retoma sola" (GH-877): not held on its format retakes, `auto_resumable`, and not a
+    format key whose hold is already due.
+
+    Known limit: the `Auto-resumed:` count (`MECHANICAL_RETAKE_MAX`), a human comment after the
+    system's and `landing_plan.stranded` live in the issue's comments, which are not read here,
+    so a mechanical pause with its retakes spent still answers True."""
+    key = auto_resumable(state)
+    if format_held(state) or key is None:
+        return False
+    return not (key in FORMAT_REASONS and format_hold_due(state))
+
+
+# The retakes a task's `check_timeout` pauses get in all: the first is free, the second runs only
+# on changed evidence (`check_timeout_retake`), a third timeout always goes to a human.
+# `auto_resume_limit` returns the same number, so the poller's count of `Auto-resumed:` comments
+# and the escalations `auto_resumable` counts stop together.
+CHECK_TIMEOUT_RETAKES = 2
+
+
+def _check_timeout_escalations(state: TaskState) -> list[EscalationPauseEntry]:
+    """The `escalation` entries of the whole `pause_log` whose cause is `check_timeout`, oldest
+    first. The whole log: a `ResumedPauseEntry` cannot tell a human's resume from a retake."""
+    return [
+        entry
+        for entry in state.get("pause_log", [])
+        if entry["kind"] == "escalation" and entry.get("cause") == "check_timeout"
+    ]
+
+
+def check_timeout_retake(
+    current: Sequence[TimeoutFact], previous: Sequence[TimeoutFact], spent: bool
+) -> bool:
+    """Whether a pause caused by checks that timed out (GH-1075) is retaken. Facts are matched
+    by `(head, check)`: a previous fact of another head or another check is no match. It retakes
+    only when it is not `spent`, there is a current fact, and every one has no match, has unknown
+    workers on its side or its match's, or has workers different from its match's: the same head
+    with the same workers ran out the same way, which a retake would only repeat.
+
+    The cap is on the evidence: a second retake needs changed evidence, and `spent` only stops a
+    run of timeouts whose evidence keeps changing."""
+    if spent or not current:
+        return False
+    matches = {(fact["head"], fact["check"]): fact for fact in previous}
+    for fact in current:
+        match = matches.get((fact["head"], fact["check"]))
+        if match is None:
+            continue
+        workers = presubmit.workers_of(fact)
+        if workers is not None and workers == presubmit.workers_of(match):
+            return False
+    return True
+
+
+def _timeout_text(fact: TimeoutFact) -> str:
+    workers = presubmit.workers_of(fact)
+    shown = "unknown" if workers is None else workers
+    return f"{fact['check']} {fact['seconds']:g}s with {shown} workers"
+
+
+def check_timeout_escalation(
+    state: TaskState, timeouts: Sequence[TimeoutFact], target: str, *, at: str
+) -> dict[str, Any]:
+    """The patch that pauses `target` on checks that timed out (GH-1075), and nothing else: class
+    `ci`, cause `check_timeout`, composed through `logged`, and the `timeout_rows` of `target` in
+    `findings`. It writes no `full_checks` record, no return and no `change_history`: a timeout
+    says nothing about the branch. The `escalation` entry carries `timeouts` and
+    `previous_timeouts`, both ordered by check; `previous_timeouts` is the `timeouts` of the
+    latest earlier `check_timeout` escalation of the whole `pause_log`, `[]` when there is none,
+    never read from `state["full_checks"]`.
+
+    The whole log is read, not the log since a human's reset, because a `ResumedPauseEntry` cannot
+    tell a human's resume from the poller's retake. An empty `timeouts` is a `ValueError`."""
+    if not timeouts:
+        raise ValueError("a check_timeout escalation needs the checks that timed out")
+    ordered = sorted(timeouts, key=lambda fact: fact["check"])
+    earlier = _check_timeout_escalations(state)
+    previous = earlier[-1].get("timeouts", []) if earlier else []
+    reason = (
+        f"checks timed out: {', '.join(_timeout_text(fact) for fact in ordered)}; "
+        f"previous: {', '.join(_timeout_text(fact) for fact in previous) or 'none'}"
+    )
+    patch = logged({**escalation("ci", reason, cause="check_timeout")}, at=at)
+    entry = patch["pause_log"][-1]
+    entry["timeouts"] = ordered
+    entry["previous_timeouts"] = list(previous)
+    patch["findings"] = timeout_rows(target, ordered, state.get("findings", []))
+    return patch
 
 
 def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
@@ -4536,7 +4725,7 @@ def stated_reset(state: TaskState) -> datetime | None:
     `None` when none states a reset: the pause then follows its calendar as ever."""
     stated = [
         _instant(entry.get("resets_at"))
-        for entry in _current_epoch(state)
+        for entry in current_epoch(state)
         if entry["kind"] == "failure" and entry["value"] in _RESET_STATING_REASONS
     ]
     return max((t for t in stated if t is not None), default=None)
@@ -4555,7 +4744,7 @@ def task_account_paused(state: TaskState, now: datetime) -> bool:
     retaken pause follows its calendar there while the stated reset here has passed."""
     if not any(
         entry["kind"] == "failure" and entry["value"] == "account_limit"
-        for entry in _current_epoch(state)
+        for entry in current_epoch(state)
     ):
         return False
     return (reset := stated_reset(state)) is None or reset > now
@@ -4597,7 +4786,7 @@ def failed_interviews(state: TaskState) -> list[Interview]:
     """The interviews any `"failure"` entry of the current epoch broke inside, each
     once, in order of failure: empty when none did."""
     specs: list[Interview] = []
-    for entry in _current_epoch(state):
+    for entry in current_epoch(state):
         if entry["kind"] != "failure":
             continue
         spec = interview_for_section(entry["section"])
@@ -4616,7 +4805,14 @@ def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     chase on top of that is not this task's own risk to take -- six otherwise, the
     whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593); GitHub's rate
     limit its whole minutely calendar (GH-989), whose own 12 h bound is `rate_limit`'s. A format
-    key (GH-1019) gets what `format_retakes.limit` leaves, which can be `0`: the hold is due."""
+    key (GH-1019) gets what `format_retakes.limit` leaves, which can be `0`: the hold is due.
+
+    `check_timeout` (GH-1075) gets `CHECK_TIMEOUT_RETAKES`, 2, ahead of the mechanical branch: the
+    poller's `resume_exhausted` stops at `prior >= limit`, `prior` counting the `Auto-resumed:`
+    comments, so a limit of 1 would block the second, evidence-based retake
+    `check_timeout_retake` allows, and the limit and `auto_resumable`'s `spent` agree on 2."""
+    if reason == "check_timeout":
+        return CHECK_TIMEOUT_RETAKES
     if reason in FORMAT_REASONS:
         return format_retakes.limit(state.get("format_retakes", {}), format_epoch_rules(state))
     if reason in MECHANICAL_CAUSES:
@@ -6179,6 +6375,43 @@ MergeRefusal = Literal[
 """
 
 
+# At most this many left-out local commits are named in the sentence.
+_LEFT_OUT_SHOWN = 10
+
+EvalSetUnread = Literal["no_sha", "upstream_note", "local_commits", "unparsable"]
+
+
+def local_commits_note(shas: Sequence[str]) -> str:
+    """The one sentence that says the product checkout has commits the upstream lacks (GH-1142):
+    the workspace's note, the poll's upstream line and the refusal comment all take it from
+    here, so the owner reads the same words wherever the cause shows."""
+    shown = ", ".join(shas[:_LEFT_OUT_SHOWN])
+    more = len(shas) - _LEFT_OUT_SHOWN
+    extra = f" and {more} more" if more > 0 else ""
+    noun = "commit" if len(shas) == 1 else "commits"
+    return (
+        f"the product checkout has {len(shas)} local {noun} not on the upstream: "
+        f"{shown}{extra}, left out of the base"
+    )
+
+
+def eval_set_unread_cause(
+    sha_known: bool, left_out: Sequence[str], failure: bool, parsed: bool
+) -> EvalSetUnread | None:
+    """Why the evaluation set could not be read, `None` when it could (GH-1142). `failure` is
+    any note of the upstream besides the left-out commits (no upstream, a failed fetch): it
+    wins over local commits, because then the base is not the plain fetched tip. Local commits
+    with a clean fetch are the cause the owner can act on; a declaration that does not parse
+    is the last."""
+    if not sha_known:
+        return "no_sha"
+    if failure:
+        return "upstream_note"
+    if left_out:
+        return "local_commits"
+    return None if parsed else "unparsable"
+
+
 @dataclass(frozen=True)
 class MergeFacts:
     """Every fact `auto_merge_decision` reads, gathered by the caller from the product
@@ -6297,6 +6530,9 @@ class MergeFacts:
     ci_red_on_base: tuple[str, ...] = ()
     github_conflicting: bool = False
     close_docs: CloseDocs | None = None
+    # GH-1142: why `in_eval_set` is `None`, for the poll line and the refusal comment only;
+    # `auto_merge_decision` never reads it.
+    eval_set_unread: EvalSetUnread | None = None
     # GH-453: what the CI says about the jobs that cover the checks the latest `full_checks`
     # record of this very head deferred (`deferral_state`), `None` when it deferred none.
     deferral: ci.CoveringState | None = None
@@ -7128,6 +7364,12 @@ def split_part_of(body: str) -> tuple[str, int, int] | None:
     return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
+def split_marker_ids(body: str) -> tuple[str, ...]:
+    """The task id of every `agentic-split` marker the body carries, in order. The stacking
+    judgement (GH-858) needs exactly one, so a body that holds two reads as ambiguous."""
+    return tuple(found.group(1) for found in _SPLIT_MARKER.finditer(body))
+
+
 # How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
 # size budget is repeated here; the budget is `size_budget.budget_text`.
 SLICING_RULES = (
@@ -7452,6 +7694,10 @@ class BlockerReport:
     open: tuple[int, ...] = ()
     closed_unresolved: tuple[tuple[int, BlockerReason], ...] = ()
     unknown: tuple[int, ...] = ()
+    # The one Ready same-split parent a stacked start would build on (GH-858, ADR-0103): an
+    # issue number, never a sha. Outside `__bool__` on purpose -- it is a reading, not a
+    # verdict: nothing resolves a blocker but `_blocker_verdict`'s merged-in-upstream check.
+    stacked_on: int | None = None
 
     def __bool__(self) -> bool:
         return bool(self.open or self.closed_unresolved or self.unknown)

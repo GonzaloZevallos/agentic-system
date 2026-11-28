@@ -3,7 +3,8 @@ Esta página muestra los grupos de módulos de `domain` y una flecha por cada gr
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:
   - [adapters.claude_sdk](packages-process-adapters-claude_sdk.md)
-  - [adapters.filesystem](packages-process-adapters-filesystem.md)
+  - [adapters.filesystem (parte 1)](packages-process-adapters-filesystem-1.md)
+  - [adapters.filesystem (parte 2)](packages-process-adapters-filesystem-2.md)
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
@@ -13,7 +14,8 @@ Esta página muestra los grupos de módulos de `domain` y una flecha por cada gr
 - Grupos:
   - [domain: checks](packages-process-domain-checks.md)
   - [domain: landing](packages-process-domain-landing.md)
-  - [domain: machine](packages-process-domain-machine.md)
+  - [domain: machine (parte 1)](packages-process-domain-machine-1.md)
+  - [domain: machine (parte 2)](packages-process-domain-machine-2.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
   - [domain: state (parte 1)](packages-process-domain-state-1.md)
@@ -33,6 +35,7 @@ graph TD
     g_domain__landing --> g_domain__state
     g_domain__machine --> g_domain__checks
     g_domain__machine --> g_domain__landing
+    g_domain__machine --> g_domain__roles
     g_domain__machine --> g_domain__state
     g_domain__playbook --> g_domain__checks
     g_domain__playbook --> g_domain__roles

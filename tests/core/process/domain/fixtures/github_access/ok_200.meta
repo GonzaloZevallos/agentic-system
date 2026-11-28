@@ -1,0 +1,4 @@
+command: gh api -i /versions
+gh_version: 2.100.0
+origin: captured
+derived_from: ""

@@ -4,20 +4,26 @@ its gate."""
 
 from __future__ import annotations
 
+import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from agentic.core.process.application.develop import develop
-from agentic.core.process.application.ports import CheckRequest, CommandResult
+from agentic.core.process.application.ports import CheckAbandoned, CheckRequest, CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
-from agentic.core.process.domain.check_schedule import CheckPriority
+from agentic.core.process.domain.check_schedule import CheckPriority, Limits
+from agentic.core.process.domain.presubmit import AffectedPlan
 from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_slice import _land, _world
 from tests.core.process.application.test_merge_full_checks import _merged_with
 from tests.fakes import (
     FakeCheckScheduler,
+    FakeReaper,
     MemoryCommands,
     MemoryStack,
     MemoryWorkspace,
@@ -154,7 +160,10 @@ def test_a_granted_gate_gives_the_same_results_and_timeout_as_one_granted_at_onc
             FakeCheckScheduler(share, wait_s=wait_s), commands, parallel=parallel, witness="w"
         )
         reason = gate()
-        rows = [{k: v for k, v in r.items() if k != "duration_s"} for r in gate.results or []]
+        rows = [
+            {k: v for k, v in r.items() if k not in ("duration_s", "workers")}
+            for r in gate.results or []
+        ]
         return reason, rows, gate.timeout_s, sorted(c for _, c in commands.ran)
 
     assert run(0.0, 4) == run(900.0, 2)
@@ -237,3 +246,294 @@ def test_the_slice_gate_asks_as_land():
     _land(ports)
     assert ports.check_scheduler.requests, "a landed slice must run its checks under a share"
     assert {r.priority for r in ports.check_scheduler.requests} == {CheckPriority.LAND}
+
+
+# -- an abandoned attempt (GH-1169) ------------------------------------------------------
+# Seam: `CheckoutPresubmit.__call__(abandoned=...)`. The flag is the attempt's own: a call that
+# sees it set books no share, launches nothing and writes nothing on the shared presubmit.
+
+
+class Flag:
+    """The abandonment flag of one attempt: `is_set` is what a call receives."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+
+class FlippingCommands(MemoryCommands):
+    """Sets `flag` once `command` has run, as the reap of a stalled attempt would."""
+
+    def __init__(self, flag: Flag, command: str, **queues: list[CommandResult]) -> None:
+        super().__init__(**queues)
+        self._flag, self._command = flag, command
+
+    def run(self, cwd, command, timeout_s, *, env=None):
+        result = super().run(cwd, command, timeout_s, env=env)
+        if command == self._command:
+            self._flag.set()
+        return result
+
+
+def _untouched(gate: CheckoutPresubmit) -> None:
+    """What an abandoned call leaves on the shared presubmit: nothing."""
+    assert gate.results is None and gate.head is None and gate.regressions == []
+    assert gate.forms == [] and gate.gates == [] and gate.invocations == []
+    assert gate.flakes() == [] and gate.timeouts() == []
+    assert gate.refusals == 0 and gate._refused_ids == [] and gate.waited_s == 0.0
+    assert gate.witness_result is None and gate.stuck_full == set()
+
+
+def test_a_flag_set_before_the_call_books_nothing_and_runs_nothing():
+    scheduler, commands, flag = FakeCheckScheduler(), MemoryCommands(), Flag()
+    gate = gate_over(scheduler, commands, witness="witness")
+    flag.set()
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert scheduler.requests == [] and commands.ran == []
+    _untouched(gate)
+
+
+def _plan() -> AffectedPlan:
+    return AffectedPlan(
+        base="abc",
+        commands={"tests": "pytest --picked={base}", "lint": "ruff check --since {base}"},
+        fallback=(),
+    )
+
+
+def test_a_gate_abandoned_during_its_first_check_does_not_launch_the_second():
+    flag, scheduler = Flag(), FakeCheckScheduler()
+    commands = FlippingCommands(flag, "pytest", pytest=[CommandResult(1, "red")])
+    gate = gate_over(scheduler, commands)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    # The launched check ran to its end; nothing after it: no rerun of the red, no lint.
+    assert [c for _, c in commands.ran] == ["pytest"]
+    assert len(scheduler.released) == 1  # the share is back
+    _untouched(gate)
+
+
+def test_a_planned_gate_abandoned_during_its_affected_check_does_not_launch_the_next():
+    flag, scheduler = Flag(), FakeCheckScheduler()
+    commands = FlippingCommands(flag, "pytest --picked=abc")
+    gate = gate_over(scheduler, commands, affected=_plan())
+    assert isinstance(gate.ports.workspace, MemoryWorkspace)
+    gate.ports.workspace.diff_paths = ("src/a.py",)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert [c for _, c in commands.ran] == ["pytest --picked=abc"]
+    assert len(scheduler.released) == 1
+    _untouched(gate)
+
+
+def test_a_gate_abandoned_during_its_last_check_stores_nothing_of_it():
+    flag, scheduler = Flag(), FakeCheckScheduler()
+    commands = FlippingCommands(flag, "ruff check .")
+    gate = gate_over(scheduler, commands)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert [c for _, c in commands.ran] == ["pytest", "ruff check ."]
+    assert len(scheduler.released) == 1
+    _untouched(gate)
+
+
+def test_a_parallel_gate_abandoned_during_a_check_does_not_rerun_it():
+    flag, scheduler = Flag(), FakeCheckScheduler()
+    commands = FlippingCommands(flag, "pytest", pytest=[CommandResult(1, "red")] * 2)
+    gate = gate_over(scheduler, commands, parallel=True)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert [c for _, c in commands.ran].count("pytest") == 1  # the red is not rerun
+    assert len(scheduler.released) == 1
+    _untouched(gate)
+
+
+def test_a_witness_that_finishes_after_the_flag_leaves_no_result_behind():
+    flag, scheduler = Flag(), FakeCheckScheduler()
+    commands = FlippingCommands(flag, "witness")
+    gate = gate_over(scheduler, commands, witness="witness")
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert [c for _, c in commands.ran] == ["witness"]
+    _untouched(gate)
+
+
+def test_the_next_attempt_runs_its_gate_in_full_on_the_same_presubmit():
+    first, second = Flag(), Flag()
+    scheduler = FakeCheckScheduler()
+    commands = FlippingCommands(first, "pytest")
+    gate = gate_over(scheduler, commands)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=first.is_set)
+    commands.ran.clear()
+    assert gate(abandoned=second.is_set) is None
+    assert [c for _, c in commands.ran] == ["pytest", "ruff check ."]
+    assert len(gate.invocations) == 1 and len(gate.gates) == 1
+    assert gate.results is not None and len(gate.results) == 2
+
+
+def test_without_a_flag_the_request_is_the_one_of_before():
+    scheduler = FakeCheckScheduler(wait_s=1.0)
+    gate = gate_over(scheduler, MemoryCommands(pytest=[CommandResult(1, "red")] * 2))
+    gate()
+    gate()
+    assert [r.cancelled for r in scheduler.requests] == [None, None]
+    assert len({(r.enqueued_at, r.token) for r in scheduler.requests[1:]}) == 1
+
+
+def test_a_grant_that_comes_back_after_the_flag_is_released_and_not_kept():
+    flag = Flag()
+
+    class LateFlag(FakeCheckScheduler):
+        def acquire(self, request: CheckRequest):
+            grant = super().acquire(request)
+            flag.set()  # the stall reap lands while the wait is being answered
+            return grant
+
+    scheduler = LateFlag(wait_s=7.0)
+    commands = MemoryCommands()
+    gate = gate_over(scheduler, commands)
+    with pytest.raises(CheckAbandoned):
+        gate(abandoned=flag.is_set)
+    assert len(scheduler.released) == 1 and commands.ran == []
+    assert gate.grant is None and gate.waited_s == 0.0
+    _untouched(gate)
+
+
+# Against a real ledger: the token is the call's, so the retry of the next attempt and the
+# abandoned thread of the previous one never share a booking.
+
+
+class Parked(MemoryCommands):
+    """The first command of each named thread waits inside `run` until the test lets it go."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reached: dict[str, threading.Event] = {}
+        self.go: dict[str, threading.Event] = {}
+
+    def park(self, thread: str) -> None:
+        self.reached[thread], self.go[thread] = threading.Event(), threading.Event()
+
+    def run(self, cwd, command, timeout_s, *, env=None):
+        name = threading.current_thread().name
+        if name in self.go and not self.reached[name].is_set():
+            self.reached[name].set()
+            self.go[name].wait(10.0)
+        return super().run(cwd, command, timeout_s, env=env)
+
+
+class Outcome:
+    """What a call run on a thread of its own ended with."""
+
+    def __init__(self, gate: CheckoutPresubmit, flag: Flag, name: str) -> None:
+        self.result: str | None = None
+        self.error: BaseException | None = None
+
+        def target() -> None:
+            try:
+                self.result = gate(abandoned=flag.is_set)
+            except BaseException as error:  # noqa: BLE001 - the thread reports whatever ended it
+                self.error = error
+
+        self.thread = threading.Thread(target=target, name=name)
+        self.thread.start()
+
+    def join(self) -> None:
+        self.thread.join(10.0)
+        assert not self.thread.is_alive()
+
+
+def _real_ledger(tmp_path, sleeping: dict[str, threading.Event] | None = None):
+    def sleep(seconds: float) -> None:
+        if sleeping is not None and (polled := sleeping.get(threading.current_thread().name)):
+            polled.set()
+        time.sleep(0.01)
+
+    return FilesystemCheckLedger(
+        tmp_path / "ledger",
+        "mine",
+        FakeReaper(),
+        Limits(cores=16),
+        boot_id=lambda: "boot",
+        is_alive=lambda pid, boot: True,
+        wall_clock=lambda: 1_000_000.0,
+        sleep=sleep,
+        pid=lambda: 7,
+    )
+
+
+def _rows(tmp_path) -> list[dict]:
+    path = tmp_path / "ledger" / "ledger.json"
+    return json.loads(path.read_text())["entries"] if path.exists() else []
+
+
+def _gate_on(ledger: FilesystemCheckLedger, commands: MemoryCommands) -> CheckoutPresubmit:
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    ports = memory_ports(workspace=workspace, commands=commands, check_scheduler=ledger)
+    return CheckoutPresubmit(
+        ports, PATH, "base", CHECKS, 30.0, priority=CheckPriority.SUBTASK, wait_max_s=60.0
+    )
+
+
+def test_a_second_attempt_books_under_its_own_token_and_the_first_one_leaves_it_alone(tmp_path):
+    commands, ledger = Parked(), _real_ledger(tmp_path)
+    gate = _gate_on(ledger, commands)
+    first, second = Flag(), Flag()
+    commands.park("one")
+    one = Outcome(gate, first, "one")
+    assert commands.reached["one"].wait(10.0)
+    (booked_by_one,) = _rows(tmp_path)
+    commands.park("two")
+    two = Outcome(gate, second, "two")
+    assert commands.reached["two"].wait(10.0)
+    rows = _rows(tmp_path)
+    assert len({r["token"] for r in rows}) == 2 and booked_by_one["token"] in {
+        r["token"] for r in rows
+    }
+    assert {r["enqueued_at"] for r in rows} == {booked_by_one["enqueued_at"]}
+    first.set()  # attempt 1 is reaped; its thread is still inside the first check
+    commands.go["one"].set()
+    one.join()
+    assert isinstance(one.error, CheckAbandoned)
+    remaining = _rows(tmp_path)
+    assert [r["token"] for r in remaining] != [booked_by_one["token"]]
+    assert len(remaining) == 1 and remaining[0]["share"] > 0  # the second attempt's share
+    assert gate.grant is not None and gate.grant.token == remaining[0]["token"]
+    commands.go["two"].set()
+    two.join()
+    assert two.error is None and two.result is None
+    assert _rows(tmp_path) == []
+
+
+def test_an_abandoned_wait_leaves_the_line_of_the_next_attempt_standing(tmp_path):
+    polled = {"one": threading.Event(), "two": threading.Event()}
+    ledger = _real_ledger(tmp_path, polled)
+    held = [ledger.acquire(CheckRequest(CheckPriority.SUBTASK, 0.0, 7200.0)) for _ in range(2)]
+    # `pid=7` for all three: tokens tell them apart, and the ledger is full (6 + 6 of 16).
+    commands = MemoryCommands()
+    gate = _gate_on(ledger, commands)
+    first, second = Flag(), Flag()
+    one = Outcome(gate, first, "one")
+    assert polled["one"].wait(10.0)
+    two = Outcome(gate, second, "two")
+    assert polled["two"].wait(10.0)
+    waiting = {r["token"] for r in _rows(tmp_path) if r["share"] == 0}
+    assert len(waiting) == 2
+    first.set()
+    one.join()
+    assert isinstance(one.error, CheckAbandoned)
+    left = {r["token"] for r in _rows(tmp_path) if r["share"] == 0}
+    assert len(left) == 1 and left < waiting  # attempt 2 still has its place
+    for grant in held:
+        ledger.release(grant)
+    two.join()
+    assert two.error is None and commands.ran  # attempt 2 got its share and ran its checks
+    assert _rows(tmp_path) == []

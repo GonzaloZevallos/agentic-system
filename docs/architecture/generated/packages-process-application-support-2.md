@@ -11,7 +11,8 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: reflection](packages-process-application-reflection.md)
+  - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+  - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
   - [application: support (parte 1)](packages-process-application-support-1.md)
 
 ```mermaid
@@ -22,6 +23,7 @@ graph TD
     g_application__support__1["support parte 1 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_application__limits["application.limits"]
     m_application__ports["application.ports"]
     m_application__preflight["application.preflight"]
     m_application__refusal_note["application.refusal_note"]
@@ -30,8 +32,8 @@ graph TD
     m_application__spec_guard["application.spec_guard"]
     m_application__stack_facts["application.stack_facts"]
     m_application__stack_hold["application.stack_hold"]
-    m_application__ports --> g_application__support__1
     m_application__ports --> g_pkg__domain
+    m_application__ports --> m_application__limits
     m_application__preflight --> g_application__support__1
     m_application__preflight --> g_pkg__agentic__shared
     m_application__preflight --> g_pkg__domain
@@ -46,6 +48,7 @@ graph TD
     m_application__run_role --> g_application__support__1
     m_application__run_role --> g_pkg__agentic__shared
     m_application__run_role --> g_pkg__domain
+    m_application__run_role --> m_application__limits
     m_application__run_role --> m_application__ports
     m_application__spec_guard --> g_application__support__1
     m_application__spec_guard --> g_pkg__domain

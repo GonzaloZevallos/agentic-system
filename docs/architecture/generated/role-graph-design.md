@@ -23,7 +23,9 @@ graph TD
     design_review -.-> phase_plan
     design_review -.-> ui_screens
     design_review -.-> write_copy
+    phase_define -.-> ui_screens
     phase_define -.-> ux_flow
+    phase_define -.-> ux_walk
     phase_define -.-> write_copy
     ui_screens -.-> design_review
     ui_screens -.-> phase_plan

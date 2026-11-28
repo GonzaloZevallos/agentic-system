@@ -13,6 +13,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.application.run_role import RoleFailure, escalation
+from agentic.core.process.domain.gh_calls import GH_CALL_KINDS, GhCallKind
+from agentic.core.process.domain.github_budget import Unmeasured
 from agentic.core.process.domain.roles import PJM
 from agentic.shared.stage0 import CHECKOUT
 from tests.readme_metrics import Family, _documented
@@ -891,6 +893,38 @@ def test_failures_leave_one_array_entry_per_reason_with_the_count_and_the_cost(s
     assert reason == "schema" and float(cost) == pytest.approx(0.03)
 
 
+def _stalled(seconds, in_hook=False):
+    return _refused("stall") | {
+        "stall": {"seconds": seconds, "last_event": "none", "in_hook": in_hook}
+    }
+
+
+def test_a_retried_stall_and_an_escalated_one_both_stamp_the_silence_as_an_int(spans):
+    retried = {
+        "runs": [_run("PjM", "pjm", "PjM", 0.1)],
+        "failures": [_stalled(3000)],
+        "cost_usd": 0.1,
+    }
+    escalated = {
+        "failures": [_stalled(1801, in_hook=True), _stalled(2400, in_hook=True)],
+        "cost_usd": 0.0,
+        "escalated": "PjM failed 2 times: stalled",
+        "status": "waiting_on_human",
+    }
+    for patch, seconds in ((retried, 3000), (escalated, 2400)):
+        with telemetry.role_span("PjM", "pjm", "gym-saas", arm="default") as run:
+            run.finish(patch)
+        value = spans.get_finished_spans()[-1].attributes["agentic.role.stall_s"]
+        assert value == seconds and type(value) is int
+
+
+def test_a_patch_with_no_stall_record_stamps_no_silence(spans):
+    patch = {"failures": [_refused("schema"), _refused("sdk")], "cost_usd": 0.0}
+    with telemetry.role_span("PjM", "pjm", "gym-saas", arm="default") as run:
+        run.finish(patch)
+    assert "agentic.role.stall_s" not in spans.get_finished_spans()[-1].attributes
+
+
 def test_review_findings_group_by_severity_category_and_status_with_the_count(spans):
     """Two findings landing in the same cell (`important`/`spec-behaviour`/`open`) are
     one array entry with the count `2`."""
@@ -990,6 +1024,29 @@ def test_a_run_of_only_reused_rows_emits_checks_but_no_duration_sample(spans):
     attributes = spans.get_finished_spans()[-1].attributes
     assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
     assert "agentic.presubmit.duration" not in attributes
+
+
+def test_a_kept_row_counts_as_reused_and_is_never_sampled(spans):
+    kept = _check(duration_s=0.0) | {"mode": "affected-only", "reused_from": "a" * 40}
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": [[kept]], "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
+    assert "agentic.presubmit.duration" not in attributes
+
+
+def test_the_exit_8_row_then_the_kept_row_samples_only_the_exit_8_seconds(spans):
+    exit_8 = _check(passed=False, duration_s=5.0) | {
+        "mode": "affected-only",
+        "affected_base": "a" * 40,
+        "exit_code": 8,
+    }
+    kept = _check(duration_s=0.0) | {"mode": "affected-only", "reused_from": "a" * 40}
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": [[exit_8, kept]], "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
+    assert list(attributes["agentic.presubmit.duration"]) == ["tests=5.0"]
 
 
 def test_a_mode_on_a_row_changes_neither_the_cells_nor_the_durations(spans):
@@ -1304,3 +1361,83 @@ def test_an_escalation_patch_with_two_refusals_carries_the_counts(spans):
     span = spans.get_finished_spans()[-1]
     assert span.attributes["agentic.role.refusals"] == ("output_missing=1", "schema_invalid=1")
     assert "agentic.role.repairs" not in span.attributes
+
+
+ONE_CALL_EACH: dict[GhCallKind, int] = {
+    "issue_list": 3,
+    "issue_view": 0,
+    "pr_list": 1,
+    "pr_view": 0,
+    "api": 2,
+    "other": 0,
+}
+NO_CALLS: dict[GhCallKind, int] = dict.fromkeys(GH_CALL_KINDS, 0)
+
+
+def test_gh_budget_exports_one_span_with_the_four_attributes(spans):
+    telemetry.gh_budget("poller", ONE_CALL_EACH, 4200, 17)
+    (span,) = spans.get_finished_spans()
+    assert span.name == "agentic.gh.budget" and span.parent is None
+    assert span.attributes == {
+        "agentic.gh.consumer": "poller",
+        "agentic.gh.calls": (
+            "api=2",
+            "issue_list=3",
+            "issue_view=0",
+            "other=0",
+            "pr_list=1",
+            "pr_view=0",
+        ),
+        "agentic.gh.graphql.remaining": 4200,
+        "agentic.gh.round_points": 17,
+    }
+
+
+def test_gh_budget_omits_what_it_did_not_measure(spans):
+    telemetry.gh_budget("run", ONE_CALL_EACH, None, Unmeasured.UNMEASURED)
+    (span,) = spans.get_finished_spans()
+    assert "agentic.gh.graphql.remaining" not in span.attributes
+    assert "agentic.gh.round_points" not in span.attributes
+    assert span.attributes["agentic.gh.consumer"] == "run"
+
+
+def test_gh_budget_keeps_a_measured_zero_round_points(spans):
+    telemetry.gh_budget("poller", NO_CALLS, 5000, 0)
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["agentic.gh.round_points"] == 0
+
+
+def test_gh_budget_with_every_count_zero_and_no_remaining_exports_nothing(spans):
+    telemetry.gh_budget("run", NO_CALLS, None, Unmeasured.UNMEASURED)
+    assert spans.get_finished_spans() == ()
+
+
+def test_gh_budget_without_a_provider_is_a_no_op():
+    telemetry.configure(tracer_provider=None)
+    telemetry.gh_budget("poller", ONE_CALL_EACH, 10, 1)
+
+
+GH_ENTERING = {"id": "T-1", "title": "t", "description": "d"}
+
+
+def test_finish_invocation_stamps_the_run_calls_zeros_included(spans):
+    with telemetry.task_span("T-1", "t", "gym-saas", arm="default") as run:
+        run.finish_invocation(GH_ENTERING, GH_ENTERING, "run", None, calls=ONE_CALL_EACH)
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["agentic.gh.consumer"] == "run"
+    assert span.attributes["agentic.gh.calls"] == (
+        "api=2",
+        "issue_list=3",
+        "issue_view=0",
+        "other=0",
+        "pr_list=1",
+        "pr_view=0",
+    )
+
+
+def test_finish_invocation_without_calls_leaves_the_attributes_absent(spans):
+    with telemetry.task_span("T-1", "t", "gym-saas", arm="default") as run:
+        run.finish_invocation(GH_ENTERING, GH_ENTERING, "run", None)
+    (span,) = spans.get_finished_spans()
+    assert "agentic.gh.consumer" not in span.attributes
+    assert "agentic.gh.calls" not in span.attributes

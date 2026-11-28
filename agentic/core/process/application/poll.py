@@ -44,9 +44,11 @@ from ..domain import (
     rate_limit,
     rules,
     stacking,
+    terminal_states,
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
+from ..domain import stacking as stacking_rules
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
@@ -66,6 +68,7 @@ from ..domain.task import (
     format_issue_for,
     refusal_noted_record,
 )
+from ..domain.terminal_states import OpenView, TerminalMemo
 from . import (
     adr_collision,
     board_sync,
@@ -85,6 +88,7 @@ from . import (
 )
 from . import escalate as escalate_module
 from .checkouts import task_base
+from .format_release import FormatReleaseCarry, release_fixed_holds
 from .ports import (
     GitError,
     HeldListMayBeCut,
@@ -97,6 +101,7 @@ from .ports import (
     RunLock,
     RunRegistration,
     RunRegistry,
+    StackHint,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
@@ -308,6 +313,7 @@ def _merge_facts(
     current_master: str | None,
     *,
     comments: Sequence[IssueComment] | None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> rules.MergeFacts:
     """What the poller can know about a delivered task before any worktree exists, every
     fact off the product checkout's own document, the tracker and the upstream sha --
@@ -354,6 +360,7 @@ def _merge_facts(
         ),
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
+        eval_set_unread=eval_set_unread if eval_set is None else None,
         touched_paths=None,
         ci_untrusted=None,
         merge_ci=tuple(raw.get("merge_ci") or ()),
@@ -708,6 +715,7 @@ def assess_merge(
     cfg: Configuration | None,
     memo: StackMemo,
     now: datetime | None = None,
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
     and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
@@ -742,6 +750,7 @@ def assess_merge(
         number,
         current_master,
         comments=read_comments(ports, task_id) if thread_needed(raw) else [],
+        eval_set_unread=eval_set_unread,
     )
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
     # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
@@ -1182,6 +1191,7 @@ def evaluate_landing_order(
     *,
     memo: StackMemo,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.advance`, the one
@@ -1230,7 +1240,16 @@ def evaluate_landing_order(
             continue
         try:
             assessed = assess_merge(
-                ports, task_id, raw, number, eval_set, current_master, cfg=cfg, memo=memo, now=now
+                ports,
+                task_id,
+                raw,
+                number,
+                eval_set,
+                current_master,
+                cfg=cfg,
+                memo=memo,
+                now=now,
+                eval_set_unread=eval_set_unread,
             )
         except StackUnreadable as unreadable:
             # Its pull request is open and recorded: still a member (an unreadable base is
@@ -1566,6 +1585,7 @@ def gather_merges(
     memo: StackMemo,
     dry_run: bool,
     skip: frozenset[int] = frozenset(),
+    eval_set_unread: rules.EvalSetUnread | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -1617,6 +1637,7 @@ def gather_merges(
         integrating,
         memo=memo,
         skip=skip,
+        eval_set_unread=eval_set_unread,
     )
 
     def at_work(task_id: str) -> bool:
@@ -1700,6 +1721,8 @@ def gather_merges(
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            if decision.reason == "eval_set_unreadable" and facts.eval_set_unread is not None:
+                line += f" ({facts.eval_set_unread})"
             if decision.reason == "merge_conflict" and assessed.conflict_source is not None:
                 line += f" ({assessed.conflict_source})"
             if decision.reason == "checks_failed":
@@ -2378,7 +2401,11 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
 
 
 def _blocker_verdict(
-    cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
+    cfg: Configuration,
+    ports: Ports,
+    blocker: int,
+    upstream: Callable[[], Upstream],
+    open_view: OpenView | None = None,
 ) -> rules.BlockerVerdict:
     """How one blocker stands. Every resolution path sits behind `state == "CLOSED"`: an
     open issue never resolves. A `COMPLETED` issue resolves on a merge commit in the
@@ -2386,18 +2413,33 @@ def _blocker_verdict(
     `closed_by_slices` with every unit's `reviewed_head` an ancestor of the upstream, or
     `tracker_only`, where there was no pull request and nothing to merge; or (GH-619) a
     split parent the split sweep recorded closed (`split_closed_at`), whose parts landed.
-    The record only counts behind `CLOSED`: on an open issue it claims nothing. Never prose."""
-    state = ports.tracker.issue_state(blocker)
-    if state.state != "CLOSED":
-        return "open"
-    if state.state_reason not in ("COMPLETED", "NOT_PLANNED"):
+    The record only counts behind `CLOSED`: on an open issue it claims nothing. Never prose.
+    `open_view` (GH-992) is the round's proof for the terminal memo: a closure the memo kept
+    stands in for the `issue_state` read (`terminal_states.served`), and a live read that
+    decides is kept (`terminal_states.record`). The document's merge commit, its status
+    records and the ancestry are judged live either way; without it nothing is kept or served."""
+    served_closure = (
+        terminal_states.served(open_view.memo, blocker, open_view) if open_view else None
+    )
+    if served_closure is not None:
+        state_reason = served_closure.state_reason
+        closing_merge_commit = served_closure.closing_merge_commit
+    else:
+        state = ports.tracker.issue_state(blocker)
+        if open_view is not None:
+            terminal_states.record(open_view.memo, blocker, state)
+        if state.state != "CLOSED":
+            return "open"
+        state_reason = state.state_reason
+        closing_merge_commit = state.closing_merge_commit
+    if state_reason not in ("COMPLETED", "NOT_PLANNED"):
         return "unknown"
-    if state.state_reason == "NOT_PLANNED":
+    if state_reason == "NOT_PLANNED":
         return "resolved"
     # The fetched tip, never local `HEAD` (GH-180): a merge on the remote that nobody
     # pulled is merged. `upstream` is asked only here, when a merge commit is to be
     # judged, and is memoised per round by `run_once`: at most one fetch.
-    merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
+    merge_commit = _merge_commit_for(ports, blocker, closing_merge_commit)
     if merge_commit is not None:
         tip = upstream().sha
         merged = ports.workspace.is_ancestor(cfg.product_dir, merge_commit, ref=tip or "HEAD")
@@ -2438,6 +2480,8 @@ def _blocked(
     number: int,
     upstream: Callable[[], Upstream],
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    stacking: stacking_rules.ParentMemo | None = None,
+    open_view: OpenView | None = None,
 ) -> rules.BlockerReport:
     """What `number`'s blockers come to; the launch predicate is `bool(report)`. Any
     doubt -- an unknown git object, a `gh` failure, a blocker whose own `stateReason` this
@@ -2449,7 +2493,11 @@ def _blocked(
     candidate's git trouble must cost that candidate's own launch, never the round, and
     never the process. When the blockers themselves cannot be read the candidate is its
     own `unknown` entry, so the report still blocks. The numbers it read (GH-836) are set in
-    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none."""
+    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none.
+    `stacking` (GH-858, ADR-0103) is the round's `ParentMemo`; without it the report is the one
+    above, byte for byte. With it, the one `open` blocker of a candidate that has no other
+    unresolved one may be read as its stacked parent (`_stacked_parent`) and move to
+    `stacked_on`; any doubt leaves it in `open`. `open_view` (GH-992) goes to `_blocker_verdict`."""
     try:
         blockers = _blocker_numbers(ports, number)
     except (ValueError, OSError, KeyError, GitError):
@@ -2461,7 +2509,7 @@ def _blocked(
     unknown: list[int] = []
     for blocker in blockers:
         try:
-            verdict = _blocker_verdict(cfg, ports, blocker, upstream)
+            verdict = _blocker_verdict(cfg, ports, blocker, upstream, open_view)
         except (ValueError, OSError, KeyError, GitError):
             verdict = "unknown"
         match verdict:
@@ -2473,7 +2521,62 @@ def _blocked(
                 unknown.append(blocker)
             case reason:
                 closed.append((blocker, reason))
+    if stacking is not None and len(open_) == 1 and not closed and not unknown:
+        if _stacked_parent(cfg, ports, number, open_[0], stacking):
+            return rules.BlockerReport(stacked_on=open_[0])
     return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
+
+
+def _stacked_parent(
+    cfg: Configuration, ports: Ports, child: int, parent: int, memo: stacking_rules.ParentMemo
+) -> bool:
+    """Whether `parent`, the child's only unresolved blocker, is the Ready same-split parent
+    a stacked start would build on (GH-858, ADR-0103, ADR-0104). Positive only when every
+    condition reads positive: the parent's document is `ready_for_review` with an approved
+    head and no `stack_parent` of its own (depth 1: an unreadable record excludes too); both
+    bodies carry exactly one `agentic-split` marker and the same id; and the parent's task
+    branch on the remote carries that head (`remote_tip`, bounded and fetched once per
+    `(parent, head)` and round, then `is_ancestor`; a tip that descends from the head counts).
+    Any exception, a failed or rate-limited `gh`, a failed fetch, is doubt: not stacked, so
+    the blocker stays `open`. After the first failed remote read of the round no other one
+    is made. The marker is read per child; the memo holds what only the parent decides."""
+    try:
+        parent_id = ports.inbox.task_id(parent)
+        parent_document = ports.documents.load(parent_id)
+        if parent_document is None or parent_document.get("status") != "ready_for_review":
+            return False
+        if stacking.stacked(parent_document):
+            return False
+        head = rules.approved_head(parent_document)
+        if head is None:
+            return False
+        ours = rules.split_marker_ids(ports.inbox.task(child)["description"])
+        theirs = rules.split_marker_ids(ports.inbox.task(parent)["description"])
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+    if len(ours) != 1 or ours != theirs:
+        return False
+    known = memo.outcome(parent, head)
+    if known is not None:
+        return known == "stacked"
+    if memo.origin_failed:
+        return memo.record(parent, head, "doubt") == "stacked"
+    try:
+        tip = ports.workspace.remote_tip(
+            cfg.product_dir, rules.task_branch(parent_id), bounded=True
+        )
+    except GitError:
+        memo.fail_origin()
+        return memo.record(parent, head, "doubt") == "stacked"
+    except (ValueError, OSError, KeyError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    if tip is None:
+        return memo.record(parent, head, "not_stacked") == "stacked"
+    try:
+        carried = ports.workspace.is_ancestor(cfg.product_dir, head, ref=tip)
+    except (ValueError, OSError, KeyError, GitError):
+        return memo.record(parent, head, "doubt") == "stacked"
+    return memo.record(parent, head, "stacked" if carried else "not_stacked") == "stacked"
 
 
 # A budget with nothing used: what the cheap, fields-only verdicts are asked with.
@@ -2501,6 +2604,9 @@ def gather_launches(
     documents: Mapping[int, TaskState | None] | None = None,
     declaration: experiment.Experiment | None = None,
     blockers_of: dict[int, tuple[int, ...]] | None = None,
+    memo: stacking_rules.ParentMemo | None = None,
+    stack_hints: dict[int, StackHint] | None = None,
+    open_view: OpenView | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -2517,16 +2623,43 @@ def gather_launches(
     new one: `_assign_arms` does that, after `rules.poll_plan`, for the launches that come out.
     Every other candidate arrives with no arm. Each candidate's blocker numbers, the ones
     `_blocked` already read (native or the body's), are set in `blockers_of` when given
-    (GH-836), the queue's edges of the launch order: no call is added."""
+    (GH-836), the queue's edges of the launch order: no call is added. The product's stacking
+    switch (GH-858, ADR-0103) is read here and nowhere else, once per round, at the fetched
+    upstream tip and only when a candidate has one open blocker and nothing else; any doubt reads
+    it as off. With it on,
+    `memo` (the round's `ParentMemo`) goes to `_blocked`, and a candidate whose only blocker
+    is the Ready parent it judged launches, its hint `{parent, approved head}` set in
+    `stack_hints` under its issue for the launch record; without the head the judgement saw,
+    it stays blocked."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
+    stacking_memo: stacking_rules.ParentMemo | None = None
+    switch_read = False
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
             continue
-        report = _blocked(cfg, ports, number, upstream, blockers_of)
+        report = _blocked(cfg, ports, number, upstream, blockers_of, None, open_view)
+        if len(report.open) == 1 and not report.closed_unresolved and not report.unknown:
+            # Only a candidate whose one unresolved blocker may be a stacked parent needs the
+            # switch, so a round without one never fetches the upstream for it.
+            if not switch_read:
+                switch_read = True
+                if _stacking_on(ports, upstream):
+                    stacking_memo = memo if memo is not None else stacking_rules.ParentMemo()
+            if stacking_memo is not None:
+                report = _blocked(
+                    cfg, ports, number, upstream, blockers_of, stacking_memo, open_view
+                )
+        hint = None
+        if report.stacked_on is not None and stacking_memo is not None:
+            hint = _stack_hint(stacking_memo, report.stacked_on)
+            if hint is None:
+                report = rules.BlockerReport(open=(report.stacked_on,))
+            elif stack_hints is not None:
+                stack_hints[number] = hint
         if reports is not None:
             reports.append(report)
         if by_issue is not None:
@@ -2543,6 +2676,22 @@ def gather_launches(
             )
         )
     return launches
+
+
+def _stacking_on(ports: Ports, upstream: Callable[[], Upstream]) -> bool:
+    """The product's stacking switch at the fetched upstream tip (GH-858); the one read of it.
+    Off when the key is absent, and off on any doubt (no tip, a key that is not a boolean)."""
+    try:
+        return ports.stack.stacking(upstream().sha)
+    except (ValueError, OSError, KeyError, GitError):
+        return False
+
+
+def _stack_hint(memo: stacking_rules.ParentMemo, parent: int) -> StackHint | None:
+    """The approved head the round's judgement found stacked for `parent`: the one head it
+    recorded as such, `None` when it recorded none or more than one."""
+    heads = {head for (p, head), seen in memo.outcomes.items() if p == parent and seen == "stacked"}
+    return StackHint(parent, next(iter(heads))) if len(heads) == 1 else None
 
 
 def _issue_number(url: str) -> int | None:
@@ -2697,6 +2846,7 @@ def gather_orphans(
     by_issue: dict[int, rules.BlockerReport],
     spent: dict[int, RetakesSpent] | None = None,
     reported: set[int] | None = None,
+    open_view: OpenView | None = None,
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -2740,7 +2890,12 @@ def gather_orphans(
             continue
         if record is not None:
             continue
-        report = _blocked(cfg, ports, number, upstream)
+        if stacking.stacked_on(raw) is not None:
+            # A stacked child waits for its parent through `stacking.held` and `pause_cause`
+            # (ADR-0103), not through its blockers (GH-858): no judgement, and no memo ever.
+            report = rules.BlockerReport()
+        else:
+            report = _blocked(cfg, ports, number, upstream, None, None, open_view)
         reports.append(report)
         by_issue[number] = report
         if report:
@@ -3043,6 +3198,7 @@ def execute(
     orphan_retakes: Mapping[int, int] | None = None,
     spent_notices: Mapping[int, RetakesSpent] | None = None,
     format_rules: Mapping[int, FormatCarried] | None = None,
+    stack_hints: Mapping[int, StackHint] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -3175,7 +3331,9 @@ def execute(
             await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
-            registry.record_launch(product, action.issue, now, action.arm)
+            registry.record_launch(
+                product, action.issue, now, action.arm, (stack_hints or {}).get(action.issue)
+            )
             fresh = ("--fresh",) if action.issue in reruns else ()
             arm = (experiment.ARM_FLAG, action.arm) if action.arm is not None else ()
             argv = _argv(argv0, "run", action.issue, product_dir, *fresh, *arm, "--detach")
@@ -3212,6 +3370,26 @@ def _recent_spend(ports: Ports, now: datetime) -> tuple[list[rules.SpendRun], in
         fresh.extend(found)
         skipped += count
     return fresh, skipped
+
+
+def _stack_pauses(view: stack_hold.StackHold) -> dict[int, tuple[stacking.PauseCause, int | None]]:
+    """The round's held children as the board mirror's issue-level fact: the cause and the chain
+    link that caused it, from what `stack_hold.compute` already read. No read of its own."""
+    return {number: (cause, view.culprits.get(number)) for number, cause in view.held.items()}
+
+
+def eval_set_unread_of(
+    upstream: Upstream, eval_set: frozenset[int] | None
+) -> rules.EvalSetUnread | None:
+    """Why `eval_set` is `None` for this round's `upstream` (GH-1142), `None` when it was
+    read. The upstream's data decides, never its note's text: any note besides the left-out
+    commits (no upstream, a failed fetch) is `failure`; a clean upstream with an unread set
+    is a declaration that did not parse."""
+    if eval_set is not None:
+        return None
+    only_left_out = bool(upstream.left_out) and not upstream.fetch_failed
+    failure = bool(upstream.note) and not only_left_out
+    return rules.eval_set_unread_cause(upstream.sha is not None, upstream.left_out, failure, False)
 
 
 def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
@@ -3478,6 +3656,8 @@ def run_once(
     system_version: Callable[[], str | None] = lambda: None,
     dry_run: bool = False,
     sweep_carry: worktree_sweep.SweepCarry | None = None,
+    format_release_carry: FormatReleaseCarry | None = None,
+    terminal_memo: TerminalMemo | None = None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -3513,7 +3693,12 @@ def run_once(
     outside the exclusive section, when the round is not held or `rules.sweeps_when_held` says its
     holds include the product volume (GH-865), not dry and `sweep_carry` is
     given: it keeps its memory in the carry, its lines join the notes and it never ends the
-    round. A held round that did not sweep, with a carry, says once per process that it did not."""
+    round. A held round that did not sweep, with a carry, says once per process that it did not.
+    `terminal_memo`
+    (GH-992) is the poller's memo of determinate blocker closures: with it, and only when this
+    round's open listing was read in full (no `refs_note`) and the round starts something, the
+    three blocker checks of the round (`gather_launches`, `gather_orphans`) get an `OpenView`
+    over it; the split sweep never does."""
     closes = gather_closes(ports)
     swept: list[str] = []
     dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
@@ -3532,6 +3717,7 @@ def run_once(
     # and the sections under the registry's lock share them; nothing is asked until one is called.
     upstream = functools.cache(ports.workspace.upstream)
     stack_memo = StackMemo()  # GH-860: this round's stacking reads, dropped with it
+    parent_memo = stacking_rules.ParentMemo()  # GH-858: the launch judgement's reads, same life
     if not dry_run:
         # The sweep's own memoised upstream (at most one fetch, and only when it has a merge
         # commit to judge); the one `registry.exclusive()` builds below is not shared with it.
@@ -3575,6 +3761,12 @@ def run_once(
     # starts nothing, so it has no order to rank and makes no call. Read before the resumes:
     # their `needs-human` safety net (GH-1019) asks the labels it carries, never a read per task.
     open_refs, refs_note = ([], None) if starts_nothing else read_open_refs(ports)
+    open_view: OpenView | None = None
+    if terminal_memo is not None and not starts_nothing and refs_note is None:
+        open_numbers = frozenset(
+            n for ref in open_refs if (n := _issue_number(ref.url)) is not None
+        )
+        open_view = OpenView(terminal_memo, open_numbers)
     format_rules: dict[int, FormatCarried] = {}
     # A task a child of this product still works on is nobody's candidate: counting a retake for
     # it (GH-1019) would spend one on a run that is not paused.
@@ -3584,6 +3776,19 @@ def run_once(
         for r in registry.live()
         if r.product == mine and (number := ports.inbox.issue_of(r.task_id)) is not None
     )
+    release_lines: list[str] = []
+    if not dry_run and not starts_nothing:
+        # GH-1020: a noted hold whose refusal issue is fixed is released before the resumes, so
+        # the task is retaken in this same round; outside `registry.exclusive()`, and the reads
+        # of the step all happen before it takes a task's lock.
+        live_tasks = {r.task_id for r in registry.live() if r.product == mine}
+        release_lines = release_fixed_holds(
+            ports,
+            lock,
+            lambda task_id: stack_hold.free_writer(task_id, live_tasks, lock),
+            format_release_carry if format_release_carry is not None else FormatReleaseCarry(),
+            skip=stack_held | at_work,
+        )
     resumes = gather_resumes(
         ports,
         now,
@@ -3607,6 +3812,7 @@ def run_once(
         reported=reported,
         skip=stack_held,
     )
+    human_lines += release_lines
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     if not dry_run:
         # GH-1019: the task whose format retakes are spent is held, and its Nota announced; only
@@ -3659,6 +3865,7 @@ def run_once(
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        stack_hints: dict[int, StackHint] = {}
         queue_blockers: dict[int, tuple[int, ...]] = {}
         experiment_notes: list[str] = []
         declaration = _declared_experiment(cfg, ports, experiment_notes)
@@ -3675,6 +3882,9 @@ def run_once(
             queued,
             declaration,
             queue_blockers,
+            parent_memo,
+            stack_hints,
+            open_view,
         )
         dependents = launch_order.dependents(launch_edges(open_refs, queued_all, queue_blockers))
         merges: list[int] = []
@@ -3704,6 +3914,7 @@ def run_once(
                 memo=stack_memo,
                 dry_run=dry_run,
                 skip=stack_held,
+                eval_set_unread=eval_set_unread_of(upstream(), eval_set),
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -3746,6 +3957,7 @@ def run_once(
                 blockers_by_issue,
                 spent_notices,
                 reported,
+                open_view,
             )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
@@ -3883,6 +4095,7 @@ def run_once(
                 orphans,
                 spent_notices,
                 format_rules,
+                stack_hints,
             )
         )
         # A deferred launch says why it waits in a line of its own (GH-836), after the others.
@@ -3939,7 +4152,7 @@ def run_once(
             now,
             live_issues=_live_issues(ports, registry, plan.actions),
             blockers=blockers_by_issue,
-            eval_set=eval_set,
+            stack_pauses=_stack_pauses(stack_view),
         )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.

@@ -57,3 +57,23 @@ sistema no retiene nada.
 - Lo que el sistema escribe en el repositorio público no puede filtrar lo que el rol escribió.
 - La retoma y la retención quedan registradas como decididas pero no construidas, para que
   nadie las cite como comportamiento actual.
+
+## Adenda GH-1020: la liberación de una retención
+
+El sondeo libera una retención ya anotada (`noted_at`, con `issue_url`) en `release_fixed_holds`.
+La regla es `rules.format_hold_released`: el issue de rechazo está cerrado y su commit de cierre
+corre en el HEAD del stage0 que ejecuta el sistema, o está cerrado sin commit (una persona lo cerró
+a mano, `NOT_PLANNED` incluido), y ese par `(issue_url, commit)` no se liberó antes. Una lectura que
+falló mantiene la retención. Las lecturas son solo locales: el issue por `gh`, y la pertenencia
+del commit con `git` sobre el checkout de stage0, sin fetch y sin escribir en él. El paso nunca
+reemplaza un lock que no sea su propio `format_release` muerto, y no hace ninguna llamada a un
+puerto con el lock tomado.
+
+Riesgos conocidos:
+
+- Una tarea retenida con un lock muerto de otro comando espera a una persona.
+- Si stage0 vuelve atrás después de una liberación, el mismo par no vuelve a liberar la retención.
+- Entre una rotación y el siguiente re-exec, el sondeo puede decir «not in stage0 yet» una ronda
+  de más.
+- Un cierre `NOT_PLANNED` libera una vez y puede gastar una retoma.
+- Un stage0 superficial (shallow) no contiene el commit: se lee como `stage0 unreadable`.

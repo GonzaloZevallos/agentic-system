@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     Board,
@@ -28,7 +29,9 @@ from agentic.core.process.application.ports import (
     ExperimentFile,
     FlagVocabulary,
     FormatFiler,
+    FormatFixReads,
     FreeSpace,
+    GhCallLog,
     Inbox,
     LabelTimeline,
     LandRecord,
@@ -61,6 +64,7 @@ from tests.fakes import (
     FakeCiLogs,
     FakeExperimentFile,
     FakeFormatFiler,
+    FakeFormatFixReads,
     FakeFreeSpace,
     FakeLabelTimeline,
     FakeLandRecord,
@@ -115,11 +119,13 @@ _spec_reader: SpecReader = FakeSpecReader({})
 _spec_validator: SpecValidator = FakeSpecValidator()
 _domain_spec_validator: SpecValidator = DomainSpecValidator()
 _stop_flag: StopFlag = FakeStopFlag()
+_gh_call_log: GhCallLog = InProcessGhCallLog()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
 _land_record: LandRecord = FakeLandRecord()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
 _format_filer: FormatFiler = FakeFormatFiler()
+_format_fixes: FormatFixReads = FakeFormatFixReads()
 
 
 def ports_of_doubles() -> Ports:
@@ -174,11 +180,13 @@ COVERED: dict[str, type] = {
     "SpecReader": FakeSpecReader,
     "SpecValidator": FakeSpecValidator,
     "StopFlag": FakeStopFlag,
+    "GhCallLog": InProcessGhCallLog,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
     "LandRecord": FakeLandRecord,
     "LabelTimeline": FakeLabelTimeline,
     "FormatFiler": FakeFormatFiler,
+    "FormatFixReads": FakeFormatFixReads,
 }
 
 
@@ -196,6 +204,16 @@ _INLINE = (
 )
 
 UNCOVERED: dict[str, Uncovered] = {
+    "BudgetStore": Uncovered(
+        (("agentic/core/process/adapters/filesystem/budget_store.py", "FilesystemBudgetStore"),),
+        "no fake implements it yet: nothing reads the port, and the real adapter is its only "
+        "implementation",
+    ),
+    "PendingPaths": Uncovered(
+        (("agentic/core/process/adapters/git/workspace.py", "GitWorkspace"),),
+        "no fake implements it yet: nothing reads the port, and the real adapter is its only "
+        "implementation",
+    ),
     "Presubmit": Uncovered(
         (
             ("tests/core/process/application/test_coverage_guard.py", "CountingPresubmit"),

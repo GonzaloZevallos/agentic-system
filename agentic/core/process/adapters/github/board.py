@@ -3,7 +3,7 @@
 Write-only as far as state goes. The one thing read from the Project is its identity: the
 node ids of the project, its fields and its Etapa options, looked up once per process. The
 fields are found by name and type; Etapa is the SINGLE_SELECT `Etapa` or, absent it, the
-built-in `Status` carrying the seven options (`_etapa_field`). Cards are added with
+built-in `Status` carrying the five options (`_etapa_field`). Cards are added with
 `addProjectV2ItemById` (idempotent) and their fields written with
 `updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`.
 
@@ -41,15 +41,18 @@ from typing import Any, Literal, NoReturn, TypeVar, get_args
 
 from ...application.ports import (
     BoardWritten,
+    GhCallLog,
     IssueRow,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
 )
 from ...domain.board import Etapa, Field, FieldWrite
+from ...domain.github_access import GithubAccess
 from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
 
 BOARD_TIMEOUT_S: float = 30
@@ -76,14 +79,14 @@ ERRORS_SHOWN = 2
 
 _FIELD_NAMES: dict[Field, str] = {
     "etapa": "Etapa",
-    "bloqueo": "Bloqueo",
+    "motivo": "Motivo",
     "costo": "Costo USD",
     "inicio": "Inicio",
     "fin": "Fin",
 }
 _FIELD_TYPES: dict[Field, str] = {
     "etapa": "SINGLE_SELECT",
-    "bloqueo": "TEXT",
+    "motivo": "TEXT",
     "costo": "NUMBER",
     "inicio": "DATE",
     "fin": "DATE",
@@ -93,7 +96,7 @@ _FIELD_TYPES: dict[Field, str] = {
 # `singleSelectOptionId` takes `String`, so the option id travels as `String!`.
 _VALUE: dict[Field, tuple[str, str]] = {
     "etapa": ("String!", "singleSelectOptionId"),
-    "bloqueo": ("String!", "text"),
+    "motivo": ("String!", "text"),
     "costo": ("Float!", "number"),
     "inicio": ("Date!", "date"),
     "fin": ("Date!", "date"),
@@ -176,13 +179,17 @@ class GhBoard:
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
         clock: Callable[[], float] = time.monotonic,
+        access: GithubAccess | None = None,
+        calls: GhCallLog | None = None,
     ):
         self.cwd = cwd
+        self._calls = calls
         self.owner = owner
         self.number = number
         self.run: Run = run if run is not None else partial(bounded_run, timeout_s=BOARD_TIMEOUT_S)
         self.log = log
         self.retry = retry
+        self.access = access
         self.clock = clock
         self._exit = 0
         self._identity: _Identity | None = None
@@ -203,6 +210,9 @@ class GhBoard:
             else lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=self.log,
             retry=self.retry if write else None,
+            access=self.access,
+            write=write,
+            calls=self._calls,
         )
 
     def _keeping_errors(
@@ -374,7 +384,10 @@ class GhBoard:
 
     def _stop(self, rnd: _Round, exc: BaseException) -> None:
         rnd.stopped = rnd.stopped or exc
-        self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
+        if isinstance(exc, TrackerTurnRefused):
+            self._halt(rnd, f"agentic: board: write stopped: {exc}")
+        else:
+            self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
 
     def _add(
         self,
@@ -476,7 +489,14 @@ def _rate_limited(error: object) -> bool:
 
 def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
     """What one failed chunk does to the write, from the exception alone."""
-    stopping = (TrackerUnreachable, TrackerRateLimited, _RateLimited, _Unauthenticated, OSError)
+    stopping = (
+        TrackerTurnRefused,  # before `TrackerTransient`: a refused turn is not worth a split
+        TrackerUnreachable,
+        TrackerRateLimited,
+        _RateLimited,
+        _Unauthenticated,
+        OSError,
+    )
     if isinstance(exc, stopping):
         return "stop"
     if isinstance(exc, TrackerCallFailed | TrackerRefused) and exc.status in BOARD_STOP_STATUSES:
@@ -560,7 +580,7 @@ def _first_missing_etapa(node: Mapping[str, Any]) -> str | None:
 
 def _etapa_field(nodes: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
     """The field node that carries the Etapa options: the SINGLE_SELECT `Etapa`, even when it
-    is incomplete (no fallback then), else the built-in `Status` when it has all seven."""
+    is incomplete (no fallback then), else the built-in `Status` when it has all five."""
     etapa_node = _single_select(nodes, "Etapa")
     if etapa_node is not None:
         missing = _first_missing_etapa(etapa_node)

@@ -172,13 +172,13 @@ def test_a_gate_without_a_grant_passes_no_env_and_leaves_the_command_alone(paral
     # The gate always holds a grant while its checks run (the fake scheduler grants at once),
     # so the no-grant path is driven through the gate's own slices, before any `_share`.
     commands = MemoryCommands()
-    gate = gate_over(commands, {"a": "a {workers}", "b": "b"}, parallel=parallel)
+    gate = gate_over(commands, {"a": "a", "b": "b"}, parallel=parallel)
     assert gate.grant is None
     slices = gate._slices()
     assert slices == {"a": None, "b": None}
     for name, command in gate.checks.items():
         gate._run_once(name, command, slices[name])
-    assert sorted(command for _, command in commands.ran) == ["a {workers}", "b"]
+    assert sorted(command for _, command in commands.ran) == ["a", "b"]
     assert commands.envs == [None, None]
 
 
@@ -220,3 +220,16 @@ def test_a_rerun_gets_the_count_of_its_check_in_a_parallel_gate():
         ("t 3", True),
         ("u 2", False),
     ]
+
+
+def test_a_command_with_the_token_and_no_grant_raises_instead_of_reaching_the_shell():
+    gate = gate_over(MemoryCommands(), {"tests": "pytest -n {workers}"})
+    with pytest.raises(presubmit.UngrantedWorkers, match="check scheduler"):
+        gate._sized("pytest -n {workers}", None)
+    assert gate._sized("pytest -x", None) == "pytest -x"
+
+
+def test_a_command_with_the_token_and_a_count_is_sized_to_that_count():
+    gate = gate_over(MemoryCommands(), {"tests": "pytest"}, scheduler=FakeCheckScheduler(5))
+    assert gate._sized("pytest -n {workers} --dist load", 5) == "pytest -n 5 --dist load"
+    assert gate._sized("pytest -n {workers} --dist load", 2) == "pytest -n 2 --dist load"

@@ -44,6 +44,10 @@ FIX: Final[Mapping[RefusalRule, str]] = {
     "estimate_below_spent_floor": (
         "Raise the estimate to cover what the task already spent, then deliver again."
     ),
+    "system_category": (
+        "Pick one of the categories the schema offers: the one you named is written by the "
+        "system alone."
+    ),
     "output_missing": (
         "Your work is committed; call the delivery tool now with your result. Do not redo the work."
     ),

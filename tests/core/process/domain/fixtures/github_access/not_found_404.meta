@@ -1,0 +1,4 @@
+command: gh api -i /repos/GonzaloZevallos/no-such-repo-gh1090
+gh_version: 2.100.0
+origin: captured
+derived_from: ""

@@ -251,6 +251,21 @@ async def test_a_ci_that_cannot_be_read_up_to_the_bound_escalates_with_its_cause
     assert cause in patch["escalated"]
 
 
+@pytest.mark.parametrize("cause", ["gh_unavailable", "gh_unreadable"])
+async def test_an_unreadable_ci_escalation_quotes_what_gh_said_of_the_last_read(cause):
+    """GH-1151: the quote is the detail of the read the wait ended on; the cause stays closed."""
+    ports = ports_of(CiUnreadable.of(cause, "HTTP 502: Bad Gateway {braces}"))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert cause in patch["escalated"]
+    assert "; gh answered: HTTP 502: Bad Gateway {braces}" in patch["escalated"]
+
+
+async def test_an_unreadable_ci_with_nothing_to_quote_says_no_gh_answered():
+    patch = await run(state_of(), ports_of(CiUnreadable("gh_unreadable")))
+    assert "gh answered" not in patch["escalated"]
+
+
 async def test_a_timed_out_ci_fails_and_names_the_pending_jobs_never_passes():
     ports = ports_of(report(job("unit"), job("web", None, "IN_PROGRESS")))
     patch = await run(state_of(), ports)
@@ -347,18 +362,19 @@ async def test_a_covered_check_is_never_run_when_the_ci_gave_no_verdict():
     assert ports.check_results.puts == []
 
 
-async def test_an_untrusted_fallback_keeps_a_timeout_red():
+async def test_an_untrusted_fallback_never_defers_a_timeout_it_escalates_it():
     ports = deferring_ports(WEB_OUT)
     ports.workspace.diff_paths = ("src/a.py", ".github/workflows/ci.yml")
     patch = await run(state_of(), ports)
-    assert patch["full_checks"]["ci_fallback"] == "untrusted"
-    assert patch["full_checks"]["passed"] is False and "deferred" not in patch["full_checks"]
+    assert "full_checks" not in patch  # GH-1075: no record, so nothing is deferred or passed
+    assert patch["pause_log"][-1]["cause"] == "check_timeout"
+    assert patch["sections"]["Full checks"].startswith("CI not used (untrusted)")
 
 
-async def test_a_product_without_ci_keeps_a_timeout_red():
+async def test_a_product_without_ci_escalates_a_timeout():
     patch = await run(state_of(), deferring_ports(WEB_OUT, ci=()))
-    assert patch["full_checks"]["passed"] is False
-    assert "deferred" not in patch["full_checks"]
+    assert "full_checks" not in patch
+    assert patch["pause_log"][-1]["cause"] == "check_timeout"
 
 
 # --- the grace period and the one republish (GH-462) ---------------------------------------

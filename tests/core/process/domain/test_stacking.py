@@ -483,6 +483,54 @@ def test_a_repeated_issue_is_unreadable():
     assert stacking.pause_cause(chain) == "unreadable"
 
 
+def test_pause_link_names_the_grandparent_when_the_cause_is_on_the_second_link():
+    chain = [_link(7, next_record=_record_of(8)), _link(8, waits=True)]
+    assert stacking.pause_link(chain) == ("parent_escalated", 8)
+
+
+def test_pause_link_names_the_direct_parent_of_a_one_link_chain():
+    assert stacking.pause_link([_link(7, stopped=True)]) == ("parent_stopped", 7)
+    assert stacking.pause_link([_link(7, state="CLOSED", reason="NOT_PLANNED")]) == (
+        "parent_abandoned",
+        7,
+    )
+
+
+@pytest.mark.parametrize(
+    ("chain", "cause"),
+    [
+        pytest.param([], "none", id="empty"),
+        pytest.param([_link()], "none", id="idle"),
+        pytest.param([_link(in_upstream=True, waits=True)], "none", id="merged"),
+        pytest.param([_link(in_upstream=None)], "unreadable", id="ancestry unread"),
+        pytest.param([_link(state=None)], "unreadable", id="fact unread"),
+        pytest.param([_link(7, next_record=_record_of(8))], "unreadable", id="cut short"),
+        pytest.param(_chain(11), "unreadable", id="depth"),
+        pytest.param(
+            [_link(7, next_record=_record_of(8)), _link(8, next_record=_record_of(7)), _link(7)],
+            "unreadable",
+            id="repeated issue",
+        ),
+    ],
+)
+def test_pause_link_names_no_link_for_none_or_unreadable(
+    chain: list[stacking.ParentLink], cause: str
+):
+    assert stacking.pause_link(chain) == (cause, None)
+
+
+def test_pause_cause_is_the_cause_of_pause_link():
+    chains = [
+        [],
+        [_link(waits=True)],
+        [_link(7, next_record=_record_of(8)), _link(8, stopped=True)],
+        [_link(in_upstream=None)],
+        _chain(10),
+    ]
+    for chain in chains:
+        assert stacking.pause_cause(chain) == stacking.pause_link(chain)[0]
+
+
 def test_the_pause_note_says_the_cause_and_when_it_ends():
     assert stacking.pause_note(7, "parent_escalated") == (
         "Paused: stacked on #7, which escalated. Resumes when #7 moves again."
@@ -591,3 +639,111 @@ def test_an_expired_unfetchable_head_never_holds_a_row_that_refusal_does_not_hol
         assert stacking.held(expired) is False
         waiting = replace(facts, heads_fetched=False, unfetchable_expired=False)
         assert stacking.held(waiting) is want
+
+
+# -- ParentMemo: the round's reads of the stacking judgement (GH-858) -------------------
+
+
+def test_a_fresh_parent_memo_knows_nothing_and_origin_has_not_failed():
+    memo = stacking.ParentMemo()
+    assert memo.outcome(5, HEAD) is None
+    assert memo.origin_failed is False
+
+
+def test_a_parent_memo_keeps_each_outcome_under_parent_and_head():
+    memo = stacking.ParentMemo()
+    assert memo.record(5, HEAD, "stacked") == "stacked"
+    memo.record(5, "b" * 40, "doubt")
+    memo.record(6, HEAD, "not_stacked")
+    assert [memo.outcome(5, HEAD), memo.outcome(5, "b" * 40), memo.outcome(6, HEAD)] == [
+        "stacked",
+        "doubt",
+        "not_stacked",
+    ]
+
+
+def test_origin_failed_is_one_way_and_memos_do_not_share_state():
+    memo, other = stacking.ParentMemo(), stacking.ParentMemo()
+    memo.fail_origin()
+    memo.record(5, HEAD, "stacked")
+    assert memo.origin_failed is True
+    assert other.origin_failed is False and other.outcomes == {}
+
+
+# -- start_ref (GH-858, ADR-0104): where a stacked child's branch starts --------------------------
+
+
+def _parent_facts(**over: Any) -> stacking.ParentFacts:
+    base: dict[str, Any] = {
+        "merged": False,
+        "abandoned": False,
+        "paused": False,
+        "ready": True,
+        "head": HEAD,
+        "carried": True,
+    }
+    return stacking.ParentFacts(**{**base, **over})
+
+
+def test_start_ref_a_merged_parent_starts_the_child_at_the_upstream():
+    assert stacking.start_ref(7, _parent_facts(merged=True)) == stacking.Upstream()
+
+
+def test_start_ref_an_abandoned_parent_starts_the_child_at_the_upstream():
+    assert stacking.start_ref(7, _parent_facts(abandoned=True, ready=False, head=None)) == (
+        stacking.Upstream()
+    )
+
+
+def test_start_ref_an_unmerged_ready_parent_whose_head_is_carried_gives_that_head():
+    assert stacking.start_ref(7, _parent_facts()) == stacking.Parent(head=HEAD)
+
+
+@pytest.mark.parametrize(
+    ("over", "cause"),
+    [
+        ({"ready": False}, "parent_not_ready"),  # archived or any status but ready_for_review
+        ({"ready": True, "head": None}, "parent_not_ready"),
+        ({"carried": False}, "head_not_carried"),
+        ({"paused": True}, "parent_paused"),
+        ({"paused": True, "ready": False}, "parent_paused"),
+        ({"merged": None}, "unreadable"),
+        ({"abandoned": None}, "unreadable"),
+        ({"paused": None}, "unreadable"),
+        ({"ready": None}, "unreadable"),
+        ({"carried": None}, "unreadable"),
+    ],
+)
+def test_start_ref_anything_else_waits_and_names_why(
+    over: dict[str, Any], cause: stacking.StackWaitCause
+):
+    assert stacking.start_ref(7, _parent_facts(**over)) == stacking.Wait(cause=cause)
+
+
+def test_start_ref_a_merged_parent_wins_over_an_unreadable_later_fact():
+    facts = _parent_facts(merged=True, paused=None, ready=None, carried=None)
+    assert stacking.start_ref(7, facts) == stacking.Upstream()
+
+
+# -- unstarted_cause (GH-1163): why a child with no branch cannot start ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("ref", "cause"),
+    [
+        (stacking.Wait("parent_not_ready"), "parent_not_ready"),
+        (stacking.Wait("head_not_carried"), "parent_not_ready"),
+        (stacking.Wait("parent_paused"), "unreadable"),
+        (stacking.Wait("unreadable"), "unreadable"),
+        (stacking.Parent(HEAD), "none"),
+        (stacking.Upstream(), "none"),
+    ],
+)
+def test_unstarted_cause_reads_the_start_ref_answer(ref, cause):
+    assert stacking.unstarted_cause(ref) == cause
+
+
+def test_the_not_ready_note_says_the_parent_left_ready_and_when_it_ends():
+    assert stacking.pause_note(5, "parent_not_ready") == (
+        "Paused: stacked on #5, which is no longer ready for review. Resumes when #5 moves again."
+    )

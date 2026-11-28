@@ -102,6 +102,12 @@ def test_add_early_split_skips_an_exact_duplicate_but_not_a_different_row():
     assert task.add_early_split([first], [later]) == [first, later]
 
 
+def test_a_sizer_failed_row_is_followed_by_a_split_row_and_both_stay():
+    failed = row("sizer_failed")
+    split = {"verdict": "split", "cause": "over", "at": "2026-11-19T12:00:00Z"}
+    assert task.add_early_split([failed], [split]) == [failed, split]
+
+
 def test_add_early_split_keeps_the_oldest_three_and_measured_does_not_change():
     rows = [row("sizer_failed", at="a"), row("sizer_failed", at="b"), row("sizer_failed", at="c")]
     capped = task.add_early_split(rows, [row("fits", at="d")])

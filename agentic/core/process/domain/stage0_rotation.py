@@ -153,6 +153,12 @@ class Stop:
     line: str
 
 
+def unavailable_line(cause: CandidateCause) -> str:
+    """The line a rotation that keeps `current` because a candidate was unavailable prints. The
+    cause is a value of the closed `CandidateCause`, never text a child or an exception wrote."""
+    return f"keep: unavailable ({cause})"
+
+
 def partial_name(sha: str) -> str:
     """The name of the stage directory a candidate is built in before it is promoted."""
     return f"{sha}.partial"

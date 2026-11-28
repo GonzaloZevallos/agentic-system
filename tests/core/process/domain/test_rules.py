@@ -11,6 +11,7 @@ from agentic.core.process.domain import (
     ci,
     document,
     landing_order,
+    rate_limit,
     retakes,
     roles,
     rules,
@@ -35,6 +36,7 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried, FailureReason
+from tests.fakes import measured
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -419,7 +421,7 @@ def test_a_pre_change_document_with_no_design_sections_resumes_into_plan():
 
 
 def test_resume_target_of_a_fresh_touches_ui_task_with_nothing_run_starts_at_ux_flow():
-    state = {**UX_FLAGS, "status": "definition_ready"}
+    state = measured({**UX_FLAGS, "status": "definition_ready"})
     assert rules.resume_target(state) == "ux_flow"
 
 
@@ -5773,3 +5775,92 @@ def test_interview_retake_delta_adds_the_drawing_departures_only_when_there_are_
         "abc123",
     )
     assert no_rows.endswith("USD.")
+
+
+def _resumed(i: int) -> Any:
+    return rules.resumed_entry(at=f"2026-11-0{i}T00:00:00+00:00")
+
+
+def _escalated(cls: Any, at: str | None) -> Any:
+    return rules.escalation_entry(cls, at)
+
+
+def test_current_epoch_is_public_and_the_private_name_is_gone():
+    assert callable(rules.current_epoch)
+    assert not hasattr(rules, "_current_epoch")
+    first, second = _escalated("questions", None), _escalated("cap", None)
+    state: Any = {"pause_log": [first, _resumed(1), second]}
+    assert rules.current_epoch(state) == [second]
+
+
+def test_previous_epoch_with_zero_one_and_two_resumed():
+    assert not hasattr(rate_limit, "_previous_epoch")
+    a, b, c = (_escalated(cls, None) for cls in ("questions", "cap", "failure"))
+    assert rules.previous_epoch({}) == []
+    assert rules.previous_epoch({"pause_log": [a, b]}) == []
+    one: Any = {"pause_log": [a, b, _resumed(1), c]}
+    assert rules.previous_epoch(one) == [a, b]
+    two: Any = {"pause_log": [a, _resumed(1), b, _resumed(2), c]}
+    assert rules.previous_epoch(two) == [b]
+    back_to_back: Any = {"pause_log": [a, _resumed(1), _resumed(2), c]}
+    assert rules.previous_epoch(back_to_back) == []
+
+
+def test_escalation_at_none_unreadable_offset_to_utc_and_last_of_several():
+    assert rules.escalation_at([]) is None
+    assert rules.escalation_at([rules.resumed_entry(at="2026-11-01T00:00:00+00:00")]) is None
+    assert rules.escalation_at([_escalated("cap", None)]) is None
+    assert rules.escalation_at([_escalated("cap", "not a date")]) is None
+    assert rules.escalation_at([_escalated("cap", "2026-11-01T10:00:00")]) is None
+    converted = rules.escalation_at([_escalated("cap", "2026-11-01T10:00:00-03:00")])
+    assert converted == datetime(2026, 11, 1, 13, tzinfo=UTC)
+    assert converted is not None and converted.utcoffset() == timedelta(0)
+    several = [
+        _escalated("cap", "2026-11-01T10:00:00+00:00"),
+        _escalated("cap", "2026-11-02T10:00:00+00:00"),
+        _failure_entry("stall"),
+    ]
+    assert rules.escalation_at(several) == datetime(2026, 11, 2, 10, tzinfo=UTC)
+    last_unreadable = [_escalated("cap", "2026-11-01T10:00:00+00:00"), _escalated("cap", None)]
+    assert rules.escalation_at(last_unreadable) is None
+
+
+# -- poller_retakes: what the board says retakes itself (GH-877) ----------------------------------
+
+
+def _delivery_transient() -> dict:
+    return {"kind": "escalation", "value": "delivery", "cause": "delivery_transient"}
+
+
+def test_poller_retakes_is_true_for_a_live_external_pause():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert rules.poller_retakes(cast(Any, state))
+
+
+def test_poller_retakes_is_false_for_a_pause_that_needs_a_human():
+    assert not rules.poller_retakes(cast(Any, _paused_by(_escalation_entry("questions"))))
+    assert not rules.poller_retakes(cast(Any, {}))
+
+
+def test_poller_retakes_is_false_while_held_on_format_retakes():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert not rules.poller_retakes(cast(Any, {**state, "format_hold": True}))
+
+
+def test_poller_retakes_is_false_for_a_format_pause_whose_hold_is_due():
+    failure = {**_failure_entry("schema"), "rule": "schema_invalid"}
+    pause = _paused_by(failure, _escalation_entry("failure"))
+    assert rules.poller_retakes(cast(Any, pause))
+    due = {**pause, "format_retakes": {"schema_invalid": 2}}
+    assert not rules.poller_retakes(cast(Any, due))
+
+
+def test_spent_mechanical_retakes_still_read_resumes_itself_known_limit():
+    """Known limit (GH-877): the `Auto-resumed:` count (`MECHANICAL_RETAKE_MAX`) lives in the
+    issue's comments, which the mirror does not read, so a mechanical pause after three spent
+    retakes still says it retakes itself (`board.RETAKES_ITSELF`). The outside follow-up issue
+    ("Board mirror: record spent mechanical retakes in the task document") closes it: whoever
+    does inverts this test."""
+    epochs = [_delivery_transient(), {"kind": "resumed"}] * 3 + [_delivery_transient()]
+    state = {"pause_log": epochs, "escalated": "delivery failed"}
+    assert rules.poller_retakes(cast(Any, state))

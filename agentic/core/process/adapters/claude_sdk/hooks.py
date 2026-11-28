@@ -75,6 +75,7 @@ import errno
 import os
 import re
 import shlex
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
@@ -85,10 +86,11 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import Presubmit, RunStopped, SchemaGuard
+from ...application.ports import CheckAbandoned, Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
+from ..git.guard import ForeignCheckout, require_checkout
 from .check_run_log import CheckRunLog
 
 # The tool Claude Code gives the model to hand back the structured output.
@@ -119,6 +121,10 @@ CONFIG = (
 PUSH = "`git push`: the system pushes the task branch when it delivers."
 WORKTREE = "`git worktree`: the system creates and removes the worktrees; work in yours."
 GIT_DIR = "`--git-dir`: work on the repository of your working directory."
+NO_CHECKOUT = (
+    "this working directory has lost its `.git` file: git run from here would act on the "
+    "product checkout. Stop and say so: the system rebuilds the checkout."
+)
 OUTSIDE = "`git -C` outside your working directory: work on your own checkout."
 NO_VERIFY = "`git commit --no-verify`: the product's hooks run on every commit; fix what they say."
 SWITCH = (
@@ -141,6 +147,10 @@ STORE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 STORE_WORDS = (".key", "agentic-setup-tree")
 
 
+# What the delivery hook and the `run_check` tool answer to a call of an abandoned attempt.
+ABANDONED_REPLY = "the attempt was abandoned; no check was run"
+
+
 @dataclass
 class TurnCount:
     """The runner's own tally of main-thread `AssistantMessage`s, the quantity
@@ -155,6 +165,25 @@ class TurnCount:
     value: int = 0
 
 
+class AttemptAbandon:
+    """Whether one attempt was abandoned (GH-1169): one instance per attempt, built in
+    `ClaudeSdkRunner.run_once` beside `HookActivity` and `TurnCount`, never kept at module
+    level and never stored in a `Presubmit` or a `RunCheck`, so the flag cannot outlive the
+    attempt that made it. The runner sets it on every exit of the attempt, before it reaps;
+    the delivery gate and `run_check`, which run in threads the reap cannot reach, poll
+    `is_set` and stop waiting for a share and launching checks. A check already launched is
+    not reached by it: it ends by its own wall, never by the attempt's stall reap."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+
 class HookActivity:
     """Which delivery hooks of one attempt are in flight, and when the last one left
     (GH-299, ADR-0057): one instance per attempt, constructed in `_session` beside
@@ -162,23 +191,40 @@ class HookActivity:
     hook runs the product's checks and can be silent for far longer than any stall
     threshold; the watchdog reads this to know the silence is the hook's, and to
     restart the whole threshold from the moment it left. `clock` is the runner's own
-    monotonic clock, so the instant is on the scale the watchdog compares it against."""
+    monotonic clock, so the instant is on the scale the watchdog compares it against.
+
+    Each live entry holds its expiry (`entered + ceiling_s` on that clock) or None when
+    its caller declared no ceiling; `expires` is the latest of them, so the watchdog stops
+    renewing on a hook only once every live one is past its own caller's deadline."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self.in_flight = 0
+        self._entries: dict[object, float | None] = {}
         self.last_exit: float | None = None
         # Whether any hook of this attempt raised `OSError(ENOSPC)` (GH-391); the SDK
         # answers the CLI with an error and the runner would otherwise never know.
         self.enospc = False
         self._clock = clock
 
+    @property
+    def in_flight(self) -> int:
+        return len(self._entries)
+
+    @property
+    def expires(self) -> float | None:
+        """The latest expiry among the live entries; None when none is live or any live
+        entry has no ceiling."""
+        if not self._entries or None in self._entries.values():
+            return None
+        return max(expiry for expiry in self._entries.values() if expiry is not None)
+
     @contextmanager
-    def running(self) -> Iterator[None]:
-        self.in_flight += 1
+    def running(self, ceiling_s: float | None = None) -> Iterator[None]:
+        token = object()
+        self._entries[token] = None if ceiling_s is None else self._clock() + ceiling_s
         try:
             yield
         finally:
-            self.in_flight -= 1
+            del self._entries[token]
             self.last_exit = self._clock()
 
 
@@ -266,6 +312,7 @@ def hooks_for(
     store: Path | None = None,
     allowed: tuple[Path, ...] = (),
     runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -287,11 +334,17 @@ def hooks_for(
     `runs`, for a role that executes, notes the Developer's own Bash calls that run a declared
     check (GH-467, `check_run_log`): the Bash `PreToolUse` hook opens the row after its denial
     verdict, and two Bash matchers, `PostToolUse` and `PostToolUseFailure`, close it. They
-    answer `{}` always: recording never decides, never denies, never raises."""
+    answer `{}` always: recording never decides, never denies, never raises.
+
+    `refuse`, for a role that executes, is asked with each Bash command after the git and store
+    denials and before the row is opened: a text denies the call with it, `None` lets it
+    through. The default `None` leaves the hook as it was."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
-            HookMatcher(matcher="Bash", hooks=[_bash(cwd, store, runs)], timeout=GUARD_TIMEOUT_S),
+            HookMatcher(
+                matcher="Bash", hooks=[_bash(cwd, store, runs, refuse)], timeout=GUARD_TIMEOUT_S
+            ),
             HookMatcher(
                 matcher="Edit|Write",
                 hooks=[_edit(cwd, forbidden or (), allowed)],
@@ -307,18 +360,26 @@ def hooks_for(
                 )
             )
     if guard is not None or presubmit is not None:
+        # One value, two uses: the SDK's own deadline for the hook and the ceiling the
+        # watchdog gives its in-flight renewal. `CheckoutPresubmit.timeout_s` already
+        # covers the whole call (first runs, affected forms, flake reruns, witness), so
+        # nothing is recomputed here.
+        gate_timeout = GUARD_TIMEOUT_S + (
+            presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0
+        )
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied, activity)],
+                hooks=[
+                    _delivery_gate(guard, presubmit, on_presubmit_denied, activity, gate_timeout)
+                ],
                 # The presubmit runs the product's checks: its own budget, plus the
                 # answer. The guard is in-process and fast, so it adds nothing here:
                 # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
                 # before the guard existed, when this was the presubmit's own timeout).
                 # GH-361: plus the longest the gate may wait for a share of the machine's
                 # cores, which is no part of `timeout_s` (the checks' clock starts after).
-                timeout=GUARD_TIMEOUT_S
-                + (presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0),
+                timeout=gate_timeout,
             )
         )
     hooks: dict[str, list[HookMatcher]] = {}
@@ -366,7 +427,12 @@ def _closing(close: Callable[[HookInput, str | None], None]) -> HookCallback:
     return hook
 
 
-def _bash(cwd: Path, store: Path | None = None, runs: CheckRunLog | None = None) -> HookCallback:
+def _bash(
+    cwd: Path,
+    store: Path | None = None,
+    runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
+) -> HookCallback:
     # Resolved once, here, for every Bash call this role's run will ever make --
     # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
     # itself stays unresolved: it is what the git branch keeps comparing against.
@@ -382,6 +448,10 @@ def _bash(cwd: Path, store: Path | None = None, runs: CheckRunLog | None = None)
         )
         if reason:
             return _deny(reason)
+        # A hand run the delivery gate repeats (ADR-0065 addendum 2026-11-25): the application
+        # decides, with `suite_refusal`; a denied call is never recorded as a check run.
+        if refuse is not None and (refused := refuse(command)):
+            return _deny(refused)
         if runs is not None:
             runs.pre(data, tool_use_id)  # guarded inside: never changes this answer
         return {}
@@ -479,6 +549,7 @@ def _delivery_gate(
     presubmit: Presubmit | None,
     on_presubmit_denied: Callable[[], None] | None = None,
     activity: HookActivity | None = None,
+    gate_timeout: float | None = None,
 ) -> HookCallback:
     """The one `PreToolUse` callback on the delivery tool: the schema guard first, the
     presubmit second, the order this module's docstring promises written here in code
@@ -488,12 +559,13 @@ def _delivery_gate(
     for `denials`: a presubmit refusal is the gate working, never the re-emission of an
     invalid shape a schema rejection is, and the two travel as separate counts.
     `activity`, when given, says the hook is in flight for the whole call, the guard
-    included (`HookActivity`)."""
+    included (`HookActivity`), with `gate_timeout` as its ceiling (None: unbounded, as
+    before): the same deadline the delivery `HookMatcher` carries."""
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        with activity.running() if activity is not None else nullcontext():
+        with activity.running(ceiling_s=gate_timeout) if activity is not None else nullcontext():
             return await _gate(data)
 
     async def _gate(data: HookInput) -> HookJSONOutput:
@@ -511,6 +583,10 @@ def _delivery_gate(
                 # attempt, which the signal is already delivering, ends the wait; the hard
                 # deadline is the net if it never comes.
                 await anyio.sleep_forever()
+            except CheckAbandoned:
+                # The attempt was abandoned (GH-1169): this is not a refusal of the gate, so
+                # it is not counted and the hook does not wait; the answer is for nobody.
+                return _deny(ABANDONED_REPLY)
             if reason:
                 if on_presubmit_denied is not None:
                     on_presubmit_denied()
@@ -652,6 +728,8 @@ def _git(words: list[str], cwd: Path, here: Path) -> str | None:
                 return OUTSIDE
     if i >= len(words):
         return None
+    if _broken_checkout(here):
+        return NO_CHECKOUT
     subcommand, args = words[i], words[i + 1 :]
     if subcommand == "config":
         reading = args[:1] in (["get"], ["list"]) or bool(_CONFIG_READS & set(args))
@@ -665,6 +743,22 @@ def _git(words: list[str], cwd: Path, here: Path) -> str | None:
     if subcommand == "commit" and _skips_hooks(args):
         return NO_VERIFY
     return None
+
+
+def _broken_checkout(directory: Path) -> bool:
+    """`directory` is inside a task folder of `.agentic/worktrees` that exists and whose
+    `.git` is not a gitfile (GH-1142, `guard.require_checkout`). A directory that is not
+    there is left to git, which fails on it by itself."""
+    for folder in (directory.resolve(), *directory.resolve().parents):
+        if folder.parent.name == "worktrees" and folder.parent.parent.name == ".agentic":
+            if not folder.is_dir():
+                return False
+            try:
+                require_checkout(directory, folder.parent)
+            except ForeignCheckout:
+                return True
+            return False
+    return False
 
 
 def _skips_hooks(args: list[str]) -> bool:

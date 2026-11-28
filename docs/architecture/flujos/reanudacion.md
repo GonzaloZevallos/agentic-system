@@ -67,7 +67,10 @@ sequenceDiagram
      cuenta, un disco lleno, o una escalación con una `MechanicalCause` como un CI sin
      veredicto o una entrega transitoria del sistema), el poller la retoma por su calendario,
      con el tope de `agentic/core/process/domain/rules.py:auto_resume_limit` (tres retomas
-     para una causa mecánica, `agentic/core/process/domain/rules.py:schedule_for`):
+     para una causa mecánica, salvo `check_timeout`, que tiene dos y además pasa por
+     `agentic/core/process/domain/rules.py:check_timeout_retake`: la segunda retoma exige
+     evidencia cambiada, otra cabeza u otros workers, y una tercera siempre va a una persona;
+     `agentic/core/process/domain/rules.py:schedule_for`):
      `agentic/core/process/application/poll.py:gather_resumes` evalúa cada pausa con
      `agentic/core/process/domain/rules.py:auto_resumable` y
      `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y,
@@ -103,6 +106,12 @@ sequenceDiagram
      (`rules.needs_a_human` es verdadera hasta que sale la Nota) y el paso de retención
      (`agentic/core/process/application/poll.py:hold_format_failures`) escribe `format_hold`,
      publica la Nota `Format hold: ` y solo entonces suelta la etiqueta.
+     Una retención ya anotada (`noted_at`, con `issue_url`) la libera el paso
+     `agentic/core/process/application/format_release.py:release_fixed_holds` (GH-1020), antes de
+     `gather_resumes` y en una ronda que no es en seco ni de las que no arrancan nada: cuando
+     `rules.format_hold_released` dice que el issue de rechazo está cerrado y su commit corre en
+     stage0 (o cerrado sin commit), guarda `format_retakes.fixed_release_patch` bajo el lock
+     `format_release` de la tarea y la misma ronda la retoma.
    - La pausa `github_rate_limit` no tiene comentario `Escalated: ` desde donde medir:
      `agentic/core/process/application/poll.py:gather_resumes` la delega en
      `agentic/core/process/application/poll.py:_rate_limit_candidate`, que toma el `since` del

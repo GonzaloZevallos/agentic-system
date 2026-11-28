@@ -12,6 +12,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -31,6 +33,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__ReleasePatch["ReleasePatch"]
     class task__RestartPending["RestartPending"]
     class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
@@ -44,15 +47,12 @@ classDiagram
     class task__StackPause["StackPause"]
     class task__StackRestack["StackRestack"]
     class task__StackUnfetchable["StackUnfetchable"]
-    class task__Subtask["Subtask"]
-    class task__TaskInput["TaskInput"]
+    class task__StallRecord["StallRecord"]
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: landing (parte 2)](classes-process-domain-landing-2.md)
+  - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
-  - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` hereda de `task.TaskInput`
-  - `task.TaskState` se asocia con `task.StackParent`

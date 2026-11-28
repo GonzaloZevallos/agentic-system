@@ -124,3 +124,97 @@ bucle cortaba, nada quedaba registrado como enviado: cada ronda repetía la mism
   minutos en vez de golpear a GitHub en cada ronda.
 - **Registro.** Una línea de registro lleva lo que imprimió `gh` solo como el estado de tres
   dígitos, `(HTTP nnn)`; el estado lo lee `run.py` (`http_status`, adenda de ADR-0050).
+
+## Adenda (GH-1165, 2026-11-27)
+
+El tablero pasa a cinco Etapas con un Motivo en cada tarjeta. Esta adenda **reemplaza la tabla
+de Etapa/Bloqueo y la línea de precedencia de arriba** (y la mención de siete opciones de la
+adenda de GH-421): el texto del ADR sigue siendo cierto con lo que sigue. Los campos que se
+escriben son Etapa, Motivo (antes Bloqueo), Costo USD, Inicio y Fin.
+
+- **Las cinco Etapas** (`domain.board.Etapa`): `Te necesita`, `En curso`, `Próximo`, `En pausa`,
+  `Hecho`. Una tarjeta sin Etapa (`Card.etapa` es `None`) está limpia y nunca se da de alta.
+- **Precedencia, en el orden en que `_stage` la evalúa:**
+  1. documento `split`: sin Etapa;
+  2. issue cerrado: `Hecho`, o sin Etapa si pasaron más de 7 días desde el cierre;
+  3. proceso vivo: `En curso`;
+  4. `ready_for_review`: `En curso`, Motivo `en PR: espera CI y merge`;
+  5. lo que necesita a la persona: etiqueta `needs-human` o `ready-for-human`, `waiting_on_human`,
+     estados finales (`discarded`, `tracker_only`, `evaluated`) y estado desconocido: `Te necesita`;
+  6. lo pausado: etiqueta `agentic-hold`, `needs-triage` o sin `agentic`: `En pausa`;
+  7. la pausa de pila (más abajo);
+  8. documento en vuelo sin proceso vivo y sin bloqueo propio: `Te necesita`, `sin proceso vivo`;
+  9. bloqueos propios: `Próximo`, `espera #N, #M`;
+  10. el resto: `Próximo`, `esperando lugar`.
+
+  El paso 7 solo actúa si ningún paso 1 a 6 aplicó: una etiqueta de pausa (paso 6) lo apaga, y
+  entonces un issue en vuelo con `agentic-hold` muestra lo mismo que antes de la pila.
+- **Tabla de Motivo** (los textos están en `domain/board.py` y se copian literalmente):
+
+  | Situación | Etapa | Motivo |
+  | --- | --- | --- |
+  | proceso vivo | En curso | `corriendo` |
+  | `ready_for_review` | En curso | `en PR: espera CI y merge` |
+  | `waiting_on_human` o `needs-human`, la poller no la retoma | Te necesita | `esperando tu respuesta: <primera línea>`, o `necesita tu atención` si no hay línea |
+  | `waiting_on_human` o `needs-human`, la poller la retoma (`rules.poller_retakes`) | Te necesita | `se retoma sola` |
+  | `ready-for-human` | Te necesita | `lista para tu revisión` |
+  | `discarded` | Te necesita | `descartada: cerrar el issue` |
+  | `tracker_only` | Te necesita | `lista de tracker pendiente` |
+  | estado desconocido o `evaluated` | Te necesita | `documento con estado desconocido` |
+  | en vuelo, sin proceso vivo | Te necesita | `sin proceso vivo` |
+  | `agentic-hold` | En pausa | `retenida: agentic-hold` |
+  | `needs-triage` | En pausa | `sin triage` |
+  | sin `agentic` | En pausa | `fuera de la bandeja` |
+  | bloqueado por otros issues | Próximo | `espera #N, #M` |
+  | nada que lo frene | Próximo | `esperando lugar` |
+  | `Hecho` | Hecho | sin Motivo |
+
+  Toda tarjeta que no es `Hecho` lleva un Motivo no vacío; si la regla no da uno, vale el de su
+  Etapa (`FALLBACK_MOTIVO`). La primera línea se corta a 200 caracteres (`MOTIVO_MAX`).
+- **Casos limpios.** Un documento `split` y un issue cerrado hace más de 7 días no tienen Etapa:
+  si la memoria recordaba una, se limpian sus campos; si no, no se escribe nada.
+- **Regla de 7 días, inclusiva** (`HECHO_DAYS`): un issue cerrado el día `D` es `Hecho` hasta `D + 7`
+  inclusive (`hecho_until`) y sale al día siguiente (`hecho_expired` es la única comparación).
+  Un issue cerrado sin día de cierre sigue siendo `Hecho`.
+- **Lecturas de vencimiento acotadas.** Cada ronda relee, para limpiarlas, a lo sumo
+  `EXPIRY_READS_MAX` (10) tarjetas `Hecho` vencidas, las de `hecho_until` más antiguo primero
+  (`expiry_due`); las que fallan al leer van después, y un issue que falla `UNREAD_MAX` (3) veces
+  seguidas sale de la memoria.
+- **Versión del formato de la memoria.** El archivo de `BoardSent` lleva `version` (`VERSION = 2`
+  en `adapters/filesystem/board_sent.py`). Una memoria con otra versión, o sin ella, se lee como
+  vacía y marcada ilegible: el espejo lo dice una vez y reenvía todo, lo cual es idempotente. Un
+  cambio de lo que la memoria significa sube la versión.
+- **Entradas de `card`.** Los hechos del propio issue (etiquetas, estado, registro vivo, el
+  `BlockerReport` de un issue sin documento, el documento), `today` y `stack_pause`. `today` y
+  `now` llegan como argumento; el dominio no lee reloj. `eval_set`, `plan.deferred` y las rondas
+  retenidas **ya no son entradas**: ningún resultado de planificación de la ronda decide una
+  tarjeta, y `card` sigue siendo una función pura de `IssueFacts`.
+- **Hijos apilados retenidos (ADR-0103).** `IssueFacts.stack_pause` es la causa por la que la
+  ronda retiene al hijo y el issue del eslabón de la cadena que la causó (`StackHold.held` y
+  `StackHold.culprits`, que `stack_hold.compute` ya calcula en cada ronda). Es un hecho del
+  propio issue que la ronda ya tenía: el espejo no hace ninguna lectura nueva (ni `stack_facts`,
+  ni git, ni tracker). Solo se aplica con un documento en vuelo (`open`, `defined`, `returned`,
+  `definition_ready`, `planned`, `developing`); nunca pasa sobre un issue cerrado, uno vivo, una
+  etiqueta ni otro estado de documento, y gana sobre los bloqueos propios del hijo. El Motivo
+  nombra el eslabón que causó la retención, no el padre directo por defecto (`#P`):
+
+  | Causa | Etapa | Motivo |
+  | --- | --- | --- |
+  | `parent_escalated`, `parent_not_ready` | Próximo | `espera #P` |
+  | `parent_stopped` | Te necesita | `padre #P detenido` |
+  | `parent_abandoned` | Te necesita | `padre #P abandonado` |
+  | `unreadable`, o una causa sin eslabón | Te necesita | `pila ilegible` |
+
+  Límite conocido: una lectura ilegible de una sola ronda lleva la tarjeta a `Te necesita` y de
+  vuelta (dos escrituras de campo, sin amortiguación). La nota que `stack_hold` escribe en el
+  issue todavía nombra al padre directo; corregirla va en un seguimiento.
+- **`board migrate`** (el contrato que construye GH-1166). Es un verbo que cambia el esquema del
+  Project para que tenga los campos y las opciones de Etapa que el dominio define: las opciones
+  salen de `get_args(Etapa)` y los textos de las constantes del dominio, nunca de una copia.
+  Por defecto es un ensayo (dry run): dice qué cambiaría y no cambia nada. Solo `--apply`
+  muta, y toda mutación pasa por la única función que comprueba la bandera. El esquema lo cambia
+  un puerto aparte, `BoardSchema`, que se construye solo en la composición de `board migrate`:
+  el puerto `Board` que tiene el poller no tiene ningún método que cambie el esquema, de modo
+  que **el poller nunca edita el esquema**. Esto matiza el «Alcance del permiso» de arriba: el
+  token `gh` del dueño con el scope `project` ahora edita el esquema del proyecto configurado,
+  y solo cuando una persona ejecuta el verbo.

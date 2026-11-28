@@ -101,7 +101,7 @@ class Configuration(BaseModel):
     # which the in-flight hook counter and the pending-tool rule cover on their own, so
     # no cross-check against `check_timeout_s`. The floor is `domain.stall.STALL_FLOOR_S`
     # (600), written out because `shared` imports nothing of the project.
-    stall_timeout_s: float = Field(default=2400.0, ge=600.0)
+    stall_timeout_s: float = Field(default=1800.0, ge=600.0)
     # Roles that may run at once across the whole process (ADR-0004, fifth addendum).
     # With the review inside each branch of the fan-out, a wave of four subtasks puts
     # four Developers and four reviewers in flight, each reviewer with its own
@@ -266,6 +266,14 @@ class Configuration(BaseModel):
     # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
     # Declared, not measured: a few parallel runs' worth of build and test scratch.
     scratch_floor_mb: int = Field(default=2048, ge=0)
+    # Where GitHub write turns are serialized: one file per machine under this directory. Every
+    # writer (the systemd poller, the shell `run`/`resume`, the merge and land children) must
+    # resolve the same cache root, `$XDG_CACHE_HOME` or `~/.cache`, or the spacing between
+    # writes splits across two files.
+    github_dir: Path = Field(default_factory=lambda: _default_github_dir())
+    # Where the GitHub account's request budget is kept, one file per account (GH-1071): a
+    # per-user cache, regenerable like scratch.
+    github_budget_dir: Path = Field(default_factory=lambda: _default_github_budget_dir())
 
     @model_validator(mode="after")
     def _ceiling_covers_the_check_timeout(self) -> Configuration:
@@ -449,10 +457,23 @@ def _default_check_results_dir() -> Path:
     return root / "agentic" / "check-results"
 
 
-def _default_scratch_dir() -> Path:
+def _default_cache_root() -> Path:
+    """`$XDG_CACHE_HOME` when set and not empty, else `~/.cache`: the one root every cache of
+    the machine hangs from, so the writers that share a file under it resolve the same path."""
     base = os.environ.get("XDG_CACHE_HOME")
-    root = Path(base) if base else Path.home() / ".cache"
-    return root / "agentic" / "scratch"
+    return Path(base) if base else Path.home() / ".cache"
+
+
+def _default_scratch_dir() -> Path:
+    return _default_cache_root() / "agentic" / "scratch"
+
+
+def _default_github_dir() -> Path:
+    return _default_cache_root() / "agentic" / "github"
+
+
+def _default_github_budget_dir() -> Path:
+    return _default_cache_root() / "agentic" / "github" / "budget"
 
 
 def _default_perf_lock_path() -> Path:

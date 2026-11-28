@@ -12,7 +12,8 @@ from typing import Literal
 # only at the raise site in `run_role._attempt`, never read back from an error's text.
 # `output_missing` the role delivered no structured output, `schema_invalid` the schema's
 # own validation refused it, `unmapped` a `ValueError` no rule claims yet; the rest are the
-# plan and drawing refusals a check raises as an `OutputRefusal`.
+# plan and drawing refusals a check raises as an `OutputRefusal`; `system_category` a finding
+# that names a category only the system writes (GH-1075).
 RefusalRule = Literal[
     "preview_slice_missing",
     "visible_without_drawing_check",
@@ -23,6 +24,7 @@ RefusalRule = Literal[
     "depends_on_reason_too_long",
     "estimated_files_empty",
     "estimate_below_spent_floor",
+    "system_category",
     "output_missing",
     "schema_invalid",
     "unmapped",

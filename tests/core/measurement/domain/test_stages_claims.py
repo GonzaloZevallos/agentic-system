@@ -155,37 +155,45 @@ OUTAGE = ("other", "outage_pause")
 
 # (the reason of the failure that ended the run, the escalation's mechanical cause) -> the claim
 # the pause makes, written by hand. `None` is no failure, or an escalation that is a judgment.
+# `check_timeout` (GH-1075) is in none of `stages._CI_CAUSES`, so today it reads as an outage
+# pause; the part that wires it decides whether it should read as `checks`.
 TRUTH = {
     (None, None): HUMAN,
     (None, "ci_gh_unavailable"): CHECKS,
     (None, "ci_gh_unreadable"): CHECKS,
     (None, "ci_run_unfinished"): CHECKS,
     (None, "delivery_transient"): OUTAGE,
+    (None, "check_timeout"): OUTAGE,
     ("account_limit", None): ACCOUNT,
     ("account_limit", "ci_gh_unavailable"): ACCOUNT,
     ("account_limit", "ci_gh_unreadable"): ACCOUNT,
     ("account_limit", "ci_run_unfinished"): ACCOUNT,
     ("account_limit", "delivery_transient"): ACCOUNT,
+    ("account_limit", "check_timeout"): ACCOUNT,
     ("upstream", None): OUTAGE,
     ("upstream", "ci_gh_unavailable"): CHECKS,
     ("upstream", "ci_gh_unreadable"): CHECKS,
     ("upstream", "ci_run_unfinished"): CHECKS,
     ("upstream", "delivery_transient"): OUTAGE,
+    ("upstream", "check_timeout"): OUTAGE,
     ("network", None): OUTAGE,
     ("network", "ci_gh_unavailable"): CHECKS,
     ("network", "ci_gh_unreadable"): CHECKS,
     ("network", "ci_run_unfinished"): CHECKS,
     ("network", "delivery_transient"): OUTAGE,
+    ("network", "check_timeout"): OUTAGE,
     ("disk_full", None): OUTAGE,
     ("disk_full", "ci_gh_unavailable"): CHECKS,
     ("disk_full", "ci_gh_unreadable"): CHECKS,
     ("disk_full", "ci_run_unfinished"): CHECKS,
     ("disk_full", "delivery_transient"): OUTAGE,
+    ("disk_full", "check_timeout"): OUTAGE,
     ("github_rate_limit", None): ACCOUNT,
     ("github_rate_limit", "ci_gh_unavailable"): ACCOUNT,
     ("github_rate_limit", "ci_gh_unreadable"): ACCOUNT,
     ("github_rate_limit", "ci_run_unfinished"): ACCOUNT,
     ("github_rate_limit", "delivery_transient"): ACCOUNT,
+    ("github_rate_limit", "check_timeout"): ACCOUNT,
 }
 
 
@@ -202,7 +210,7 @@ def _truth_gaps(table):
 
 def test_the_truth_table_covers_every_external_reason_and_mechanical_cause():
     assert _truth_gaps(TRUTH) == (set(), set())
-    assert len(TRUTH) == 30
+    assert len(TRUTH) == 36
 
 
 def test_the_coverage_guard_rejects_a_table_missing_a_reason_or_a_cause():

@@ -9,11 +9,14 @@ text is the caller's, because only the caller knows where the document is."""
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeIs, get_args
+from typing import TYPE_CHECKING, Literal, TypeIs, get_args
 
 from .task import assumption_text
+
+if TYPE_CHECKING:
+    from .landing import IssueRef
 
 # Under GitHub's 65,536 with room for `Closes #N\n\n` (the tracker's own prefix).
 PR_BODY_MAX = 60_000
@@ -99,11 +102,65 @@ def closes_marker(issue: int) -> str:
     return f"<!-- agentic-closes: #{issue} -->"
 
 
-def closes_line(description: str) -> str:
-    """The `Closes #N` line a task's pull request carries for the parent part its issue body
-    names, or `""` for a task that names none."""
-    match = _CLOSES_MARKER.search(description)
-    return f"Closes #{match.group(1)}" if match else ""
+_FENCE_OPENER = re.compile(r"^(`{3,}|~{3,})")
+_ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)/?$")
+
+
+def _unfenced_lines(body: str) -> list[str]:
+    """The stripped lines of `body` outside a fenced code block, delimiters excluded. A fence
+    opens on a stripped line starting with 3 or more backticks or tildes and closes on a stripped
+    line made only of the same character, at least as long; an unclosed fence hides the rest.
+    The rule `rules.blockers_from_body` reads `Blocked by:` with (GH-415), which this module
+    cannot import: `rules` reaches it through `schemas`."""
+    lines: list[str] = []
+    fence = ""
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if fence:
+            if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
+                fence = ""
+            continue
+        opener = _FENCE_OPENER.match(stripped)
+        if opener:
+            fence = opener.group(1)
+            continue
+        lines.append(stripped)
+    return lines
+
+
+def closing_numbers(body: str, own: int | None) -> list[int]:
+    """The issue numbers the `agentic-closes` markers of `body` name (GH-592, GH-1104), without
+    duplicates, in first-seen order, `own` left out. A marker counts only as the whole of a line
+    outside a fenced code block, as `closes_marker` writes it: one quoted in prose or in backticks
+    is never a closing line. The only place a body is read for the marker."""
+    found: list[int] = []
+    for line in _unfenced_lines(body):
+        match = _CLOSES_MARKER.fullmatch(line)
+        if match and int(match.group(1)) != own:
+            found.append(int(match.group(1)))
+    return list(dict.fromkeys(found))
+
+
+def closes_lines(numbers: Sequence[int]) -> str:
+    """One `Closes #N` line per number, or `""` for none."""
+    return "\n".join(f"Closes #{number}" for number in numbers)
+
+
+def carriers(refs: Sequence[IssueRef], parent: int, parts: Collection[int]) -> list[int]:
+    """The numbers of the issues among `refs` whose body closes `parent` through
+    `closing_numbers`, in the order of `refs`: never `parent` itself nor a number of `parts`
+    (the parent's own recorded parts), and not a ref whose URL carries no issue number."""
+    found: list[int] = []
+    for ref in refs:
+        url = _ISSUE_URL_NUMBER.search(ref.url)
+        if url is None:
+            continue
+        number = int(url.group(1))
+        if number == parent or number in parts:
+            continue
+        if parent in closing_numbers(ref.body, None):
+            found.append(number)
+    return found
 
 
 def stacked_line(parent: int | None) -> str:

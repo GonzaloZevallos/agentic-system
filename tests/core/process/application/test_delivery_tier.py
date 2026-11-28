@@ -226,7 +226,7 @@ async def test_the_tool_carries_the_products_verifications_and_their_walls(cfg):
     await develop(state, cfg, ports)
     tool = runner.calls[0]["check_tool"]
     assert tool.verification_names == ("compare",)
-    assert tool.gate.timeouts == {"compare": 900.0, "pytest": 1200.0}
+    assert tool.gate.walls == {"compare": 900.0, "pytest": 1200.0}
 
 
 async def test_a_dirty_stage0_offers_no_tool_and_runs_exactly_todays_commands(cfg):

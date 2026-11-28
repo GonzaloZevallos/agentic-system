@@ -31,6 +31,8 @@ TAIL_LINES = 30
 # The stack file always forces the full form (ADR-0046): a change to what the checks are
 # can never be measured by the selection that file declares.
 STACK_FILE = ".agentic/stack.yaml"
+# How many characters of a commit sha the checks table shows.
+SHA_SHOWN = 8
 BASE_TOKEN = "{base}"
 WORKERS_TOKEN = "{workers}"
 # Where a `rerun_checks` form takes the test ids `failed_ids` read from the red run (GH-530).
@@ -96,6 +98,13 @@ class CheckResult(TypedDict):
     # (ADR-0065). Set by the system on read, never stored and never by the model; absent
     # on a row that ran.
     reused: NotRequired[bool]
+    # The full sha of G, the last commit this check was green on, on a kept row only (GH-1125):
+    # the affected form selected nothing between G and the head, so G's verdict stands. Set by
+    # `forward_base.kept_row`, never by the model; the row ran nothing.
+    reused_from: NotRequired[str]
+    # The full sha of G on an affected row that really ran against it (GH-1125): what
+    # `kept_row` checks before it keeps G's verdict. Set by the system, absent otherwise.
+    affected_base: NotRequired[str]
     # True on a row produced by the one rerun of a red check (ADR-0066). Set by the system,
     # never by the model; never stored in the check-result store; absent on a first run.
     rerun: NotRequired[bool]
@@ -116,6 +125,21 @@ class CheckResult(TypedDict):
     # True on a `full_checks` row that timed out while a gating CI job covers its suite
     # (GH-453): set only through `deferred_verdict`, never stored in the check-result store.
     deferred: NotRequired[bool]
+    # How many workers the command ran with (GH-1075). Absent when nothing recorded it, which
+    # reads as unknown, never as 1: `workers_of` is its one reader.
+    workers: NotRequired[int]
+
+
+class TimeoutFact(TypedDict):
+    """One check whose command hit `check_timeout_s` (GH-1075): the head it ran on, the check's
+    name, how long it ran and, when known, the workers it ran with. `workers` is absent when
+    nothing recorded it, which reads as unknown, never as 1 (`workers_of`). Lives here because
+    `task` imports this module; `task` re-exports it."""
+
+    head: str
+    check: str
+    seconds: float
+    workers: NotRequired[int]
 
 
 FlakeVerdict = Literal["pass", "flake", "fail"]
@@ -507,20 +531,186 @@ def affected_prefix(command: str) -> str:
     return command[: min(cuts)].rstrip()
 
 
+def rule_prefix(command: str) -> str:
+    """What a `Bash(prefix:*)` rule for a declared check may hold: the command cut at its first
+    system token, stripped, and without a trailing word that starts with `-`, the option that
+    owned the token (`-n` of `-n {workers}`: the number it took is not text a rule can name, and
+    the rule stays what it was before the check was sized). A command without a token is
+    returned exactly as it is. An empty cut is `""`, and the caller gives no rule for it."""
+    cuts = [i for i in (command.find(token) for token in _SYSTEM_TOKENS) if i >= 0]
+    if not cuts:
+        return command
+    cut = command[: min(cuts)].strip()
+    head, _, last = cut.rpartition(" ")
+    return head.strip() if last.startswith("-") else cut
+
+
+class UngrantedWorkers(Exception):
+    """A command that still holds `{workers}` was about to run with no share granted by the
+    check scheduler (ADR-0070): the shell would take the token as text. An ordinary exception,
+    not a `FailureReason`: no closed set gains a value for a state that is a bug of the caller."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__(
+            f"`{command}` holds {WORKERS_TOKEN} but the check scheduler granted no share: "
+            "a command is never run with the token unfilled"
+        )
+
+
+# The exit codes this repo's `scripts/affected_tests.py` gives for "selected nothing" and
+# "cannot decide". A convention of this repo, not a system contract: another product's affected
+# script that exits 8 or 9 reads the same here, and any other exit is `affected_red`. A test pins
+# both to the script's `EMPTY` and `REFUSED`.
+AFFECTED_EMPTY_EXIT = 8
+AFFECTED_REFUSED_EXIT = 9
+# The most characters of a changed path a `GateForm` keeps.
+FORM_PATH_MAX = 200
+# The most `GateForm`s one attempt's `RoleRun.forms` keeps; the older ones are counted.
+FORMS_MAX = 50
+
+# Why a check ran the form it ran (the closed set `RoleRun.forms` records): the first five say
+# why the plan chose it, then why an affected form was followed by the full one, and
+# `kept_green`: the affected form selected nothing since G and G's verdict stands (GH-1125).
+ModeCause = Literal[
+    "none",
+    "fallback_glob",
+    "stack_file",
+    "paths_unknown",
+    "no_affected_form",
+    "stuck_full",
+    "script_empty",
+    "script_refused",
+    "affected_red",
+    "kept_green",
+]
+
+
+class GateForm(TypedDict):
+    """The form one check of a delivery gate ran and why: written by the system from exit
+    codes, declared globs and changed paths, never from a check's output. `glob` is the declared
+    fallback glob (or `STACK_FILE`) that forced a full form and `path` the first changed path that
+    matched it, cut to `FORM_PATH_MAX`."""
+
+    check: str
+    mode: Mode
+    cause: ModeCause
+    via: Literal["gate", "tool"]
+    glob: NotRequired[str]
+    path: NotRequired[str]
+
+
+@dataclass(frozen=True)
+class PlannedForm:
+    """What `plan_form` chose for one check, before anything ran."""
+
+    mode: Mode
+    cause: ModeCause
+    glob: str | None
+    path: str | None
+
+
+# What a gate with no affected plan ran: every check full, because the product declares no
+# affected form for any of them.
+UNPLANNED = PlannedForm("full", "no_affected_form", None, None)
+
+
+def plan_form(
+    check: str,
+    changed_paths: Sequence[str] | None,
+    fallback: Sequence[str],
+    commands: Mapping[str, str],
+    stuck: frozenset[str],
+) -> PlannedForm:
+    """Which form one check runs and why, the first rule that applies: the changed paths are
+    unknown (`None`, the lookup failed) or empty; a path matches a fallback glob, or the stack
+    file; the check has no affected form; the check already failed in full on this instance.
+    Globs match the whole POSIX path, so `*` crosses `/`: that errs toward running full."""
+    if not changed_paths:
+        return PlannedForm("full", "paths_unknown", None, None)
+    for glob in fallback:
+        for path in changed_paths:
+            if fnmatchcase(path, glob):
+                return PlannedForm("full", "fallback_glob", glob, path)
+    for path in changed_paths:
+        if fnmatchcase(path, STACK_FILE):
+            return PlannedForm("full", "stack_file", STACK_FILE, path)
+    if check not in commands:
+        return PlannedForm("full", "no_affected_form", None, None)
+    if check in stuck:
+        return PlannedForm("full", "stuck_full", None, None)
+    return PlannedForm("affected-only", "none", None, None)
+
+
 def check_modes(
     names: Sequence[str], plan: AffectedPlan, changed_paths: Sequence[str] | None
 ) -> dict[str, Mode]:
-    """Which form each check runs. Everything runs full when the changed paths are unknown
-    (`None`, the lookup failed) or empty, or when any path matches a fallback glob or the
-    stack file; a check with no affected form always runs full. Globs match the whole
-    POSIX path, so `*` crosses `/`: that errs toward running full."""
-    everything_full = not changed_paths or any(
-        fnmatchcase(path, glob) for path in changed_paths for glob in (*plan.fallback, STACK_FILE)
-    )
+    """Which form each check runs: `plan_form`'s mode, with no check stuck."""
     return {
-        name: "affected-only" if name in plan.commands and not everything_full else "full"
+        name: plan_form(name, changed_paths, plan.fallback, plan.commands, frozenset()).mode
         for name in names
     }
+
+
+def settle_form(
+    planned: PlannedForm, rows: Sequence[CheckResult], via: Literal["gate", "tool"]
+) -> GateForm:
+    """The form one check ran, from its rows in run order. The affected row is the first one
+    with mode `affected-only` that is not a rerun (a reused one included): when it passed, that
+    is the form; when it did not, the full form followed it and the cause is its exit
+    (`AFFECTED_EMPTY_EXIT`, `AFFECTED_REFUSED_EXIT`, else `affected_red`; a timed-out row is
+    always `affected_red`). A rerun row never sets the cause. With no affected row the plan
+    stands. A kept row (`reused_from`, GH-1125) settles it first: mode `affected-only`, cause
+    `kept_green`. In the exit-8 case both rows are present, the exit-8 row first and then the
+    kept row, so the kept row decides. The only writer of a `ModeCause`."""
+    if any(
+        r.get("mode") == "affected-only" and not r.get("rerun", False) and "reused_from" in r
+        for r in rows
+    ):
+        return {
+            "check": rows[0]["name"],
+            "mode": "affected-only",
+            "cause": "kept_green",
+            "via": via,
+        }
+    affected = next(
+        (r for r in rows if r.get("mode") == "affected-only" and not r.get("rerun", False)), None
+    )
+    form: GateForm = {
+        "check": rows[0]["name"] if rows else "",
+        "mode": planned.mode,
+        "cause": planned.cause,
+        "via": via,
+    }
+    if affected is None:
+        if planned.glob is not None:
+            form["glob"] = planned.glob
+        if planned.path is not None:
+            form["path"] = planned.path[:FORM_PATH_MAX]
+        return form
+    if affected["passed"]:
+        return {**form, "mode": "affected-only", "cause": "none"}
+    return {**form, "mode": "full", "cause": _affected_cause(affected)}
+
+
+def _affected_cause(affected: CheckResult) -> ModeCause:
+    if affected.get("timed_out", False):
+        return "affected_red"
+    exit_code = affected.get("exit_code")
+    if exit_code == AFFECTED_EMPTY_EXIT:
+        return "script_empty"
+    if exit_code == AFFECTED_REFUSED_EXIT:
+        return "script_refused"
+    return "affected_red"
+
+
+def cap_forms(
+    existing: Sequence[GateForm], new: Sequence[GateForm], cap: int = FORMS_MAX
+) -> tuple[list[GateForm], int]:
+    """`existing` then `new`, the last `cap` in order of arrival, and how many older ones were
+    left out."""
+    joined = [*existing, *new]
+    kept = joined[-cap:] if cap > 0 else []
+    return kept, len(joined) - len(kept)
 
 
 def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
@@ -532,15 +722,24 @@ def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
     return list(last.values())
 
 
+def ran(row: CheckResult) -> bool:
+    """Whether the row is a measured run on this tree: False for a reused row (ADR-0065), a
+    rerun (ADR-0066) and a kept row (`reused_from`, GH-1125). The single test for a row that
+    may enter the check-result store (together with `passed`), feed a duration, or count as a
+    measured run: a kept row passed, but nothing ran for it."""
+    return not (row.get("reused") or row.get("rerun") or "reused_from" in row)
+
+
 def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     """Seconds spent per check name, summed over its rows; a row without one counts zero.
     A reused row never ran, so it adds nothing and a check with only reused rows has no
     entry (ADR-0065): its stored duration is another run's, not a sample of this one. A
     rerun row (ADR-0066) is a second run of the same check, not a sample of the first: it
-    adds nothing either."""
+    adds nothing either. In the exit-8 case (GH-1125) the real exit-8 row still counts and
+    the kept row after it adds nothing: see `ran`."""
     totals: dict[str, float] = {}
     for row in rows:
-        if row.get("reused") or row.get("rerun"):
+        if not ran(row):
             continue
         totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
     return totals
@@ -552,11 +751,14 @@ def decided_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     this invocation spent on a check, so it skips a reused row and a rerun; this answers how long
     the run whose verdict stands took: a flake is its green rerun, and a reused pass is its
     stored `duration_s`, measured on that same tree. A failed or timed-out check has no entry,
-    and neither has a row without a duration: that is never counted as zero."""
+    and neither has a row without a duration: that is never counted as zero. A kept row
+    (`reused_from`, GH-1125) is skipped too: its check gets no entry, never 0. This does not
+    use `ran` on purpose: `ran` is False for a reused pass and a flake's rerun, and skipping
+    those would change `budget_breaches` for every task."""
     return {
         row["name"]: row["duration_s"]
         for row in final_results(rows)
-        if row["passed"] and "duration_s" in row
+        if row["passed"] and "duration_s" in row and "reused_from" not in row
     }
 
 
@@ -695,10 +897,16 @@ def checks_markdown(
             outcome += " (rerun)"
         if r.get("reused"):
             outcome += " (reused)"
+        if "reused_from" in r:
+            outcome += f" (kept from {r['reused_from'][:SHA_SHOWN]})"
+        if "affected_base" in r:
+            outcome += f" against {r['affected_base'][:SHA_SHOWN]}"
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
         shown = f"{seconds[r['name']]:.1f}" if r["name"] in seconds else "-"
+        if "reused_from" in r:
+            shown = "-"
         rows.append("| " + " | ".join([*cells, outcome, shown]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
@@ -706,8 +914,14 @@ def checks_markdown(
     ]
     if moded:
         against = f"`{base}`" if base else "the task base"
+        marked = any("reused_from" in r or "affected_base" in r for r in results)
+        scope = (
+            "`affected-only` rows without `against` or `kept from`"
+            if marked
+            else ("`affected-only` rows")
+        )
         parts.append(
-            f"`affected-only` rows ran the tests selected against {against} (the whole "
+            f"{scope} ran the tests selected against {against} (the whole "
             "branch, `task_base..head`, not the increment under review); the full suite "
             "runs at merge (ADR-0045)."
         )
@@ -920,6 +1134,55 @@ def gate_verdict(results: Sequence[CheckResult]) -> Literal["green", "red", "tim
     if any(row.get("timed_out", False) and not row["passed"] for row in last):
         return "timed_out"
     return "green"
+
+
+def check_timeout(results: Sequence[CheckResult]) -> bool:
+    """Whether a gate run came out `timed_out` (GH-1075): a timeout with no failing test. Reads
+    only the rows' `timed_out` field through `gate_verdict`, never their output text."""
+    return gate_verdict(results) == "timed_out"
+
+
+def workers_of(row: Mapping[str, object]) -> int | None:
+    """The workers a check ran with, or `None` when nothing recorded them (GH-1075). The only
+    reader of `workers`, on a `CheckResult` or a `TimeoutFact`: an absent value is unknown,
+    never 1."""
+    workers = row.get("workers")
+    return workers if isinstance(workers, int) and not isinstance(workers, bool) else None
+
+
+def timeout_facts(results: Sequence[CheckResult], head: str) -> list[TimeoutFact]:
+    """One fact per check of the final rows that timed out, sorted by check; `workers` only
+    when `workers_of` gives one. The caller decides whether the run `check_timeout`s: a real red
+    beside a timeout is not one, and has its own facts all the same."""
+    facts: list[TimeoutFact] = []
+    for row in sorted(final_results(results), key=lambda r: r["name"]):
+        if row["passed"] or not row.get("timed_out", False):
+            continue
+        fact: TimeoutFact = {
+            "head": head,
+            "check": row["name"],
+            "seconds": row.get("duration_s", 0.0),
+        }
+        if (workers := workers_of(row)) is not None:
+            fact["workers"] = workers
+        facts.append(fact)
+    return facts
+
+
+def storable(row: CheckResult) -> bool:
+    """Whether the check-result store may keep `row` (GH-1075): only a row that passed and did
+    not time out. A pass that a timeout cut short is no pass."""
+    return row["passed"] and not row.get("timed_out", False)
+
+
+def timeout_line(fact: TimeoutFact) -> str:
+    """The fixed line for `### Checks` and the claim of a timeout row (GH-1075): what ran out
+    and with how many workers, never why. Unverified: nothing says the timeout is the check's."""
+    workers = workers_of(fact)
+    return (
+        f"{fact['check']} timed out after {fact['seconds']:g}s with "
+        f"{'unknown' if workers is None else workers} workers, unverified"
+    )
 
 
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:

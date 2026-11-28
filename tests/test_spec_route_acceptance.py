@@ -19,6 +19,7 @@ from agentic.core.process.domain.spec_delivery import (
     render_draft_front_matter,
 )
 from tests.fakes import (
+    Measured,
     MemoryTracker,
     MemoryWorkspace,
     ScriptedRunner,
@@ -125,8 +126,10 @@ async def run(task, script, reader=None, owner=OWNER, tmp_path=None, tracker=Non
         spec_validator=DomainSpecValidator(),
     )
     ports.workspace.moved.update({MemoryWorkspace.ROOT / "GH-1", MemoryWorkspace.ROOT / "GH-1.api"})
-    app = build_graph(lambda cfg: ports, arm_for=composition._arm_for).compile(
-        checkpointer=InMemorySaver()
+    app = Measured(
+        build_graph(lambda cfg: ports, arm_for=composition._arm_for).compile(
+            checkpointer=InMemorySaver()
+        )
     )
     configurable = {"product_dir": str(tmp_path), "thread_id": "GH-1", "owner_login": owner}
     return await app.ainvoke(task, config={"configurable": configurable})

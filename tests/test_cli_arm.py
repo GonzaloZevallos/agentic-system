@@ -276,6 +276,7 @@ async def run_through_the_real_graph(
     from agentic import composition
     from agentic.core.process.adapters.langgraph.graph import build_graph
     from tests.fakes import (
+        MeasuredBuilder,
         MemoryWorkspace,
         ScriptedRunner,
         answers,
@@ -310,7 +311,9 @@ async def run_through_the_real_graph(
         seen.append(cfg)
         return ports
 
-    monkeypatch.setattr(cli, "graph", build_graph(ports_for, arm_for=composition._arm_for))
+    monkeypatch.setattr(
+        cli, "graph", MeasuredBuilder(build_graph(ports_for, arm_for=composition._arm_for))
+    )
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
     for switch in ("AGENTIC_REVIEW_MODE", "AGENTIC_SKIP_EPHEMERAL"):

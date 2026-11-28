@@ -9,6 +9,8 @@ from agentic.core.process.adapters.evaluation import (
     EvaluationWorkspace,
 )
 from agentic.core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input_path
+from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.github.format_fix_reads import GhFormatFixReads
 from agentic.core.process.application.format_issue import FormatFiling
 from agentic.shared.configuration import Configuration
 
@@ -25,6 +27,29 @@ def test_an_ordinary_root_keeps_the_real_ports(tmp_path):
     assert not isinstance(ports.stack, EvaluationStack)
     # GH-1030: one filing of a format refusal per run, built by the root.
     assert isinstance(ports.format_filing, FormatFiling)
+    # GH-1067: the reads that release a format hold, built once for a real run.
+    assert isinstance(ports.format_fixes, GhFormatFixReads)
+
+
+def test_the_pending_paths_port_is_the_workspace_instance(tmp_path):
+    ports = default_ports(_cfg(tmp_path))
+
+    assert isinstance(ports.workspace, GitWorkspace)
+    assert ports.pending_paths is ports.workspace
+
+
+def test_an_evaluation_root_keeps_the_read_only_pending_paths_port(tmp_path):
+    root = tmp_path / ".agentic" / "eval" / "EVAL-7-aaaaaaaa-default-1"
+    path = frozen_input_path(root)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "id: EVAL-7-aaaaaaaa-default-1\nissue: 7\nbase: " + "a" * 40 + "\ntitle: t\nbody: b\n"
+    )
+
+    ports = default_ports(_cfg(root))
+
+    assert isinstance(ports.workspace, EvaluationWorkspace)
+    assert isinstance(ports.pending_paths, GitWorkspace)
 
 
 def test_an_evaluation_root_wraps_the_ports_and_reads_its_frozen_entry(tmp_path):
@@ -44,6 +69,7 @@ def test_an_evaluation_root_wraps_the_ports_and_reads_its_frozen_entry(tmp_path)
     assert (ports.board, ports.board_sent) == (None, None)
     # An evaluation files no issue in the system's repo.
     assert ports.format_filing is None
+    assert ports.format_fixes is None
 
 
 def test_an_evaluation_root_without_its_frozen_entry_reads_no_task_from_anywhere(tmp_path):

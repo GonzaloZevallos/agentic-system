@@ -24,6 +24,7 @@ classDiagram
     class ci_push__Pushed["Pushed"]
     class ci_trust__TrustRead["TrustRead"]
     class format_issue__FormatFiling["FormatFiling"]
+    class format_release__FormatReleaseCarry["FormatReleaseCarry"]
     class limits__RunLimits["RunLimits"]
     class ports__AddedAdr["AddedAdr"]
     class ports__AddedLine["AddedLine"]
@@ -32,7 +33,7 @@ classDiagram
     class ports__BoardSent["BoardSent"]
     class ports__BoardWritten["BoardWritten"]
     class ports__BranchPullRequest["BranchPullRequest"]
-    class ports__CheckRequest["CheckRequest"]
+    class ports__BudgetStore["BudgetStore"]
 ```
 
 ## Relaciones con otras páginas
@@ -41,5 +42,5 @@ classDiagram
   - `ports.AttemptFailed` se asocia con `ports.CheckRuns`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `limits.RunLimits`

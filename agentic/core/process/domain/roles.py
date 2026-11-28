@@ -823,8 +823,10 @@ REFLECTOR = Role(
 
 def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
     """A permission rule per declared check. A prefix: the reviewer runs the command on
-    one file or one test by appending to it."""
-    return tuple(f"Bash({command}:*)" for command in checks.values())
+    one file or one test by appending to it. A command is cut where the system fills a token
+    in (`presubmit.rule_prefix`), so a rule never holds one; no cut, no rule."""
+    prefixes = (presubmit.rule_prefix(command) for command in checks.values())
+    return tuple(f"Bash({prefix}:*)" for prefix in prefixes if prefix)
 
 
 def affected_check_rules(commands: Mapping[str, str]) -> tuple[str, ...]:
