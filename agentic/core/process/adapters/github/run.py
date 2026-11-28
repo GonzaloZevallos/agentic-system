@@ -81,9 +81,14 @@ _HTTP_STATUS = re.compile(
 # policy (GH-438). 503 and 504 are backed by the pinned source's `HTTP %d` form, not by a
 # captured failure; if `gh`'s wording changes the classifier does not retry, the safe side.
 GH_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
-# What `gh` prints when the primary rate limit is spent ("API rate limit exceeded ... (HTTP
-# 403)"); the wait for it comes from `gh api rate_limit`, never from this text.
-GH_RATE_LIMIT_MARKER = "api rate limit exceeded"
+# What `gh` prints when the primary rate limit is spent, matched lowercase: the REST form "API
+# rate limit exceeded ... (HTTP 403)" and the GraphQL form "GraphQL: API rate limit already
+# exceeded for user ID N." (`gh issue list`, GH-1214). The wait for it comes from `gh api
+# rate_limit`, never from this text.
+GH_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    "api rate limit exceeded",
+    "api rate limit already exceeded",
+)
 # The longest one retry wait or rate-limit wait may be: for `run`/`resume`, and for the
 # `merge`/`land` children, which must not hold the lane of the runs exempt from the cap for
 # more than a minute (GH-389, ADR-0050 addendum).
@@ -300,7 +305,7 @@ def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
-    if GH_RATE_LIMIT_MARKER in lowered:
+    if any(marker in lowered for marker in GH_RATE_LIMIT_MARKERS):
         return "rate_limited"
     if http_status(stderr) in GH_TRANSIENT_STATUSES or any(
         marker in lowered for marker in GH_TRANSIENT_MARKERS
@@ -606,6 +611,7 @@ __all__ = [
     "GH_DRAIN_S",
     "GH_EXIT_AUTH",
     "GH_EXEMPT_WAIT_MAX_S",
+    "GH_RATE_LIMIT_MARKERS",
     "GH_RATE_WAIT_MAX_S",
     "GH_TIMEOUT_S",
     "GH_TRANSIENT_MARKERS",

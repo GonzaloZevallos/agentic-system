@@ -47,6 +47,9 @@ class ScriptedRun:
 RATE_LIMITED = subprocess.CalledProcessError(
     1, ["gh"], output="", stderr="gh: API rate limit exceeded (HTTP 403)"
 )
+GRAPHQL_RATE_LIMITED = subprocess.CalledProcessError(
+    1, ["gh"], output="", stderr="GraphQL: API rate limit already exceeded for user ID 123."
+)
 SPENT = json.dumps({"resources": {"core": {"remaining": 0, "reset": 1001}}})
 
 
@@ -82,6 +85,14 @@ def test_every_attempt_under_a_policy_is_counted_with_its_probe_as_api():
     assert _call(run, calls, retry=retry) == "done"
     assert calls.kinds == ["issue_view", "api", "issue_view", "api", "issue_view"]
     assert dict(calls.drain()) == {"issue_view": 3, "api": 2}
+
+
+def test_the_graphql_message_counts_like_the_rest_one_under_a_policy():
+    calls = MemoryLog()
+    run = ScriptedRun(GRAPHQL_RATE_LIMITED, SPENT, "done")
+    retry = GhRetry(max_wait_s=60, sleep=lambda s: None, now=lambda: 1000.0)
+    assert _call(run, calls, "issue", "list", retry=retry) == "done"
+    assert calls.kinds == ["issue_list", "api", "issue_list"]
 
 
 def test_a_failed_attempt_is_still_counted_without_a_policy():

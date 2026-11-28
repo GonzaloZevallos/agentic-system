@@ -1214,3 +1214,58 @@ def test_without_a_call_label_the_wording_is_the_first_two_arguments():
     assert lines == [
         "agentic: gh api -i timed out after 60 s; this read fails and the next round retries"
     ]
+
+
+# --- the GraphQL rate-limit message (GH-1214) -------------------------------------------
+
+GRAPHQL_RATE_LIMITED = "GraphQL: API rate limit already exceeded for user ID 123."
+
+
+@pytest.mark.parametrize(
+    "stderr", [RATE_LIMITED, GRAPHQL_RATE_LIMITED, GRAPHQL_RATE_LIMITED.upper()]
+)
+def test_both_rate_limit_messages_classify_as_rate_limited(stderr):
+    from agentic.core.process.adapters.github.run import _retryable_kind
+
+    assert _retryable_kind(1, stderr) == "rate_limited"
+
+
+def test_an_unrelated_message_is_not_rate_limited():
+    from agentic.core.process.adapters.github.run import _retryable_kind
+
+    assert _retryable_kind(1, "GraphQL: Could not resolve to a Repository") is None
+
+
+def test_the_graphql_message_waits_for_the_graphql_reset_alone():
+    from datetime import UTC, datetime
+
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    only_graphql = json.dumps(
+        {
+            "resources": {
+                "core": {"remaining": 4_000, "reset": 1_050},
+                "graphql": {"remaining": 0, "reset": 1_200},
+            }
+        }
+    )
+    run = _script(_failed(GRAPHQL_RATE_LIMITED), only_graphql)
+    call, _ = _retrying(run, clock, cap=60, args=("issue", "list"))
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at == datetime.fromtimestamp(1_200, UTC)
+
+
+def test_the_graphql_message_with_no_resource_at_zero_ends_with_no_reset():
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    spent_nowhere = json.dumps({"resources": {"graphql": {"remaining": 9, "reset": 1_200}}})
+    run = _script(
+        *[_failed(GRAPHQL_RATE_LIMITED), spent_nowhere] * 2, _failed(GRAPHQL_RATE_LIMITED)
+    )
+    call, _ = _retrying(run, clock, args=("issue", "list"))
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.resets_at is None

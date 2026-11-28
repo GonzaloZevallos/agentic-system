@@ -1,5 +1,5 @@
 {
-  "note": "DERIVED, not captured: the 403 GitHub answers when the primary rate limit is spent, shaped from its docs (rate limits for the REST API: x-ratelimit-remaining 0 and x-ratelimit-reset in epoch seconds) and the message the marker run.py cites as GH_RATE_LIMIT_MARKER.",
+  "note": "DERIVED, not captured: the 403 GitHub answers when the primary rate limit is spent, shaped from its docs (rate limits for the REST API: x-ratelimit-remaining 0 and x-ratelimit-reset in epoch seconds) and the message the first of the markers run.py cites as GH_RATE_LIMIT_MARKERS.",
   "status": 403,
   "headers": [
     [

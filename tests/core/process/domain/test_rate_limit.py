@@ -525,3 +525,51 @@ def test_pause_at_drops_a_naive_instant_and_keeps_an_offset_one_as_written():
     at = rate_limit.pause_at(offset)
     assert at == datetime(2026, 11, 20, 12, tzinfo=UTC)
     assert at is not None and at.utcoffset() == timedelta(hours=2)
+
+
+# --- skip_until and round_skip (GH-1214) -------------------------------------------------
+
+
+def test_skip_until_without_a_reset_is_none():
+    assert rate_limit.skip_until(None, "apostrophe", AT) is None
+
+
+def test_skip_until_is_the_reset_with_the_product_offset():
+    resets = AT + timedelta(minutes=30)
+    assert rate_limit.skip_until(resets, "apostrophe", AT) == resets + reset_offset("apostrophe")
+
+
+def test_skip_until_caps_a_far_reset_at_now_plus_the_wait_max():
+    assert rate_limit.skip_until(AT + timedelta(days=3), "apostrophe", AT) == (
+        AT + RATE_LIMIT_WAIT_MAX
+    )
+
+
+def test_skip_until_reads_now_from_its_argument():
+    later = AT + timedelta(hours=5)
+    assert rate_limit.skip_until(AT + timedelta(days=3), "x", later) == later + RATE_LIMIT_WAIT_MAX
+
+
+def test_round_skip_holds_before_the_instant():
+    until = AT + timedelta(minutes=10)
+    assert rate_limit.round_skip(AT, until) == until
+
+
+def test_round_skip_ends_at_the_instant_and_after():
+    until = AT + timedelta(minutes=10)
+    assert rate_limit.round_skip(until, until) is None
+    assert rate_limit.round_skip(until + timedelta(seconds=1), until) is None
+
+
+def test_round_skip_without_an_instant_is_none():
+    assert rate_limit.round_skip(AT, None) is None
+
+
+def test_round_skip_refuses_an_instant_beyond_the_wait_max():
+    assert rate_limit.round_skip(AT, AT + RATE_LIMIT_WAIT_MAX) == AT + RATE_LIMIT_WAIT_MAX
+    assert rate_limit.round_skip(AT, AT + RATE_LIMIT_WAIT_MAX + timedelta(seconds=1)) is None
+
+
+def test_round_skip_clears_when_the_clock_jumped_back():
+    until = AT + RATE_LIMIT_WAIT_MAX
+    assert rate_limit.round_skip(AT - timedelta(hours=1), until) is None

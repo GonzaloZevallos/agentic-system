@@ -110,6 +110,7 @@ from .core.process.application.ports import (
     Stage0Store,
     StopFlag,
     TrackerCallFailed,
+    TrackerRateLimited,
     Upstream,
 )
 from .core.process.application.preflight import (
@@ -149,6 +150,7 @@ from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.gh_calls import GhConsumer
 from .core.process.domain.github_budget import Unmeasured
 from .core.process.domain.playbook import Delta, Playbook
+from .core.process.domain.rate_limit import round_skip, skip_until
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
 from .core.process.domain.stage0_rotation import (
     REEXEC_MARKER,
@@ -1812,7 +1814,11 @@ async def _poll(
     (in a `finally`, so after a failed or crashed round too) with the line `budget_round`
     returns, drained from `gh_calls` (without it the step does not run either) and sent to
     `budget_telemetry` (`NoTelemetry` when left out): `_poll_budget_wiring` builds them for `main`'s
-    poll dispatch, the only caller that passes them."""
+    poll dispatch, the only caller that passes them.
+
+    A round that ends on `TrackerRateLimited` with a stated reset (GH-1214) makes the loop skip the
+    rounds until `rate_limit.skip_until` says: a skipped round only beats `start` and `end`, says
+    one line and sleeps `interval_s`, with no `gh` call, no round and no budget step."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1837,6 +1843,7 @@ async def _poll(
         notify_carry = NotifyCarry()  # GH-1205: what the notifier said and read, per process
         terminal_memo = TerminalMemo()  # GH-992: determinate blocker closures, per process
         release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
+        rate_limited_until: datetime | None = None  # GH-1214: skip rounds until this instant
         try:
             while True:
                 if stage0 is not None:
@@ -1844,6 +1851,17 @@ async def _poll(
                         return  # a live holder took the lock while this process was away
                 inherited = _reap_inherited(inherited, proc)
                 beat("start")
+                until = round_skip(datetime.now(UTC), rate_limited_until)
+                if until is not None:
+                    # GH-1214: no read, no round, no step: only the beats, one line, the sleep.
+                    when = until.isoformat()
+                    print(
+                        f"agentic: poll: round skipped: GitHub rate limit until {when}", flush=True
+                    )
+                    beat("end")
+                    await sleep(interval_s)
+                    continue
+                rate_limited_until = None
                 try:
                     try:
                         # The round's one `upstream()` (GH-420): the warning and the eval set
@@ -1871,6 +1889,10 @@ async def _poll(
                             print(line, flush=True)
                     except TrackerCallFailed as exc:  # a stalled `gh` ends this round
                         print(f"agentic: poll: round ended early: {exc}", flush=True)
+                        if isinstance(exc, TrackerRateLimited):
+                            rate_limited_until = skip_until(
+                                exc.resets_at, product_name(ports), datetime.now(UTC)
+                            )
                     beat("end")
                 finally:
                     if budget_step is not None:

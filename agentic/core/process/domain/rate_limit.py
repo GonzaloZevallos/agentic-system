@@ -34,6 +34,8 @@ __all__ = [
     "rate_limit_persisted_patch",
     "reset_offset",
     "retake_due_at",
+    "round_skip",
+    "skip_until",
     "cleared_on_close",
     "governing_reset",
     "tracker_silent",
@@ -243,3 +245,22 @@ def notice_posted(comments: Sequence[tuple[str, datetime]], at: datetime, text: 
     whose time is strictly later than `at`. A comment of an earlier pause does not count."""
     heading = text.split("\n", 1)[0]
     return any(body.split("\n", 1)[0] == heading and created > at for body, created in comments)
+
+
+def skip_until(resets_at: datetime | None, product: str, now: datetime) -> datetime | None:
+    """The instant the poller stops skipping rounds after a GitHub rate limit ended one: the
+    `governing_reset` (the instant the retakes wake), capped at `now + RATE_LIMIT_WAIT_MAX`;
+    `None` without a stated reset. Pure: `now` is an argument."""
+    governing = governing_reset(resets_at, product)
+    if governing is None:
+        return None
+    return min(governing, now + RATE_LIMIT_WAIT_MAX)
+
+
+def round_skip(now: datetime, until: datetime | None) -> datetime | None:
+    """`until` while the poller still skips rounds, `None` otherwise: only when
+    `now < until <= now + RATE_LIMIT_WAIT_MAX`, so an instant that passed, or one farther than
+    the cap (a clock that jumped back), is no skip. Pure: `now` is an argument."""
+    if until is not None and now < until <= now + RATE_LIMIT_WAIT_MAX:
+        return until
+    return None
