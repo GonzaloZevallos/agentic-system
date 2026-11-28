@@ -662,3 +662,82 @@ def test_digest_hour_reads_a_valid_hour(raw: object):
 )
 def test_digest_hour_reads_anything_else_as_the_default(raw: object):
     assert notify.digest_hour(raw) == 20
+
+
+DIGEST_KEY = DigestKey("apostrophe", date(2026, 11, 20))
+DIGEST = DigestEvent(DIGEST_KEY, _utc(2026, 11, 20, 20))
+RELEASE = EventKey("release", "apostrophe", 9, AT_UTC)
+
+
+def _settle(
+    keys: dict[Any, Any],
+    *,
+    instant: datetime = _utc(2026, 11, 20, 19),
+    digest: DigestEvent | None = None,
+    release: EventKey | None = None,
+    judged: bool = False,
+) -> Any:
+    return notify.row_settlement(
+        replace(ACTIVE, keys=keys), instant=instant, digest=digest, release=release, judged=judged
+    )
+
+
+def test_a_digest_sent_settles_the_rows_at_or_before_its_instant_by_its_key():
+    keys = {DIGEST_KEY: "sent"}
+    assert _settle(keys, digest=DIGEST) == DIGEST_KEY
+    assert _settle(keys, digest=DIGEST, instant=DIGEST.instant) == DIGEST_KEY
+
+
+def test_a_digest_leaves_a_row_after_its_instant_or_with_the_key_not_sent_unsettled():
+    assert _settle({DIGEST_KEY: "sent"}, digest=DIGEST, instant=_utc(2026, 11, 20, 21)) is None
+    assert _settle({}, digest=DIGEST) is None
+    assert _settle({DIGEST_KEY: "covered"}, digest=DIGEST) is None
+
+
+def test_a_digest_on_ignores_the_release_and_the_judgment():
+    keys: dict[Any, Any] = {RELEASE: "sent"}
+    assert _settle(keys, digest=DIGEST, release=RELEASE, judged=True) is None
+
+
+@pytest.mark.parametrize("outcome", ["sent", "superseded", "covered", "unbuildable"])
+def test_a_recorded_release_settles_its_row_under_any_outcome(outcome: Any):
+    assert _settle({RELEASE: outcome}, release=RELEASE, judged=True) == RELEASE
+
+
+def test_an_unrecorded_release_is_judged_or_unsettled():
+    assert _settle({}, release=RELEASE, judged=True) is notify.Judged.JUDGED
+    assert _settle({}, judged=True) is notify.Judged.JUDGED
+    assert _settle({}, release=RELEASE) is None
+    assert _settle({}) is None
+
+
+def test_the_cursor_advances_past_judged_rows_and_stops_at_the_first_unsettled_one():
+    rows: list[tuple[datetime, Any]] = [
+        (_at(1), notify.Judged.JUDGED),
+        (_at(2), _key(_at(2))),
+        (_at(3), None),
+        (_at(4), notify.Judged.JUDGED),
+    ]
+    assert notify.advance_read_at(None, rows, cut_at=None) == _at(2)
+    assert notify.advance_read_at(None, [rows[0], rows[3]], cut_at=None) == _at(4)
+
+
+@pytest.mark.parametrize(
+    "now",
+    [_utc(2026, 3, 8, 6), _utc(2026, 3, 8, 8), _utc(2026, 11, 1, 3), _utc(2026, 11, 1, 6)],
+)
+def test_digest_instant_equals_the_instant_of_digest_event_across_a_dst_change(now: datetime):
+    record = _started(_utc(2026, 1, 1, 0))
+    for hour in (1, 2, 20):
+        expected = notify.digest_instant(now, NY, hour)
+        event = _digest(now, record, hour=hour)
+        assert event is None or event.instant == expected
+        assert expected.utcoffset() == timedelta(0)
+
+
+def test_digest_instant_reads_the_spring_forward_gap_and_rejects_bad_input():
+    assert notify.digest_instant(_utc(2026, 3, 8, 8), NY, 2) == _utc(2026, 3, 8, 7)
+    with pytest.raises(ValueError):
+        notify.digest_instant(datetime(2026, 11, 21, 2), NY, 20)
+    with pytest.raises(ValueError):
+        notify.digest_instant(_utc(2026, 11, 21, 2), NY, 24)
