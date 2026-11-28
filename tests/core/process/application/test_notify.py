@@ -421,8 +421,10 @@ def test_split_facts_of_reads_parent_and_parts_without_the_tracker() -> None:
     assert split_facts_of(1, {1: root, 2: None}) is None
 
 
-ALLOWED_IMPORTERS: frozenset[str] = frozenset()
-# Part 3b-2 adds agentic/core/process/application/poll.py here, with the poll's call.
+# GH-1205: the poll calls it (the round) and the poll loop builds its carry.
+ALLOWED_IMPORTERS: frozenset[str] = frozenset(
+    {"agentic/core/process/application/poll.py", "agentic/cli.py"}
+)
 
 
 def _imports_notify_use_case(path: Path, tree: ast.AST) -> bool:
