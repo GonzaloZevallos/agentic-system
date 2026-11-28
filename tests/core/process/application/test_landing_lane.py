@@ -41,8 +41,11 @@ def _member(issue: int) -> landing_order.Member:
     return landing_order.Member(issue=issue, queued_at=None, live_pass=False, waits_on_human=False)
 
 
-def _head(*, integrating: bool = True, landing=()) -> LaneHead:
-    return LaneHead(7, URL.format(7), {"landing": list(landing)}, integrating)
+def _head(
+    *, integrating: bool = True, landing=(), pr_head: str | None = None, busy: bool = True
+) -> LaneHead:
+    """By default a busy head the round did not assess: its pull request is read for the sha."""
+    return LaneHead(7, URL.format(7), {"landing": list(landing)}, integrating, pr_head, busy)
 
 
 def _sync(head: str, at: str = "2026-11-10T10:00:00+00:00") -> dict[str, object]:
@@ -189,16 +192,37 @@ def test_a_head_diff_that_fails_gives_no_paths_and_fetches_no_commit():
     assert ports.workspace.ancestor_checks == []
 
 
-def test_a_head_that_does_not_integrate_reads_nothing_at_all():
+def test_a_head_that_does_not_integrate_is_read_like_any_other():
     ports = _ports()
+    ports.workspace.touched_by[(MASTER, HEAD_OID)] = ("a.py",)
 
     by_issue = _facts(ports, head=_head(integrating=False))
 
     assert by_issue[7].integrating is False
+    assert by_issue[7].paths == frozenset({"a.py"})
+    assert by_issue[7].head_syncs_left == landing_rules.LANDING_SYNCS_MAX
+    assert (by_issue[5].lane_decision, by_issue[5].clean) == ("merge", True)
+    assert by_issue[5].paths is not None
+
+
+def test_a_head_the_round_assessed_is_read_without_asking_the_pull_request():
+    ports = _ports()
+    ports.workspace.touched_by[(MASTER, OTHER_OID)] = ("x.py",)
+
+    by_issue = _facts(ports, head=_head(integrating=False, pr_head=OTHER_OID, busy=False))
+
+    assert by_issue[7].paths == frozenset({"x.py"})
+    assert ports.tracker.events == []
+
+
+def test_an_idle_head_without_an_assessed_sha_has_unknown_paths_and_no_candidate_is_read():
+    ports = _ports()
+
+    by_issue = _facts(ports, head=_head(busy=False))
+
     assert (by_issue[7].paths, by_issue[7].head_syncs_left) == (None, None)
     assert (by_issue[5].lane_decision, by_issue[5].clean) == ("merge", True)
     assert (by_issue[5].holds_master, by_issue[5].paths) == (None, None)
-    assert ports.tracker.events == []
     assert ports.workspace.touched_reads == []
     assert ports.workspace.ancestor_checks == []
 
@@ -350,6 +374,57 @@ def test_an_admission_is_written_once_and_keeps_its_instant_on_the_same_sha():
     assert _admission(ports)["at"] == NOW.isoformat()
     _admit(ports, now=LATER, pr_head=OTHER_OID)
     assert _admission(ports)["at"] == LATER.isoformat()
+
+
+def test_an_admission_is_rewritten_with_a_fresh_instant_when_only_the_master_moved():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    moved = "d" * 40
+    landing_lane.admit(
+        ports, "GH-5", ports.documents.load("GH-5"), 7, MEMBER_HEAD, moved, "merge", LATER,
+        _work(), [],
+    )  # fmt: skip
+    assert _admission(ports) == {
+        "head_issue": 7,
+        "pr_head": MEMBER_HEAD,
+        "master": moved,
+        "decision": "merge",
+        "at": LATER.isoformat(),
+    }
+    before = dict(ports.documents.closures)
+    landing_lane.admit(
+        ports, "GH-5", ports.documents.load("GH-5"), 7, MEMBER_HEAD, moved, "merge", LATER,
+        _work(), [],
+    )  # fmt: skip
+    assert dict(ports.documents.closures) == before
+
+
+def test_two_admitted_lanes_one_merges_and_the_other_is_readmitted_on_the_new_master_and_records():
+    ports = _lane_ports(5, 6, 7)
+    other_head, moved = "e" * 40, "d" * 40
+    for task_id, pr_head in (("GH-5", MEMBER_HEAD), ("GH-6", other_head)):
+        landing_lane.admit(
+            ports, task_id, ports.documents.load(task_id), 7, pr_head, MASTER, "merge", NOW,
+            _work(), [],
+        )  # fmt: skip
+    _merged(ports)  # #5 merges on its admitted pair and moves master
+    assert _record(ports, open_ids=("GH-5", "GH-6", "GH-7")) == []
+    assert ports.documents.load("GH-5")["lane_recorded"] is not None
+
+    landing_lane.admit(
+        ports, "GH-6", ports.documents.load("GH-6"), 7, other_head, moved, "merge", LATER,
+        _work(), [],
+    )  # fmt: skip
+    ports.documents.record_closure(
+        "GH-6",
+        {
+            "auto_merge_head": other_head,
+            "auto_merge_master": moved,
+            "auto_merged_at": (LATER + timedelta(minutes=1)).isoformat(),
+        },
+    )
+
+    assert landing_order.lane_merge_verdict(ports.documents.load("GH-6")) == "record"
 
 
 def test_an_admission_is_not_written_while_the_member_is_at_work():

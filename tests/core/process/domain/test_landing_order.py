@@ -650,26 +650,34 @@ def test_the_lane_goes_to_a_clean_member_beside_a_busy_integrating_head():
 @pytest.mark.parametrize(
     "facts",
     [
-        {"busy": False},
-        {"seen_at": None},
-        {"seen_at": NOW - GAP_MAX - SEC},
-        {"integrating": False},
+        {"head_merging": True},
         {"head_syncs_left": None},
         {"head_syncs_left": LANE_SYNCS_MIN - 1},
         {"paths": None},
     ],
-    ids=[
-        "idle",
-        "never_seen",
-        "seen_too_long_ago",
-        "not_integrating",
-        "syncs_none",
-        "syncs_low",
-        "paths_none",
-    ],
+    ids=["head_merging", "syncs_none", "syncs_low", "paths_none"],
 )
-def test_a_head_missing_a_condition_opens_no_lane(facts):
-    assert _lane([_lane_head(**facts), _cand()]) == ()
+@pytest.mark.parametrize("child", [{}, {"busy": False}, {"integrating": False}])
+def test_a_head_missing_a_condition_opens_no_lane_with_or_without_a_child(facts, child):
+    assert _lane([_lane_head(**facts, **child), _cand()]) == ()
+
+
+def test_a_yielded_head_is_not_the_head_and_opens_no_lane():
+    old = _lane_head(busy=False, seen_at=None, yielded_at=T0, yields=1)
+    result = order([old, _cand()], NOW)
+    assert result.head == 2
+    assert result.lanes == ()
+
+
+def test_a_head_that_waits_on_ci_with_no_child_is_not_the_head():
+    waiting = _lane_head(busy=False, waits_on_ci=True)
+    assert order([waiting, _cand()], NOW).head == 2
+
+
+def test_an_idle_head_that_waits_with_no_running_run_opens_three_lanes():
+    members = [_lane_head(busy=False, head_merging=False, waits_on_ci=False)]
+    members += [_disjoint(n) for n in (2, 3, 4)]
+    assert order(members, NOW).lanes == (2, 3, 4)
 
 
 def test_a_head_seen_exactly_gap_max_ago_still_opens_a_lane():
@@ -744,7 +752,8 @@ def test_advance_passes_the_lane_through_and_leaves_the_head_and_yields_alone():
 # --- lane_reason ---------------------------------------------------------------------------------
 
 LANE_REASONS: dict[LaneReason, tuple[Member | None, Member]] = {
-    "head_not_integrating": (None, _cand()),
+    "no_head": (None, _cand()),
+    "head_merging": (_lane_head(head_merging=True), _cand()),
     "head_paths_unknown": (_lane_head(paths=None), _cand()),
     "head_sync_budget": (_lane_head(head_syncs_left=None), _cand()),
     "member_paths_unknown": (_lane_head(), _cand(paths=None)),
@@ -759,8 +768,8 @@ LANE_REASONS: dict[LaneReason, tuple[Member | None, Member]] = {
 LEGACY_REASONS = {"holds_master_unknown", "lacks_master"}
 GREEDY_REASONS = {"lane_overlap", "lanes_full"}
 """Reasons that need several members: `test_lanes_*` below produce them."""
-HEAD_STATE_REASONS = {"no_head", "head_merging"}
-"""Reasons of the head's own state; `_head_obstacle` produces them from the poller subtask on."""
+HEAD_STATE_REASONS: set[str] = set()
+LEGACY_REASONS |= {"head_not_integrating"}
 """Kept in the type so a value already written still reads; no member has them as an obstacle."""
 
 
@@ -798,16 +807,19 @@ def test_lane_reason_names_each_obstacle(reason):
         _lane_head(seen_at=None),
         _lane_head(seen_at=NOW - GAP_MAX - SEC),
         _lane_head(integrating=False),
+        _lane_head(busy=False, seen_at=None, integrating=False),
     ],
-    ids=["idle", "never_seen", "seen_too_long_ago", "not_integrating"],
+    ids=["idle", "never_seen", "seen_too_long_ago", "not_integrating", "idle_unseen"],
 )
-def test_a_head_that_does_not_hold_its_turn_or_integrate_is_not_integrating(head_):
-    assert lane_reason(_cand(), head_, NOW) == "head_not_integrating"
+def test_a_head_that_is_neither_busy_nor_integrating_still_opens_a_lane(head_):
+    # GH-1213: only what the head can still do to master matters, not what it is doing.
+    assert lane_reason(_cand(), head_, NOW) is None
+    assert _lane([head_, _cand()]) == (2,)
 
 
 def test_the_head_is_checked_before_the_member():
     member = _cand(paths=None)
-    assert lane_reason(member, _lane_head(integrating=False), NOW) == "head_not_integrating"
+    assert lane_reason(member, _lane_head(head_merging=True), NOW) == "head_merging"
     assert lane_reason(member, _lane_head(paths=None), NOW) == "head_paths_unknown"
     assert lane_reason(member, _lane_head(head_syncs_left=1), NOW) == "head_sync_budget"
     assert lane_reason(member, _lane_head(), NOW) == "member_paths_unknown"
@@ -917,15 +929,16 @@ def test_lane_overlap_and_lanes_full_go_only_to_a_member_that_would_have_opened(
     assert lanes(members, members[0], NOW) == ((2,), {})
 
 
-def test_an_idle_head_gives_no_lanes_and_head_not_integrating():
+def test_an_idle_head_opens_the_lanes_and_a_merging_head_none():
     idle = _lane_head(busy=False)
     members = [idle, _disjoint(2), _disjoint(3)]
-    assert order(members, NOW).lanes == ()
-    assert lanes(members, idle, NOW)[1] == {2: "head_not_integrating", 3: "head_not_integrating"}
+    assert order(members, NOW).lanes == (2, 3)
+    merging = replace(idle, head_merging=True)
+    assert lanes(members, merging, NOW) == ((), {2: "head_merging", 3: "head_merging"})
 
 
 def test_no_head_gives_no_lanes():
-    assert lanes([_disjoint(2)], None, NOW) == ((), {2: "head_not_integrating"})
+    assert lanes([_disjoint(2)], None, NOW) == ((), {2: "no_head"})
 
 
 def test_a_member_that_is_not_clean_gets_neither_a_lane_nor_a_reason():
@@ -1247,10 +1260,10 @@ def test_a_busy_head_with_lane_merges_never_yields_whatever_it_spent():
     assert (result.head, result.lanes) == (1, (2,))
 
 
-def test_when_the_heads_child_ends_the_lane_closes_and_the_head_stays_first():
+def test_when_the_heads_child_ends_the_lane_stays_open_and_the_head_stays_first():
     working = _lane_head()
     done = replace(working, busy=False, integrating=False)
     assert order([working, _cand()], NOW).lanes == (2,)
     after = order([done, _cand()], NOW)
-    assert (after.head, after.lanes, after.yielded) == (1, (), ())
-    assert lane_reason(_cand(), done, NOW) == "head_not_integrating"
+    assert (after.head, after.lanes, after.yielded) == (1, (2,), ())
+    assert lane_reason(_cand(), done, NOW) is None
