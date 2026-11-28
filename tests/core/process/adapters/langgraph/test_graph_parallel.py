@@ -4,11 +4,11 @@ whatever the siblings are doing. The roles block on an event per subtask (`Block
 so each test says which role of which subtask is still running while another one starts."""
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.adapters.langgraph import graph as graph_module
 from agentic.core.process.domain.roles import FINDINGS
 from agentic.core.process.domain.task import WAITING_ON_HUMAN
 from tests.core.process.adapters.langgraph.test_graph import (
@@ -20,14 +20,9 @@ from tests.core.process.adapters.langgraph.test_graph import (
     script_for,
     technical,
 )
-from tests.fakes import BlockingRunner, delivered, planned, reviewed
+from tests.fakes import HANG_GUARD_S, BlockingRunner, delivered, planned, reviewed
 
 pytestmark = pytest.mark.anyio
-
-
-# A guard against a hang, not an assertion about speed: under `-n 12` with the machine loaded
-# (GH-979) a run that takes 6 s alone took past the 20 s and 30 s these waits used to carry.
-HANG_GUARD_S = 120
 
 
 @pytest.fixture
@@ -138,19 +133,31 @@ async def test_a_returned_subtask_restarts_after_the_turn_wrote_the_findings(con
     assert final["changes_requested"] == {"Tech Lead→Developer:domain": 1}
 
 
-async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once(config):
+async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once(
+    config, monkeypatch
+):
     runner, fakes = blocking(subtask("domain"), subtask("ui", "api"))
     fakes.workspace.dirty.add(MemoryWorkspace.ROOT / "GH-1.domain")
     runner.queues["developer__domain"] = [delivered(), delivered(), delivered()]
     runner.hold("tech_lead_review__api")
+    # The loop starts nothing once the folded state holds the escalation, and the turn after
+    # the failed branch is the first to see it there: the document already shows it while
+    # the branch's task is still ending, so the document is not the moment to release `api`.
+    loop = asyncio.get_running_loop()
+    folded_in = asyncio.Event()
+    turn = graph_module.integrate_turn
+
+    def watching(state, *args, **kwargs):
+        patch = turn(state, *args, **kwargs)
+        if state.get("escalated"):
+            loop.call_soon_threadsafe(folded_in.set)  # the turn runs in a worker thread
+        return patch
+
+    monkeypatch.setattr(graph_module, "integrate_turn", watching, raising=True)
     run = start(runner, fakes, config)
 
     await runner.started("tech_lead_review__api")
-    documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
-    while not saved(documents).get("escalated"):  # domain failed three times
-        await asyncio.sleep(0.01)
-    for _ in range(50):  # let its branch end and the loop fold the escalation in
-        await asyncio.sleep(0)
+    await asyncio.wait_for(folded_in.wait(), HANG_GUARD_S)  # domain failed three times
     runner.release("tech_lead_review__api")  # the sibling in flight is drained, not killed
     final = await asyncio.wait_for(run, HANG_GUARD_S)
 

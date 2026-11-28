@@ -139,6 +139,10 @@ from agentic.shared.configuration import Configuration
 MERGE_BASE = "e" * 40
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
+# A guard against a hang, not an assertion about speed: under `-n 12` with the machine loaded
+# (GH-979) a run that takes 6 s alone took past the 20 s and 30 s these waits used to carry.
+HANG_GUARD_S = 120
+
 
 class ScriptedRunner:
     """Answers `run_once` from per-role queues and records every call it saw.
@@ -210,7 +214,7 @@ class BlockingRunner(ScriptedRunner):
         for key in keys:
             self._held.setdefault(key, asyncio.Event()).set()
 
-    async def started(self, key: str, timeout: float = 20.0) -> None:
+    async def started(self, key: str, timeout: float = HANG_GUARD_S) -> None:
         await asyncio.wait_for(self._began.setdefault(key, asyncio.Event()).wait(), timeout)
 
     async def run_once(self, role: Role, prompt: str, **kwargs: Any) -> RawResult:
@@ -226,7 +230,7 @@ class BlockingRunner(ScriptedRunner):
             self.peak = max(self.peak, self.running)
         try:
             if key in self._held:
-                await asyncio.wait_for(self._held[key].wait(), 20.0)
+                await asyncio.wait_for(self._held[key].wait(), HANG_GUARD_S)
             else:
                 await asyncio.sleep(0.01)
             result = await super().run_once(role, prompt, **kwargs)
