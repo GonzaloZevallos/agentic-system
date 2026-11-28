@@ -1557,6 +1557,14 @@ fallas por motivo queda como historia (ADR-0037, commit que lo borró); lo que c
 es hoy — un atributo de span, con qué clave, o el lector que la reemplaza cuando no quedó
 en ninguno — vive familia por familia en `observability/README.md`.
 
+**Notificador por mail.** El poller puede avisar por mail a una sola persona, y está apagado
+salvo que el dueño ponga `AGENTIC_NOTIFY_EMAIL_TO`. Tiene tres clases, que
+`AGENTIC_NOTIFY_EVENTS` enciende o apaga una por una: el aviso de espera, el de aterrizaje y
+el resumen diario. Lo que sale de la máquina son números, títulos y enlaces de issues y pull
+requests, y el motivo de los escalados. No agrega ninguna señal de medición (ADR-0037), y
+sus llamadas a `gh` cuentan en la línea del presupuesto del poller. Qué hace y dónde no
+actúa: el término Notificador de `agentic/core/process/CONTEXT.md`.
+
 ### Tooling
 
 `pyproject.toml` con `uv.lock`, ruff con `E F I UP` (sin `D`: docstrings obligatorios en 17
