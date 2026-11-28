@@ -35,6 +35,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 classDiagram
     class notify_message__WindowedSection["WindowedSection"]
     class output_repair__RepairContext["RepairContext"]
+    class rate_limit_wait__RateLimitReading["RateLimitReading"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
@@ -47,7 +48,6 @@ classDiagram
     class scratch__OwnerEntry["OwnerEntry"]
     class scratch__OwnerRecord["OwnerRecord"]
     class scratch__PartitionFolder["PartitionFolder"]
-    class scratch__PartitionListing["PartitionListing"]
 ```
 
 ## Relaciones con otras páginas

@@ -26,6 +26,7 @@ graph TD
     m_adapters__github__gh_call_log["adapters.github.gh_call_log"]
     m_adapters__github__inbox["adapters.github.inbox"]
     m_adapters__github__label_timeline["adapters.github.label_timeline"]
+    m_adapters__github__rate_limit_watch["adapters.github.rate_limit_watch"]
     m_adapters__github__run["adapters.github.run"]
     m_adapters__github__tracker["adapters.github.tracker"]
     m_adapters__github__account --> g_pkg__application
@@ -51,6 +52,8 @@ graph TD
     m_adapters__github__inbox --> m_adapters__github__tracker
     m_adapters__github__label_timeline --> g_pkg__application
     m_adapters__github__label_timeline --> m_adapters__github__run
+    m_adapters__github__rate_limit_watch --> g_pkg__domain
+    m_adapters__github__rate_limit_watch --> m_adapters__github__run
     m_adapters__github__run --> g_pkg__application
     m_adapters__github__run --> g_pkg__domain
     m_adapters__github__tracker --> g_pkg__application

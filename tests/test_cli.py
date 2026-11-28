@@ -162,7 +162,7 @@ def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
     monkeypatch.setattr(
         composition,
         "GhInbox",
-        lambda product_dir, calls=None: GhInbox(product_dir, run=run, calls=calls),
+        lambda product_dir, calls=None, **_: GhInbox(product_dir, run=run, calls=calls),
     )
     return calls
 

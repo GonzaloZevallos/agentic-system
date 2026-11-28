@@ -6,7 +6,8 @@ Esta página muestra las clases públicas de los módulos del grupo `toplevel` d
   - [adapters: filesystem (parte 1)](classes-process-adapters-filesystem-1.md)
   - [adapters: filesystem (parte 2)](classes-process-adapters-filesystem-2.md)
   - [adapters: git](classes-process-adapters-git.md)
-  - [adapters: github](classes-process-adapters-github.md)
+  - [adapters: github (parte 1)](classes-process-adapters-github-1.md)
+  - [adapters: github (parte 2)](classes-process-adapters-github-2.md)
   - [adapters: shell](classes-process-adapters-shell.md)
   - [adapters: smtp](classes-process-adapters-smtp.md)
 
