@@ -58,6 +58,7 @@ graph TD
     m_application__poll --> g_application__support
     m_application__poll --> g_pkg__agentic__shared
     m_application__poll --> g_pkg__domain
+    m_application__poll --> m_application__notify
     m_application__poll --> m_application__registration
     m_application__promotion --> g_pkg__domain
     m_application__registration --> g_application__support
