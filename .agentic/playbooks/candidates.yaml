@@ -2662,3 +2662,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-28T10:14:29.934+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before the plan relies on another issue to bring a piece (wiring, adapter, constructor call), read what that issue actually delivers and name who constructs the new component, or plan that wiring yourself.
+  confidence: medium
+  seen_in:
+  - GH-1058
+  sources:
+  - finding
+  added_at: '2026-11-28T12:02:25.033+00:00'

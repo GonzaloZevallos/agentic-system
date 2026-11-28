@@ -1787,3 +1787,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-1057
+  GH-1058@review:
+    cost_usd: 0.0443
