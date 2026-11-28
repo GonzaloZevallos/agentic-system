@@ -60,6 +60,7 @@ WALKERS = (
     "tests/core/process/domain/test_escalation_spec_guard.py",
     "tests/core/process/application/test_release.py",
     "tests/core/process/application/test_prompt_placeholder_scan.py",
+    "tests/core/process/application/test_notify.py",
 )
 KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
