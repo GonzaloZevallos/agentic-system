@@ -34,6 +34,7 @@ __all__ = [
     "WindowedSection",
     "clean",
     "digest_message",
+    "is_repo_url",
     "release_message",
     "repo_url",
     "waiting_message",
@@ -67,10 +68,15 @@ def clean(value: str, limit: int = FIELD_MAX) -> str:
     return kept if len(kept) <= limit else kept[: limit - 1] + "…"
 
 
-def repo_url(value: str) -> str:
-    """`value` when it is `https://github.com/<owner>/<repo>` in ASCII, else `ValueError`."""
+def is_repo_url(value: str) -> bool:
+    """Whether `value` is `https://github.com/<owner>/<repo>` in ASCII."""
     match = _REPO.fullmatch(value)
-    if match is None or {".", ".."} & set(match.groups()):
+    return match is not None and not {".", ".."} & set(match.groups())
+
+
+def repo_url(value: str) -> str:
+    """`value` when `is_repo_url`, else `ValueError`."""
+    if not is_repo_url(value):
         raise ValueError(f"repo is not a GitHub repository URL: {value!r}")
     return value
 

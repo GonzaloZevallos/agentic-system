@@ -28,6 +28,7 @@ from ..domain.notify import (
     NotifyKinds,
     Outcome,
     PartFact,
+    ReleaseEvent,
     SplitFacts,
     advance_read_at,
     digest_event,
@@ -56,6 +57,7 @@ class NotifyCarry:
     """What the caller keeps between rounds so a line is said once per process."""
 
     dropped_said: bool = False
+    repo_said: bool = False
     skipped_said: set[tuple[int, str]] = field(default_factory=set)
 
 
@@ -189,11 +191,7 @@ def _state(raw: Any) -> TaskState:
     return state
 
 
-def _compose(build: Callable[[], notify_message.Message]) -> Mail | None:
-    try:
-        message = build()
-    except ValueError:
-        return None
+def _mail(message: notify_message.Message) -> Mail:
     return Mail(message.subject, message.text)
 
 
@@ -276,7 +274,7 @@ class _Round:
         if self.kinds.digest and digest is not None and len(sends) < SENDS_PER_ROUND:
             view = self._view(digest, closed, merged, tray_docs)
             message = _port(lambda: notify_message.digest_message(view, self.repo))
-            self._send(digest.key, Mail(message.subject, message.text))
+            self._send(digest.key, _mail(message))
             self.digest_sent = digest
         self._save(replace(self.record, activity_read_at=self.cursor()))
 
@@ -313,8 +311,8 @@ class _Round:
         cls = state.get("escalation_class")
         if cls is None or (cls, None) not in escalation_prompts.ESCALATION_PROMPTS:
             return None
-        return _compose(
-            lambda: notify_message.waiting_message(
+        return _mail(
+            notify_message.waiting_message(
                 product=self.product,
                 issue=number,
                 title=str(doc.get("title") or ""),
@@ -337,51 +335,57 @@ class _Round:
             if not self.kinds.release:
                 rows.append(_Row(row.instant, None, False))
                 continue
-            try:
-                found = self._release(row, docs)
-            except ValueError as exc:
-                name = type(exc).__name__
-                if (row.number, name) not in carry.skipped_said:
-                    carry.skipped_said.add((row.number, name))
-                    lines.append(f"notify: #{row.number} skipped ({name})")
-                found = None
-            rows.append(_Row(row.instant, found[0] if found else None, found is None or found[2]))
-            if found is not None and found[1] is not None:
-                sends.append((found[0], found[1]))
+            doc = docs.get(row.number)
+            if doc is None:
+                rows.append(_Row(row.instant, None, True))
+                continue
+            event, readable = self._event(row, doc, docs, carry, lines)
+            if not readable:
+                rows.append(_Row(row.instant, None, False))
+                continue
+            if event is None:
+                rows.append(_Row(row.instant, None, True))
+                continue
+            assert self.record is not None
+            action = pending(event, self.record, self.now)
+            if action == "covered":
+                self._set({event.key: "covered"})
+            if action == "send":
+                mail = _mail(
+                    notify_message.release_message(
+                        product=self.product,
+                        event=event,
+                        titles=_titles(docs, event),
+                        departures=[],
+                        repo=self.repo,
+                    )
+                )
+                sends.append((event.key, mail))
+            rows.append(_Row(row.instant, event.key, action != "send"))
         return sends, rows
 
-    def _release(self, row: ActivityRow, docs: _Docs) -> tuple[EventKey, Mail | None, bool] | None:
-        assert self.record is not None
-        doc = docs.get(row.number)
-        facts = split_facts_of(row.number, docs)
-        if doc is None:
-            return None
-        event = release_event(
-            _state(doc),
-            self.product,
-            row.number,
-            facts,
-            auto_merged_at=_instant(doc.get("auto_merged_at")),
-        )
-        if event is None:
-            return None
-        action = pending(event, self.record, self.now)
-        if action == "covered":
-            self._set({event.key: "covered"})
-        if action != "send":
-            return event.key, None, True
-        mail = _compose(
-            lambda: notify_message.release_message(
-                product=self.product,
-                event=event,
-                titles=_titles(docs, event),
-                departures=[],
-                repo=self.repo,
-            )
-        )
-        if mail is None:
-            self._set({event.key: "unbuildable"})
-        return event.key, mail, mail is None
+    def _event(
+        self, row: ActivityRow, doc: Doc, docs: _Docs, carry: NotifyCarry, lines: list[str]
+    ) -> tuple[ReleaseEvent | None, bool]:
+        """The release event of a closed issue and whether its split facts could be read; a
+        `ValueError` of the document's shape or timestamps skips this row only."""
+        try:
+            facts = split_facts_of(row.number, docs)
+            if facts is None:
+                return None, False
+            return release_event(
+                _state(doc),
+                self.product,
+                row.number,
+                facts,
+                auto_merged_at=_instant(doc.get("auto_merged_at")),
+            ), True
+        except ValueError as exc:
+            name = type(exc).__name__
+            if (row.number, name) not in carry.skipped_said:
+                carry.skipped_said.add((row.number, name))
+                lines.append(f"notify: #{row.number} skipped ({name})")
+            return None, True
 
     def _view(
         self,
@@ -429,7 +433,7 @@ class _Round:
         return notify_message.WindowedSection(shown, cut, single)
 
 
-def _titles(docs: Mapping[int, Doc | None], event: Any) -> dict[int, str]:
+def _titles(docs: Mapping[int, Doc | None], event: ReleaseEvent) -> dict[int, str]:
     numbers = {event.key.issue, *(leaf.issue for leaf in event.leaves)}
     return {n: str((docs.get(n) or {}).get("title") or "") for n in numbers}
 
@@ -446,10 +450,17 @@ def notify(
     repo: str,
 ) -> list[str]:
     """The poll note lines of one notifier round; `[]` without a notifier, a record store or an
-    activity read. Never raises: a port failure ends the round with one line, the type name."""
+    activity read. A port failure ends the round with one line, the type name. A `repo` that is not
+    a GitHub repository URL ends it before any read or write, said once per `carry`: no message
+    could be built, so no key may be recorded as `unbuildable`."""
     if ports.notifier is None or ports.notified is None or ports.activity is None:
         return []
     lines: list[str] = []
+    if not notify_message.is_repo_url(repo):
+        if not carry.repo_said:
+            carry.repo_said = True
+            lines.append("notify: repo is not a GitHub repository URL")
+        return lines
     run = _Round(ports, now, kinds, product, repo)
     try:
         run.run(carry, lines, tz, hour)

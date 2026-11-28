@@ -235,6 +235,37 @@ def test_wrong_parent_parts_skip_only_their_row_with_one_line() -> None:
     assert s.notified.record.activity_read_at == _at(62)
 
 
+def test_unreadable_split_facts_leave_the_row_unjudged_until_the_part_has_a_document() -> None:
+    root = _doc(
+        "GH-10", split_issues={"1": f"{REPO}/issues/11"}, split_closed_at=_at(50).isoformat()
+    )
+    s = Setup(docs={"GH-10": root, "GH-5": _ui(5)}, closed=[_row(5, 61), _row(10, 62)])
+    assert s.round() == []
+    assert s.notified.record.activity_read_at == _at(61)
+    assert [m.subject for m in s.notifier.sent] == ["[shop] Released #5: AB"]
+    assert not any(isinstance(k, EventKey) and k.issue == 10 for k in s.notified.record.keys)
+    part = _part(11, 10, delivery_outcome="merged", pull_request=f"{REPO}/pull/9")
+    s.documents.save(part)
+    s.round(NOW + timedelta(minutes=1))
+    assert [m.subject for m in s.notifier.sent][-1].startswith("[shop] Released #10")
+    assert s.notified.record.activity_read_at == _at(62)
+
+
+@pytest.mark.parametrize("repo", ["", "http://github.com/acme/shop", f"{REPO}/", "https://x/a/b"])
+def test_bad_repo_sends_nothing_writes_no_key_and_says_so_once(repo: str) -> None:
+    s = Setup(docs={"GH-5": _ui(5)}, closed=[_row(5, 61)])
+    lines = [*notify_round(s, repo), *notify_round(s, repo, NOW + NOTIFY_RETRY_AFTER)]
+    assert lines == ["notify: repo is not a GitHub repository URL"]
+    assert s.notifier.sent == []
+    assert s.notified.record.keys == {}
+    assert s.notified.record.activity_read_at is None
+    assert s.activity.reads == []
+
+
+def notify_round(s: Setup, repo: str, now: datetime = NOW) -> list[str]:
+    return notify(s.ports, now, carry=s.carry, kinds=ALL, tz=TZ, hour=20, product="shop", repo=repo)
+
+
 def test_release_only_cursor_passes_sixty_closed_issues_over_two_rounds() -> None:
     rows = [_row(1000 + n, n + 1) for n in range(60)]
     s = Setup(closed=rows)
@@ -362,5 +393,12 @@ def test_nothing_imports_the_notify_use_case_yet() -> None:
         if path != own and _imports_notify_use_case(path, ast.parse(path.read_text()))
     }
     assert importers == ALLOWED_IMPORTERS
-    sample = ast.parse("from agentic.core.process.application.notify import notify")
-    assert _imports_notify_use_case(Path("x/other.py"), sample)
+    for source, folder in [
+        ("from agentic.core.process.application.notify import notify", "x"),
+        ("import agentic.core.process.application.notify as n", "x"),
+        ("from .notify import notify", "application"),
+        ("from . import notify", "application"),
+        ("from agentic.core.process.application import notify", "x"),
+    ]:
+        assert _imports_notify_use_case(Path(folder) / "other.py", ast.parse(source)), source
+    assert not _imports_notify_use_case(Path("x/other.py"), ast.parse("import os"))
