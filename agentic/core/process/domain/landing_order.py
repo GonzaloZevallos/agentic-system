@@ -339,12 +339,15 @@ def lane_ready(m: Member) -> bool:
     )
 
 
-def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozenset[str]:
+def _head_obstacle(head_: Member | None) -> LaneReason | frozenset[str]:
     """Why `head_` opens no lane, or its paths when it does: the only place the head conditions
-    are written (busy and seen within `GAP_MAX`, integrating, paths read, `LANE_SYNCS_MIN`
-    syncs). A `str` is the reason; a `frozenset` is the head's paths, read and known."""
-    if head_ is None or not (holds_turn(head_, now) and head_.integrating):
-        return "head_not_integrating"
+    are written (a head, not `head_merging`, paths read, `LANE_SYNCS_MIN` syncs). Whether the head
+    is busy, integrating or holds its turn no longer matters (GH-1213): only what it can still do
+    to master does. A `str` is the reason; a `frozenset` is the head's paths, read and known."""
+    if head_ is None:
+        return "no_head"
+    if head_.head_merging:
+        return "head_merging"
     if head_.paths is None:
         return "head_paths_unknown"
     if head_.head_syncs_left is None or head_.head_syncs_left < LANE_SYNCS_MIN:
@@ -368,7 +371,7 @@ def lanes(
     then, only for a member that is `lane_ready` and would otherwise have opened, `lane_overlap`
     (with the union of the lanes picked) and `lanes_full`. A member that is not clean gets no
     reason, and neither does one that has the lane or that no lane condition of its own stops."""
-    taken = _head_obstacle(chosen, now)
+    taken = _head_obstacle(chosen)
     members = [m for m in eligible if chosen is None or m.issue != chosen.issue]
     reasons: dict[int, LaneReason] = {}
     picked: list[int] = []

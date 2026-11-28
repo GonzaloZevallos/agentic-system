@@ -1022,10 +1022,10 @@ class LandingRound:
     entries: tuple[OrderEntry, ...]
     head: int | None
     yielded: tuple[landing_order.Yield, ...] = ()
-    lane: int | None = None
-    """The one waiting member that may be integrated beside a busy head (GH-681): what
-    `landing_order.order` answers once `landing_lane.lane_facts` has read the facts, `None` when
-    there is none or the head holds no turn."""
+    lanes: tuple[int, ...] = ()
+    """The waiting members that may merge beside the head (GH-681, GH-1213): what
+    `landing_order.lanes` answers once `landing_lane.lane_facts` has read the facts, `()` when
+    there is none. Which of them open this round is `landing_order.lanes_open`'s."""
     lane_reasons: Mapping[int, landing_order.LaneReason] = field(default_factory=dict)
     """Why each waiting member that is clean has no lane: `landing_order.lanes`'s."""
 
@@ -1147,10 +1147,13 @@ def _member(
         and bool(report.running_runs)
     )
     master = facts.current_master if facts is not None else None
-    merge_due = (
+    unbacked = exempt_queue.backoff_ends(raw.get("merge_refusal"), pr_head, master) is None
+    merge_due = decision is not None and decision.kind in ("merge", "run_checks") and unbacked
+    # GH-1213: the merge verb is about to act on it (its decision is one of `LANE_DECISIONS`).
+    head_merging = (
         decision is not None
-        and decision.kind in ("merge", "run_checks")
-        and exempt_queue.backoff_ends(raw.get("merge_refusal"), pr_head, master) is None
+        and landing_order.lane_decision_of(decision.kind, decision.reason) is not None
+        and unbacked
     )
     turn_at = landing_order.instant(raw.get("head_turn_at"))
     yields = raw.get("head_yields")
@@ -1171,6 +1174,7 @@ def _member(
         ),
         busy=working,
         merge_due=merge_due,
+        head_merging=head_merging,
         waits_on_ci=ci_running and not working,
         account_paused=rules.account_paused(resumes, now) and not working,
         # GH-838: the assessment's facts, read through the round's memo; none for a task a child
@@ -1205,7 +1209,7 @@ def evaluate_landing_order(
     of it (`turned`); the writer (`_record_turn`) compares the two. `now` defaults to the clock;
     `resumes` are the product's paused tasks, for `account_paused`. `integrating` maps the ids with
     a live child of an integrating kind (`landing_order.integrates`) to that kind: with the head
-    among them and holding its turn, the fast lane (GH-681) is read once (`_fast_lane`), without
+    among them, the fast lanes (GH-681) are read once (`_fast_lane`), without
     touching `member` or `turned`. `memo` is the window of the stacking reads (GH-860): the
     caller's.
     An issue in `skip` (GH-899, a stacked child the round holds) is no member and no entry: it is
@@ -1266,7 +1270,7 @@ def evaluate_landing_order(
         add(task_id, number, raw, assessed, member)
     resumed = landing_order.resumed(members, now)
     result, turned = landing_order.advance(resumed, now)
-    lane, lane_reasons = _fast_lane(
+    lanes, lane_reasons = _fast_lane(
         ports, cfg, current_master, entries, turned, result.head, integrating or {}, now
     )
     after = iter(turned)
@@ -1279,7 +1283,7 @@ def evaluate_landing_order(
         ),
         result.head,
         result.yielded,
-        lane,
+        lanes,
         lane_reasons,
     )
 
@@ -1338,28 +1342,31 @@ def _fast_lane(
     head_issue: int | None,
     integrating: Mapping[str, str],
     now: datetime,
-) -> tuple[int | None, dict[int, landing_order.LaneReason]]:
-    """The fast lane of a round (GH-681): the member that may merge beside the head and why each
-    other clean member may not. `members` are as `advance` returned them, so the head of the round
-    has been observed (a child run's save may have erased what the document held of it). Nothing is
-    read unless the head, as this round observes it, integrates and a waiting member is a
-    candidate; the facts are `landing_lane`'s and the predicate and its reasons `landing_order`'s.
+) -> tuple[tuple[int, ...], dict[int, landing_order.LaneReason]]:
+    """The fast lanes of a round (GH-681, GH-1213): the members that may merge beside the head and
+    why each other clean member may not. `members` are as `advance` returned them, so the head of
+    the round has been observed (a child run's save may have erased what the document held of it).
+    Nothing is read unless a waiting member is a candidate; the facts are `landing_lane`'s and the
+    predicate and its reasons `landing_order`'s.
     A clean member that is no candidate only carries the reason the round already computed
     (`_lane_candidates`). Read-only: it writes nothing and adds no member state."""
     head = next((m for m in members if m.issue == head_issue), None)
     head_entry = next((e for e in entries if e.number == head_issue), None)
     if cfg is None or head is None or head_entry is None:
-        return None, {}
+        return (), {}
     reads = _lane_candidates(entries, head.issue, current_master, now)
     marked = landing_lane.mark_not_candidates(members, reads.not_candidates)
     read_head = head
     with_facts = marked
     if reads.candidates:
+        outcome = head_entry.outcome
         lane_head = landing_lane.LaneHead(
             head.issue,
             str(head_entry.raw.get("pull_request")),
             head_entry.raw,
             head_entry.task_id in integrating,
+            outcome.facts.pr_head if isinstance(outcome, MergeAssessment) else None,
+            head.busy,
         )
         with_facts = landing_lane.lane_facts(
             ports,
@@ -1371,8 +1378,7 @@ def _fast_lane(
             reads.decisions,
         )
         read_head = next(m for m in with_facts if m.issue == head.issue)
-    picked, reasons = landing_order.lanes(with_facts, read_head, now)
-    return (picked[0] if picked and reads.candidates else None), reasons
+    return landing_order.lanes(with_facts, read_head, now)
 
 
 LANE_TEXT: dict[landing_order.LaneReason, str] = {
@@ -1395,12 +1401,12 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
 
 
 def _head_child_kind(round_: LandingRound, integrating: Mapping[str, str] | None) -> str:
-    """The kind of the live integrating child on the head of `round_`: the fast lane never opens
-    unless there is one, so a closed value of `landing_order.INTEGRATING_KINDS`."""
+    """The kind of the live integrating child on the head of `round_`, `idle` when it has none (a
+    lane opens beside an idle head too, GH-1213)."""
     for entry in round_.entries:
         if entry.number == round_.head and integrating is not None:
-            return integrating.get(entry.task_id, "unknown")
-    return "unknown"
+            return integrating.get(entry.task_id, "idle")
+    return "idle"
 
 
 def _yield_record(
@@ -1648,13 +1654,7 @@ def gather_merges(
         landing_lane.record_lane_merges(
             ports, [entry.task_id for entry in round_.entries], now, at_work, out
         )
-        landing_lane.clear_admissions(
-            ports,
-            [(entry.task_id, entry.number) for entry in round_.entries],
-            {round_.lane} if round_.lane is not None else set(),
-            at_work,
-            out,
-        )
+    lane_pending: list[tuple[OrderEntry, MergeAssessment, str | None]] = []
     for entry in round_.entries:
         task_id, number, raw = entry.task_id, entry.number, entry.raw
         assessed = entry.outcome
@@ -1698,7 +1698,7 @@ def gather_merges(
         owned = (
             entry.member is not None and entry.member.waits_on_human and decision.kind == "refuse"
         )
-        if turn == "waiting" and number != round_.lane and not owned:
+        if turn == "waiting" and number not in round_.lanes and not owned:
             # GH-588: a pull request that is not the head of the order is left as it is,
             # approved: a clean merge-tree needs no pass, a conflict none until its turn.
             reading = (
@@ -1777,29 +1777,91 @@ def gather_merges(
                 refusal, head, current_master, now
             ):
                 backed_off.append(number)
+            elif number in round_.lanes:
+                # A lane is only decided once the whole round is read (`lanes_open`): its
+                # backoff is booked above, like any member's, but it is found after the loop.
+                lane_pending.append((entry, assessed, head))
             else:
-                if number == round_.lane:
-                    busy_head = round_.head
-                    admitted = landing_order.lane_decision_of(decision.kind, decision.reason)
-                    child = _head_child_kind(round_, integrating)
-                    out.append(
-                        f"agentic: poll: auto-merge #{number} -> fast lane behind busy "
-                        f"#{busy_head} ({child}, {admitted})"
-                    )
-                    if not held and busy_head is not None and head is not None and admitted:
-                        landing_lane.admit(
-                            ports,
-                            task_id,
-                            raw,
-                            busy_head,
-                            head,
-                            current_master,
-                            admitted,
-                            now,
-                            at_work,
-                            out,
-                        )
                 found.append(number)
+    found.extend(
+        _open_lanes(
+            ports,
+            round_,
+            lane_pending,
+            lands or [],
+            integrating,
+            current_master,
+            now,
+            at_work,
+            held,
+            out,
+        )
+    )
+    return found
+
+
+def _open_lanes(
+    ports: Ports,
+    round_: LandingRound,
+    pending: Sequence[tuple[OrderEntry, MergeAssessment, str | None]],
+    lands: Sequence[rules.LandCandidate],
+    integrating: Mapping[str, str] | None,
+    current_master: str,
+    now: datetime,
+    at_work: Callable[[str], bool],
+    held: bool,
+    out: list[str],
+) -> list[int]:
+    """The lanes of the round that open beside its head (GH-1213) and the admission and line of
+    each. `pending` are the members of `round_.lanes` that are not backed off, in lane order.
+    None opens when the head's own merge is the round's exempt child: its decision is one the
+    verb acts on (`head_merging`), or a step of it that costs no slot (`merge`, `land_checks`)
+    is in `lands`; which child is exempt is `rules.counts_against_cap`'s. The members that do not
+    open say they wait. The admissions of every other member are cleared (informative)."""
+    head = round_.head
+    head_entry = next((e for e in round_.entries if e.number == head), None)
+    head_member = head_entry.member if head_entry is not None else None
+    head_exempt = (head_member is not None and head_member.head_merging) or any(
+        c.issue == head and not rules.counts_against_cap(c.kind) for c in lands
+    )
+    opened = landing_order.lanes_open([entry.number for entry, _, _ in pending], head_exempt)
+    child = _head_child_kind(round_, integrating)
+    found: list[int] = []
+    for entry, assessed, pr_head in pending:
+        number = entry.number
+        if number not in opened:
+            out.append(
+                f"agentic: poll: auto-merge #{number} -> waiting (clean, head merging) behind "
+                f"#{head}"
+            )
+            continue
+        decision = assessed.decision
+        admitted = landing_order.lane_decision_of(decision.kind, decision.reason)
+        out.append(
+            f"agentic: poll: auto-merge #{number} -> fast lane beside #{head} ({child}, {admitted})"
+        )
+        if not held and head is not None and pr_head is not None and admitted:
+            landing_lane.admit(
+                ports,
+                entry.task_id,
+                entry.raw,
+                head,
+                pr_head,
+                current_master,
+                admitted,
+                now,
+                at_work,
+                out,
+            )
+        found.append(number)
+    if not held:
+        landing_lane.clear_admissions(
+            ports,
+            [(e.task_id, e.number) for e in round_.entries],
+            set(opened),
+            at_work,
+            out,
+        )
     return found
 
 
