@@ -16,3 +16,4 @@ Esta página es el índice de los diagramas de clases de `agentic.core.process.a
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
   - [application: support (parte 8)](classes-process-application-support-8.md)
+  - [application: support (parte 9)](classes-process-application-support-9.md)

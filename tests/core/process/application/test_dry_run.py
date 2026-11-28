@@ -26,6 +26,7 @@ from agentic.core.process.application.dry_run import (
     ReadOnly,
     read_only_ports,
 )
+from agentic.core.process.domain.notify import NotifiedRecord
 from tests.fakes import memory_ports
 
 PORTS = sorted(READS)
@@ -283,3 +284,29 @@ def test_a_dry_round_never_carries_the_reads_that_release_a_format_hold():
 
     world, *_ = read_only_ports(memory_ports(format_fixes=Fixes()), Raises(), Raises(), None)
     assert world.format_fixes is None
+
+
+def test_a_dry_round_never_carries_the_notifier_its_record_or_its_activity_read():
+    # GH-1056: a dry round sends no mail, writes no record and reads no activity.
+    class Stub:
+        def send(self, mail: ports.Mail) -> None:
+            raise AssertionError("a dry round must not send")
+
+        def load(self) -> NotifiedRecord:
+            raise AssertionError("a dry round must not load")
+
+        def save(self, record: NotifiedRecord) -> None:
+            raise AssertionError("a dry round must not save")
+
+        def merged_prs(self, since: datetime, limit: int) -> list[ports.ActivityRow]:
+            raise AssertionError("a dry round must not read")
+
+        def closed_issues(self, since: datetime, limit: int) -> list[ports.ActivityRow]:
+            raise AssertionError("a dry round must not read")
+
+    filled = dataclasses.replace(memory_ports(), notifier=Stub(), notified=Stub(), activity=Stub())
+    assert filled.notifier is not None and filled.notified is not None
+    assert filled.activity is not None
+
+    world, *_ = read_only_ports(filled, Raises(), Raises(), None)
+    assert (world.notifier, world.notified, world.activity) == (None, None, None)

@@ -440,6 +440,9 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         board_sent=None,
         format_filing=None,
         format_fixes=None,
+        notifier=None,
+        notified=None,
+        activity=None,
     )
 
 

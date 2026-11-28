@@ -203,6 +203,12 @@ _INLINE = (
     "so only their member names are checked"
 )
 
+_INLINE_UNIMPLEMENTED = (
+    "nothing reads the port yet (GH-1056 part 4 wires it): the only stand-in is the inline stub "
+    "of the evaluation test, outside mypy's scope, so only its member names are checked"
+)
+_NOTIFIER_STAND_IN = ("tests/core/process/adapters/langgraph/test_graph_evaluation.py", "_Stub")
+
 UNCOVERED: dict[str, Uncovered] = {
     "BudgetStore": Uncovered(
         (("agentic/core/process/adapters/filesystem/budget_store.py", "FilesystemBudgetStore"),),
@@ -274,6 +280,15 @@ UNCOVERED: dict[str, Uncovered] = {
     "FailurePolicy": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Policy"),), _INLINE
     ),
+    "Notifier": Uncovered((_NOTIFIER_STAND_IN,), _INLINE_UNIMPLEMENTED),
+    "Notified": Uncovered(
+        (
+            ("agentic/core/process/adapters/filesystem/notified.py", "FilesystemNotified"),
+            _NOTIFIER_STAND_IN,
+        ),
+        _INLINE_UNIMPLEMENTED,
+    ),
+    "Activity": Uncovered((_NOTIFIER_STAND_IN,), _INLINE_UNIMPLEMENTED),
 }
 
 
