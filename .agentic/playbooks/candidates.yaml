@@ -2624,3 +2624,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a node or edge to a shared flow, search the whole test suite for every test that drives the flow through it, not just the neighbouring directory, and run those tests before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-1027
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T05:05:16.948+00:00'
