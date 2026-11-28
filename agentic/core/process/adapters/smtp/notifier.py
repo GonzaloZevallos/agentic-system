@@ -12,7 +12,6 @@ from __future__ import annotations
 import smtplib
 import ssl
 from email.message import EmailMessage
-from typing import Any
 
 from ...application.ports import Mail, NotifyFailed
 from .config import SmtpSettings
@@ -25,8 +24,8 @@ class SmtpNotifier:
     def __init__(
         self,
         settings: SmtpSettings,
-        smtp: type = smtplib.SMTP,
-        smtp_ssl: type = smtplib.SMTP_SSL,
+        smtp: type[smtplib.SMTP] = smtplib.SMTP,
+        smtp_ssl: type[smtplib.SMTP_SSL] = smtplib.SMTP_SSL,
     ):
         self.settings = settings
         self._smtp = smtp
@@ -61,7 +60,7 @@ class SmtpNotifier:
         conn.send_message(msg)
         conn.quit()
 
-    def _connect(self, host: str, port: int) -> Any:
+    def _connect(self, host: str, port: int) -> smtplib.SMTP:
         if port == IMPLICIT_TLS_PORT:
             return self._smtp_ssl(
                 host, port, timeout=TIMEOUT_S, context=ssl.create_default_context()

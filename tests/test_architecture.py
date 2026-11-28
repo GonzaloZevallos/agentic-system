@@ -586,7 +586,13 @@ SMTP_HOME = Path("core") / "process" / "adapters" / "smtp"
 SMTP_CONFIG = SMTP_HOME / "config.py"
 SMTP_STDLIB = frozenset(sys.stdlib_module_names)
 SMTP_ALLOWED_PROJECT = "agentic.core.process.application.ports"
+SMTP_OWN = "agentic.core.process.adapters.smtp"
 NOTIFY_LITERAL = "AGENTIC_NOTIFY_"
+
+
+def _within(name: str, module: str) -> bool:
+    """`name` is `module` or something inside it, on a dot boundary."""
+    return name == module or name.startswith(module + ".")
 
 
 def _smtp_foreign_imports(package: Path) -> list[str]:
@@ -596,11 +602,9 @@ def _smtp_foreign_imports(package: Path) -> list[str]:
     for path in sorted((package / SMTP_HOME).glob("*.py")):
         for name in imports.imports_of(path, package.parent):
             top = name.split(".")[0]
-            own = name.startswith("agentic.core.process.adapters.smtp")
-            # The ports module, what it exports, or a package on the way down to it.
-            ports = name.startswith(SMTP_ALLOWED_PROJECT) or SMTP_ALLOWED_PROJECT.startswith(
-                name + "."
-            )
+            own = _within(name, SMTP_OWN)
+            # The ports module or what it exports; no package above it, no sibling by prefix.
+            ports = _within(name, SMTP_ALLOWED_PROJECT)
             if top in SMTP_STDLIB or own or ports:
                 continue
             found.add(f"{path.name}: {name}")
@@ -657,8 +661,15 @@ def test_the_smtp_import_guard_rejects_a_foreign_import(tmp_path):
     (package / SMTP_HOME / "notifier.py").write_text(
         "import smtplib\nimport requests\nfrom agentic.core.process.domain import notify\n"
         "from agentic.core.process.application.ports import Mail\n"
+        "from agentic.core.process.application.ports_x import Other\n"
+        "import agentic.core.process.application\n"
+        "import agentic.core.process.adapters.smtp_x\n"
     )
     assert _smtp_foreign_imports(package) == [
+        "notifier.py: agentic.core.process.adapters.smtp_x",
+        "notifier.py: agentic.core.process.application",
+        "notifier.py: agentic.core.process.application.ports_x",
+        "notifier.py: agentic.core.process.application.ports_x.Other",
         "notifier.py: agentic.core.process.domain",
         "notifier.py: agentic.core.process.domain.notify",
         "notifier.py: requests",
