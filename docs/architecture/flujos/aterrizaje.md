@@ -148,7 +148,7 @@ sequenceDiagram
 
    Los carriles rápidos (ADR-0090, adenda GH-1213) se abren junto a la Cabeza sea cual sea su
    estado, ociosa incluida. Ninguno se abre cuando el propio merge de la Cabeza es el hijo exento
-   de la ronda: `agentic/core/process/domain/landing_order.py:lanes_open`, con el `head_exempt` que
+   de la ronda: `lanes_open` (en `agentic/core/process/domain/landing_order.py`), con el `head_exempt` que
    arma `agentic/core/process/application/poll.py` a partir de `Member.head_merging` y de
    `rules.counts_against_cap`, no devuelve ninguno, y esos miembros dicen
    `waiting (clean, head merging) behind #H`; los que sí se abren dicen
