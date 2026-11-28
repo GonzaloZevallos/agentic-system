@@ -22,6 +22,8 @@ from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.git.workspace import GitRepoOrigin
+from agentic.core.process.adapters.github.activity import GhActivity
 from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
@@ -868,3 +870,28 @@ def test_two_default_ports_without_calls_share_the_process_call_log(tmp_path, mo
         "issue_list": 1, "issue_view": 1, "pr_list": 0, "pr_view": 0, "api": 0, "other": 0
     }  # fmt: skip
     assert fake_gh() == 2
+
+
+def test_the_activity_read_is_not_wired_while_the_notifier_address_is_unset(tmp_path, monkeypatch):
+    # GH-1058: the Activity read exists only with the notifier (AGENTIC_NOTIFY_EMAIL_TO).
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    monkeypatch.delenv("AGENTIC_NOTIFY_EMAIL_TO", raising=False)
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product))
+    assert ports.activity is None and ports.notifier is None
+    assert ports.notified is None and ports.origin is None
+
+
+def test_the_activity_read_is_wired_with_the_notifier_and_offline_ports_drop_it(
+    tmp_path, monkeypatch
+):
+    product = _committed_product(tmp_path, monkeypatch, "product: demo\nchecks:\n  tests: 'true'\n")
+    monkeypatch.setenv("AGENTIC_NOTIFY_EMAIL_TO", "someone@example.com")
+    cfg = Configuration(product_dir=product)
+    live = composition.default_ports(cfg)
+    assert isinstance(live.activity, GhActivity) and live.notifier is not None
+    # GH-1205: the origin read exists where the notifier does, over the product's checkout.
+    assert isinstance(live.origin, GitRepoOrigin)
+    offline = composition.offline_ports(cfg)
+    assert offline.activity is None and offline.notifier is None and offline.notified is None
+    assert offline.origin is None and offline.notify_settings is None

@@ -452,6 +452,28 @@ def test_the_same_run_id_falls_back_to_completed_at_and_keeps_both_when_nothing_
     assert _verdicts(bare_red, bare_green, declared=("docs",)) == ("red", 1)
 
 
+def test_a_naive_instant_cannot_order_a_rerun_so_both_runs_stay_current() -> None:
+    """ADR-0111: `current_runs` kept only the later of two runs of one id when the instants were
+    read as UTC; an instant with no offset is unreadable, so the older red stays and decides."""
+    red = _at(job("docs", "FAILURE", NEW), "2026-11-12T05:00:00")
+    green = _at(job("docs", "SUCCESS", NEW), "2026-11-12T06:00:00Z")
+    # Old: (green,). New: the red has no readable instant, so it is kept beside the green.
+    assert ci.current_runs(report(red, green)) == (red, green)
+    assert _verdicts(red, green, declared=("docs",)) == ("red", 1)
+    # The same older instant with an offset orders: only the green stays, as with `Z`.
+    offset_red = _at(job("docs", "FAILURE", NEW), "2026-11-12T07:00:00+02:00")
+    assert ci.current_runs(report(offset_red, green)) == (green,)
+    assert _verdicts(offset_red, green, declared=("docs",)) == ("green", 0)
+    both_red = _at(job("docs", "FAILURE", NEW), "2026-11-12T05:00:00")
+    both_green = _at(job("docs", "SUCCESS", NEW), "2026-11-12T06:00:00")
+    assert ci.current_runs(report(both_red, both_green)) == (both_red, both_green)
+    assert _verdicts(both_red, both_green, declared=("docs",)) == ("red", 1)
+    # The same pair with `Z` is ordered: the later green decides alone.
+    zoned_red = _at(job("docs", "FAILURE", NEW), "2026-11-12T05:00:00Z")
+    zoned_green = _at(job("docs", "SUCCESS", NEW), "2026-11-12T06:00:00Z")
+    assert ci.current_runs(report(zoned_red, zoned_green)) == (zoned_green,)
+
+
 def test_a_check_with_no_readable_run_id_is_never_discarded_nor_discards() -> None:
     status = CiCheck("docs", "COMPLETED", "FAILURE", "https://github.com/o/r/runs/docs")
     green = job("docs", "SUCCESS", NEW)

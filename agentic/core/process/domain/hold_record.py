@@ -1,6 +1,6 @@
 """The holds record a closed task's document keeps (GH-839): the intervals the issue spent under
-the hold label. Pure: no I/O, and nothing outside the standard library (process imports only
-`shared`, so the instants are read here with a private reader, not by `measurement`).
+the hold label. Pure: no I/O, and nothing outside the standard library and the domain's one
+instant parser (`instant.parse_instant`, ADR-0111: an instant with no offset is unreadable).
 
 Either the intervals, `{intervals: [{start, end}]}` (an empty list is read, no holds), or why they
 are not known, `{unknown: unreadable | unpaired}`. This module is the one builder and the one
@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Final, Literal
+
+from .instant import parse_instant
 
 HOLDS_KEY: Final = "holds"
 HoldUnknownCause = Literal["unreadable", "unpaired"]
@@ -41,17 +43,6 @@ class Unreadable:
     """The marker a timeline reader hands `patch` when it could not read the whole timeline."""
 
 
-def _instant(value: object) -> datetime | None:
-    """An ISO-8601 text as an aware datetime (naive reads as UTC); `None` when it is not one."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
 def _unknown(cause: HoldUnknownCause) -> dict[str, Any]:
     return {"unknown": cause}
 
@@ -61,13 +52,13 @@ def from_events(events: Sequence[LabelEvent], merged_at: str) -> dict[str, Any]:
     are ignored; each addition pairs with the next removal; a hold open at the merge ends at
     `merged_at`. A removal with no open addition is `unpaired`; an addition while one is already
     open is ignored (the hold stays open); an instant that does not parse, `merged_at` included,
-    is `unreadable`."""
-    merged = _instant(merged_at)
+    is `unreadable`, and so is one with no offset (ADR-0111)."""
+    merged = parse_instant(merged_at)
     if merged is None:
         return _unknown("unreadable")
     timed: list[tuple[datetime, int, LabelEvent]] = []
     for position, event in enumerate(events):
-        at = _instant(event.at)
+        at = parse_instant(event.at)
         if at is None:
             return _unknown("unreadable")
         timed.append((at, position, event))
@@ -102,7 +93,7 @@ def _interval(record: object) -> tuple[datetime, datetime] | None:
     or does not parse, or the end is before the start."""
     if not isinstance(record, Mapping):
         return None
-    start, end = _instant(record.get("start")), _instant(record.get("end"))
+    start, end = parse_instant(record.get("start")), parse_instant(record.get("end"))
     if start is None or end is None or end < start:
         return None
     return start, end

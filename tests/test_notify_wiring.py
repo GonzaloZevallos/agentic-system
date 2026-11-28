@@ -10,7 +10,7 @@ from agentic.core.process.adapters.filesystem.notified import FilesystemNotified
 from agentic.core.process.adapters.smtp.notifier import SmtpNotifier
 from agentic.core.process.application.dry_run import read_only_ports
 from agentic.core.process.application.ports import (
-    ActivityRow,
+    ActivityPage,
     Mail,
     NotifySettings,
 )
@@ -30,10 +30,10 @@ class _Stub:
     def save(self, record: NotifiedRecord) -> None:
         raise AssertionError("must not save")
 
-    def merged_prs(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
         raise AssertionError("must not read")
 
-    def closed_issues(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
         raise AssertionError("must not read")
 
 

@@ -34,6 +34,8 @@ __all__ = [
     "WindowedSection",
     "clean",
     "digest_message",
+    "github_repo_url",
+    "is_repo_url",
     "release_message",
     "repo_url",
     "waiting_message",
@@ -52,6 +54,11 @@ NOTHING: Final = "Nothing to report."
 _REMOVED: Final = ("Cc", "Zl", "Zp")
 _DIRECTION: Final = frozenset([0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)])
 _REPO: Final = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", re.ASCII)
+_REMOTES: Final = (
+    re.compile(r"https://github\.com/([^/\s@:]+)/([^/\s@:]+)", re.ASCII),
+    re.compile(r"git@github\.com:([^/\s@:]+)/([^/\s@:]+)", re.ASCII),
+    re.compile(r"ssh://git@github\.com/([^/\s@:]+)/([^/\s@:]+)", re.ASCII),
+)
 _UNFILLED: Final = ("{", "}", "<usd>", "<n>")
 
 _Line = tuple[str, str]
@@ -67,12 +74,34 @@ def clean(value: str, limit: int = FIELD_MAX) -> str:
     return kept if len(kept) <= limit else kept[: limit - 1] + "…"
 
 
-def repo_url(value: str) -> str:
-    """`value` when it is `https://github.com/<owner>/<repo>` in ASCII, else `ValueError`."""
+def is_repo_url(value: str) -> bool:
+    """Whether `value` is `https://github.com/<owner>/<repo>` in ASCII."""
     match = _REPO.fullmatch(value)
-    if match is None or {".", ".."} & set(match.groups()):
+    return match is not None and not {".", ".."} & set(match.groups())
+
+
+def repo_url(value: str) -> str:
+    """`value` when `is_repo_url`, else `ValueError`."""
+    if not is_repo_url(value):
         raise ValueError(f"repo is not a GitHub repository URL: {value!r}")
     return value
+
+
+def github_repo_url(remote: str) -> str | None:
+    """The `https://github.com/<owner>/<repo>` URL of a git remote on github.com (https, scp-like
+    or ssh form, an optional `.git` suffix, whitespace trimmed), else `None`: another host, a
+    remote with credentials (an https userinfo), or text that is not a remote. The only place
+    that converts a remote, and it never raises or returns any of its text but a validated URL."""
+    text = remote.strip()
+    for pattern in _REMOTES:
+        match = pattern.fullmatch(text)
+        if match is None:
+            continue
+        owner, name = match.groups()
+        name = name.removesuffix(".git")
+        url = f"https://github.com/{owner}/{name}"
+        return url if is_repo_url(url) else None
+    return None
 
 
 @dataclass(frozen=True)

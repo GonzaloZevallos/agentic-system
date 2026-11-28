@@ -65,8 +65,9 @@ from .core.process.adapters.filesystem.write_gate import WRITE_TURN_FILE, Filesy
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
-from .core.process.adapters.git.workspace import WORKTREES
+from .core.process.adapters.git.workspace import WORKTREES, GitRepoOrigin
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker, account
+from .core.process.adapters.github.activity import GhActivity
 from .core.process.adapters.github.board import (
     BOARD_WRITE_ATTEMPTS,
     BOARD_WRITE_BACKOFF_S,
@@ -430,6 +431,12 @@ def offline_ports(cfg: Configuration) -> Ports:
         tracker=NoGithub("tracker"),
         inbox=NoGithub("inbox"),
         board=NoGithub("board"),
+        # GH-1058: a smoke sends no mail and reads no activity, whatever the environment says.
+        notifier=None,
+        notified=None,
+        activity=None,
+        origin=None,
+        notify_settings=None,
     )
 
 
@@ -447,9 +454,11 @@ def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
         board_sent=None,
         format_filing=None,
         format_fixes=None,
+        # GH-1056, GH-1058: an evaluation sends no mail and reads no activity.
         notifier=None,
         notified=None,
         activity=None,
+        origin=None,
         notify_settings=None,
     )
 
@@ -544,6 +553,24 @@ def _ports(
         else Path(os.devnull)
     )
     notifier, notified, notify_settings = notify_members(os.environ, notify_path)
+    # GH-1058: the Activity read exists only where the notifier does, from the same decision.
+    activity = (
+        None
+        if notifier is None
+        else GhActivity(
+            cfg.product_dir,
+            retry=GhRetry(
+                max_wait_s=BOARD_WRITE_WAIT_MAX_S,
+                attempts=BOARD_WRITE_ATTEMPTS,
+                backoff_s=BOARD_WRITE_BACKOFF_S,
+                stop=stop_flag,
+            ),
+            access=access,
+            calls=calls,
+        )
+    )
+    # GH-1205: the origin read, over the same checkout, exists where the notifier does too.
+    origin = None if notifier is None else GitRepoOrigin(cfg.product_dir)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -617,6 +644,8 @@ def _ports(
         ),
         notifier=notifier,
         notified=notified,
+        activity=activity,
+        origin=origin,
         notify_settings=notify_settings,
         scratch=scratch,
         free_space=free_space,

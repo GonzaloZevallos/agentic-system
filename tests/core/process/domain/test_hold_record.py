@@ -34,11 +34,53 @@ def test_an_absent_key_reads_as_none():
     assert hr.read({"other": 1}) is None
 
 
-def test_the_intervals_read_as_aware_pairs_and_a_naive_bound_is_utc():
-    got = hr.read(doc({"intervals": [interval(end="2026-10-01T10:00:00")]}))
+def test_the_intervals_read_as_aware_pairs_in_the_zone_they_were_written():
+    got = hr.read(doc({"intervals": [interval(end="2026-10-01T12:00:00+02:00")]}))
     assert got == (
         (datetime(2026, 10, 1, 9, 0, tzinfo=UTC), datetime(2026, 10, 1, 10, 0, tzinfo=UTC)),
     )
+
+
+# --- a naive instant is unreadable (ADR-0111): old reading UTC, now `HoldUnknown` ---------------
+
+
+@pytest.mark.parametrize("bound", ["start", "end"])
+def test_a_stored_interval_with_a_naive_bound_reads_as_unreadable_where_it_read_as_utc(bound):
+    naive = interval(**{bound: "2026-10-01T09:30:00"})
+    with_z = interval(**{bound: "2026-10-01T09:30:00Z"})
+    with_offset = interval(**{bound: "2026-10-01T11:30:00+02:00"})
+    assert hr.read(doc({"intervals": [naive]})) == HoldUnknown("unreadable")
+    assert hr.read(doc({"intervals": [interval(), naive]})) == HoldUnknown("unreadable")
+    assert isinstance(hr.read(doc({"intervals": [with_z]})), tuple)
+    assert hr.read(doc({"intervals": [with_offset]})) == hr.read(doc({"intervals": [with_z]}))
+
+
+@pytest.mark.parametrize("naive_at", [0, 1])
+def test_a_label_event_with_a_naive_instant_is_unreadable_where_it_was_utc(naive_at):
+    at = ["2026-10-01T09:00:00Z", "2026-10-01T10:00:00Z"]
+    zoned = [added(at[0]), removed(at[1])]
+    naive = [
+        LabelEvent(at[i].removesuffix("Z") if i == naive_at else at[i], e.action)
+        for i, e in enumerate(zoned)
+    ]
+    assert hr.from_events(naive, MERGED) == {"unknown": "unreadable"}
+    assert hr.from_events(zoned, MERGED) == {"intervals": [interval()]}
+    offset = [added("2026-10-01T11:00:00+02:00"), removed("2026-10-01T12:00:00+02:00")]
+    assert hr.from_events(offset, MERGED) == {
+        "intervals": [{"start": "2026-10-01T11:00:00+02:00", "end": "2026-10-01T12:00:00+02:00"}]
+    }
+
+
+def test_a_naive_merge_instant_is_unreadable_where_it_was_utc():
+    assert hr.from_events([added("2026-10-01T09:00:00Z")], "2026-10-01T12:00:00") == {
+        "unknown": "unreadable"
+    }
+
+
+def test_the_unreadable_record_from_a_naive_event_is_what_patch_stores_and_read_returns():
+    patched = hr.patch([added("2026-10-01T09:00:00")], MERGED)
+    assert patched == {hr.HOLDS_KEY: {"unknown": "unreadable"}}
+    assert hr.read(patched) == HoldUnknown("unreadable")
 
 
 def test_an_empty_list_is_read_with_no_holds_not_none():

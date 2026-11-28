@@ -12,22 +12,11 @@ clears it."""
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
 from typing import Literal
 
+from . import instant
+
 CommentKind = Literal["escalated", "ready"]
-
-
-def _instant(value: str | None) -> datetime | None:
-    """The aware instant of an ISO-8601 string (`Z` or an offset), `None` when it is missing,
-    empty, garbage or carries no offset (it cannot be ordered against an aware one)."""
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else None
 
 
 def open_escalation(
@@ -48,7 +37,7 @@ def open_escalation(
     escalated = [created for kind, created in comments if kind == "escalated"]
     if not escalated:
         return False
-    latest = _instant(escalated[-1])
+    latest = instant.parse_instant(escalated[-1])
     if latest is None:
         return None
     readies = [created for kind, created in comments if kind == "ready"]
@@ -57,7 +46,7 @@ def open_escalation(
         *([resumed_at] if resumed_at is not None else []),
         *released_at,
     ]
-    parsed = [_instant(mark) for mark in marks]
+    parsed = [instant.parse_instant(mark) for mark in marks]
     if any(mark is not None and mark > latest for mark in parsed):
         return False
     if any(mark is None for mark in parsed):

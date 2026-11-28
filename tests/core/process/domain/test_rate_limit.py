@@ -516,3 +516,12 @@ def test_governing_reset_adds_the_products_offset_once_and_needs_a_stated_reset(
     reset = _at(minutes=20)
     assert rate_limit.governing_reset(reset, "p") == reset + reset_offset("p")
     assert rate_limit.governing_reset(None, "p") is None
+
+
+def test_pause_at_drops_a_naive_instant_and_keeps_an_offset_one_as_written():
+    naive = _state([{"kind": "escalation", "value": "failure", "at": "2026-11-20T12:00:00"}])
+    assert rate_limit.pause_at(naive) is None
+    offset = _state([{"kind": "escalation", "value": "failure", "at": "2026-11-20T14:00:00+02:00"}])
+    at = rate_limit.pause_at(offset)
+    assert at == datetime(2026, 11, 20, 12, tzinfo=UTC)
+    assert at is not None and at.utcoffset() == timedelta(hours=2)

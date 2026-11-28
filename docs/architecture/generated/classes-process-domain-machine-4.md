@@ -33,7 +33,6 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
-    class scratch__PartitionListing["PartitionListing"]
     class scratch__RecordFact["RecordFact"]
     class scratch__Removal["Removal"]
     class scratch__ScratchListing["ScratchListing"]
@@ -47,5 +46,7 @@ classDiagram
     class stage0_rotation__Proceed["Proceed"]
     class stage0_rotation__Red["Red"]
     class stage0_rotation__Stop["Stop"]
+    class stage0_rotation__SwitchRecord["SwitchRecord"]
+    class stage0_rotation__Target["Target"]
     stage0_rotation__Proceed --> stage0_rotation__Green
 ```

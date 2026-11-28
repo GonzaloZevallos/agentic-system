@@ -44,6 +44,7 @@ from agentic.core.process.application.ports import (
     ProductKnowledge,
     ProductStack,
     Prompts,
+    RepoOrigin,
     RoleRunner,
     RunRegistry,
     RunStopped,
@@ -70,6 +71,7 @@ from tests.fakes import (
     FakeLandRecord,
     FakeLauncher,
     FakeLoadReader,
+    FakeOrigin,
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
@@ -126,6 +128,7 @@ _land_record: LandRecord = FakeLandRecord()
 _label_timeline: LabelTimeline = FakeLabelTimeline()
 _format_filer: FormatFiler = FakeFormatFiler()
 _format_fixes: FormatFixReads = FakeFormatFixReads()
+_repo_origin: RepoOrigin = FakeOrigin()
 
 
 def ports_of_doubles() -> Ports:
@@ -187,6 +190,7 @@ COVERED: dict[str, type] = {
     "LabelTimeline": FakeLabelTimeline,
     "FormatFiler": FakeFormatFiler,
     "FormatFixReads": FakeFormatFixReads,
+    "RepoOrigin": FakeOrigin,
 }
 
 

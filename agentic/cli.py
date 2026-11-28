@@ -94,6 +94,7 @@ from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.format_release import FormatReleaseCarry
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
+from .core.process.application.notify import NotifyCarry
 from .core.process.application.ports import (
     GhCallLog,
     Heartbeats,
@@ -1833,6 +1834,7 @@ async def _poll(
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
+        notify_carry = NotifyCarry()  # GH-1205: what the notifier said and read, per process
         terminal_memo = TerminalMemo()  # GH-992: determinate blocker closures, per process
         release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
         try:
@@ -1862,6 +1864,7 @@ async def _poll(
                             eval_set=_round_eval_set(ports, upstream),
                             system_version=telemetry.fresh_system_version,
                             sweep_carry=sweep_carry,
+                            notify_carry=notify_carry,
                             format_release_carry=release_carry,
                             terminal_memo=terminal_memo,
                         ):
