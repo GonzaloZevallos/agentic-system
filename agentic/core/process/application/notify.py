@@ -42,7 +42,7 @@ from ..domain.notify import (
 )
 from ..domain.stack_signals import MERGED_OUTCOMES
 from ..domain.task import TaskState
-from .ports import ActivityRow, Mail, Ports
+from .ports import ActivityPage, ActivityRow, Mail, Ports
 
 __all__ = ["NotifyCarry", "notify", "split_facts_of"]
 
@@ -177,12 +177,20 @@ class _Row:
     judged: bool
 
 
-def _read(read: Callable[[datetime, int], list[ActivityRow]], since: datetime) -> list[ActivityRow]:
-    rows = read(since, SHOWN + 1)
-    for row in rows:
-        if row.instant.utcoffset() != timedelta(0) or row.instant <= since:
+_NONE = ActivityPage((), None)
+
+
+def _read(read: Callable[[datetime, int], ActivityPage], since: datetime) -> ActivityPage:
+    """One wrapped Activity read of at most `SHOWN` rows; the page says where it cut. Every instant
+    must be aware UTC and after `since`, otherwise the read is the round's failure."""
+    page = read(since, SHOWN)
+    instants = [row.instant for row in page.rows]
+    if page.cut_at is not None:
+        instants.append(page.cut_at)
+    for instant in instants:
+        if instant.utcoffset() != timedelta(0) or instant <= since:
             raise ValueError("activity row instant")
-    return rows
+    return page
 
 
 def _state(raw: Any) -> TaskState:
@@ -257,16 +265,15 @@ class _Round:
         assert self.record is not None and self.record.started_at is not None
         since = self.record.activity_read_at or self.record.started_at
         waiting, tray_docs = self._waiting()
-        closed: list[ActivityRow] = []
-        merged: list[ActivityRow] = []
+        closed, merged = _NONE, _NONE
         if self.kinds.release or self.kinds.digest:
             closed = _port(lambda: _read(self.activity.closed_issues, since))
         if self.kinds.digest:
             merged = _port(lambda: _read(self.activity.merged_prs, since))
-        cuts = [rows[SHOWN].instant for rows in (closed, merged) if len(rows) > SHOWN]
+        cuts = [page.cut_at for page in (closed, merged) if page.cut_at is not None]
         self.cut_at = min(cuts) if cuts else None
-        releases = self._releases(closed[:SHOWN], carry, lines)
-        self.rows = [*releases[1], *(_Row(r.instant, None, False) for r in merged[:SHOWN])]
+        releases = self._releases(list(closed.rows), carry, lines)
+        self.rows = [*releases[1], *(_Row(r.instant, None, False) for r in merged.rows)]
         sends = [*waiting, *releases[0]]
         for key, mail in sends[:SENDS_PER_ROUND]:
             self._send(key, mail)
@@ -393,8 +400,8 @@ class _Round:
     def _view(
         self,
         digest: DigestEvent,
-        closed: list[ActivityRow],
-        merged: list[ActivityRow],
+        closed: ActivityPage,
+        merged: ActivityPage,
         tray: Mapping[int, Doc],
     ) -> notify_message.DigestView:
         waiting: list[notify_message.DigestRow] = []
@@ -421,14 +428,13 @@ class _Round:
             self._window(closed, digest),
         )
 
-    def _window(
-        self, rows: list[ActivityRow], digest: DigestEvent
-    ) -> notify_message.WindowedSection:
-        cut = len(rows) > SHOWN
-        single = cut and all(r.instant == self.cut_at for r in rows)
+    def _window(self, page: ActivityPage, digest: DigestEvent) -> notify_message.WindowedSection:
+        cut = page.cut
+        same = all(r.instant == self.cut_at for r in page.rows)
+        single = cut and page.cut_at == self.cut_at and same
         kept = [
             r
-            for r in rows[:SHOWN]
+            for r in page.rows
             if r.instant <= digest.instant
             and (single or self.cut_at is None or r.instant < self.cut_at)
         ]

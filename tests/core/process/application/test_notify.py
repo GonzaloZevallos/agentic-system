@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from agentic.core.process.application.notify import NotifyCarry, notify, split_facts_of
-from agentic.core.process.application.ports import ActivityRow, Ports
+from agentic.core.process.application.ports import ActivityPage, ActivityRow, Ports
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.notify import (
     NOTIFY_RETRY_AFTER,
@@ -203,6 +203,30 @@ def test_naive_instant_from_activity_is_the_rounds_failure() -> None:
     s = Setup(closed=[ActivityRow(5, "t", "u", datetime(2026, 11, 20, 9, 0))])
     assert s.round() == ["notify: round failed (ValueError)"]
     assert s.notified.record.failed_at == NOW
+
+
+class _FixedPage(FakeActivity):
+    """Answers every closed read with one page, however wrong it is for `since`."""
+
+    def __init__(self, page: ActivityPage) -> None:
+        super().__init__()
+        self.page = page
+
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
+        return self.page
+
+
+@pytest.mark.parametrize(
+    "page",
+    [ActivityPage((_row(5, 0),), None), ActivityPage((), START)],
+    ids=["row_at_since", "cut_at_since"],
+)
+def test_instant_not_after_since_from_activity_is_the_rounds_failure(page: ActivityPage) -> None:
+    s = Setup(docs={"GH-5": _ui(5)})
+    s.activity = _FixedPage(page)
+    assert s.round() == ["notify: round failed (ValueError)"]
+    assert s.notified.record.failed_at == NOW
+    assert s.notifier.sent == []
 
 
 def test_save_failing_after_a_send_resends_exactly_once() -> None:

@@ -21,6 +21,7 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     REMERGE_DIFF_MIN_GIT,
     Activity,
+    ActivityPage,
     ActivityRow,
     AddedAdr,
     AddedLine,
@@ -3033,17 +3034,19 @@ class FakeActivity:
 
     def _read(
         self, kind: str, rows: list[ActivityRow], since: datetime, limit: int
-    ) -> list[ActivityRow]:
+    ) -> ActivityPage:
         self.reads.append((kind, since))
         if self.error is not None:
             raise self.error
         later = [r for r in rows if r.instant.tzinfo is None or r.instant > since]
-        return sorted(later, key=lambda r: (r.instant, r.number))[:limit]
+        ordered = sorted(later, key=lambda r: (r.instant, r.number))
+        cut_at = ordered[limit].instant if len(ordered) > limit else None
+        return ActivityPage(tuple(ordered[:limit]), cut_at)
 
-    def merged_prs(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
         return self._read("merged", self.merged, since, limit)
 
-    def closed_issues(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
         return self._read("closed", self.closed, since, limit)
 
 
