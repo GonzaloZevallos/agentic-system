@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__BoardSent["BoardSent"]
     class ports__BoardWritten["BoardWritten"]
     class ports__BranchPullRequest["BranchPullRequest"]
     class ports__BudgetStore["BudgetStore"]

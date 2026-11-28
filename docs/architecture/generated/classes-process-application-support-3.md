@@ -34,6 +34,7 @@ classDiagram
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
     class ports__Inbox["Inbox"]
+    class ports__InstalledProducts["InstalledProducts"]
 ```
 
 ## Relaciones con otras páginas
@@ -46,7 +47,7 @@ classDiagram
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 7)](classes-process-application-support-7.md)
+  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 8)](classes-process-application-support-8.md)
-  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.UnstageablePath` hereda de `ports.GitError`

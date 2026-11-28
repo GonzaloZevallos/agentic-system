@@ -8,6 +8,7 @@ Esta página muestra los módulos del adaptador `adapters.github` y los imports 
   - [adapters.git](packages-process-adapters-git.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [application](packages-process-application.md)
   - [domain](packages-process-domain.md)
@@ -17,6 +18,7 @@ graph TD
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_adapters__github__account["adapters.github.account"]
+    m_adapters__github__activity["adapters.github.activity"]
     m_adapters__github__board["adapters.github.board"]
     m_adapters__github__ci_logs["adapters.github.ci_logs"]
     m_adapters__github__commit_ci["adapters.github.commit_ci"]
@@ -29,6 +31,9 @@ graph TD
     m_adapters__github__account --> g_pkg__application
     m_adapters__github__account --> g_pkg__domain
     m_adapters__github__account --> m_adapters__github__run
+    m_adapters__github__activity --> g_pkg__application
+    m_adapters__github__activity --> g_pkg__domain
+    m_adapters__github__activity --> m_adapters__github__run
     m_adapters__github__board --> g_pkg__application
     m_adapters__github__board --> g_pkg__domain
     m_adapters__github__board --> m_adapters__github__run

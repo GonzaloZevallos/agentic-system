@@ -7,6 +7,7 @@ Esta página muestra las clases públicas de los módulos del grupo `shell` de `
   - [adapters: filesystem (parte 2)](classes-process-adapters-filesystem-2.md)
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
   - [adapters: toplevel](classes-process-adapters-toplevel.md)
 
 ```mermaid

@@ -9,6 +9,7 @@ Esta página muestra los grupos de módulos de `application` y una flecha por ca
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [domain](packages-process-domain.md)
 - Grupos:

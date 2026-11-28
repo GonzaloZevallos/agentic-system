@@ -54,6 +54,7 @@ from agentic.core.process.application.ports import (
     MergeFailed,
     Notified,
     Notifier,
+    NotifySettings,
     OwnerRuleEntry,
     PendingPaths,
     PerfLock,
@@ -3038,6 +3039,7 @@ def memory_ports(
     notifier: Notifier | None = None,
     notified: Notified | None = None,
     activity: Activity | None = None,
+    notify_settings: NotifySettings | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -3073,6 +3075,7 @@ def memory_ports(
         notifier=notifier,
         notified=notified,
         activity=activity,
+        notify_settings=notify_settings,
     )
 
 

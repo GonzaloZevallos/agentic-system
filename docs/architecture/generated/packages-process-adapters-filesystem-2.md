@@ -8,6 +8,7 @@ Esta página muestra los módulos del adaptador `adapters.filesystem` y los impo
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [application](packages-process-application.md)
   - [domain](packages-process-domain.md)

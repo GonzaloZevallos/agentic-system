@@ -298,10 +298,10 @@ def test_a_dry_round_never_carries_the_notifier_its_record_or_its_activity_read(
         def save(self, record: NotifiedRecord) -> None:
             raise AssertionError("a dry round must not save")
 
-        def merged_prs(self, since: datetime, limit: int) -> list[ports.ActivityRow]:
+        def merged_prs(self, since: datetime, limit: int) -> ports.ActivityPage:
             raise AssertionError("a dry round must not read")
 
-        def closed_issues(self, since: datetime, limit: int) -> list[ports.ActivityRow]:
+        def closed_issues(self, since: datetime, limit: int) -> ports.ActivityPage:
             raise AssertionError("a dry round must not read")
 
     filled = dataclasses.replace(memory_ports(), notifier=Stub(), notified=Stub(), activity=Stub())
