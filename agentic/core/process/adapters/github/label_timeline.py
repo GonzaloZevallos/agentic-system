@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ...application.ports import TrackerCallFailed
-from .run import Run, bounded_run, print_line, run_gh
+from .run import RateLimitLatch, Run, bounded_run, print_line, run_gh
 
 _QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -49,8 +49,10 @@ class GhLabelTimeline:
         product_dir: Path,
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
+        latch: RateLimitLatch | None = None,
     ):
         self.product_dir = product_dir
+        self._latch = latch if latch is not None else RateLimitLatch()
         self._run = run
         self._log = log
 
@@ -73,6 +75,7 @@ class GhLabelTimeline:
                 args,
                 cwd=self.product_dir,
                 log=self._log,
+                latch=self._latch,
                 not_installed="gh is not installed",
                 failed=lambda stderr: "gh api graphql failed",
             )

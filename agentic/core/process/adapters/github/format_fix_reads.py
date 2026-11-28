@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ...application.ports import GhCallLog, IssueState, Tracker, TrackerCallFailed
-from .run import Run, bounded_run, run_gh
+from .run import RateLimitLatch, Run, bounded_run, run_gh
 
 _ISSUE_URL = re.compile(r"https://github\.com/([^/?#\s]+)/([^/?#\s]+)/issues/(\d+)/?")
 _SLUG = re.compile(r"[^/\s]+/[^/\s]+")
@@ -80,6 +80,7 @@ class GhRepoSlug:
                 not_installed="gh is not installed",
                 failed=lambda stderr: "gh repo view failed",
                 log=lambda _line: None,
+                latch=RateLimitLatch(),  # nothing reads it: a failed read is `None`
                 calls=self._calls,
             )
             name = json.loads(raw)["nameWithOwner"]

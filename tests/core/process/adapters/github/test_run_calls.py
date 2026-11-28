@@ -58,6 +58,7 @@ def _call(run, calls, *args, **over):
         not_installed="no gh",
         failed=lambda stderr: f"failed: {stderr}",
         log=lambda line: None,
+        latch=None,
         calls=calls,
         **over,
     )

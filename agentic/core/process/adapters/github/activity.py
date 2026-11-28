@@ -30,7 +30,7 @@ from ...application.ports import (
     TrackerCallFailed,
 )
 from ...domain.github_access import GithubAccess
-from .run import GhRetry, Run, bounded_run, run_gh
+from .run import GhRetry, RateLimitLatch, Run, bounded_run, run_gh
 
 ACTIVITY_READ_TIMEOUT_S: float = 60
 """One read's own bound: up to ten pages of a hundred rows in a single `gh` call."""
@@ -57,6 +57,7 @@ class GhActivity:
         self._access = access
         self._calls = calls
         self._run = run
+        self._latch = RateLimitLatch()  # nothing reads it: a failed page is `ActivityFailed`
 
     def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
         return self._page("pr", since, limit)
@@ -105,6 +106,7 @@ class GhActivity:
             not_installed="gh is not installed",
             failed=lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=lambda _line: None,
+            latch=self._latch,
             retry=self._retry,
             retry_timeouts=True,
             access=self._access,

@@ -171,6 +171,30 @@ def test_the_process_guard_rejects_a_module_that_starts_its_own(tmp_path):
     assert _starts_own_process(tmp_path) == ["late.py", "popen.py"]
 
 
+def _run_gh_calls_without_latch(root: Path) -> list[str]:
+    """GH-996: every call to `run_gh` names its `latch` (a `RateLimitLatch` or `None`), so a
+    rate limit that ends a call cannot go unmarked by forgetting the argument."""
+    found: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name == "run_gh" and all(keyword.arg != "latch" for keyword in node.keywords):
+                found.append(f"{path.name}:{node.lineno}")
+    return found
+
+
+def test_every_run_gh_call_passes_a_latch():
+    assert _run_gh_calls_without_latch(PACKAGE) == []
+
+
+def test_the_latch_guard_rejects_a_call_that_omits_it(tmp_path):
+    (tmp_path / "bad.py").write_text("run_gh(run, args, cwd=cwd)\nmod.run_gh(run, args)\n")
+    (tmp_path / "good.py").write_text("run_gh(run, args, latch=None)\n")
+    assert _run_gh_calls_without_latch(tmp_path) == ["bad.py:1", "bad.py:2"]
+
+
 # Invariant 7 (GH-274, ADR-0051): `psycopg` is imported by the Langfuse adapter alone, and the
 # root never imports that adapter at module level, so no other command loads the driver.
 CONFINED = ("psycopg",)
