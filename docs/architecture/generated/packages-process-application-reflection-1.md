@@ -1,4 +1,4 @@
-Esta página muestra los módulos del grupo `reflection` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El grupo se dividió por cantidad: esta es la parte 1 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
+Esta página muestra los módulos del grupo `reflection` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. Los imports hacia `domain` se resumen en un solo nodo `domain (paquete)` porque dibujar un nodo por grupo no cabe en el presupuesto de diagramas. El grupo se dividió por cantidad: esta es la parte 1 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
 
 - Padre: [application](packages-process-application.md)
 - Hermanas:
@@ -20,41 +20,33 @@ graph TD
     g_application__landing["landing (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
     g_application__support["support (grupo)"]
-    g_domain__checks["checks (grupo de domain)"]
-    g_domain__landing["landing (grupo de domain)"]
-    g_domain__machine["machine (grupo de domain)"]
-    g_domain__playbook["playbook (grupo de domain)"]
-    g_domain__roles["roles (grupo de domain)"]
-    g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    g_pkg__domain["domain (paquete)"]
     m_application__board_sync["application.board_sync"]
+    m_application__early_size["application.early_size"]
     m_application__owner_rules["application.owner_rules"]
     m_application__playbook_land["application.playbook_land"]
     m_application__reflect["application.reflect"]
     m_application__reflect_run["application.reflect_run"]
     m_application__board_sync --> g_application__lifecycle
     m_application__board_sync --> g_application__support
-    m_application__board_sync --> g_domain__landing
-    m_application__board_sync --> g_domain__state
+    m_application__board_sync --> g_pkg__domain
+    m_application__early_size --> g_application__landing
+    m_application__early_size --> g_application__support
+    m_application__early_size --> g_pkg__agentic__shared
+    m_application__early_size --> g_pkg__domain
     m_application__owner_rules --> g_application__support
-    m_application__owner_rules --> g_domain__roles
-    m_application__owner_rules --> g_domain__state
     m_application__owner_rules --> g_pkg__agentic__shared
+    m_application__owner_rules --> g_pkg__domain
     m_application__playbook_land --> g_application__support
-    m_application__playbook_land --> g_domain__checks
-    m_application__playbook_land --> g_domain__playbook
-    m_application__playbook_land --> g_domain__state
+    m_application__playbook_land --> g_pkg__domain
     m_application__playbook_land --> m_application__reflect_run
     m_application__reflect --> g_application__support
-    m_application__reflect --> g_domain__playbook
-    m_application__reflect --> g_domain__roles
-    m_application__reflect --> g_domain__state
     m_application__reflect --> g_pkg__agentic__shared
+    m_application__reflect --> g_pkg__domain
     m_application__reflect_run --> g_application__landing
     m_application__reflect_run --> g_application__support
-    m_application__reflect_run --> g_domain__machine
-    m_application__reflect_run --> g_domain__playbook
-    m_application__reflect_run --> g_domain__state
     m_application__reflect_run --> g_pkg__agentic__shared
+    m_application__reflect_run --> g_pkg__domain
     m_application__reflect_run --> m_application__reflect
 ```
