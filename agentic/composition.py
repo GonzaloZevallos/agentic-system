@@ -12,6 +12,7 @@ from `core.measurement` and is handed to the process adapters here, so
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sqlite3
@@ -64,7 +65,7 @@ from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.ancestry import GitAncestry
 from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
-from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
+from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker, account
 from .core.process.adapters.github.board import (
     BOARD_WRITE_ATTEMPTS,
     BOARD_WRITE_BACKOFF_S,
@@ -74,6 +75,7 @@ from .core.process.adapters.github.board import (
 from .core.process.adapters.github.ci_logs import GhCiLogs
 from .core.process.adapters.github.commit_ci import GhCommitCi
 from .core.process.adapters.github.format_fix_reads import GhFormatFixReads, GhRepoSlug
+from .core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -84,6 +86,7 @@ from .core.process.adapters.github.run import (
 )
 from .core.process.adapters.github.tracker import pull_request_number
 from .core.process.adapters.langgraph.graph import build_graph
+from .core.process.adapters.offline import NoGithub
 from .core.process.adapters.shell import (
     NullStopFlag,
     ShellCommands,
@@ -96,6 +99,7 @@ from .core.process.adapters.shell.stage0_candidate import ShellStage0Candidate
 from .core.process.application.format_issue import FormatFiling
 from .core.process.application.ports import (
     FailurePolicy,
+    GhCallLog,
     Heartbeats,
     Inbox,
     InstalledProducts,
@@ -121,6 +125,7 @@ from .core.process.application.stage0_rotate import Prune
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
+from .core.process.domain.gh_calls import GH_CALL_KINDS, GhCallKind
 from .core.process.domain.github_access import GithubAccess
 from .core.process.domain.poller_units import unit_dir
 from .core.process.domain.presubmit import ApiBreakLine
@@ -221,16 +226,53 @@ def write_access(cfg: Configuration, gh_retry: GhWait | None, stop: StopFlag) ->
     return GithubAccess(gate=gate)
 
 
+@functools.cache
+def process_call_log() -> GhCallLog:
+    """The one `GhCallLog` of this process (GH-990): every `gh` adapter the composition builds
+    counts into it. The only place `InProcessGhCallLog` is constructed outside tests."""
+    return InProcessGhCallLog()
+
+
+BUDGET_READ_TIMEOUT_S = 5
+
+
+class _UncountedGhCalls:
+    """The `GhCallLog` the budget read counts into: it counts nothing, so the read of the
+    account's budget never shows up in a real log (GH-939). Private: only `budget_read`
+    builds it."""
+
+    def record(self, kind: GhCallKind) -> None:
+        return None
+
+    def drain(self) -> Mapping[GhCallKind, int]:
+        return dict.fromkeys(GH_CALL_KINDS, 0)
+
+
+def budget_read(cwd: Path) -> Callable[[], object | None]:
+    """The poller's zero-argument read of `gh api rate_limit` (GH-939): bounded at
+    `BUDGET_READ_TIMEOUT_S` seconds (plus the drain `bounded_run` allows a killed child) and
+    counted in no real `GhCallLog`, so the figure it reads does not include itself. The
+    document, or `None` when `gh` failed or printed no JSON."""
+    run = functools.partial(bounded_run, timeout_s=BUDGET_READ_TIMEOUT_S)
+    return lambda: account.read_rate_limit(run, cwd, calls=_UncountedGhCalls())
+
+
 def default_ports(
-    cfg: Configuration, stop_flag: StopFlag | None = None, *, gh_retry: GhWait | None = None
+    cfg: Configuration,
+    stop_flag: StopFlag | None = None,
+    *,
+    gh_retry: GhWait | None = None,
+    calls: GhCallLog | None = None,
 ) -> Ports:
     """The ports of a product. `stop_flag` is the one flag `run`/`resume` can mark when a
     signal stops them (GH-355); every other caller leaves it out and gets one that is never
     set, so no other verb can have a command raise `RunStopped`. `gh_retry` is the wait cap
     of the tracker's retry policy; left out, the tracker never retries (the poller, `inbox`,
-    `close` and every other verb, ADR-0050)."""
+    `close` and every other verb, ADR-0050). `calls` is where every `gh` adapter counts its
+    launches; left out, it is `process_call_log()`, so the ports of every node of a process
+    share one log (GH-990)."""
     flag = stop_flag if stop_flag is not None else NullStopFlag()
-    ports = _ports(cfg, flag, gh_retry)
+    ports = _ports(cfg, flag, gh_retry, calls=calls if calls is not None else process_call_log())
     # GH-470: the root alone decides that a process is wired as an evaluation.
     if evaluation.is_evaluation_root(cfg.product_dir):
         frozen = frozen_input_path(cfg.product_dir)
@@ -271,6 +313,7 @@ def stage0_master_window(
     product_dir: Path,
     stack_ci: Callable[[str], tuple[str, ...]],
     access: GithubAccess,
+    calls: GhCallLog,
 ) -> GitMasterWindow:
     """The stage0 rotation's view of master (GH-632, part 2c): a mirror under `root` of
     `remote_url`, each commit's CI read by sha through `gh` run in `product_dir`. Nothing calls it
@@ -284,7 +327,7 @@ def stage0_master_window(
     return GitMasterWindow(
         root,
         remote_url,
-        ci=GhCommitCi(GhTracker(product_dir, access=access)),
+        ci=GhCommitCi(GhTracker(product_dir, access=access, calls=calls)),
         stack_ci=stack_ci,
     )
 
@@ -352,10 +395,11 @@ def stage0_rotation(
     store = FilesystemStage0Store(root)
     stack = GitStack(root / MIRROR)
     access = write_access(cfg, None, NullStopFlag())
-    window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci, access)
+    calls = process_call_log()
+    window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci, access, calls)
     scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
-    candidate = ShellStage0Candidate(root, scratch, installed, origin)
-    repo = system_repo(access)
+    candidate = ShellStage0Candidate(root, scratch, installed, origin, out=print)
+    repo = system_repo(access, calls)
     return Stage0Rotation(
         store=store,
         users=ProcStage0Users(root),
@@ -367,6 +411,18 @@ def stage0_rotation(
         products=installed,
         heartbeats=FilesystemHeartbeats(root),
         root=root,
+    )
+
+
+def offline_ports(cfg: Configuration) -> Ports:
+    """The ports `agentic stage0 smoke` runs over (GH-1152): the ones `poll` is built with, but
+    the tracker, the inbox and the board raise on any use, so nothing in the smoke can reach
+    GitHub. Everything else (the stack, the prompts, the workspace) is the product's own."""
+    return replace(
+        default_ports(cfg),
+        tracker=NoGithub("tracker"),
+        inbox=NoGithub("inbox"),
+        board=NoGithub("board"),
     )
 
 
@@ -413,14 +469,19 @@ def perf_lock(cfg: Configuration) -> FilesystemPerfLock:
     return FilesystemPerfLock(cfg.perf_lock_path, NullStopFlag())
 
 
-def system_repo(access: GithubAccess) -> SystemRepo:
+def system_repo(access: GithubAccess, calls: GhCallLog) -> SystemRepo:
     """The system's own repo, for the one thing the `reflect` verb writes there: an issue
     with `needs-triage` for a lesson about the system (ADR-0056, ADR-0002). The stage0
     checkout `gh` resolves the repo from is `telemetry.REPO`, never the product's."""
-    return SystemRepo(GhTracker(telemetry.REPO, access=access), GhInbox(telemetry.REPO))
+    return SystemRepo(
+        GhTracker(telemetry.REPO, access=access, calls=calls),
+        GhInbox(telemetry.REPO, calls=calls),
+    )
 
 
-def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None) -> Ports:
+def _ports(
+    cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None, *, calls: GhCallLog
+) -> Ports:
     # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
     # handle on the same path, and whole lines are what makes that safe to interleave
     # (README.md, 14). `None` with no `log_file` -- the `langgraph dev` door -- opens
@@ -456,13 +517,14 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
     # GH-1083: one access, so one gate, for every tracker and the board of this node.
     access = write_access(cfg, gh_retry, stop_flag)
     tracker = (
-        GhTracker(cfg.product_dir, api_break_line=declared_api_break, access=access)
+        GhTracker(cfg.product_dir, api_break_line=declared_api_break, access=access, calls=calls)
         if gh_retry is None
         else GhTracker(
             cfg.product_dir,
             retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
             api_break_line=declared_api_break,
             access=access,
+            calls=calls,
         )
     )
     git_workspace = GitWorkspace(cfg.product_dir, cfg.git_identity)
@@ -490,14 +552,17 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
-        inbox=GhInbox(cfg.product_dir),
+        inbox=GhInbox(cfg.product_dir, calls=calls),
         workspace=git_workspace,
         # The same instance: one adapter answers both, read-only for the second.
         pending_paths=git_workspace,
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
         ci_logs=GhCiLogs(
-            cfg.product_dir, ci_reader(tracker), declared=lambda: tuple(stack.ci("HEAD"))
+            cfg.product_dir,
+            ci_reader(tracker),
+            declared=lambda: tuple(stack.ci("HEAD")),
+            calls=calls,
         ),
         # GH-470: the product's experiment declaration, read once per poller round.
         experiment=FilesystemExperimentFile(cfg.product_dir),
@@ -527,6 +592,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
                 stop=stop_flag,
             ),
             access=access,
+            calls=calls,
         ),
         board_sent=None
         if project is None
@@ -541,13 +607,14 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         spec_validator=DomainSpecValidator(),
         # GH-1030: one filing per run, so its locks and filed pairs are the run's; it writes to
         # the system's own repo (`system_repo`), never the product's.
-        format_filing=FormatFiling(system_repo(access), print, utc_now),
+        format_filing=FormatFiling(system_repo(access, calls), print, utc_now),
         # GH-1067: the reads that release a format hold, on the system's own repo and the
         # stage0 checkout it runs (`telemetry.REPO`), never the product's.
         format_fixes=GhFormatFixReads(
-            GhTracker(telemetry.REPO, access=access),
-            GhRepoSlug(telemetry.REPO),
+            GhTracker(telemetry.REPO, access=access, calls=calls),
+            GhRepoSlug(telemetry.REPO, calls=calls),
             GitAncestry(telemetry.REPO).contains,
+            calls=calls,
         ),
     )
 

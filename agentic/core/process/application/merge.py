@@ -1575,8 +1575,14 @@ def _ci_evidence(
                 text += f"; the report carried: {', '.join(ci.reported_names(report)) or 'none'}"
             return text
         return f"CI checks still pending: {', '.join(facts.ci_required)}"
-    cause = facts.ci_unreadable.cause if facts.ci_unreadable is not None else "gh_unreadable"
-    return f"`gh` could not read the CI report ({cause})"
+    unreadable = facts.ci_unreadable
+    cause = unreadable.cause if unreadable is not None else "gh_unreadable"
+    said = (
+        f"; gh answered: {unreadable.detail}"
+        if unreadable is not None and unreadable.detail
+        else ""
+    )
+    return f"`gh` could not read the CI report ({cause}){said}"
 
 
 def _deferral_evidence(facts: rules.MergeFacts, report: ci.CiReport) -> str:

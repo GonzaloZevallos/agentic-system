@@ -76,6 +76,7 @@ from agentic.core.process.application.ports import (
     SpecReader,
     SpecUnreadable,
     SpecValidator,
+    StackHint,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -498,6 +499,7 @@ class MemoryStack:
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
         adr_naming: Literal["numbered", "dated"] = "numbered",
+        stacking: bool = False,
         prototype: PrototypeListing | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
@@ -577,6 +579,7 @@ class MemoryStack:
         # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
         # default for one), and each revision asked: a test counts the reads.
         self.declared_adr_naming = adr_naming
+        self.declared_stacking = stacking
         self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
         self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
@@ -657,6 +660,10 @@ class MemoryStack:
     def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
         self.adr_naming_reads.append(revision)
         return self.adr_naming_at.get(revision, self.declared_adr_naming)
+
+    def stacking(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_stacking
 
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1035,6 +1042,8 @@ class MemoryWorkspace:
         self.remote_tips: dict[str, str] = {}
         self.remote_tip_error: str | None = None
         self.remote_tip_calls: list[tuple[Path, str]] = []
+        # The `bounded` flag of each `remote_tip` ask, in the same order as `remote_tip_calls`.
+        self.remote_tip_bounded: list[bool] = []
         # GH-376: `ci_refs` is the sha each `agentic-ci/` ref holds on the fake remote;
         # `ci_ref_calls` is every `publish_ci_ref` / `remote_refs` / `delete_remote_ref`
         # as `(verb, argument)`, and `ci_ref_error` makes each of them raise `GitError`.
@@ -1118,6 +1127,9 @@ class MemoryWorkspace:
         self.checkouts_made: list[str] = []
         self.pruned = 0
         self.fetched_commits: list[str] = []
+        # Shas `fetch_commit` cannot bring in, and where each stacked branch started (GH-858).
+        self.unfetchable: set[str] = set()
+        self.started: dict[str, str] = {}
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
         # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
@@ -1157,9 +1169,17 @@ class MemoryWorkspace:
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
 
-    def task_checkout(self, task_id: str) -> Checkout:
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
         branch = rules.task_branch(task_id)
-        return self._made(branch, self.ROOT / task_id, "base0")
+        path = self.ROOT / task_id
+        # As the real one: the start is asked only for a branch not made yet, and its sha is
+        # the base. Without one, the default base.
+        if start is not None and branch not in self.checkouts_made:
+            self.started[branch] = start()
+            return self._made(branch, path, self.started[branch])
+        if branch in self.started:
+            return self._made(branch, path, self.started[branch])
+        return self._made(branch, path, "base0")
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
         branch = rules.subtask_branch(task_id, subtask_id)
@@ -1432,8 +1452,9 @@ class MemoryWorkspace:
         self.pushed.append(branch)
         self.pushes.append((branch, lease))
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         self.remote_tip_calls.append((path, branch))
+        self.remote_tip_bounded.append(bounded)
         if self.remote_tip_error is not None:
             raise GitError(self.remote_tip_error)
         return self.remote_tips.get(branch)
@@ -1513,6 +1534,8 @@ class MemoryWorkspace:
         self.cleaned.append(task_id)
 
     def branch_head(self, branch: str) -> str | None:
+        if branch in self.started:
+            return self.started[branch]
         return self.existing_branches[branch][0] if branch in self.existing_branches else None
 
     def base_of(self, branch: str) -> str | None:
@@ -1529,7 +1552,7 @@ class MemoryWorkspace:
     # `diff_paths`, and every worktree it asks for or removes is kept by name.
     def fetch_commit(self, sha: str) -> bool:
         self.fetched_commits.append(sha)
-        return True
+        return sha not in self.unfetchable
 
     # GH-229: the two-phase reads of a branch's own ADRs, over `branch_commits`.
     def advance_master(self, *files: str) -> str:
@@ -2255,12 +2278,17 @@ class MemoryRunRegistry:
         return self.attempts.get((product, issue))
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
         kept = arm if arm is not None else (existing.arm if existing is not None else None)
-        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept)
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept, stack_hint)
 
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)

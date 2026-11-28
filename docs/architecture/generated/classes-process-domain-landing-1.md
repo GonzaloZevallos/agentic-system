@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -43,7 +44,9 @@ classDiagram
     class board__Card["Card"]
     class board__FieldWrite["FieldWrite"]
     class board__IssueFacts["IssueFacts"]
+    class board__Remembered["Remembered"]
     class cost_history__Bucket["Bucket"]
     class cost_history__Floor["Floor"]
+    class cost_history__History["History"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```

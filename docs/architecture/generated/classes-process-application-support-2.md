@@ -23,6 +23,7 @@ classDiagram
     class ports__BoardWritten["BoardWritten"]
     class ports__BranchPullRequest["BranchPullRequest"]
     class ports__BudgetStore["BudgetStore"]
+    class ports__CheckAbandoned["CheckAbandoned"]
     class ports__CheckRequest["CheckRequest"]
     class ports__CheckResults["CheckResults"]
     class ports__CheckRuns["CheckRuns"]
@@ -33,7 +34,6 @@ classDiagram
     class ports__CommandResult["CommandResult"]
     class ports__Commands["Commands"]
     class ports__CommitCiReader["CommitCiReader"]
-    class ports__ExperimentFile["ExperimentFile"]
 ```
 
 ## Relaciones con otras páginas

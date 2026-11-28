@@ -408,6 +408,15 @@ def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
     assert "ADR-0044" in STACK_YAML.read_text(encoding="utf-8")
 
 
+def test_this_repo_declares_stacking_on_and_the_gate_reads_a_real_bool():
+    """GH-858: agentic-system turns the stacked start on (apostrophe stays off by default),
+    read through the domain exactly as `GitStack.stacking` would, so a malformed value fails
+    here and not in the poller's launch judgement."""
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    assert stack.stacking(data, STACK_YAML) is True
+    assert stack.stacking({"checks": {"tests": "pytest"}}, STACK_YAML) is False
+
+
 def test_the_declared_delivery_checks_are_this_repos_four_checks_and_docs_in_order():
     """This repo's own fast tier, read through the domain exactly as `GitStack` would; the
     reserved `docs` check joins it last because the stack declares `docs:` (ADR-0074)."""

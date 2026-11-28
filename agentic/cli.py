@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -81,11 +81,13 @@ from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, NullStopFlag, inhibitor
-from .core.process.application import archive, close_issues, reflect_run, release
+from .core.process.adapters.telemetry import NoTelemetry, Telemetry
+from .core.process.application import archive, close_issues, reflect_run, release, stacked_start
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application import stop as stopmod
+from .core.process.application.budget_round import BudgetCarry, budget_round
 from .core.process.application.delivered import files_patch, size_patch
 from .core.process.application.dry_run import DryRunRefused, read_only_ports
 from .core.process.application.escalate import NEEDS_HUMAN
@@ -93,6 +95,7 @@ from .core.process.application.format_release import FormatReleaseCarry
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
+    GhCallLog,
     Heartbeats,
     LabelTimeline,
     Launcher,
@@ -138,9 +141,12 @@ from .core.process.domain import (
     rules,
     size_budget,
     stack_signals,
+    stacking,
 )
 from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
+from .core.process.domain.gh_calls import GhConsumer
+from .core.process.domain.github_budget import Unmeasured
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
 from .core.process.domain.stage0_rotation import (
@@ -163,6 +169,7 @@ from .core.process.domain.task import (
     TrackerFailure,
     TrackerFailureRecord,
 )
+from .core.process.domain.terminal_states import TerminalMemo
 from .core.process.domain.tracker_refs import issue_number
 from .shared import stage0 as stage0_paths
 from .shared.configuration import (
@@ -178,6 +185,9 @@ from .shared.errors import CannotStart as CannotStart
 # The eval commands moved to `eval_commands`; the old names stay here as the same objects.
 # `_eval_score` and `_read_eval_set` are imported above and used
 # here; the rest are only re-exported. `_eval_compare` is the wrapper below.
+# The exit code of a stacked start that waits on its parent (GH-858): no document, branch or
+# escalation is left behind, and the poller's launch schedule spaces the next try.
+STACK_WAIT_EXIT = 3
 UNKNOWN_SYSTEM_VERSION = eval_commands.UNKNOWN_SYSTEM_VERSION
 _fmt_figure = eval_commands._fmt_figure
 _bucket_documents = eval_commands._bucket_documents
@@ -595,6 +605,16 @@ def build_parser() -> CommandTree:
         metavar="DIR",
         help="the rotation root (default ~/.agentic-stage0s)",
     )
+    stage0_smoke = add(
+        ("stage0", "smoke"),
+        stage0_sub,
+        "smoke",
+        help="prove this stage starts and can read a product: the real preflight over ports that "
+        "make no tracker, inbox or board call; exits 0, or non-zero on any failure",
+    )
+    stage0_smoke.add_argument(
+        "--product-dir", required=True, help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
     scores = add(("scores",), sub, "scores", help="a task's numbers as Langfuse scores (GH-273)")
     scores_sub = scores.add_subparsers(dest="scores_command", required=True)
     scores_backfill = add(
@@ -753,6 +773,8 @@ def main() -> None:
     if args.command == "perf":
         sys.exit(_perf_main(args))
     if args.command == "stage0":
+        if args.stage0_command == "smoke":
+            sys.exit(_stage0_smoke(args.product_dir))
         sys.exit(_stage0_rotate(args.root))
     if args.command == "run":
         if args.issue_input is not None:
@@ -998,6 +1020,7 @@ def main() -> None:
             # A dry round writes no log file: `_log_file_for` mkdirs `.agentic/logs`.
             log_file = None if args.dry_run else _log_file_for(cfg, "poll")
             rotation_store, rotation_heartbeats = _stage0_wiring(stage0_paths.DEFAULT_ROOT)
+            budget = _poll_budget_wiring(cfg.product_dir)
             work = partial(
                 _poll,
                 cfg,
@@ -1009,6 +1032,9 @@ def main() -> None:
                 dry_run=args.dry_run,
                 stage0=rotation_store,
                 heartbeats=rotation_heartbeats,
+                budget_read=budget.read,
+                gh_calls=budget.gh_calls,
+                budget_telemetry=budget.sink,
             )
         else:
             if args.issue_input is not None:
@@ -1162,6 +1188,25 @@ def _stage0_rotate(root: Path) -> int:
         prune=rotation.prune,
         out=print,
     )
+    return 0
+
+
+def _stage0_smoke(product_dir: str) -> int:
+    """`agentic stage0 smoke`: what a rotation asks of a candidate stage for one product (GH-1152).
+    The product's configuration and ports are `poll`'s, with the tracker, the inbox and the board
+    replaced by ports that raise, and the real `preflight` runs over them: the stage's code
+    starts, and the product's stack, flags and prompts read. No GitHub call, so the time is a
+    constant and not the length of a queue. Exits 0, or 1 on any exception; the exception type is
+    the only thing said, never a port's text."""
+    os.environ[ENV_PREFIX + "PRODUCT_DIR"] = product_dir
+    try:
+        cfg = Configuration.from_sources({}, os.environ)
+        if not cfg.agentic_dir.is_dir():
+            raise ValueError("not a product repo: no .agentic/ directory")
+        preflight(cfg, composition.offline_ports(cfg))
+    except Exception as exc:
+        print(f"agentic: stage0 smoke failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1725,6 +1770,9 @@ async def _poll(
     stage0: Stage0Store | None = None,
     execve: Callable[..., NoReturn] = os.execve,
     proc: _Proc | None = None,
+    budget_read: Callable[[], object | None] | None = None,
+    gh_calls: GhCallLog | None = None,
+    budget_telemetry: Telemetry | None = None,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -1756,7 +1804,14 @@ async def _poll(
     `_reexec` compares its own checkout with the stage `current` names and, when they differ,
     replaces this process with the poller of that stage through `execve`. With it `None` there
     is no re-exec and no path is resolved. `proc` is where the zombies inherited across an exec
-    are read and reaped (only a process that carries `AGENTIC_REEXEC_FROM` has any)."""
+    are read and reaped (only a process that carries `AGENTIC_REEXEC_FROM` has any).
+
+    `budget_read` (GH-939) is the zero-argument read of `gh api rate_limit`; with it `None` the
+    budget step does not exist and nothing is printed or drained. With one, every round ends
+    (in a `finally`, so after a failed or crashed round too) with the line `budget_round`
+    returns, drained from `gh_calls` (without it the step does not run either) and sent to
+    `budget_telemetry` (`NoTelemetry` when left out): `_poll_budget_wiring` builds them for `main`'s
+    poll dispatch, the only caller that passes them."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1773,10 +1828,12 @@ async def _poll(
     inherited = proc.children() if os.environ.get(REEXEC_MARKER) else frozenset[int]()
     told: set[Path] = set()
     hold = _PollHold()
+    budget_step = _budget_step(budget_read, gh_calls, budget_telemetry)
     with _locked(lock, pollmod.LOCK_KEY, hold=hold):
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
+        terminal_memo = TerminalMemo()  # GH-992: determinate blocker closures, per process
         release_carry = FormatReleaseCarry()  # GH-1020: what was said and spent, per process
         try:
             while True:
@@ -1786,33 +1843,82 @@ async def _poll(
                 inherited = _reap_inherited(inherited, proc)
                 beat("start")
                 try:
-                    # The round's one `upstream()` (GH-420): the warning and the eval set read it.
-                    upstream = ports.workspace.upstream()
-                    said, notice = _fast_forward_notice(ports, upstream, said)
-                    for line in notice:
-                        print(line, flush=True)
-                    for line in pollmod.run_once(
-                        cfg,
-                        ports,
-                        registry,
-                        real_launcher,
-                        datetime.now(UTC),
-                        spawn_as,
-                        lock=lock,
-                        current_boot=liveness.current_boot_id(),
-                        eval_set=_round_eval_set(ports, upstream),
-                        system_version=telemetry.fresh_system_version,
-                        sweep_carry=sweep_carry,
-                        format_release_carry=release_carry,
-                    ):
-                        print(line, flush=True)
-                except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
-                    print(f"agentic: poll: round ended early: {exc}", flush=True)
-                beat("end")
+                    try:
+                        # The round's one `upstream()` (GH-420): the warning and the eval set
+                        # read it.
+                        upstream = ports.workspace.upstream()
+                        said, notice = _fast_forward_notice(ports, upstream, said)
+                        for line in notice:
+                            print(line, flush=True)
+                        for line in pollmod.run_once(
+                            cfg,
+                            ports,
+                            registry,
+                            real_launcher,
+                            datetime.now(UTC),
+                            spawn_as,
+                            lock=lock,
+                            current_boot=liveness.current_boot_id(),
+                            eval_set=_round_eval_set(ports, upstream),
+                            system_version=telemetry.fresh_system_version,
+                            sweep_carry=sweep_carry,
+                            format_release_carry=release_carry,
+                            terminal_memo=terminal_memo,
+                        ):
+                            print(line, flush=True)
+                    except TrackerCallFailed as exc:  # a stalled `gh` ends this round
+                        print(f"agentic: poll: round ended early: {exc}", flush=True)
+                    beat("end")
+                finally:
+                    if budget_step is not None:
+                        budget_step()
                 await sleep(interval_s)
         except anyio.get_cancelled_exc_class():
             beat("stop")  # a clean stop, inside the lock: before `_locked` releases it
+            _bounded_flush("poll")  # the last round's span, never a hang
             raise
+
+
+def _budget_step(
+    read: Callable[[], object | None] | None,
+    gh_calls: GhCallLog | None,
+    sink: Telemetry | None,
+) -> Callable[[], None] | None:
+    """The end of a poller round's GraphQL budget line (GH-939): `None` when there is no `read`
+    or no `gh_calls` (only `main`'s poll dispatch wires the process log), so nothing runs.
+    Otherwise one call drains the log, reads, and prints the line; a stdout that refuses the
+    line (`OSError`) costs the line, never the loop. The carry lives as long as the loop that
+    built this. Synchronous on purpose: the read is bounded, and it blocks the way the round's
+    other `gh` calls do."""
+    if read is None or gh_calls is None:
+        return None
+    log = gh_calls
+    exporter = sink if sink is not None else NoTelemetry()
+    carry = BudgetCarry()
+
+    def step() -> None:
+        line = budget_round(read, log, carry, exporter)
+        with suppress(OSError):
+            print(line, flush=True)
+
+    return step
+
+
+class _PollBudget(NamedTuple):
+    """What `_poll` gets for the GraphQL budget line (GH-991): the read, the process call log
+    and where the line goes (the otel module, which implements `Telemetry.gh_budget`)."""
+
+    read: Callable[[], object | None]
+    gh_calls: GhCallLog
+    sink: Telemetry
+
+
+def _poll_budget_wiring(product_dir: Path) -> _PollBudget:
+    """The one place the poller's budget line is wired, called only by `main`'s poll dispatch:
+    a named function so a test fails if the sink goes back to `NoTelemetry`."""
+    return _PollBudget(
+        composition.budget_read(product_dir), composition.process_call_log(), telemetry
+    )
 
 
 def _stage0_wiring(root: Path) -> tuple[Stage0Store, Heartbeats]:
@@ -1900,6 +2006,36 @@ def _flush_before_exec() -> None:
         print("agentic: poll: flush before the re-exec timed out", flush=True)
     elif problems:
         print(f"agentic: poll: flush before the re-exec failed: {problems[0]}", flush=True)
+
+
+def _bounded_flush(
+    what: str,
+    *,
+    flush: Callable[[], None] = telemetry.flush,
+    cap_s: float = _STOP_FLUSH_CAP_S,
+) -> None:
+    """The telemetry out before a process ends (GH-991), on a daemon thread joined with `cap_s`
+    so a collector that hangs costs at most that: a flush that hangs or raises says one line
+    (`agentic: <what>: telemetry flush timed out|failed: <ExcClass>`) and never raises."""
+    problems: list[Exception] = []
+
+    def work() -> None:
+        try:
+            flush()
+        except Exception as exc:  # whatever a flush raises must not change the exit
+            problems.append(exc)
+
+    flusher = threading.Thread(target=work, daemon=True)
+    flusher.start()
+    flusher.join(cap_s)
+    line = None
+    if flusher.is_alive():
+        line = f"agentic: {what}: telemetry flush timed out"
+    elif problems:
+        line = f"agentic: {what}: telemetry flush failed: {type(problems[0]).__name__}"
+    if line is not None:
+        with suppress(OSError):
+            print(line, flush=True)
 
 
 def _reexec_plan(
@@ -2111,6 +2247,9 @@ async def _run(
                 )
             if diagnosis:
                 task = {**task, "description": f"{task['description']}\n\n{diagnosis}"}
+            # The one stacked-start decision of a launch, before the archive moves anything and
+            # before any document is written: a `Wait` leaves the previous run exactly as it was.
+            stack_patch = _stack_gate(task["id"], fresh, ports, cfg, registry)
             archive_failures = _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -2122,7 +2261,10 @@ async def _run(
                 migrated_app = graph.compile(checkpointer=migrated_saver)
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
-                entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
+                entered = {
+                    **rules.entering(task, cap=cfg.decided_cap, carried=carried),
+                    **stack_patch,
+                }
                 if assignment is not None:
                     entered = {**entered, "assignment": assignment}
                 if archive_failures:
@@ -2133,6 +2275,38 @@ async def _run(
                     migrated_app, entered, config, entered, ports, cfg, "run", stop=stop
                 )
     _report(final, task["id"], ports)
+
+
+def _stack_gate(
+    task_id: str, fresh: bool, ports: Ports, cfg: Configuration, registry: RunRegistry
+) -> dict[str, object]:
+    """The document fragment a stacked start owes the run's first write (GH-858): empty when the
+    launch has no parent to ask about -- the poller left no hint and, under `--fresh`, the
+    previous document holds no legible `stack_parent` (which a task already stacked is followed
+    by, without reading the switch). Otherwise `stacked_start.decide` and its patch, unchanged.
+    A `Wait` ends the invocation here with `STACK_WAIT_EXIT` and one line: nothing was archived,
+    written or spent, and nothing escalates."""
+    previous = _previous_document(task_id, ports)
+    record = stacking.parse_stack_parent(previous) if previous else stacking.Absent()
+    number = issue_number(task_id)
+    attempt = registry.launch_attempts(product_name(ports), number) if number else None
+    parent = attempt.stack_hint.parent if attempt and attempt.stack_hint else None
+    if parent is None and fresh and isinstance(record, dict):
+        parent = record["issue"]
+    if parent is None:
+        return {}
+    decision = stacked_start.decide(
+        task_id,
+        parent,
+        record if isinstance(record, dict) else None,
+        ports,
+        datetime.now(UTC).isoformat(),
+        cfg=cfg,
+    )
+    if isinstance(decision.ref, stacking.Wait):
+        stacked_start.log_wait(task_id, parent, decision.ref.cause)
+        sys.exit(STACK_WAIT_EXIT)
+    return decision.patch
 
 
 def _previous_document(task_id: str, ports: Ports) -> dict | None:
@@ -2719,18 +2893,51 @@ def _fast_forward_notice(
     return block, [f"agentic: poll: product checkout {cannot}"]
 
 
+def _report_gh_budget(command: Literal["merge", "land"], gh_calls: GhCallLog) -> None:
+    """The end of a `merge`/`land` child (GH-991): drains the process call log exactly once and
+    sends the launches of `gh` it made as `agentic.gh.budget` under consumer `run`, then flushes
+    within `_STOP_FLUSH_CAP_S`. A side channel: nothing here changes a result, an exit code or a
+    printed line other than its own failure line, and nothing raises out. Runs after the lock and
+    the registry entry were released, so a slow collector never holds either."""
+    calls = gh_calls.drain()
+    consumer: GhConsumer = "run"
+    try:
+        telemetry.gh_budget(consumer, calls, None, Unmeasured.UNMEASURED)
+    except Exception as exc:
+        with suppress(OSError):
+            print(f"agentic: {command}: gh budget not exported: {type(exc).__name__}", flush=True)
+    _bounded_flush(command)
+
+
 async def _merge(
     task_id: str,
     issue: int,
     cfg: Configuration,
     ports: Ports,
     label_timeline: LabelTimeline | None = None,
+    gh_calls: GhCallLog | None = None,
 ) -> None:
     """`agentic merge --issue N` (GH-178, ADR-0045): the task's pull request merged when
     `rules.auto_merge_decision` says so, after the checks ran on its head merged with the
     upstream. Under the task's own run lock and registered like any run; spends no model
     money and opens no span, like `close`. The closure runs in this process once the pull
-    request is merged."""
+    request is merged. Whatever the outcome, the `gh` launches of the whole command are drained
+    once and exported (`_report_gh_budget`); `gh_calls` is the log, the process one when left
+    out."""
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
+    try:
+        await _merge_pull_request(task_id, issue, cfg, ports, label_timeline)
+    finally:
+        _report_gh_budget("merge", log)
+
+
+async def _merge_pull_request(
+    task_id: str,
+    issue: int,
+    cfg: Configuration,
+    ports: Ports,
+    label_timeline: LabelTimeline | None,
+) -> None:
     lock = _lock_for(cfg)
     with (
         _locked(lock, task_id),
@@ -2833,14 +3040,29 @@ def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
 
 
 async def _land(
-    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind = "land_model"
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    run_kind: rules.RunKind = "land_model",
+    gh_calls: GhCallLog | None = None,
 ) -> None:
     """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
     refusal of the task's pull request, recorded under the task's run lock and then
     dispatched. Registered like any run; the kind
     it registers under is the one it was spawned with (`--run-kind`), fixed for its whole life
     and checked by `land` against the step it recomputes. Spends no model money itself and
-    opens no span."""
+    opens no span. Whatever the outcome, the `gh` launches of the whole command are drained once
+    and exported (`_report_gh_budget`); `gh_calls` is the log, the process one when left out."""
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
+    try:
+        await _land_step(task_id, cfg, ports, run_kind)
+    finally:
+        _report_gh_budget("land", log)
+
+
+async def _land_step(
+    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind
+) -> None:
     lock = _lock_for(cfg)
     registry = _registry_for(cfg)
 
@@ -3170,7 +3392,10 @@ async def _reflect(
                 task_id=task_id,
                 system=system
                 if system is not None
-                else composition.system_repo(composition.write_access(cfg, None, NullStopFlag())),
+                else composition.system_repo(
+                    composition.write_access(cfg, None, NullStopFlag()),
+                    composition.process_call_log(),
+                ),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc
@@ -3647,6 +3872,7 @@ async def _invoke(
     decision: str | None = None,
     scorer: LangfuseScores | None = None,
     stop: StopCause | None = None,
+    gh_calls: GhCallLog | None = None,
 ) -> TaskState:
     # The state as this invocation entered: `_run`'s fresh `TaskInput` (no prior cost),
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
@@ -3660,11 +3886,19 @@ async def _invoke(
     # composition root, so it calls `metrics.arm_label` directly, the same function
     # `composition._arm_for` closes over for the graph's own per-node role spans.
     arm = delivery_metrics.arm_label(arm_input(cfg))
+    log = gh_calls if gh_calls is not None else composition.process_call_log()
     try:
         with telemetry.task_span(task["id"], task["title"], product_name(ports), arm=arm) as run:
             try:
                 final = await app.ainvoke(graph_input, config=config)
+            except stacked_start.StackWait as wait:
+                # A branch that could not be started at its recorded head: not a crash, and
+                # nothing escalates -- no branch was made, so the next start tries again.
+                stacked_start.log_wait(task["id"], wait.parent, wait.cause)
+                sys.exit(STACK_WAIT_EXIT)
             except Exception:
+                # The one drain of this exit (GH-991): the launches up to the crash.
+                calls = log.drain()
                 # The run broke outside any use case; the task span still closes with a
                 # status, so the trace carries it (`crashed` is telemetry-only, never state).
                 # `stop.crashed` is what `_locked` reads to keep the lock marked: only here,
@@ -3673,10 +3907,11 @@ async def _invoke(
                     stop.crashed = True
                 crashed = cast(TaskState, {**task, "status": "crashed"})
                 run.finish(crashed)
-                run.finish_invocation(entering, crashed, kind, decision)
+                run.finish_invocation(entering, crashed, kind, decision, calls=calls)
                 raise
+            calls = log.drain()  # the one drain of this exit: up to the end of the graph run
             run.finish(final)
-            run.finish_invocation(entering, final, kind, decision)
+            run.finish_invocation(entering, final, kind, decision, calls=calls)
         # After the span closed, so the write's wait is never part of the task's trace; a
         # crashed invocation raised above and never gets here.
         _write_scores(scorer, task["id"], ports, finished_only=True)

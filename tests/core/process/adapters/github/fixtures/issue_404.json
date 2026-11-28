@@ -1,0 +1,12 @@
+{
+  "note": "SYNTHETIC: the 404 of a write to an issue that does not exist; stderr is the captured gh 2.100.0 form cited in run.py (`gh: Not Found (HTTP 404)`).",
+  "status": 404,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ]
+  ],
+  "body": "{\"message\": \"Not Found\", \"documentation_url\": \"https://docs.github.com/rest/issues/comments#create-an-issue-comment\", \"status\": \"404\"}",
+  "stderr": "gh: Not Found (HTTP 404)"
+}

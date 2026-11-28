@@ -131,3 +131,40 @@ lectura de carga son de las subtareas siguientes de la misma tarea.
   los dos productos; (3) recién entonces apostrophe declara sus claves y hace que `compare.sh` salga
   con 75 cuando la app no está lista. Si un producto declara antes, sus corridas fallan al cargar
   porque las claves desconocidas se rechazan.
+
+## Adenda (2026-11-25): el Developer no corre a mano las suites que la puerta de entrega va a correr (GH-1070)
+
+**Decisión.** Una sola función pura, `suite_refusal` (`domain/run_check.py`), decide si se rechaza
+una corrida a mano de un chequeo declarado. La llaman `RunCheck.run` y el hook de Bash; ninguno
+guarda una lista propia de nombres.
+
+- Nunca se rechaza una verificación declarada, un chequeo fuera de `delivery_checks` (la puerta no
+  lo corre) ni un chequeo en el conjunto rojo.
+- Un chequeo de entrega con forma afectada se rechaza siempre: la respuesta trae el comando
+  afectado (con `{base}` y `{workers}` ya resueltos, `HAND_WORKERS = 1`), o un archivo o id de
+  test, para correr con Bash, y dice que `run_check` lo corre completo si la puerta falla en él.
+- Un chequeo de entrega sin forma afectada se rechaza sólo si el pase no se guardaría (árbol sin
+  commit o sucio): con commit y árbol limpio la corrida es la que la puerta reutiliza.
+- El conjunto rojo sale sólo de estado del sistema: las filas rojas de la última mirada de la puerta
+  (también las que se agotaron por tiempo) y los hallazgos `full_checks:` abiertos, de cualquier
+  subtarea. Nunca del texto ni de los argumentos del modelo.
+
+**Por qué se basa en el plan afectado y por si el pase se guardaría.** Lo que cuesta es repetir la
+suite que la puerta corre igual: con forma afectada, la corrida completa a mano nunca se reutiliza
+de forma útil; sin ella, sólo un pase guardado ahorra la segunda corrida.
+
+**Alcance por producto.** agentic-system declara formas afectadas, así que actúa sobre todo la
+primera rama; apostrophe, que casi no las declara, la segunda.
+
+**Relectura de GH-1009.** Sus 2 h 50 fueron tiempos agotados de la puerta y esperas de núcleos; su
+única corrida a mano fue una reproducción útil tras un tiempo agotado, que esta regla sigue
+permitiendo (el chequeo está en rojo).
+
+**Riesgo residual.** La negación de Bash cubre sólo la forma exacta declarada (`uv run pytest -x`
+pasa) y la rama sin forma afectada no se hace cumplir en Bash, que no lee el árbol. Un rojo de la
+puerta de una corrida anterior que no dejó fila `full_checks:` no abre la excepción.
+
+**Cómo verificarlo después.** En Langfuse, la proporción del tiempo de pared del Developer en spans
+de `run_check` y de Bash durante la semana siguiente a las corridas con este cambio. Nada se
+condiciona a esa lectura. Los hashes de los prompts del Developer y del integrador cambian, así que
+sus métricas no son comparables a través de este cambio.

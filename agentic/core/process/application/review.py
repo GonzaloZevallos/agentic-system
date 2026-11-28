@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +40,15 @@ from agentic.shared.configuration import Configuration, ReviewMode, experiment_s
 
 from ..domain import ci, docs, landing, presubmit, restart, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
-from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, FindingRecord, TaskState, apply
+from ..domain.task import (
+    INTEGRATION,
+    WAITING_ON_HUMAN,
+    FindingRecord,
+    TaskState,
+    apply,
+    returns,
+    timeout_rows,
+)
 from . import ci_push, ci_trust, promotion, review_scope, shadow_review, spec_guard
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
@@ -189,6 +197,12 @@ async def review(
     # reviews, from the tip; the sync is what records `carried`, here it is `full`/`clean`.
     verdict, tip = review_scope.scope_of(scoped, subtask_id, head, checkout.path, ports)
     resolving = verdict.scope == "resolution"
+    # The checks that timed out with no failing test on the head under review (GH-1075), as
+    # observation rows the reviewer sees and the table keeps; a carried scope or a head already
+    # reviewed adds nothing, and the dedup of `timeout_rows` makes a second pass add none.
+    timeouts = _timeout_rows(state, subtask_id, head, verdict.scope, reviewed_before)
+    if timeouts:
+        reading = {**reading, "findings": [*reading.get("findings", []), *timeouts]}
     if resolving:
         reading = {
             **reading,
@@ -213,6 +227,9 @@ async def review(
             from_base=from_base,
             resolution=resolving,
         )
+
+    reviewed_run = reviewed
+    reviewed = _with_rows(reviewed_run, timeouts)
 
     shadows = shadow_review.ShadowOutcome()
     if shadow_review.due(state, subtask_id, cfg):
@@ -267,7 +284,7 @@ async def review(
         }
         findings = _required_paths_findings(applied, base, head, findings, ports)
     system = rules.appended(own, findings)
-    category = rules.change_category(findings)
+    category = rules.change_category([f for f in findings if returns(f["category"])])
     # One rebind, after the verdict: the reason is the returning row's, the system's when
     # that is the one that blocks (GH-511), and nothing below reads the reviewer's own.
     reason = rules.verdict_reason(own, system, output.data["reason"])
@@ -365,6 +382,41 @@ async def review(
         patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
     return done(patch)
+
+
+def _timeout_rows(
+    state: TaskState, subtask_id: str, head: str, scope: str, reviewed_before: bool
+) -> list[FindingRecord]:
+    """The `process-check-timeout` rows for the delivery under review (GH-1075): the facts of
+    every run of the unit's Developer section whose head is `head`, in runs order, through the
+    domain's `timeout_rows`. Nothing for a `carried` scope or a head the unit already had
+    reviewed."""
+    subtask = state["subtasks"][subtask_id]
+    if scope == "carried" or (
+        reviewed_before and rules.same_commit(subtask["reviewed_head"], head)
+    ):
+        return []
+    section = rules.developer_section(subtask_id)
+    facts = [
+        fact
+        for run in state.get("runs", [])
+        if run.get("section", run["role"]) == section
+        for fact in run.get("timeouts", [])
+        if rules.same_commit(fact["head"], head)
+    ]
+    return timeout_rows(subtask_id, facts, state.get("findings", []))
+
+
+def _with_rows(
+    run: Callable[[], Awaitable[tuple[Output | None, TaskState]]], rows: list[FindingRecord]
+) -> Callable[[], Awaitable[tuple[Output | None, TaskState]]]:
+    """`run` with `rows` added to the patch it returns, so the table keeps what the reviewer saw."""
+
+    async def with_rows() -> tuple[Output | None, TaskState]:
+        output, patch = await run()
+        return output, apply(patch, {"findings": rows}) if rows else patch
+
+    return with_rows
 
 
 def _rows_of(state: TaskState, subtask_id: str) -> list[FindingRecord]:

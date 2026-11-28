@@ -26,6 +26,7 @@ from agentic.core.process.domain.task import (
     add_format_issues,
     add_full_checks_reads,
     add_merge_ci,
+    add_reintegrations,
     add_restorations,
     add_review_scopes,
     add_shadow_reviews,
@@ -458,6 +459,19 @@ def value_for(key: str, branch: str, n: int):
     if reducer is add_stack_restacks:
         # One row per (at, upstream), a function of that key alone: the first row seen wins.
         return [{"at": f"t{n % 3}", "upstream": "u", "conflict": False, "cost_usd": 0.5}]
+    if reducer is add_reintegrations:
+        # One row per (at, upstream, mode), a function of that key alone: the first row seen
+        # wins, so a row that differed by branch would depend on which branch landed first.
+        return [
+            {
+                "at": f"t{n % 3}",
+                "upstream": "u",
+                "mode": "session",
+                "cause": "clean",
+                "attempt_s": 0.5,
+                "resumed": False,
+            }
+        ]
     if reducer is add_stack_pauses:
         # One row per (parent, cause, at), a function of that key alone: a later row replaces
         # the earlier, so a row that differed by branch would depend on which landed last.
@@ -554,6 +568,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_full_checks_reads,
             add_merge_ci,
             add_restorations,
+            add_reintegrations,
             add_review_scopes,
             add_shadow_reviews,
             add_stack_pauses,

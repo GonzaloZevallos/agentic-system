@@ -17,7 +17,7 @@ import anyio
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import presubmit, rules
+from ..domain import presubmit, rules, stacking
 from ..domain.roles import Role
 from ..domain.task import INTEGRATION, TaskState
 from .ports import Checkout, Ports, RunStopped
@@ -45,6 +45,22 @@ def task_base(state: TaskState, ports: Ports) -> str:
 
 
 def task_checkout(state: TaskState, cfg: Configuration, ports: Ports) -> Checkout:
+    """The task's checkout. A task whose document carries a legible `stack_parent` and whose
+    branch does not exist yet is started at the recorded head (GH-858): the sha is brought in
+    here, outside git's lock, and handed to the workspace as an already-decided start. Only
+    reads the record: it never writes the document nor returns a patch. Any other call is
+    exactly as it always was. Raises `stacked_start.StackWait` for a head that cannot be had."""
+    # Here and not at the top: `stacked_start` reads documents through `resume`, which imports this
+    # module (through `spec_guard`), so a module-level import would be a cycle.
+    from . import stacked_start
+
+    record = stacking.parse_stack_parent(state)
+    if (
+        isinstance(record, dict)
+        and ports.workspace.branch_head(rules.task_branch(state["id"])) is None
+    ):
+        sha = stacked_start.branch_start(record, ports)
+        return _prepared(ports.workspace.task_checkout(state["id"], lambda: sha), state, cfg, ports)
     return _prepared(ports.workspace.task_checkout(state["id"]), state, cfg, ports)
 
 

@@ -19,6 +19,7 @@ from typing import Any, Literal, Protocol, get_args
 
 from . import ci, merge_ci, presubmit, pull_request, rules, stacking
 from .adr_numbers import Ambiguous, Renaming
+from .docs import Docs, owned
 from .document import HUMAN
 from .landing_order import Turn
 from .roles import LANDING_DIAGNOSER
@@ -39,6 +40,9 @@ from .task import (
     LandingEntry,
     MergeCiRecord,
     OutOfBoundsLine,
+    ReintegrationCause,
+    ReintegrationMode,
+    ReintegrationRecord,
     ReleasePatch,
     RenumberCause,
     RenumberMode,
@@ -828,14 +832,23 @@ RESOLUTION_LINES_MAX = 600
 `full` with cause `over_cap`: the text is never truncated. Declared, not measured."""
 
 
+StepKind = Literal["upstream_merge", "own_commit", "foreign_merge", "regeneration"]
+"""What one commit of the chain is: an upstream merge, the branch's own commit, a merge of
+something else, or a one-parent commit the system recorded as a regeneration (GH-976)."""
+
+
 @dataclass(frozen=True)
 class ScopeStep:
     """One commit on the first-parent chain from the accepted tip to the head. `text` is the
-    remerge-diff of a merge, or the diff of an own commit; `""` when there is none."""
+    remerge-diff of a merge, or the diff of an own commit; `""` when there is none. `paths` are
+    the paths the step adds beyond git's own merge of its parents: for a merge the paths of its
+    remerge-diff (empty when clean), for a one-parent commit the paths it touches. A step with
+    `text` and no `paths` is one whose paths could not be told, and is never covered."""
 
     sha: str
-    kind: Literal["upstream_merge", "own_commit", "foreign_merge"]
+    kind: StepKind
     text: str
+    paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -845,7 +858,8 @@ class ScopeFacts:
     `unreadable_cause` then names why; `reviewed_is_ancestor` says the accepted tip is an
     ancestor of the head; `system_merge` says the system made the merge of the upstream
     itself (informational: a clean merge carries whoever made it); `steps` is the
-    first-parent chain from the accepted tip to the head, oldest first."""
+    first-parent chain from the accepted tip to the head, oldest first; `docs` is the
+    product's docs block at the task base, `None` when it declares none or no step needed it."""
 
     reviewed: str | None
     readable: bool
@@ -853,6 +867,32 @@ class ScopeFacts:
     reviewed_is_ancestor: bool
     system_merge: bool
     steps: tuple[ScopeStep, ...]
+    docs: Docs | None = None
+
+
+_DIFF_HEADER = "diff --git "
+
+
+def diff_paths(text: str) -> tuple[str, ...] | None:
+    """The paths a diff names, from its `diff --git a/X b/Y` headers: both sides of each, once,
+    in first-seen order; `()` for the empty text. `None` when a path cannot be told for sure: a
+    header with a quoted path, one whose ` b/` split is ambiguous or absent, or a non-empty
+    text with no header at all."""
+    if not text:
+        return ()
+    found: dict[str, None] = {}
+    headers = 0
+    for line in text.splitlines():
+        if not line.startswith(_DIFF_HEADER):
+            continue
+        headers += 1
+        rest = line[len(_DIFF_HEADER) :]
+        splits = [m.start() for m in re.finditer(" b/", rest)]
+        if '"' in rest or not rest.startswith("a/") or len(splits) != 1:
+            return None
+        found[rest[2 : splits[0]]] = None
+        found[rest[splits[0] + 3 :]] = None
+    return tuple(found) if headers else None
 
 
 @dataclass(frozen=True)
@@ -869,11 +909,18 @@ def _full(cause: ScopeCause) -> ScopeVerdict:
     return ScopeVerdict("full", cause, "")
 
 
+def _covered(step: ScopeStep, docs: Docs | None) -> bool:
+    """Whether the step adds nothing but what the docs command owns: it has paths and every
+    one is under `docs.paths`. The one place `docs.owned` is applied to a step's paths."""
+    return docs is not None and bool(step.paths) and all(owned(docs, p) for p in step.paths)
+
+
 def review_scope(facts: ScopeFacts) -> ScopeVerdict:
-    """What the review of a head covers (GH-589, ADR-0089): the only place that decides
+    """What the review of a head covers (GH-589, GH-976, ADR-0089): the only place that decides
     carried / resolution / full. The first condition that holds wins, each one names one
-    cause. The text of a `resolution` is never truncated: above `RESOLUTION_LINES_MAX` the
-    pass is `full`."""
+    cause. An effective own commit is an own commit, or a regeneration that is not covered; a
+    chain whose only steps with text are covered carries as `regenerated`. The text of a
+    `resolution` is never truncated: above `RESOLUTION_LINES_MAX` the pass is `full`."""
     steps = facts.steps
     kinds = [step.kind for step in steps]
     if facts.reviewed is None:
@@ -882,15 +929,33 @@ def review_scope(facts: ScopeFacts) -> ScopeVerdict:
         return _full(facts.unreadable_cause or "unreadable")
     if not facts.reviewed_is_ancestor:
         return _full("rewritten")
-    if "upstream_merge" not in kinds:
+    if not steps or (
+        "upstream_merge" not in kinds and any(kind != "regeneration" for kind in kinds)
+    ):
         return _full("no_merge")
     if "foreign_merge" in kinds:
         return _full("foreign_merge")
-    if "own_commit" in kinds and kinds.index("own_commit") < kinds.index("upstream_merge"):
+    effective = [
+        step.kind == "own_commit"
+        or (step.kind == "regeneration" and not _covered(step, facts.docs))
+        for step in steps
+    ]
+    if "upstream_merge" in kinds and any(effective[: kinds.index("upstream_merge")]):
         return _full("own_before_merge")
-    if "own_commit" not in kinds and not any(step.text for step in steps):
+    texted = [step for step in steps if step.text]
+    if not any(effective) and not texted:
         return ScopeVerdict("carried", "clean", "")
-    shown = [step for step in steps if step.text or step.kind == "own_commit"]
+    if (
+        not any(effective)
+        and facts.docs is not None
+        and all(_covered(s, facts.docs) for s in texted)
+    ):
+        return ScopeVerdict("carried", "regenerated", "")
+    shown = [
+        step
+        for step, own in zip(steps, effective, strict=True)
+        if step.text or step.kind == "own_commit" or own
+    ]
     text = "\n".join(
         f"## {step.sha[:12]} ({step.kind})\n{step.text or '(no changes)'}".rstrip("\n")
         for step in shown
@@ -2604,6 +2669,37 @@ def restack_row(
             for key, count in counted.items() if isinstance(counted, Mapping) else ():
                 tokens[key] = tokens.get(key, 0) + count
         row["tokens"] = tokens
+    return row
+
+
+def reintegration_row(
+    *,
+    at: str,
+    upstream: str,
+    mode: ReintegrationMode,
+    cause: ReintegrationCause,
+    attempt_s: float,
+    resumed: bool,
+    generate_s: float | None = None,
+    regeneration: str | None = None,
+) -> ReintegrationRecord:
+    """The `ReintegrationRecord` of one reintegration attempt (GH-994). A `mechanical` attempt
+    never continues a session, so `mechanical` with `resumed` raises `ValueError`. `generate_s`
+    and `regeneration` are left out of the row when `None` (not measured / no commit made)."""
+    if mode == "mechanical" and resumed:
+        raise ValueError("a mechanical reintegration cannot be resumed")
+    row: ReintegrationRecord = {
+        "at": at,
+        "upstream": upstream,
+        "mode": mode,
+        "cause": cause,
+        "attempt_s": attempt_s,
+        "resumed": resumed,
+    }
+    if generate_s is not None:
+        row["generate_s"] = generate_s
+    if regeneration is not None:
+        row["regeneration"] = regeneration
     return row
 
 

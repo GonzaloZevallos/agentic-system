@@ -20,20 +20,20 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__ExperimentFile["ExperimentFile"]
     class ports__FailurePolicy["FailurePolicy"]
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FormatFiler["FormatFiler"]
     class ports__FormatFixReads["FormatFixReads"]
     class ports__FreeSpace["FreeSpace"]
+    class ports__GhCallLog["GhCallLog"]
     class ports__GitError["GitError"]
     class ports__Grant["Grant"]
     class ports__Heartbeats["Heartbeats"]
     class ports__HeldListMayBeCut["HeldListMayBeCut"]
     class ports__Inbox["Inbox"]
     class ports__InstalledProducts["InstalledProducts"]
-    class ports__IssueComment["IssueComment"]
-    class ports__IssueRow["IssueRow"]
 ```
 
 ## Relaciones con otras páginas
@@ -46,7 +46,7 @@ classDiagram
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 7)](classes-process-application-support-7.md)
-  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 8)](classes-process-application-support-8.md)
+  - `ports.HeldListMayBeCut` hereda de `ports.TrackerCallFailed`
   - `ports.UnstageablePath` hereda de `ports.GitError`
