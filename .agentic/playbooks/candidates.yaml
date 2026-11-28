@@ -2709,3 +2709,21 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-28T17:15:40.379+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Import test fakes and helpers from the shared tests/fakes package, never from another test module, so test files stay decoupled and setup stays cheap.
+  confidence: medium
+  seen_in:
+  - GH-996
+  sources:
+  - finding
+  added_at: '2026-11-28T18:06:09.785+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: Check the plan's hand-written file count against the 15 file cap before you submit it; when over, split shared port and adapter work into a follow-up issue instead of escalating to a narrow decision.
+  confidence: medium
+  seen_in:
+  - GH-996
+  sources:
+  - human_decision
+  added_at: '2026-11-28T18:06:09.785+00:00'

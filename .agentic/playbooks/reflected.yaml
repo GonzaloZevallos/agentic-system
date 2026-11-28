@@ -1806,3 +1806,6 @@ tasks:
     decisions: 1
   GH-1209@review:
     cost_usd: 0.043
+  GH-996@review:
+    cost_usd: 0.0442
+    decisions: 1
