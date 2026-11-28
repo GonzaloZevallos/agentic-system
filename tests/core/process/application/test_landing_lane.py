@@ -370,9 +370,9 @@ def test_an_admission_is_cleared_when_the_member_is_no_longer_the_lane():
     ports = _lane_ports(5, 7)
     _admit(ports)
     out: list[str] = []
-    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work("GH-5"), out)
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], set(), _work("GH-5"), out)
     assert _admission(ports) is not None  # at work: not written
-    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), out)
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], set(), _work(), out)
     assert _admission(ports) is None and out == []
 
 
@@ -383,7 +383,7 @@ def test_a_member_that_is_still_the_lane_keeps_its_admission_and_the_head_is_unt
     _admit(ports)
     before = (_admission(ports), dict(ports.documents.closures))
     out: list[str] = []
-    landing_lane.clear_admissions(ports, [("GH-5", 5), ("GH-7", 7)], 5, _work(), out)
+    landing_lane.clear_admissions(ports, [("GH-5", 5), ("GH-7", 7)], {5}, _work(), out)
     assert (_admission(ports), dict(ports.documents.closures)) == before
     assert out == []
 
@@ -392,14 +392,14 @@ def test_clearing_never_takes_an_admission_a_merge_followed():
     ports = _lane_ports(5, 7)
     _admit(ports)
     _merged(ports)
-    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), [])
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], set(), _work(), [])
     assert _admission(ports) is not None
 
 
 def test_a_cleared_admission_is_never_credited_when_the_member_later_merges_as_head():
     ports = _lane_ports(5, 7)
     _admit(ports)
-    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), [])
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], set(), _work(), [])
     _merged(ports)
     assert _record(ports) == []
     assert "lane_merges" not in ports.documents.load("GH-7")

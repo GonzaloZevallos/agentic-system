@@ -17,7 +17,7 @@ into a `landing` list or a `head_*` key: the head's budget and `rules.landing_pa
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -209,16 +209,16 @@ def admit(
 def clear_admissions(
     ports: Ports,
     members: Iterable[tuple[str, int]],
-    lane: int | None,
+    lanes: Collection[int],
     at_work: Callable[[str], bool],
     out: list[str],
 ) -> None:
-    """Clear `lane_admitted` (to `None`) from each `(task_id, issue)` of `members` that is not the
-    round's `lane`, is not at work and whose admission no merge followed (`auto_merged_at` later
-    than `at`, which recording keeps): a deferred admission is then never credited if the member
-    later merges as head. The documents are read fresh. A failed write is one line."""
+    """Clear `lane_admitted` (to `None`) from each `(task_id, issue)` of `members` not in the
+    round's `lanes`, not at work and whose admission no merge followed (`auto_merged_at` later than
+    `at`, which recording keeps): a deferred admission is then never credited if the member later
+    merges as head. The documents are read fresh. A failed write is one line."""
     for task_id, issue in members:
-        if issue == lane or at_work(task_id):
+        if issue in lanes or at_work(task_id):
             continue
         raw = _load(ports, task_id)
         admitted = _admission(raw) if raw is not None else None

@@ -1027,7 +1027,7 @@ class LandingRound:
     `landing_order.order` answers once `landing_lane.lane_facts` has read the facts, `None` when
     there is none or the head holds no turn."""
     lane_reasons: Mapping[int, landing_order.LaneReason] = field(default_factory=dict)
-    """Why each waiting member that is clean has no lane: `lane_reason`'s."""
+    """Why each waiting member that is clean has no lane: `landing_order.lanes`'s."""
 
 
 def _stamp(raw: TaskState) -> datetime | None:
@@ -1371,14 +1371,8 @@ def _fast_lane(
             reads.decisions,
         )
         read_head = next(m for m in with_facts if m.issue == head.issue)
-    reasons: dict[int, landing_order.LaneReason] = {}
-    for member in with_facts:
-        if member.issue != head.issue:
-            reason = landing_order.lane_reason(member, read_head, now)
-            if reason is not None:
-                reasons[member.issue] = reason
-    lane = landing_order.order(with_facts, now).lane if reads.candidates else None
-    return lane, reasons
+    picked, reasons = landing_order.lanes(with_facts, read_head, now)
+    return (picked[0] if picked and reads.candidates else None), reasons
 
 
 LANE_TEXT: dict[landing_order.LaneReason, str] = {
@@ -1392,6 +1386,10 @@ LANE_TEXT: dict[landing_order.LaneReason, str] = {
     "stack_parent_unmerged": "stacked parent unmerged",
     "not_merge_ready": "not merge ready",
     "backed_off": "backed off",
+    "lane_overlap": "paths overlap another lane",
+    "lanes_full": "lanes full",
+    "no_head": "no head",
+    "head_merging": "head merging",
 }
 """What the poller says of each `LaneReason` after `clean`; `{head}` is the head's issue."""
 
@@ -1653,7 +1651,7 @@ def gather_merges(
         landing_lane.clear_admissions(
             ports,
             [(entry.task_id, entry.number) for entry in round_.entries],
-            round_.lane,
+            {round_.lane} if round_.lane is not None else set(),
             at_work,
             out,
         )

@@ -71,7 +71,14 @@ LANE_DECISIONS = frozenset({("merge", None), ("ci_run", None), ("run_checks", No
 """The `(kind, reason)` pairs of `rules.auto_merge_decision` that may merge beside the head: the
 only place that says which. No `refuse` and no `wait` is in it."""
 
+LANES_MAX = 3
+"""The most lanes that open beside the head in one round: the only place the cap is written."""
+
 LaneReason = Literal[
+    "no_head",
+    "head_merging",
+    "lane_overlap",
+    "lanes_full",
     "head_not_integrating",
     "head_paths_unknown",
     "head_sync_budget",
@@ -83,9 +90,10 @@ LaneReason = Literal[
     "not_merge_ready",
     "backed_off",
 ]
-"""Why a member that is clean has no lane beside the head. `holds_master_unknown` and
-`lacks_master` are no longer obstacles of a member (the merge verb brings the evidence on the pair
-itself) and stay here so a value already written still reads."""
+"""Why a member that is clean has no lane beside the head. `lane_overlap`: its paths overlap a lane
+already chosen; `lanes_full`: `LANES_MAX` lanes are chosen. `head_not_integrating`,
+`holds_master_unknown` and `lacks_master` are no longer obstacles of a member (the merge verb
+brings the evidence on the pair itself) and stay here so a value already written still reads."""
 
 
 @dataclass(frozen=True)
@@ -98,7 +106,8 @@ class Member:
     turn (the caller reads it as `since` for `unproductive_steps`), `charged_s` the seconds already
     spent as head, `seen_at` when it was last seen as head, `yielded_at` and `yields` when and how
     many times it gave up its turn, `steps_on_head` the unproductive steps on its current sha,
-    `busy` a live child, `merge_due` that only the merge is left, `waits_on_ci` and
+    `busy` a live child, `merge_due` that only the merge is left, `head_merging` that its merge
+    decision is one of `LANE_DECISIONS` (the verb is about to act on it), `waits_on_ci` and
     `account_paused` that it cannot advance now. A member with `yielded_at=None` has not yielded,
     whatever `yields` says.
 
@@ -146,6 +155,7 @@ class Member:
     steps_on_head: int = 0
     busy: bool = False
     merge_due: bool = False
+    head_merging: bool = False
     waits_on_ci: bool = False
     account_paused: bool = False
     lane_decision: LaneDecision | None = None
@@ -170,14 +180,14 @@ class Yield:
 @dataclass(frozen=True)
 class Order:
     """The result of `order`: the issue at the head (`None`: nobody eligible) and the members that
-    yielded to reach it, in the order they did. `lane` is the one member that may be integrated
-    beside the head (GH-681), `None` when there is none. A busy head never yields and a head that
-    yielded in this call fails `holds_turn`, so the head as passed in and the head after yields
-    agree whenever a lane exists."""
+    yielded to reach it, in the order they did. `lanes` are the members that may be integrated
+    beside the head (GH-681, GH-1213), in the order `lanes()` chose them, `()` when there is none.
+    A busy head never yields and a head that yielded in this call fails `holds_turn`, so the head
+    as passed in and the head after yields agree whenever a lane exists."""
 
     head: int | None
     yielded: tuple[Yield, ...]
-    lane: int | None = None
+    lanes: tuple[int, ...] = ()
 
 
 def instant(value: object) -> datetime | None:
@@ -319,7 +329,7 @@ def lane_ready(m: Member) -> bool:
     against the current master, its paths read, and nothing that keeps it from advancing. Holding
     master is not asked: the merge verb runs its evidence on the pair (head, current master). It
     does not check that `m` is eligible in `order`, nor `yielded_at`; the head conditions are
-    `lane_reason`'s."""
+    `lanes`' own."""
     return (
         m.lane_decision is not None
         and m.clean is True
@@ -342,42 +352,73 @@ def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozense
     return head_.paths
 
 
-def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
-    """Why `member`, clean, has no lane beside `head_`: a stacked child whose parent is unmerged
-    first (the head's obstacles are no news to a member that could not have it anyway); then, for
-    a member with no admitted `lane_decision`, its `not_candidate`; then the head's conditions and
-    the member's own. `None` for a member that is not clean (it gets no reason), for one that is
-    not admitted and has no `not_candidate`, and for one with no obstacle of its own: it never
-    means "has the lane", which is `Order.lane`."""
-    if member.clean is not True:
-        return None
-    if member.stack_held:
-        return "stack_parent_unmerged"
-    if member.lane_decision is None:
-        return member.not_candidate
-    taken = _head_obstacle(head_, now)
-    if isinstance(taken, str):
-        return taken
-    if member.paths is None:
-        return "member_paths_unknown"
-    if member.paths & taken:
-        return "paths_overlap"
-    return None
+def lanes(
+    eligible: Iterable[Member], chosen: Member | None, now: datetime
+) -> tuple[tuple[int, ...], dict[int, LaneReason]]:
+    """The lanes beside the final head `chosen` and why each clean member without one has none:
+    the only place the selection and the reasons are written, so they cannot contradict.
 
+    Lanes: greedy by `(queued_at, issue)` over the members other than the head that are
+    `lane_ready`, whose paths are disjoint from the head's and from the union of the lanes already
+    picked (a `None` path set is never disjoint), up to `LANES_MAX`.
 
-def _lane(eligible: list[Member], chosen: Member | None, now: datetime) -> int | None:
-    """The member that gets the lane beside the final head `chosen`, `None` when none does: the
-    first by `(queued_at, issue)` that is `lane_ready` and whose paths are disjoint from the
-    head's."""
+    Reasons, for a clean member that has no lane, the first that applies: `stack_parent_unmerged`;
+    its `not_candidate` when it has no `lane_decision` (no reason if it has none either); the
+    head's reason (`_head_obstacle`); `member_paths_unknown`; `paths_overlap` (with the head);
+    then, only for a member that is `lane_ready` and would otherwise have opened, `lane_overlap`
+    (with the union of the lanes picked) and `lanes_full`. A member that is not clean gets no
+    reason, and neither does one that has the lane or that no lane condition of its own stops."""
     taken = _head_obstacle(chosen, now)
-    if isinstance(taken, str):
-        return None
-    pick = _first(
-        m
-        for m in eligible
-        if m is not chosen and lane_ready(m) and m.paths is not None and not m.paths & taken
+    members = [m for m in eligible if chosen is None or m.issue != chosen.issue]
+    reasons: dict[int, LaneReason] = {}
+    picked: list[int] = []
+    union: frozenset[str] = frozenset()
+    ordered = sorted(
+        members,
+        key=lambda m: (m.queued_at is None, m.queued_at or datetime.min, m.issue),
     )
-    return pick.issue if pick is not None else None
+    for m in ordered:
+        if m.clean is not True:
+            continue
+        if m.stack_held:
+            reasons[m.issue] = "stack_parent_unmerged"
+            continue
+        if m.lane_decision is None:
+            if m.not_candidate is not None:
+                reasons[m.issue] = m.not_candidate
+            continue
+        if isinstance(taken, str):
+            reasons[m.issue] = taken
+            continue
+        if m.paths is None:
+            reasons[m.issue] = "member_paths_unknown"
+        elif m.paths & taken:
+            reasons[m.issue] = "paths_overlap"
+        elif not lane_ready(m):
+            continue
+        elif m.paths & union:
+            reasons[m.issue] = "lane_overlap"
+        elif len(picked) >= LANES_MAX:
+            reasons[m.issue] = "lanes_full"
+        else:
+            picked.append(m.issue)
+            union |= m.paths
+    return tuple(picked), reasons
+
+
+def lanes_open(lane_issues: Iterable[int], head_exempt: bool) -> tuple[int, ...]:
+    """The lanes that open this round: none when the head is exempt (its own merge is the one
+    exempt child of the round), else `lane_issues` as `lanes` chose them."""
+    return () if head_exempt else tuple(lane_issues)
+
+
+def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
+    """Why `member`, clean, has no lane beside `head_` on its own: a view of `lanes` over the head
+    and `member` alone, so it never answers differently from it. `None` for a member that is not
+    clean, one with no `not_candidate`, and one with no obstacle of its own: it never means "has
+    the lane", which is `Order.lanes`."""
+    pair = [member] if head_ is None else [head_, member]
+    return lanes(pair, head_, now)[1].get(member.issue)
 
 
 def _choose(eligible: list[Member], now: datetime) -> Member | None:
@@ -420,7 +461,7 @@ def order(members: Iterable[Member], now: datetime) -> Order:
     return Order(
         chosen.issue if chosen is not None else None,
         tuple(done),
-        _lane(eligible, chosen, now),
+        lanes(eligible, chosen, now)[0],
     )
 
 
@@ -429,7 +470,7 @@ def advance(members: Iterable[Member], now: datetime) -> tuple[Order, tuple[Memb
     state if it yielded in this call, else as given; then the final head gets `observed` (so a
     yielded member that ends as head is anchored in the same call), a member that was not yielded
     and was seen as head gets `left_head`, any other is unchanged. A head that vanished is not in
-    `members` and is not folded. `Order.lane` passes through as `order` gave it."""
+    `members` and is not folded. `Order.lanes` passes through as `order` gave it."""
     given = tuple(members)
     result = order(given, now)
     gave_up = {y.member.issue: y.member for y in result.yielded}
@@ -561,7 +602,7 @@ def lane_merge_verdict(raw: Mapping[str, object]) -> Literal["record", "not_lane
     `not_lane` when it merged after the admission on another sha or master (not provably a lane
     merge), `None` for anything else: no admission, already marked, a merge not later than the
     admission, or an instant that is missing or does not parse. It is not the lane predicate
-    (`lane_ready`, `lane_reason`)."""
+    (`lane_ready`, `lanes`)."""
     from .rules import same_commit  # rules imports this module through `document`
 
     admitted = raw.get("lane_admitted")
