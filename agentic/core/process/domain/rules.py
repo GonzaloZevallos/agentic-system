@@ -6851,8 +6851,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `thread_unread` (the flag is set), `open_escalation` (the fact
     is not `False`: `None` is never clear, GH-784), `pr_not_open`, `adr_number_taken`,
-    `not_approved`, `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `drawing_unsettled`
-    (only when `drawing_checked`), `criteria_unreadable`
+    `not_approved`, `head_not_reviewed`, `perf_unverified` (only when `perf_convened`),
+    `drawing_unsettled` (only when `drawing_checked`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `stacking.refusal` (only when `stack` is
     not `None`: `stack_parent_unmerged`, `stack_restack_due` or `stack_base_orphaned`, GH-855; a
