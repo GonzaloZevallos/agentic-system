@@ -29,6 +29,7 @@ from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.board import Etapa
+from agentic.core.process.domain.board_schema import MOTIVO_FIELD
 from agentic.core.process.domain.ci import CiCheck, CiReport, red_checks
 from agentic.core.process.domain.github_access import GithubAccess
 from agentic.core.process.domain.landing import CI_LOG_JOBS
@@ -704,7 +705,7 @@ def _identity_answer() -> dict:
     options = [{"id": f"O{i}", "name": n} for i, n in enumerate(get_args(Etapa))]
     nodes = [
         {"id": "F_etapa", "name": "Etapa", "dataType": "SINGLE_SELECT", "options": options},
-        {"id": "F_motivo", "name": "Motivo", "dataType": "TEXT"},
+        {"id": "F_motivo", "name": MOTIVO_FIELD, "dataType": "TEXT"},
         {"id": "F_costo", "name": "Costo USD", "dataType": "NUMBER"},
         {"id": "F_inicio", "name": "Inicio", "dataType": "DATE"},
         {"id": "F_fin", "name": "Fin", "dataType": "DATE"},

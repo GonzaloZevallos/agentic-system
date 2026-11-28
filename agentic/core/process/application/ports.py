@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ..domain.board import Field, FieldWrite
+from ..domain.board_schema import FieldNode, Step
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
 from ..domain.design import Design, NotReady, PrototypeListing
@@ -2661,6 +2662,24 @@ class Board(Protocol):
         raises once an issue was sent: it returns what it sent (an issue not in `written` is
         not recorded as sent) and whether a transport cause cut the round short. With nothing
         sent, a stop raises its cause."""
+        ...
+
+
+class BoardSchemaRejected(Exception):
+    """GitHub refused a schema change: its answer carried GraphQL errors. Plain on purpose,
+    not a `TrackerCallFailed` or `TrackerTransient`: nothing retries a schema write."""
+
+
+class BoardSchema(Protocol):
+    """The GitHub Project's schema (GH-1166): what `board migrate` reads and changes. Apart
+    from `Board`, which the poller holds and which can change nothing here."""
+
+    def fields(self) -> tuple[FieldNode, ...]:
+        """The Project's fields as they are now: one fresh read per call."""
+        ...
+
+    def apply(self, step: Step) -> None:
+        """Makes one step true on the Project. `BoardSchemaRejected` when GitHub refuses."""
         ...
 
 
