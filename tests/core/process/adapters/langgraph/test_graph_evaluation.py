@@ -14,7 +14,7 @@ from agentic.composition import default_ports, evaluation_ports
 from agentic.core.process.adapters.evaluation import ClosedInbox
 from agentic.core.process.adapters.langgraph.graph import build_graph
 from agentic.core.process.adapters.telemetry import NoTelemetry
-from agentic.core.process.application.ports import ActivityRow, AttemptFailed, Mail
+from agentic.core.process.application.ports import ActivityPage, AttemptFailed, Mail
 from agentic.core.process.domain.notify import NotifiedRecord
 from agentic.shared.configuration import Configuration
 from tests.core.process.adapters.langgraph.test_graph import (
@@ -128,10 +128,10 @@ class _Stub:
     def save(self, record: NotifiedRecord) -> None:
         raise AssertionError("an evaluation must not save")
 
-    def merged_prs(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
         raise AssertionError("an evaluation must not read")
 
-    def closed_issues(self, since: datetime, limit: int) -> list[ActivityRow]:
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
         raise AssertionError("an evaluation must not read")
 
 

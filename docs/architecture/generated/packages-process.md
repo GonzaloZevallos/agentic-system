@@ -32,6 +32,7 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
 
 ```mermaid
 graph TD
@@ -42,6 +43,7 @@ graph TD
     g_pkg__adapters__github["adapters.github (paquete)"]
     g_pkg__adapters__langgraph["adapters.langgraph (paquete)"]
     g_pkg__adapters__shell["adapters.shell (paquete)"]
+    g_pkg__adapters__smtp["adapters.smtp (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
     g_pkg__adapters --> g_pkg__application
@@ -62,5 +64,6 @@ graph TD
     g_pkg__adapters__langgraph --> g_pkg__domain
     g_pkg__adapters__shell --> g_pkg__application
     g_pkg__adapters__shell --> g_pkg__domain
+    g_pkg__adapters__smtp --> g_pkg__application
     g_pkg__application --> g_pkg__domain
 ```

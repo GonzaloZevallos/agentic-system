@@ -7,6 +7,7 @@ Esta página muestra las clases públicas de los módulos del grupo `claude_sdk`
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
   - [adapters: toplevel](classes-process-adapters-toplevel.md)
 
 ```mermaid

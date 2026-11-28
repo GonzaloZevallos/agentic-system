@@ -81,3 +81,25 @@ mensaje no se puede armar queda `unbuildable`, nunca se manda a medias.
 - Un padre que se cierra por el `Closes` de su única hija terminal no tiene `split_closed_at` y no
   anuncia.
 - Una raíz cerrada sin ninguna hoja fusionada no anuncia.
+
+## Adenda (GH-1057): el adaptador SMTP y su cableado
+
+- **TLS.** El puerto 465 es TLS implícito (`SMTP_SSL`). En cualquier otro puerto el servidor tiene
+  que ofrecer STARTTLS: se hace `ehlo`, se verifica `has_extn("starttls")` y se pasa a TLS con
+  `ssl.create_default_context()`, que verifica el certificado y el nombre. Sin STARTTLS el envío
+  falla con `NotifyFailed` antes de cualquier `login`: nunca se autentica sin TLS. Toda conexión
+  lleva un timeout explícito de 10 s. Sin usuario no hay `login`.
+- **Una sola lectura de la configuración.** `adapters/smtp/config.py` es el único módulo que nombra
+  las variables `AGENTIC_NOTIFY_*`. `settings(environ)` recibe el mapa, nunca lee `os.environ`, y
+  devuelve los valores crudos: un puerto o una hora mal escritos no lanzan al componer, fallan al
+  enviar como `NotifyFailed`. La composición obtiene todo de ahí y nadie más importa `smtplib`.
+- **Bordes.** Un `EMAIL_TO` vacío o con solo espacios significa apagado: `notifier`, `notified` y
+  `notify_settings` quedan en `None`. Un `EVENTS` vacío o sin ningún tipo tras partir por comas
+  significa todos los tipos: un error de tipeo nunca apaga el aviso en silencio. Un destinatario
+  con coma se rechaza, es uno solo. El From es el usuario si tiene `@` y, si no, el destinatario.
+- **Fallos.** Todo error sale como `NotifyFailed` con el nombre del tipo de la excepción original y
+  nada más: ni su texto, ni la respuesta del servidor, ni la contraseña, el usuario o cualquier
+  valor configurado, tampoco en `__cause__` ni en `__context__`.
+- **Canal hacia el caso de uso.** `Ports.notify_settings` lleva la hora del resumen y los tipos de
+  evento, crudos, a la parte que los interpreta, sin que importe el adaptador ni lea el entorno.
+  Es `None` junto con el notificador, en el dry-run y en la evaluación.
