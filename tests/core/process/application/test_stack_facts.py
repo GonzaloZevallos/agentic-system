@@ -20,13 +20,14 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.application.stack_facts import (
     StackMemo,
     parent_chain,
+    parent_facts,
     stack_facts,
 )
 from agentic.core.process.domain import stacking
 from agentic.core.process.domain.task import StackParent, apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.gh374_shape import document as escalated_document
-from tests.fakes import MemoryDocuments, MemoryTracker
+from tests.fakes import MemoryDocuments, MemoryTracker, memory_ports
 
 PARENT = "c" * 40
 CHILD = "d" * 40
@@ -537,3 +538,78 @@ def test_a_parent_without_the_stranded_shape_never_reads_comments():
     world.parent(9, escalated="CI red")
     world.tracker.timestamped_comments = lambda task_id: pytest.fail("read")  # type: ignore[method-assign]
     assert world.cause(_record(9)) == "parent_escalated"
+
+
+# -- parent_facts (GH-1163): the one computation of the parent-ready facts ------------------------
+
+APPROVED, RECORDED = "a" * 40, "b" * 40
+PARENT_BRANCH = "agentic/GH-5"
+
+
+def _parent_ports(*, labels: tuple[str, ...] = (), **document: object) -> Any:
+    ports = memory_ports()
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, labels)
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "status": "ready_for_review",
+            "subtasks": {"a": {"reviewed_head": APPROVED}},
+            **document,
+        }
+    )
+    ports.workspace.remote_tips[PARENT_BRANCH] = TIP
+    ports.workspace.ancestors = {APPROVED, RECORDED}
+    return ports
+
+
+def test_parent_facts_without_a_head_reads_the_approved_head_and_checks_it_is_carried():
+    facts = parent_facts(CFG, _parent_ports(), 5)
+    assert facts == stacking.ParentFacts(False, False, False, True, APPROVED, True)
+    assert stacking.start_ref(5, facts) == stacking.Parent(APPROVED)
+
+
+def test_parent_facts_with_a_head_checks_that_head_is_carried_not_the_approved_one():
+    ports = _parent_ports()
+    ports.workspace.ancestors = {APPROVED}  # the remote branch no longer carries the recorded one
+    facts = parent_facts(CFG, ports, 5, head=RECORDED)
+    assert (facts.head, facts.carried) == (RECORDED, False)
+    assert stacking.start_ref(5, facts) == stacking.Wait("head_not_carried")
+
+
+def test_parent_facts_given_paused_replaces_the_derivation_from_labels_and_escalated():
+    ports = _parent_ports(labels=("needs-human",), escalated="CI red")
+    assert parent_facts(CFG, ports, 5).paused is True
+    assert parent_facts(CFG, ports, 5, paused=False).paused is False
+
+
+def test_parent_facts_of_a_parent_that_left_ready_is_not_ready():
+    facts = parent_facts(CFG, _parent_ports(status="planning"), 5, head=RECORDED)
+    assert (facts.ready, facts.carried) == (False, None)
+    assert stacking.start_ref(5, facts) == stacking.Wait("parent_not_ready")
+
+
+def test_parent_facts_through_a_memo_reads_the_issue_once_and_keeps_each_head_apart():
+    ports = _parent_ports()
+    memo = StackMemo()
+    first = parent_facts(CFG, ports, 5, head=RECORDED, memo=memo)
+    again = parent_facts(CFG, ports, 5, head=RECORDED, memo=memo)
+    other = parent_facts(CFG, ports, 5, head=APPROVED, memo=memo)
+    assert again is first and other.head == APPROVED
+    assert ports.tracker.issue_state_calls[5] == 1  # the issue read is the memo's, once
+
+
+@pytest.mark.parametrize("memoised", [False, True])
+def test_parent_facts_failed_reads_leave_every_fact_unread(memoised: bool):
+    memo = StackMemo() if memoised else None
+    ports = _parent_ports()
+    ports.tracker.state_errors.add(5)
+    unread = stacking.ParentFacts(None, None, None, None, None, None)
+    assert parent_facts(CFG, ports, 5, head=RECORDED, memo=memo) == unread
+    ports = _parent_ports()
+    ports.workspace.remote_tip_error = "origin down"
+    facts = parent_facts(CFG, ports, 5, head=RECORDED, memo=memo)
+    assert facts.carried is None
+    assert stacking.start_ref(5, facts) == stacking.Wait("unreadable")
+    ports = memory_ports()  # the parent's issue is open and its document is missing
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    assert parent_facts(CFG, ports, 5, head=RECORDED, memo=StackMemo()) == unread

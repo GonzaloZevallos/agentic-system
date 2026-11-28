@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from agentic.core.process.application import landing, landing_plan
 from agentic.core.process.application.ports import RawResult, Upstream
 from agentic.core.process.domain import schemas
+from agentic.core.process.domain.rules import Commit
 from agentic.core.process.domain.task import (
     VERDICT_SYNC,
     VERDICT_UNLANDABLE,
@@ -44,6 +45,10 @@ def _world(monkeypatch):
     _, document = gh320_conflicting_facts()
     ports = memory_ports(tracker=MemoryTracker())
     ports.workspace.upstream_answer = Upstream("origin/master", MASTER, None)
+    # The one clean merge of master the sync makes, as `scope_of` reads it from the reviewed head.
+    ports.workspace.first_parent_line = (Commit("f" * 40, (HEAD, MASTER)),)
+    ports.workspace.ancestors_by_ref = {MASTER: {MASTER}}
+    ports.workspace.ancestors = {HEAD}
     ports.tracker.prs[str(document["pull_request"])] = gh320_pull_request()
     units = {
         name: {"id": name, **unit}

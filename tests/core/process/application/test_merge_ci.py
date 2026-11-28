@@ -302,6 +302,20 @@ def test_an_unreadable_report_after_the_bound_names_gh_and_the_cause_never_a_che
     assert "gh" in comment and "gh_unreadable" in comment and "web" not in comment
 
 
+def test_the_refusal_of_an_unreadable_report_quotes_what_gh_said_when_it_said_anything(tmp_path):
+    ports = _world(
+        CiUnreadable.of("gh_unreadable", "<html>502 Bad Gateway</html>"),
+        pushed_head=HEAD,
+        pushed_at=_ago(4000),
+    )
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result == merge.MergeResult("refused", "ci_unreadable")
+    [(_, comment)] = ports.tracker.comments
+    assert "(gh_unreadable); gh answered: <html>502 Bad Gateway</html>" in comment
+
+
 def test_a_declared_check_never_reported_is_named_after_the_bound(tmp_path):
     ports = _world(
         _report(_check("other")), declared=("web", "e2e"), pushed_head=HEAD, pushed_at=_ago(4000)

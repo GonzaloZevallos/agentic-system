@@ -9,9 +9,12 @@ under `core.process` imports it. `NoTelemetry` is the default when nobody does.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from typing import Protocol
 
+from ..domain.gh_calls import GhCallKind, GhConsumer
+from ..domain.github_budget import Unmeasured
 from ..domain.task import TaskState
 
 
@@ -29,6 +32,14 @@ class Telemetry(Protocol):
 
     def traceparent(self) -> str | None: ...
 
+    def gh_budget(
+        self,
+        consumer: GhConsumer,
+        calls: Mapping[GhCallKind, int],
+        remaining: int | None,
+        round_points: int | Unmeasured,
+    ) -> None: ...
+
 
 class _NoSpan:
     def finish(self, patch: TaskState) -> None:
@@ -42,4 +53,13 @@ class NoTelemetry:
         return nullcontext(_NoSpan())
 
     def traceparent(self) -> str | None:
+        return None
+
+    def gh_budget(
+        self,
+        consumer: GhConsumer,
+        calls: Mapping[GhCallKind, int],
+        remaining: int | None,
+        round_points: int | Unmeasured,
+    ) -> None:
         return None

@@ -12,6 +12,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Literal
 
 Resource = Literal["core", "graphql", "search"]
@@ -104,6 +105,59 @@ def _resource_budget(remaining: object, reset: object, from_headers: bool) -> Re
     if count is None or at is None:
         return None
     return ResourceBudget(count, at)
+
+
+@dataclass(frozen=True)
+class GraphqlReading:
+    """One `gh api rate_limit` reading of the GraphQL resource; `reset` is aware UTC."""
+
+    used: int
+    limit: int
+    remaining: int
+    reset: datetime
+
+
+class Unmeasured(Enum):
+    """A measurement that does not exist; never a 0."""
+
+    UNMEASURED = "unmeasured"
+
+
+def _count(value: object) -> int | None:
+    count = _remaining(value, False)
+    return count if count is not None and len(str(count)) <= _MAX_DIGITS else None
+
+
+def graphql_reading(doc: object) -> GraphqlReading | None:
+    """The GraphQL reading of a `gh api rate_limit` document (`resources.graphql`); any
+    bad shape is `None`, never an error."""
+    resources = doc.get("resources") if isinstance(doc, Mapping) else None
+    entry = resources.get("graphql") if isinstance(resources, Mapping) else None
+    if not isinstance(entry, Mapping):
+        return None
+    used = _count(entry.get("used"))
+    limit = _count(entry.get("limit"))
+    remaining = _count(entry.get("remaining"))
+    reset = _epoch(entry.get("reset"), False)
+    if used is None or limit is None or remaining is None or reset is None:
+        return None
+    return GraphqlReading(used, limit, remaining, reset)
+
+
+def round_points(
+    previous: GraphqlReading | None, current: GraphqlReading | None
+) -> int | Literal[Unmeasured.UNMEASURED]:
+    """The movement of the account's GraphQL `used` between two readings.
+
+    It is every process on the machine that moved it (the sleep and the poller's children
+    included), while the calls printed beside it count only this process's own `gh`
+    launches. A difference exists only when both readings exist, share the reset window
+    and the count did not go down; anything else is `Unmeasured.UNMEASURED`, never 0.
+    The only place that subtracts two `used` values."""
+    if previous is None or current is None or previous.reset != current.reset:
+        return Unmeasured.UNMEASURED
+    difference = current.used - previous.used
+    return difference if difference >= 0 else Unmeasured.UNMEASURED
 
 
 def _resource(value: object) -> Resource | None:

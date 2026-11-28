@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.filesystem.run_registry import FilesystemRunRegistry
-from agentic.core.process.application.ports import LaunchAttempt, RunRegistration
+from agentic.core.process.application.ports import LaunchAttempt, RunRegistration, StackHint
 from agentic.core.process.domain import exempt_queue, rules
 from agentic.core.process.domain.rules import SpendRun
 
@@ -481,6 +481,42 @@ def test_the_arm_survives_every_rewrite_of_the_launch_record_and_clears_with_it(
     assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 3, "control")
     registry.clear_launch("apostrophe", 20)
     assert registry.launch_attempts("apostrophe", 20) is None
+
+
+# --- GH-858: the stacked-start hint rides on the launch record -------------------------
+
+
+def test_the_stack_hint_is_rewritten_on_every_launch_and_none_clears_it(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path)
+    hint = StackHint(5, "a" * 40)
+    registry.record_launch("apostrophe", 20, T0, stack_hint=hint)
+    record = json.loads((tmp_path / "launches" / "apostrophe-20.json").read_text())
+    assert record["stack_hint"] == {"parent": 5, "head": "a" * 40}
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 1, None, hint)
+    # Unlike the arm, a relaunch that names no hint does not inherit the old one.
+    registry.record_launch("apostrophe", 20, T0, arm="light")
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 2, "light")
+    assert "stack_hint" not in json.loads(
+        (tmp_path / "launches" / "apostrophe-20.json").read_text()
+    )
+
+
+def test_a_launch_record_without_a_hint_is_still_since_and_prior_only(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path)
+    registry.record_launch("apostrophe", 20, T0)
+    record = json.loads((tmp_path / "launches" / "apostrophe-20.json").read_text())
+    assert record == {"since": T0.isoformat(), "prior": 1}
+
+
+@pytest.mark.parametrize(
+    "junk", [{"parent": "x", "head": "a"}, {"parent": 5}, "junk", {"parent": True, "head": "a"}]
+)
+def test_an_illegible_stack_hint_reads_as_no_hint(tmp_path, junk):
+    registry = FilesystemRunRegistry(tmp_path)
+    registry.record_launch("apostrophe", 20, T0)
+    path = tmp_path / "launches" / "apostrophe-20.json"
+    path.write_text(json.dumps({"since": T0.isoformat(), "prior": 1, "stack_hint": junk}))
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 1)
 
 
 # -- exempt attempts and published exempt waits (GH-500) ------------------------------------

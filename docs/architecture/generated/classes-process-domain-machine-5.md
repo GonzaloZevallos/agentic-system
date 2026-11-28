@@ -33,8 +33,6 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
-    class stage0_rotation__Red["Red"]
-    class stage0_rotation__Stop["Stop"]
     class stage0_rotation__SwitchRecord["SwitchRecord"]
     class stage0_rotation__Target["Target"]
     class stage0_rotation__Unavailable["Unavailable"]
@@ -44,4 +42,9 @@ classDiagram
     class stall__Stall["Stall"]
     class stall__StallSnapshot["StallSnapshot"]
     class stall__Verdict["Verdict"]
+    class terminal_states__Closure["Closure"]
+    class terminal_states__OpenView["OpenView"]
+    class terminal_states__ReadState["ReadState"]
+    class terminal_states__TerminalMemo["TerminalMemo"]
+    terminal_states__OpenView --> terminal_states__TerminalMemo
 ```

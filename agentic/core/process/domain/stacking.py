@@ -39,6 +39,9 @@ text; they gate nothing. `refusal` stays the only gate on merging. Where the not
 a paused child is skipped and the rule that no merge runs while `pause_cause` is not `none` belong
 to the poller hold part, whose ADR lives with it. "Moves again" means the parent leaves the cause:
 it is reopened, resumed, or its escalation is released.
+
+`unstarted_cause` (GH-1163) is the cause of a child that has no task branch yet, read off
+`start_ref`: `pause_cause(chain)` only sees a parent that is paused, never one that left Ready.
 """
 
 from __future__ import annotations
@@ -207,8 +210,15 @@ def refusal(stack: StackFacts, conflicts: bool | None) -> rules.MergeRefusal | N
     return "stack_parent_unmerged"
 
 
-PauseCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned", "unreadable", "none"]
-NotedCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned"]
+PauseCause = Literal[
+    "parent_escalated",
+    "parent_stopped",
+    "parent_abandoned",
+    "parent_not_ready",
+    "unreadable",
+    "none",
+]
+NotedCause = Literal["parent_escalated", "parent_stopped", "parent_abandoned", "parent_not_ready"]
 
 PAUSE_DEPTH = 10
 """The most links of a parent chain `pause_cause` reads: a longer one is `unreadable`."""
@@ -217,6 +227,7 @@ _NOTE_TEXT: Mapping[NotedCause, str] = {
     "parent_escalated": "escalated",
     "parent_stopped": "was stopped",
     "parent_abandoned": "was closed as not planned",
+    "parent_not_ready": "is no longer ready for review",
 }
 
 
@@ -257,23 +268,30 @@ def _link_cause(link: ParentLink) -> PauseCause | None:
     return None
 
 
-def pause_cause(chain: Sequence[ParentLink]) -> PauseCause:
-    """Why a stacked child waits on its parents, `none` when it does not. The links are read in
+def pause_link(chain: Sequence[ParentLink]) -> tuple[PauseCause, int | None]:
+    """Why a stacked child waits on its parents, `none` when it does not, and the issue of the
+    link whose `_link_cause` decided it: the one walk of the chain. The links are read in
     order, each by `_link_cause`; a repeated issue or an 11th link is `unreadable`, and so is a
     chain that ends with a parent still to read. Anything not known is `unreadable`, never
-    `none`. It decides nothing about merging: that is `refusal`'s."""
+    `none`. The issue is `None` for `none` and for `unreadable`, which name no link. It decides
+    nothing about merging: that is `refusal`'s."""
     seen: set[int] = set()
     for position, link in enumerate(chain):
         issue = link.record["issue"]
         if position >= PAUSE_DEPTH or issue in seen:
-            return "unreadable"
+            return "unreadable", None
         seen.add(issue)
         cause = _link_cause(link)
         if cause is not None:
-            return cause
+            return cause, issue if cause not in ("none", "unreadable") else None
         if isinstance(link.next_record, Absent):
-            return "none"
-    return "none" if not chain else "unreadable"
+            return "none", None
+    return "none" if not chain else "unreadable", None
+
+
+def pause_cause(chain: Sequence[ParentLink]) -> PauseCause:
+    """The cause of `pause_link`, which decides it."""
+    return pause_link(chain)[0]
 
 
 def pause_note(parent: int, cause: NotedCause) -> str:
@@ -415,3 +433,88 @@ class ParentMemo:
 
     def fail_origin(self) -> None:
         self.origin_failed = True
+
+
+StackWaitCause = Literal["parent_not_ready", "head_not_carried", "parent_paused", "unreadable"]
+"""Why a stacked start waits (GH-858): the closed set the log line `agentic: stack: GH-N waits on
+#P (<cause>)` takes its cause from."""
+
+
+@dataclass(frozen=True)
+class Upstream:
+    """Start at the fetched upstream: the parent's work is merged or abandoned, so nothing is
+    left to stack on and the child's record is cleared."""
+
+
+@dataclass(frozen=True)
+class Parent:
+    """Start at `head`, the parent's approved head carried by its remote branch."""
+
+    head: str
+
+
+@dataclass(frozen=True)
+class Wait:
+    """Do nothing yet: no document, branch or worktree is written, and nothing escalates."""
+
+    cause: StackWaitCause
+
+
+@dataclass(frozen=True)
+class ParentFacts:
+    """What the application layer read about a stacked child's parent, for `start_ref`. Each
+    fact is `None` when its read failed. `merged`: the parent's work is in the upstream;
+    `abandoned`: its issue is closed as not planned; `paused`: its run escalated or was
+    stopped; `ready`: its document is `ready_for_review`; `head`: its approved
+    head (`None` if it has none); `carried`: its remote branch carries `head`."""
+
+    merged: bool | None
+    abandoned: bool | None
+    paused: bool | None
+    ready: bool | None
+    head: str | None
+    carried: bool | None
+
+
+def start_ref(parent_issue: int, facts: ParentFacts) -> Upstream | Parent | Wait:
+    """Where the child of `parent_issue` starts (GH-858, ADR-0104), the first row that applies:
+
+    1. the parent merged: `Upstream`; closed as not planned: `Upstream`;
+    2. the parent paused: `Wait(parent_paused)`;
+    3. the parent not Ready, or Ready with no approved head: `Wait(parent_not_ready)`;
+    4. the head not on the remote branch: `Wait(head_not_carried)`;
+    5. otherwise `Parent(head)`.
+
+    A fact that was not read decides nothing: it is `Wait(unreadable)`, never a stacked start.
+    Pure; `parent_issue` only names whose facts these are."""
+    del parent_issue
+    if facts.merged is True or (facts.merged is False and facts.abandoned is True):
+        return Upstream()
+    if facts.merged is None or facts.abandoned is None or facts.paused is None:
+        return Wait(cause="unreadable")
+    if facts.paused:
+        return Wait(cause="parent_paused")
+    if facts.ready is None:
+        return Wait(cause="unreadable")
+    if not facts.ready or facts.head is None:
+        return Wait(cause="parent_not_ready")
+    if facts.carried is None:
+        return Wait(cause="unreadable")
+    if not facts.carried:
+        return Wait(cause="head_not_carried")
+    return Parent(head=facts.head)
+
+
+def unstarted_cause(ref: Upstream | Parent | Wait) -> PauseCause:
+    """Why a stacked child that has no task branch yet cannot start (GH-1163), read off
+    `start_ref`'s answer for it: a parent that is not Ready, or whose remote branch no longer
+    carries the recorded head, is `parent_not_ready`; a parent that is paused (the chain already
+    says so) or a read that failed is `unreadable`, which holds without a note; `Parent` and
+    `Upstream` start the child, so `none`. Pure; a `Wait` writes nothing and never escalates."""
+    match ref:
+        case Wait(cause="parent_not_ready" | "head_not_carried"):
+            return "parent_not_ready"
+        case Wait():
+            return "unreadable"
+        case Parent() | Upstream():
+            return "none"

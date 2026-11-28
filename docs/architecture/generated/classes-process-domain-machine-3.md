@@ -46,6 +46,7 @@ classDiagram
     class scratch__Owner["Owner"]
     class scratch__OwnerEntry["OwnerEntry"]
     class scratch__OwnerRecord["OwnerRecord"]
+    class scratch__PartitionFolder["PartitionFolder"]
 ```
 
 ## Relaciones con otras páginas

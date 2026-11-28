@@ -44,6 +44,7 @@ classDiagram
     class github_access__Turn["Turn"]
     class github_access__WriteGate["WriteGate"]
     class github_budget__Budget["Budget"]
+    class github_budget__GraphqlReading["GraphqlReading"]
     class github_budget__ResourceBudget["ResourceBudget"]
     class github_budget__Start["Start"]
 ```

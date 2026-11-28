@@ -4615,6 +4615,20 @@ def auto_resumable(state: TaskState) -> ResumeKey | None:
     return key if held else None
 
 
+def poller_retakes(state: TaskState) -> bool:
+    """Whether the poller retakes this pause on its own, the one source of the board's
+    "se retoma sola" (GH-877): not held on its format retakes, `auto_resumable`, and not a
+    format key whose hold is already due.
+
+    Known limit: the `Auto-resumed:` count (`MECHANICAL_RETAKE_MAX`), a human comment after the
+    system's and `landing_plan.stranded` live in the issue's comments, which are not read here,
+    so a mechanical pause with its retakes spent still answers True."""
+    key = auto_resumable(state)
+    if format_held(state) or key is None:
+        return False
+    return not (key in FORMAT_REASONS and format_hold_due(state))
+
+
 # The retakes a task's `check_timeout` pauses get in all: the first is free, the second runs only
 # on changed evidence (`check_timeout_retake`), a third timeout always goes to a human.
 # `auto_resume_limit` returns the same number, so the poller's count of `Auto-resumed:` comments

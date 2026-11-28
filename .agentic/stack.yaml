@@ -42,6 +42,10 @@ checks:
 # them gave no red that the serial run did not give (ADR-0044, "Evidencia para este repo").
 # Read at a task's base, like every key here: it governs from the task after the merge.
 parallel_checks: true
+# `stacking` (GH-858): the stacked start is on for this repo only; apostrophe leaves the key
+# absent and stays off. It is read at the fetched upstream tip, in the launch judgement and
+# nowhere else (ADR-0104), so it governs from the first round after this change merges.
+stacking: true
 # The affected-only form of the pytest check (ADR-0046), selected by `scripts/affected_tests.py`
 # (ADR-0047): the tests whose import closure reaches the change, an explicit table for what
 # tests read without importing it, and exit 8/9 when it selects nothing or cannot decide.

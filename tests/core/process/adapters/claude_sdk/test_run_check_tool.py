@@ -19,7 +19,7 @@ from agentic.core.process.adapters.claude_sdk.check_server import (
 from agentic.core.process.adapters.claude_sdk.hooks import HookActivity
 from agentic.core.process.adapters.claude_sdk.runner import options_for
 from agentic.core.process.application import presubmit
-from agentic.core.process.application.ports import CommandResult, RunStopped
+from agentic.core.process.application.ports import CheckAbandoned, CommandResult, RunStopped
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.application.run_check import RunCheck, resolved_walls
 from agentic.core.process.domain.check_schedule import CheckPriority
@@ -181,6 +181,22 @@ def test_a_stop_in_the_run_check_tool_gives_no_result_and_waits_for_the_cancella
 
     cancelled, done = asyncio.run(drive())
     assert cancelled and done == []  # no tool result: the stop is not one
+
+
+class AbandonedTool(SlowTool):
+    def __call__(self, name: str) -> str:
+        raise CheckAbandoned
+
+
+def test_an_abandoned_call_answers_the_fixed_text_and_does_not_wait():
+    async def drive() -> dict:
+        with anyio.fail_after(5):
+            return await run_check_tool(AbandonedTool()).handler({"name": "tests"})
+
+    reply = asyncio.run(drive())
+    assert reply == {
+        "content": [{"type": "text", "text": "the attempt was abandoned; no check was run"}]
+    }
 
 
 # -- a verification longer than the foreground limit (ADR-0065 addendum, GH-451) ------

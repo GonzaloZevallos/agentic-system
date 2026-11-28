@@ -37,7 +37,7 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 5)](classes-process-application-support-5.md)
   - `landing_plan.LandingContext` se asocia con `ports.Ports`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`

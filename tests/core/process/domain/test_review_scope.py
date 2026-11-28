@@ -6,10 +6,12 @@ from __future__ import annotations
 import pytest
 
 from agentic.core.process.domain import landing
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.landing import (
     RESOLUTION_LINES_MAX,
     ScopeFacts,
     ScopeStep,
+    diff_paths,
     review_scope,
     scope_patch,
 )
@@ -181,3 +183,112 @@ def test_a_restack_after_the_approved_head_is_carried_with_the_cause_clean():
 def test_a_restack_over_own_commits_the_review_never_accepted_is_a_full_review():
     verdict = review_scope(facts(own_step(), merge_step()))
     assert (verdict.scope, verdict.cause) == ("full", "own_before_merge")
+
+
+# --- GH-976: regeneration steps, covered paths, diff_paths ---------------------------------
+
+DOCS = Docs(generate="make docs", paths=("docs/generated/**",))
+OWNED = ("docs/generated/a.md",)
+
+
+def regen_step(
+    paths: tuple[str, ...] = OWNED, text: str = "diff of regen", sha: str = "g" * 40
+) -> ScopeStep:
+    return ScopeStep(sha, "regeneration", text, paths)
+
+
+def owned_merge(sha: str = "m" * 40) -> ScopeStep:
+    return ScopeStep(sha, "upstream_merge", "+x", OWNED)
+
+
+def regenerated(*steps: ScopeStep, docs: Docs | None = DOCS, **overrides):
+    return review_scope(facts(*steps, docs=docs, **overrides))
+
+
+def test_a_merge_with_text_wholly_under_docs_paths_is_carried_regenerated():
+    verdict = regenerated(owned_merge())
+    assert (verdict.scope, verdict.cause, verdict.text) == ("carried", "regenerated", "")
+
+
+def test_a_clean_merge_bringing_code_outside_docs_paths_stays_clean():
+    verdict = regenerated(merge_step())
+    assert (verdict.scope, verdict.cause) == ("carried", "clean")
+
+
+def test_a_merge_text_with_one_path_outside_docs_paths_is_a_resolution():
+    step = ScopeStep("m" * 40, "upstream_merge", "+x", (*OWNED, "src/code.py"))
+    assert regenerated(step).scope == "resolution"
+
+
+def test_text_with_no_parsed_paths_is_never_covered():
+    step = ScopeStep("m" * 40, "upstream_merge", "+x", ())
+    assert regenerated(step).scope == "resolution"
+    assert regenerated(merge_step(), regen_step(paths=())).scope == "resolution"
+
+
+def test_without_docs_or_with_none_owned_nothing_is_covered():
+    assert regenerated(owned_merge(), docs=None).scope == "resolution"
+    assert regenerated(owned_merge(), docs=Docs("g", ())).scope == "resolution"
+
+
+def test_a_covered_regeneration_after_a_clean_merge_is_carried_regenerated():
+    verdict = regenerated(merge_step(), regen_step())
+    assert (verdict.scope, verdict.cause) == ("carried", "regenerated")
+
+
+def test_a_chain_of_only_covered_regenerations_is_carried_regenerated():
+    verdict = regenerated(regen_step(), regen_step(sha="h" * 40))
+    assert (verdict.scope, verdict.cause) == ("carried", "regenerated")
+
+
+def test_an_uncovered_regeneration_after_the_merge_is_a_resolution_shown_by_kind():
+    verdict = regenerated(merge_step(), regen_step(paths=("src/x.py",), sha="e" * 40))
+    assert (verdict.scope, verdict.cause) == ("resolution", "resolved")
+    assert "eeeeeeeeeeee (regeneration)" in verdict.text
+
+
+def test_an_uncovered_regeneration_before_the_merge_is_full_own_before_merge():
+    verdict = regenerated(regen_step(paths=("src/x.py",)), merge_step())
+    assert (verdict.scope, verdict.cause) == ("full", "own_before_merge")
+
+
+def test_a_chain_of_uncovered_regenerations_alone_is_not_no_merge_but_a_resolution():
+    verdict = regenerated(regen_step(paths=("src/x.py",)))
+    assert (verdict.scope, verdict.cause) == ("resolution", "resolved")
+
+
+def test_a_chain_with_an_own_commit_is_never_regenerated():
+    verdict = regenerated(merge_step(), regen_step(), own_step())
+    assert verdict.scope == "resolution"
+
+
+def test_a_chain_without_merge_and_with_a_non_regeneration_step_is_no_merge():
+    assert regenerated(regen_step(), own_step()).cause == "no_merge"
+
+
+def test_a_foreign_merge_beside_a_regeneration_is_full():
+    foreign = ScopeStep("f" * 40, "foreign_merge", "")
+    assert regenerated(regen_step(), foreign).cause == "no_merge"
+    assert regenerated(merge_step(), regen_step(), foreign).cause == "foreign_merge"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", ()),
+        ("diff --git a/x.md b/x.md\n--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@", ("x.md",)),
+        ("diff --git a/old.md b/new.md\nsimilarity index 90%", ("old.md", "new.md")),
+        ("diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ", ("i.png",)),
+        ("diff --git a/s.sh b/s.sh\nold mode 100644\nnew mode 100755", ("s.sh",)),
+        ("diff --git a/a b.md b/a b.md\n+x", ("a b.md",)),
+        (
+            "diff --git a/p b/p\n+x\ndiff --git a/q b/q\n+y\ndiff --git a/p b/p\n+z",
+            ("p", "q"),
+        ),
+        ('diff --git "a/\\303.md" "b/\\303.md"\n+x', None),
+        ("+x\n-y", None),
+        ("diff --git a/a b/c b/a b/c\n+x", None),
+    ],
+)
+def test_diff_paths(text, expected):
+    assert diff_paths(text) == expected

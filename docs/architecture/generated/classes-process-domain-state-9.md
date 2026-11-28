@@ -47,7 +47,7 @@ classDiagram
     class task__StackPause["StackPause"]
     class task__StackRestack["StackRestack"]
     class task__StackUnfetchable["StackUnfetchable"]
-    class task__Subtask["Subtask"]
+    class task__StallRecord["StallRecord"]
 ```
 
 ## Relaciones con otras páginas
@@ -56,6 +56,3 @@ classDiagram
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - `stacking.ParentLink` se asocia con `task.StackParent`
-- [domain: state (parte 10)](classes-process-domain-state-10.md)
-  - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` se asocia con `task.StackParent`

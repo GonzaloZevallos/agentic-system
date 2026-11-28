@@ -25,7 +25,7 @@ from ..domain.run_check import (
     VerificationCall,
     resolve_wall,
 )
-from .presubmit import CheckoutPresubmit
+from .presubmit import CheckoutPresubmit, stop_if_abandoned
 
 
 def resolved_walls(
@@ -110,10 +110,15 @@ class RunCheck:
         walls = list(gate.walls.values())
         return max(legacy, run_check.call_timeout_s(walls, gate.wait_max_s, witness_s))
 
-    def __call__(self, name: str) -> str:
-        return run_check.render(self.run(name))
+    def __call__(self, name: str, *, abandoned: Callable[[], bool] | None = None) -> str:
+        return run_check.render(self.run(name, abandoned=abandoned))
 
-    def run(self, name: str) -> CheckRun:
+    def run(self, name: str, *, abandoned: Callable[[], bool] | None = None) -> CheckRun:
+        """`abandoned` is the flag of the attempt that asked (GH-1169), or None. Once it is set
+        the call raises `CheckAbandoned` at the next look and writes nothing to the gate, the
+        store or `calls`; a check already launched runs to its own wall, which the flag cannot
+        shorten."""
+        stop_if_abandoned(abandoned)
         gate = self.gate
         command = gate.checks.get(name)
         verification = None if command is not None else self.verifications.get(name)
@@ -146,24 +151,29 @@ class RunCheck:
         # never again below; on a dirty or uncommitted tree it clears whatever an earlier
         # call left, so nothing is read or written for a tree that is not the head's.
         # A verification is never read from or written to the store (ADR-0065 addendum).
+        stop_if_abandoned(abandoned)
         gate._prepare_reuse(committed and clean and verification is None)
         # The witness and the check run under a share of the machine's cores, like the gate's
         # (ADR-0070): without one a `{workers}` in the command would reach the shell as text.
         # Its place in the queue is its own, apart from the delivery gate's.
-        with gate._share(fresh=True):
+        with gate._share(fresh=True, abandoned=abandoned):
+            stop_if_abandoned(abandoned)
             # A command with a `not_ready_exit` has its load read by the gate's classification
             # (in the row); one read of ours would only repeat it.
             measured = verification is not None and not self._classified(name)
             before = self._read_load() if measured else None
             # The witness runs before the check, in this same call: its agreement is what
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
-            witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
-            row = gate._run(name, command)
+            witness_reason = (
+                gate._run_witness(gate.witness, abandoned) if gate.witness is not None else None
+            )
+            row = gate._run(name, command, None, abandoned)
             after = self._read_load() if measured else None
             outcome: Outcome | None = None
             retry: Retry | None = None
             if self._classified(name):
-                row, outcome, retry = self._settle(name, command, row)
+                row, outcome, retry = self._settle(name, command, row, abandoned)
+        stop_if_abandoned(abandoned)  # no call is recorded, no pass stored, for nobody awaiting it
         if verification is not None:
             return self._verified(name, row, witness_reason, outcome, (before, after), retry)
         passed, reused = row["passed"], bool(row.get("reused", False))
@@ -223,7 +233,11 @@ class RunCheck:
         return run_check.evidence_markdown(self.calls)
 
     def _settle(
-        self, name: str, command: str, first: CheckResult
+        self,
+        name: str,
+        command: str,
+        first: CheckResult,
+        abandoned: Callable[[], bool] | None = None,
     ) -> tuple[CheckResult, Outcome, Retry | None]:
         """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
         run once more in this same call, judged by the gate's own `flake_verdict`; the pair is
@@ -236,7 +250,7 @@ class RunCheck:
         spent = Retry(
             first.get("duration_s", 0.0), first.get("load_before"), first.get("load_after")
         )
-        again = self.gate._execute(name, command)
+        again = self.gate._execute(name, command, None, abandoned)
         if presubmit.flake_verdict(first, again) == "flake":
             return again, Outcome.PASSED, spent
         failed = Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
