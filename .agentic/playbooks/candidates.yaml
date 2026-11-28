@@ -2594,3 +2594,33 @@ candidates:
   - finding
   - return
   added_at: '2026-11-27T22:19:34.099+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: In tests, build expected user-facing texts from the domain constants the code defines, never as literals. Before you deliver, grep the tests for the literal text and fix every hit.
+  confidence: medium
+  seen_in:
+  - GH-1165
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, turn each plan invariant into a grep over your whole diff, tests included, and run it. If a value has a domain constant, use the constant, never a repeated literal.
+  confidence: medium
+  seen_in:
+  - GH-1164
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: On the integrated branch, run the grep each plan invariant implies over production code and tests. Fix any repeated literal of a domain value by using the domain constant or function.
+  confidence: medium
+  seen_in:
+  - GH-1164
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-28T00:57:26.271+00:00'
