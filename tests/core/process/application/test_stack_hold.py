@@ -230,6 +230,49 @@ def test_a_parent_in_the_upstream_holds_nothing():
     assert (hold.held, hold.causes) == ({}, {20: "none"})
 
 
+def test_culprits_names_the_link_that_caused_the_hold_not_the_direct_parent():
+    world = _World()
+    grandparent = world.parent(8, escalated="CI red")
+    world.parent(7, stack_parent=dict(grandparent))
+    world.child(20, _record(7))
+    hold = world.compute(world.queued(20))
+    assert hold.held == {20: "parent_escalated"}
+    assert (hold.parents, hold.culprits) == ({20: 7}, {20: 8})
+
+
+def test_culprits_is_the_direct_parent_when_the_direct_parent_is_the_cause():
+    world, _ = _escalated_world()
+    assert world.compute(world.queued(20)).culprits == {20: 7}
+
+
+def test_culprits_is_the_direct_parent_for_parent_not_ready():
+    world = _World()
+    grandparent = world.parent(8)
+    world.parent(7, status="planning", stack_parent=dict(grandparent))
+    world.child(20, _record(7))
+    hold = world.compute(world.queued(20))
+    assert hold.held == {20: "parent_not_ready"}
+    assert hold.culprits == {20: 7}
+
+
+def test_culprits_has_no_entry_for_an_unreadable_chain_or_for_none():
+    world = _World()
+    parent = world.parent(7)
+    world.child(20, parent)
+    del world.tracker.states[7]  # unreadable
+    hold = world.compute(world.queued(20))
+    assert (hold.held, hold.culprits) == ({20: "unreadable"}, {})
+    world, parent = _unstarted_world(status="planning")
+    world.workspace.branches.add("agentic/GH-20")  # a branch: the second step says none
+    hold = world.compute(world.queued(20))
+    assert (hold.causes, hold.culprits) == ({20: "none"}, {})
+    world = _World()
+    parent = world.parent(7, escalated="x")
+    world.workspace.ancestors.add((parent["head"], TIP))
+    world.child(20, parent)
+    assert world.compute(world.queued(20)).culprits == {}
+
+
 # --- compute: the second step of a child with no task branch (GH-1163) -------------------------
 
 

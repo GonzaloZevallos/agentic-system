@@ -17,6 +17,7 @@ graph TD
     define["define"]
     diagnose["diagnose"]
     discard["discard"]
+    early_size["early_size"]
     phase_build["build (fase)"]
     phase_classify["classify (fase)"]
     phase_design["design (fase)"]
@@ -28,6 +29,8 @@ graph TD
     define -.-> validate
     diagnose -.-> validate
     discard -.-> __end__
+    early_size -.-> phase_design
+    early_size -.-> phase_plan
     phase_build -.-> define
     phase_build -.-> diagnose
     phase_classify -.-> define
@@ -38,8 +41,9 @@ graph TD
     validate -.-> define
     validate -.-> diagnose
     validate -.-> discard
+    validate -.-> early_size
     validate -.-> phase_design
     validate -.-> phase_plan
 ```
 
-Pueden escalar: `consolidate`, `define`, `diagnose`, `discard`, `validate`
+Pueden escalar: `consolidate`, `define`, `diagnose`, `discard`, `early_size`, `validate`

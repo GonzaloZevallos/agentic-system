@@ -3579,3 +3579,64 @@ def eval_set_yaml(*issues: int, smoke: int | None = None, extra: str = "") -> st
         ]
     lines.append(f"smoke: {issues[0] if smoke is None else smoke}")
     return "\n".join(lines) + "\n" + extra
+
+
+def measured(state: Mapping[str, Any]) -> dict[str, Any]:
+    """`state` with the early size check already answered (`fits`): the one place the seed row is
+    written, so a test that is not about the early check never runs the definition sizer."""
+    row = {"verdict": "go", "cause": "fits", "at": "2026-01-01T00:00:00+00:00"}
+    return {**state, "early_split": [row]}
+
+
+class Measured:
+    """A compiled graph whose runs on a task start with the early size check answered
+    (`measured`), so a test that is not about it never runs the definition sizer. Anything else
+    is the graph's own."""
+
+    def __init__(self, graph: Any):
+        self._graph = graph
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        if isinstance(input, Mapping):
+            await self._graph.aupdate_state(config, measured({}), as_node="classify")
+        return await self._graph.ainvoke(input, config=config, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._graph, name)
+
+
+class MeasuredBuilder:
+    """The graph builder `cli._run` compiles itself: what it compiles is a `Measured` graph."""
+
+    def __init__(self, builder: Any):
+        self._builder = builder
+
+    def compile(self, *args: Any, **kwargs: Any) -> Measured:
+        return Measured(self._builder.compile(*args, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._builder, name)
+
+
+def early_sized(
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
+    parts: Sequence[dict[str, object]] = (),
+    cost: float = 0.05,
+) -> RawResult:
+    """What the definition sizer answers: the declared size of the whole task and, when it cuts
+    it, the parts (each with the edges' reasons and the default size of a part)."""
+    items = [{**PART_DEFAULTS, **_reasons_for(p), **p} for p in parts]
+    return RawResult(
+        {
+            "markdown": "Bucket read; cut.",
+            "estimated_cost_usd": 5.0,
+            "estimated_files": 5,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
+            "parts": items,
+        },
+        cost,
+    )

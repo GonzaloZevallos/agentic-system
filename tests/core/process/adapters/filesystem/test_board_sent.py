@@ -2,24 +2,24 @@
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
-from agentic.core.process.adapters.filesystem.board_sent import FilesystemBoardSent
+from agentic.core.process.adapters.filesystem.board_sent import VERSION, FilesystemBoardSent
 from agentic.core.process.application.ports import SentEntry, SentMemory
 
 
 def _with_issue(number, present):
-    issues = {number: {"fingerprint": "a", "present": present}}
-    return json.dumps({"project_id": "P", "failed_at": None, "issues": issues})
+    issues = {number: {"fingerprint": "a", "present": present, "hecho_until": None, "unread": 0}}
+    return json.dumps({"version": VERSION, "project_id": "P", "failed_at": None, "issues": issues})
 
 
 MEMORY = SentMemory(
     project_id="PVT_1",
     failed_at=datetime(2026, 10, 27, 12, 0, tzinfo=UTC),
     issues={
-        7: SentEntry("abc123", frozenset({"etapa", "bloqueo"})),
+        7: SentEntry("abc123", frozenset({"etapa", "motivo"}), date(2026, 11, 3), 2),
         9: SentEntry("def456", frozenset({"etapa"})),
     },
 )
@@ -39,10 +39,10 @@ def test_a_missing_file_is_an_empty_memory_without_a_complaint(tmp_path):
 @pytest.mark.parametrize(
     "content",
     [
-        '{"project_id": "PVT_1", "failed_at": null, "iss',
+        '{"version": 2, "project_id": "PVT_1", "failed_at": null, "iss',
         "[]",
-        '{"project_id": 4, "failed_at": null, "issues": {}}',
-        '{"project_id": "P", "failed_at": "not a date", "issues": {}}',
+        '{"version": 2, "project_id": 4, "failed_at": null, "issues": {}}',
+        '{"version": 2, "project_id": "P", "failed_at": "not a date", "issues": {}}',
         _with_issue("7", ["bloque"]),
         _with_issue("x", []),
     ],
@@ -52,6 +52,18 @@ def test_an_unreadable_file_reads_empty_and_says_so(tmp_path, content):
     path.write_text(content, encoding="utf-8")
     got = FilesystemBoardSent(path).load()
     assert got.unreadable and got.issues == {} and got.project_id is None
+
+
+@pytest.mark.parametrize("version", [None, VERSION - 1, VERSION + 1])
+def test_a_file_without_the_current_version_reads_as_unreadable(tmp_path, version):
+    path = tmp_path / "board.json"
+    store = FilesystemBoardSent(path)
+    store.save(MEMORY)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.pop("version")
+    path.write_text(json.dumps(record if version is None else {**record, "version": version}))
+    got = store.load()
+    assert got.unreadable and got.issues == {}
 
 
 def test_a_failed_replace_leaves_the_old_file_whole_and_no_temp_file(tmp_path, monkeypatch):

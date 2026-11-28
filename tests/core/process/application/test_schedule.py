@@ -480,7 +480,7 @@ def value_for(key: str, branch: str, n: int):
         # The record has one serial writer, so the reducer is not commutative; the one row every
         # branch writes is the same, and an equal row adds nothing, so the fold cannot depend on
         # which branch landed first.
-        return [{"verdict": "go", "cause": "fits", "at": "t"}]
+        return [{"verdict": "go", "cause": "close", "at": "t"}]
     if reducer is add_shadow_reviews:
         # One row per subtask, a function of the subtask alone: the first row seen wins, so a
         # row that differed by branch would depend on which branch landed first.

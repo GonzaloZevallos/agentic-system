@@ -185,13 +185,13 @@ def sized(planned_files, planned_lines, actual_files, actual_lines, cost=10, **m
 
 def test_nine_sized_tasks_are_not_a_ratio():
     history = cost_history.build([sized(10, 100, 12, 150)] * (size_budget.PROVEN_PAIRS - 1))
-    assert cost_history.size_ratio(history) is None
+    assert cost_history.size_ratio(history) == size_budget.UNPROVEN_RATIO
 
 
 def test_ten_sized_tasks_give_the_p90_of_the_ratio_per_field():
     # Ratios 1.1 .. 2.0 on files, 3.0 .. 12.0 on lines: the p90 of ten is the ninth.
     documents = [sized(10, 100, 10 + i, 100 * (i + 2)) for i in range(1, 11)]
-    files, lines = cost_history.size_ratio(cost_history.build(documents)) or (0, 0)
+    files, lines = cost_history.size_ratio(cost_history.build(documents))
     assert files == pytest.approx(1.9)
     assert lines == pytest.approx(11.0)
 
@@ -203,15 +203,15 @@ def test_a_ratio_below_one_is_clamped_to_one():
 
 def test_a_task_that_planned_zero_in_either_field_is_skipped_and_counts_no_pair():
     with_zero = [sized(0, 0, 3, 30)] * size_budget.PROVEN_PAIRS
-    assert cost_history.size_ratio(cost_history.build(with_zero)) is None
+    assert cost_history.size_ratio(cost_history.build(with_zero)) == size_budget.UNPROVEN_RATIO
     mixed = [sized(0, 100, 3, 200)] * 5 + [sized(10, 100, 20, 100)] * 5
-    assert cost_history.size_ratio(cost_history.build(mixed)) is None
+    assert cost_history.size_ratio(cost_history.build(mixed)) == size_budget.UNPROVEN_RATIO
 
 
 def test_documents_without_both_records_are_ignored():
     planned_only = doc(1, 10, **size_budget.PlanSize(10, 100, 0).to_frontmatter())
     old = [doc(1, 10)] * 20 + [planned_only] * 20
-    assert cost_history.size_ratio(cost_history.build(old)) is None
+    assert cost_history.size_ratio(cost_history.build(old)) == size_budget.UNPROVEN_RATIO
     ten = [sized(10, 100, 20, 200)] * size_budget.PROVEN_PAIRS
     assert cost_history.size_ratio(cost_history.build(old + ten)) == (2.0, 2.0)
 
