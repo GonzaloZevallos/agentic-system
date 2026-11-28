@@ -23,18 +23,23 @@ from pathlib import Path
 from typing import Literal
 
 from ...application.ports import (
+    GhCallLog,
     StopFlag,
     TrackerCallFailed,
     TrackerRateLimited,
     TrackerRefused,
     TrackerTimedOut,
     TrackerTransient,
+    TrackerTurnRefused,
     TrackerUnreachable,
+    WriteGate,
 )
+from ...domain.gh_calls import kind_of
 from ...domain.github_access import (
     GithubAccess,
     HttpResponse,
     NotAnHttpResponse,
+    is_write,
     split_response,
     wait_from,
 )
@@ -306,11 +311,12 @@ def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     return None
 
 
-def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
+def _rate_limit_reset(run: Run, cwd: Path, calls: GhCallLog | None = None) -> float | None:
     """The largest `reset` (epoch seconds) among the resources `gh api rate_limit` says are
     spent; `None` when the read fails or none is. Called with no policy: a rate-limited read
     must not wait on itself. This read decides the wait: it passes `access=None` explicitly,
-    so it is never gated, serialized, budgeted or cached, whatever the caller's access."""
+    so it is never gated, serialized, budgeted or cached, whatever the caller's access. It
+    counts as one `api` call in the caller's `calls` (GH-990)."""
     try:
         raw = run_gh(
             run,
@@ -320,6 +326,7 @@ def _rate_limit_reset(run: Run, cwd: Path) -> float | None:
             failed=lambda stderr: "gh api rate_limit failed",
             log=lambda line: None,
             access=None,
+            calls=calls,
         )
         resources = json.loads(raw)["resources"]
         resets = [
@@ -361,6 +368,7 @@ def _retry_wait(
     cwd: Path,
     call: str,
     response: HttpResponse | None,
+    calls: GhCallLog | None = None,
 ) -> _Wait:
     """Seconds to wait before the next attempt, or the reason to give up instead, and the
     reset read on this call. The only place that decides to wait or to give up. `response` is
@@ -373,7 +381,7 @@ def _retry_wait(
     if kind in ("timed_out", "unreachable"):
         return _Wait(retry.backoff(attempt), None, None)
     if kind == "rate_limited":
-        reset = _rate_limit_reset(run, cwd)
+        reset = _rate_limit_reset(run, cwd, calls)
         if reset is not None:
             seconds = max(reset - retry.now(), 0)
             if seconds > retry.max_wait_s:
@@ -401,6 +409,29 @@ def _retry_wait(
     return _Wait(seconds, None, None)
 
 
+def _take_turn(gate: WriteGate, call: str, remaining: float, log: Callable[[str], None]) -> float:
+    """One write turn for `call`: the seconds it waited when granted. A refused or stopped turn
+    writes one line and raises `TrackerTurnRefused`; `gh` is never launched. No line holds
+    anything `gh` printed."""
+    turn = gate.take(remaining)
+    if turn.outcome == "granted":
+        if turn.waited_s > 0:
+            log(f"agentic: gh {call} waiting {turn.waited_s:g} s for its write turn")
+        return turn.waited_s
+    reason = (
+        f"over the {gate.cap_s:g} s bound" if turn.outcome == "refused" else "the wait was stopped"
+    )
+    message = f"gh {call} write turn refused: {reason}"
+    log(f"agentic: {message}")
+    raise TrackerTurnRefused(message)
+
+
+# What stays on a subcommand (GH-1089): `pr merge`, `pr close`, `pr reopen`, `pr edit`,
+# `pr view`, `issue close`, `issue create`, `issue edit --add-label/--remove-label`, `issue
+# view`, `run list`, `run rerun`, `workflow run` and `label create` print no HTTP headers, so
+# they get only the backoff of `run_gh`, never a `retry-after` or `x-ratelimit-reset` wait. The
+# writes that went to `gh api -i` (`pr create`, `issue comment`, `issue edit --body-file`) pass
+# their subcommand name as `call=`.
 def run_gh(
     run: Run,
     args: Sequence[str],
@@ -412,6 +443,9 @@ def run_gh(
     retry: GhRetry | None = None,
     retry_timeouts: bool = False,
     access: GithubAccess | None = None,
+    write: bool | None = None,
+    call: str | None = None,
+    calls: GhCallLog | None = None,
 ) -> str:
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
@@ -446,11 +480,38 @@ def run_gh(
     (`resets_at` comes only from that read) and uses the headers only when it gave nothing. A
     header wait over `retry.max_wait_s` neither sleeps nor clamps: it ends as the kind's error
     saying GitHub asked to wait that long. A timeout always waits the backoff. The kind is
-    decided from stderr alone, so a secondary 403 or a 429 stays a refusal."""
-    call = " ".join(args[:2])
+    decided from stderr alone, so a secondary 403 or a 429 stays a refusal.
+
+    `write` says whether the call may change GitHub; `None` lets `is_write(args)` decide. Only
+    with `access.gate` and a write does the call take a turn (`gate.take`), on every attempt,
+    right before `gh` launches: a retry takes a new turn. The call's wait is bounded by
+    `gate.cap_s` in all, turn waits and retry sleeps together; a retry wait longer than what is
+    left is never shortened, it ends as the kind's error with no sleep. A turn that is refused
+    or whose wait was stopped writes one line and raises `TrackerTurnRefused`, and `gh` never
+    launches. No such line holds `gh` output, and no metric, label or span attribute is added.
+    With no gate, or for a read, every path is the one above.
+
+    `call` (GH-1089) is the name of the call in every log line, turn line and message this
+    function writes; `None` is the first two arguments, as before. A write moved to `gh api`
+    passes its subcommand name (`pr create`), so its wording does not become `api -i`.
+
+    `calls` (GH-990) counts each attempt by `kind_of(args)`, once, immediately before `run`
+    (after the write turn, so a refused or stopped turn records nothing), with or without a
+    retry policy; a rate-limit probe counts as `api`. `None` records nothing and changes
+    nothing."""
+    if call is None:
+        call = " ".join(args[:2])
     attempt = 1
     last_reset: float | None = None
+    gate = access.gate if access is not None else None
+    if gate is not None and not (write if write is not None else is_write(args)):
+        gate = None
+    waited = 0.0
     while True:
+        if gate is not None:
+            waited += _take_turn(gate, call, max(gate.cap_s - waited, 0.0), log)
+        if calls is not None:
+            calls.record(kind_of(args))
         try:
             result = run(["gh", *args], cwd=cwd, capture_output=True, text=True, check=True)
         except FileNotFoundError as exc:
@@ -488,16 +549,24 @@ def run_gh(
         else:
             return result.stdout.strip()
         assert retry is not None  # only a policy reaches a retryable kind
-        wait = _retry_wait(kind, attempt, retry, run, cwd, call, response)
+        wait = _retry_wait(kind, attempt, retry, run, cwd, call, response, calls)
         seconds, giving_up = wait.seconds, wait.giving_up
         if wait.reset is not None:
             last_reset = wait.reset
+        if giving_up is None and gate is not None:
+            left = max(gate.cap_s - waited, 0.0)
+            if seconds > left:
+                giving_up = (
+                    f"gh {call} {_PHRASES[kind]}; its wait is {seconds:g} s, "
+                    f"over the {left:g} s left of its {gate.cap_s:g} s write bound"
+                )
         if giving_up is None:
             log(
                 f"agentic: gh {call} {_PHRASES[kind]}; "
                 f"retrying in {seconds:g} s (attempt {attempt}/{retry.attempts})"
             )
             if retry.wait(seconds):
+                waited += seconds
                 attempt += 1
                 continue
             giving_up = f"gh {call} {_PHRASES[kind]}; the wait was stopped"
@@ -509,6 +578,28 @@ def run_gh(
                 resets_at=datetime.fromtimestamp(last_reset, tz=UTC),
             ) from cause
         raise _ERRORS[kind](_with_status(giving_up, status), status=status) from cause
+
+
+def stream_gh(
+    args: Sequence[str],
+    *,
+    cwd: Path | str | None,
+    max_bytes: int,
+    timeout_s: float,
+    tail: bool = False,
+    calls: GhCallLog | None = None,
+) -> StreamRead:
+    """`bounded_stream` of `gh <args>` (GH-990): `args` excludes `gh`, which this function
+    prepends, so a caller that already wrote it gets a `ValueError`. Records one call by
+    `kind_of(args)` before the process starts. stderr stays closed (`bounded_stream` sends it
+    to DEVNULL), so a streamed read cannot be classified as rate-limited here."""
+    if args and args[0] == "gh":
+        raise ValueError("stream_gh takes the arguments without the leading gh")
+    if calls is not None:
+        calls.record(kind_of(args))
+    return bounded_stream(
+        ["gh", *args], cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=tail
+    )
 
 
 __all__ = [
@@ -527,4 +618,5 @@ __all__ = [
     "http_status",
     "print_line",
     "run_gh",
+    "stream_gh",
 ]

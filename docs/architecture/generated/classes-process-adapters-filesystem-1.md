@@ -7,6 +7,7 @@ Esta página muestra las clases públicas de los módulos del grupo `filesystem`
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
   - [adapters: toplevel](classes-process-adapters-toplevel.md)
 
 ```mermaid
@@ -20,4 +21,5 @@ classDiagram
     class filesystem__file_inbox__FileInbox["FileInbox"]
     class filesystem__free_space__StatvfsFreeSpace["StatvfsFreeSpace"]
     class filesystem__heartbeats__FilesystemHeartbeats["FilesystemHeartbeats"]
+    class filesystem__installed_products__SystemdUnitInstalledProducts["SystemdUnitInstalledProducts"]
 ```

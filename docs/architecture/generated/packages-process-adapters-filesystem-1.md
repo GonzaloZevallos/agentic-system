@@ -8,6 +8,7 @@ Esta página muestra los módulos del adaptador `adapters.filesystem` y los impo
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [application](packages-process-application.md)
   - [domain](packages-process-domain.md)
@@ -27,6 +28,7 @@ graph TD
     m_adapters__filesystem__file_inbox["adapters.filesystem.file_inbox"]
     m_adapters__filesystem__free_space["adapters.filesystem.free_space"]
     m_adapters__filesystem__heartbeats["adapters.filesystem.heartbeats"]
+    m_adapters__filesystem__installed_products["adapters.filesystem.installed_products"]
     m_adapters__filesystem__board_sent --> g_pkg__application
     m_adapters__filesystem__board_sent --> g_pkg__domain
     m_adapters__filesystem__budget_store --> g_pkg__domain
@@ -39,4 +41,5 @@ graph TD
     m_adapters__filesystem__file_inbox --> g_pkg__domain
     m_adapters__filesystem__free_space --> g_pkg__domain
     m_adapters__filesystem__heartbeats --> g_pkg__domain
+    m_adapters__filesystem__installed_products --> g_pkg__domain
 ```

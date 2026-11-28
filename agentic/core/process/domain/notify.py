@@ -1,20 +1,22 @@
 """The pure core of the email notifier (GH-1056): what is owed a notice, never how it is sent.
 
-Nothing calls this module yet: the poll use case that does is a later part of GH-1056, and the
-daily digest computation is a follow-up one. `release_event` decides, from facts a caller loads
-(`SplitFacts`), who announces a landing: a task with a known parent is `covered`, and only a closed
-root lists its merged leaves (ADR-0106). It imports no clock, no mail and no environment:
-`now` and `tz` are parameters, and every instant it returns or keeps in a key is UTC. The epochs
-of a task's `pause_log` are read only through `rules` (`current_epoch`, `previous_epoch`,
-`escalation_at`, `pause_kind`), never directly.
+Nothing calls this module yet: the poll use case that does is a later part of GH-1056.
+`digest_event` decides the daily digest owed from `now`, `tz` and the record. `advance_read_at`
+moves the activity window past what a digest consumed, never splitting a group of equal instants.
+`release_event` decides, from facts a caller loads (`SplitFacts`), who announces a landing: a task
+with a known parent is `covered`, and only a closed root lists its merged leaves (ADR-0106). It
+imports no clock, no mail and no environment: `now` and `tz` are parameters, and every instant it
+returns or keeps in a key is UTC. The epochs of a task's `pause_log` are read only through `rules`
+(`current_epoch`, `previous_epoch`, `escalation_at`, `pause_kind`), never directly.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from enum import Enum
 from typing import Literal
 
 from . import rules
@@ -25,20 +27,28 @@ __all__ = [
     "NOTIFY_HORIZON",
     "NOTIFY_RETRY_AFTER",
     "SENDS_PER_ROUND",
+    "DigestEvent",
     "DigestKey",
     "EventKey",
+    "Judged",
     "NotifiedRecord",
     "NotifyKey",
+    "NotifyKinds",
     "Outcome",
     "PartFact",
     "ReleaseEvent",
     "SplitFacts",
     "WaitingEvent",
+    "advance_read_at",
+    "digest_event",
+    "digest_hour",
+    "digest_instant",
     "due",
     "pending",
     "prune",
     "release_event",
     "retry_due",
+    "row_settlement",
     "start",
     "waiting_event",
 ]
@@ -49,8 +59,11 @@ NOTIFY_HORIZON = timedelta(days=7)
 NOTIFY_RETRY_AFTER = timedelta(minutes=15)
 # The most notices one round sends.
 SENDS_PER_ROUND = 5
-# The local hour of the daily digest; read by the digest computation of the follow-up issue.
+# The local hour of the daily digest when the setting is missing or invalid (`digest_hour`).
 DEFAULT_DIGEST_HOUR = 20
+_LAST_HOUR = 23
+# One or two ASCII digits: a unicode digit or a sign is not an hour.
+_HOUR_TEXT = re.compile(r"[0-9]{1,2}")
 
 # Restates `knowledge.domain.stack.SLUG`, which this domain may not import; a test compares them.
 _PRODUCT_SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -65,6 +78,11 @@ digest."""
 def _check_product(product: str) -> None:
     if not isinstance(product, str) or _PRODUCT_SLUG.fullmatch(product) is None:
         raise ValueError(f"product is not a slug: {product!r}")
+
+
+def _check_utc(name: str, instant: datetime) -> None:
+    if instant.utcoffset() != timedelta(0):
+        raise ValueError(f"{name} is not an aware UTC datetime: {instant!r}")
 
 
 @dataclass(frozen=True)
@@ -83,14 +101,13 @@ class EventKey:
         _check_product(self.product)
         if isinstance(self.issue, bool) or not isinstance(self.issue, int) or self.issue <= 0:
             raise ValueError(f"issue is not a positive integer: {self.issue!r}")
-        if self.instant.utcoffset() != timedelta(0):
-            raise ValueError(f"instant is not an aware UTC datetime: {self.instant!r}")
+        _check_utc("instant", self.instant)
 
 
 @dataclass(frozen=True)
 class DigestKey:
-    """The daily digest of one product for one local date. Nothing builds it yet: the follow-up
-    issue does."""
+    """The daily digest of one product for one local date. `digest_event` builds it; nothing calls
+    that yet."""
 
     product: str
     local_date: date
@@ -114,6 +131,23 @@ class NotifiedRecord:
     failed_at: datetime | None
     activity_read_at: datetime | None
     keys: Mapping[NotifyKey, Outcome]
+
+
+class Judged(Enum):
+    """The marker of an Activity row that was judged and owes nothing. A cursor marker only:
+    `row_settlement` returns it and `advance_read_at` counts it as settled; it is never a key of
+    `NotifiedRecord.keys` and never saved."""
+
+    JUDGED = "judged"
+
+
+@dataclass(frozen=True)
+class NotifyKinds:
+    """Which event kinds are enabled. Built by the caller; no text is parsed here."""
+
+    waiting: bool
+    release: bool
+    digest: bool
 
 
 @dataclass(frozen=True)
@@ -227,6 +261,14 @@ def due(instant: datetime, record: NotifiedRecord, now: datetime) -> bool:
     return instant > max(record.started_at, _cutoff(now))
 
 
+def _unrecorded_due(
+    key: NotifyKey, instant: datetime, record: NotifiedRecord, now: datetime
+) -> bool:
+    """The only composition of `due` and "its key is not yet recorded": `pending` and
+    `digest_event` both read it."""
+    return due(instant, record, now) and key not in record.keys
+
+
 def prune(record: NotifiedRecord, now: datetime, tz: tzinfo) -> tuple[NotifiedRecord, int]:
     """`record` without the keys older than the horizon, and how many were dropped. An `EventKey`
     is kept from the cutoff instant on; a `DigestKey` from the cutoff's local date in `tz` on."""
@@ -238,6 +280,51 @@ def prune(record: NotifiedRecord, now: datetime, tz: tzinfo) -> tuple[NotifiedRe
         if not old:
             kept[key] = outcome
     return replace(record, keys=kept), len(record.keys) - len(kept)
+
+
+def advance_read_at(
+    read_at: datetime | None,
+    candidates: Sequence[tuple[datetime, NotifyKey | Judged | None]],
+    *,
+    cut_at: datetime | None,
+) -> datetime | None:
+    """Where the activity read resumes after a digest consumed `candidates` (`(instant, key)`, at
+    most `limit` of them; a key means the row is settled in `record.keys`, for a digest only
+    `sent`; `Judged.JUDGED` also counts as settled). `cut_at` is the instant of the `limit + 1`-th
+    row when the read returned one. The result is the greatest keyed instant strictly before the
+    earliest unkeyed one, else `read_at`; it depends only on the set of candidates. A group of
+    equal instants is advanced past whole or not at all: a cut inside one leaves the whole group
+    out, unless every remaining row shares `cut_at` (a single group, counted as "50+"). Rows at or
+    before `read_at` are stale (`since` is exclusive). Rejects, never normalizes, a naive or
+    non-UTC instant, a `cut_at` not after `read_at` and a `cut_at` earlier than a candidate.
+
+    Caller precondition: a row older than `NOTIFY_HORIZON` (not `due`) is passed with a key or not
+    passed at all, otherwise an unkeyed row stops the window for good. Accepted loss: a single
+    group larger than the limit is consumed trimmed."""
+    if read_at is not None:
+        _check_utc("read_at", read_at)
+    if cut_at is not None:
+        _check_utc("cut_at", cut_at)
+    for instant, _ in candidates:
+        _check_utc("candidate instant", instant)
+    if read_at is not None and cut_at is not None and cut_at <= read_at:
+        raise ValueError(f"cut_at {cut_at!r} is not after read_at {read_at!r}")
+    rows = [row for row in candidates if read_at is None or row[0] > read_at]
+    if not rows:
+        return read_at
+    if cut_at is not None:
+        if cut_at < max(instant for instant, _ in rows):
+            raise ValueError(f"cut_at {cut_at!r} is earlier than a candidate")
+        if any(instant != cut_at for instant, _ in rows):
+            rows = [row for row in rows if row[0] < cut_at]
+    unsettled = [instant for instant, settled in rows if settled is None]
+    stop = min(unsettled) if unsettled else None
+    advanced = [
+        instant
+        for instant, settled in rows
+        if settled is not None and (stop is None or instant < stop)
+    ]
+    return max(advanced) if advanced else read_at
 
 
 def retry_due(record: NotifiedRecord, now: datetime) -> bool:
@@ -324,7 +411,91 @@ def pending(
     event: WaitingEvent | ReleaseEvent, record: NotifiedRecord, now: datetime
 ) -> Literal["send", "superseded", "covered"] | None:
     """What `event` still owes: its action when it is `due` and its key is not yet recorded, else
-    `None`. The only composition of these rules."""
-    if due(event.key.instant, record, now) and event.key not in record.keys:
+    `None`."""
+    if _unrecorded_due(event.key, event.key.instant, record, now):
         return event.action
     return None
+
+
+def digest_hour(raw: object) -> int:
+    """The local hour of the digest from a raw setting: an `int` (not a bool) in 0..23, or a `str`
+    of one or two ASCII digits with that value. Anything else reads as `DEFAULT_DIGEST_HOUR`, never
+    normalized, and this never raises."""
+    if isinstance(raw, bool):
+        return DEFAULT_DIGEST_HOUR
+    if isinstance(raw, str):
+        if _HOUR_TEXT.fullmatch(raw) is None:
+            return DEFAULT_DIGEST_HOUR
+        raw = int(raw)
+    if isinstance(raw, int) and 0 <= raw <= _LAST_HOUR:
+        return raw
+    return DEFAULT_DIGEST_HOUR
+
+
+@dataclass(frozen=True)
+class DigestEvent:
+    """What `digest_event` found: the `key` of the digest and the UTC `instant` it is due.
+    `key.local_date` is the local date of the `now` the computation used, never the local date of
+    the resulting `instant`."""
+
+    key: DigestKey
+    instant: datetime
+
+
+def digest_instant(now: datetime, tz: tzinfo, hour: int) -> datetime:
+    """The UTC instant of the digest of the local date of `now` in `tz` at `hour` local, fold 0.
+    Raises `ValueError` for a `now` that is not aware UTC or an `hour` outside 0..23."""
+    if now.utcoffset() != timedelta(0):
+        raise ValueError(f"now is not an aware UTC datetime: {now!r}")
+    if not 0 <= hour <= _LAST_HOUR:
+        raise ValueError(f"hour is not in 0..{_LAST_HOUR}: {hour!r}")
+    local_date = now.astimezone(tz).date()
+    return datetime.combine(local_date, time(hour), tzinfo=tz).replace(fold=0).astimezone(UTC)
+
+
+def digest_event(
+    now: datetime, tz: tzinfo, hour: int, record: NotifiedRecord, product: str
+) -> DigestEvent | None:
+    """The digest of `product` owed at `now`: today's (the local date of `now` in `tz`) at `hour`
+    local, fold 0, converted to UTC before any comparison. `None` until that instant, when `due`
+    does not hold (the activation or the horizon is not behind it) or when any outcome is already
+    recorded for its key. Raises `ValueError` for a `now` that is not aware UTC or an `hour`
+    outside 0..23.
+
+    Only today's local date is considered: a poller down from the digest hour until past local
+    midnight loses that day's digest. A digest is never unbuildable, covered or superseded.
+    Nothing calls it yet."""
+    instant = digest_instant(now, tz, hour)
+    key = DigestKey(product, now.astimezone(tz).date())
+    if instant <= now and _unrecorded_due(key, instant, record, now):
+        return DigestEvent(key, instant)
+    return None
+
+
+def row_settlement(
+    record: NotifiedRecord,
+    *,
+    instant: datetime,
+    digest: DigestEvent | None,
+    release: EventKey | None,
+    judged: bool,
+) -> NotifyKey | Judged | None:
+    """The only rule of what settles an Activity row for the cursor (`advance_read_at`).
+
+    | digest     | result                                                                     |
+    |------------|----------------------------------------------------------------------------|
+    | not `None` | `digest.key` iff the record holds it `sent` and `instant <= digest.instant`, |
+    |            | else `None`; `release` and `judged` are ignored                            |
+    | `None`     | `release` when recorded under any `Outcome`; else `JUDGED` if `judged`;    |
+    |            | else `None`                                                                |
+
+    Kinds: digest on (release on or off) -> the digest rule, `digest` being only the digest sent
+    in this very round (its key already `sent`); digest off, release on -> the release/`JUDGED`
+    rule; both off -> no Activity is read and this is not called. `JUDGED` is a cursor marker
+    only: it is never written to the record."""
+    if digest is not None:
+        sent = record.keys.get(digest.key) == "sent" and instant <= digest.instant
+        return digest.key if sent else None
+    if release is not None and release in record.keys:
+        return release
+    return Judged.JUDGED if judged else None

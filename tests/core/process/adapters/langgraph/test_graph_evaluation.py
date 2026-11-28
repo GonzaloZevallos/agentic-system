@@ -4,6 +4,7 @@ evaluation that escalates writes nothing either. The ports are wrapped by
 `composition.evaluation_ports`, the one wiring `default_ports` applies to an evaluation root."""
 
 from dataclasses import replace
+from datetime import datetime
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -13,7 +14,9 @@ from agentic.composition import default_ports, evaluation_ports
 from agentic.core.process.adapters.evaluation import ClosedInbox
 from agentic.core.process.adapters.langgraph.graph import build_graph
 from agentic.core.process.adapters.telemetry import NoTelemetry
-from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.application.ports import ActivityPage, AttemptFailed, Mail
+from agentic.core.process.domain.notify import NotifiedRecord
+from agentic.shared.configuration import Configuration
 from tests.core.process.adapters.langgraph.test_graph import (
     Fakes,
     MemoryWorkspace,
@@ -21,7 +24,7 @@ from tests.core.process.adapters.langgraph.test_graph import (
     script_for,
     technical,
 )
-from tests.fakes import MemoryCommands, MemorySampleApp, MemoryStack, MemoryTracker
+from tests.fakes import Measured, MemoryCommands, MemorySampleApp, MemoryStack, MemoryTracker
 
 pytestmark = pytest.mark.anyio
 
@@ -71,7 +74,7 @@ def build(script, fakes):
         return ports
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)
-    return graph.compile(checkpointer=InMemorySaver()), built
+    return Measured(graph.compile(checkpointer=InMemorySaver())), built
 
 
 def untouched(real_tracker, real_workspace):
@@ -111,3 +114,41 @@ async def test_an_evaluation_task_that_escalates_also_writes_nothing(config):
     assert final["status"] == "waiting_on_human"
     assert final["escalated"]
     untouched(real_tracker, real_workspace)
+
+
+class _Stub:
+    """Fills all three notifier ports; none of them may be called."""
+
+    def send(self, mail: Mail) -> None:
+        raise AssertionError("an evaluation must not send")
+
+    def load(self) -> NotifiedRecord:
+        raise AssertionError("an evaluation must not load")
+
+    def save(self, record: NotifiedRecord) -> None:
+        raise AssertionError("an evaluation must not save")
+
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
+        raise AssertionError("an evaluation must not read")
+
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
+        raise AssertionError("an evaluation must not read")
+
+
+async def test_an_evaluation_root_carries_no_notifier_record_or_activity_read(tmp_path):
+    # GH-1056: the three ports of the email notifier are taken away like the board.
+    filled = replace(
+        default_ports(Configuration(product_dir=tmp_path)),
+        notifier=_Stub(),
+        notified=_Stub(),
+        activity=_Stub(),
+    )
+    ports = evaluation_ports(filled, ClosedInbox())
+    assert (ports.notifier, ports.notified, ports.activity) == (None, None, None)
+
+
+async def test_production_ports_carry_no_notifier_yet(tmp_path):
+    """GH-1056 part 4 wires production: it must REPLACE this assertion with the wiring, not
+    delete it."""
+    ports = default_ports(Configuration(product_dir=tmp_path))
+    assert (ports.notifier, ports.notified, ports.activity) == (None, None, None)

@@ -285,7 +285,8 @@ def test_real_git_a_directory_git_lost_is_removed_with_its_task_and_the_branches
 
     assert not task.path.exists() and not sub.path.exists()
     listing = git("worktree", "list", "--porcelain", cwd=root)
-    assert "GH-9" not in listing
+    # Match the checkouts' own paths, not "GH-9": the temp dir may itself hold that text.
+    assert str(task.path) not in listing and str(sub.path) not in listing
     assert git("branch", "--list", "agentic/GH-9*", cwd=root).split() == [
         task.branch,
         sub.branch,

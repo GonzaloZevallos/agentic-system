@@ -68,6 +68,13 @@ Playwright's list reporter, `test_id` captures the `file:line` of a `›` line, 
 `(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›`, with the command
 `npx playwright test {failed_ids}`.
 
+*The worker count* (GH-927): a check takes its worker count from `{workers}` or `CHECK_WORKERS`
+(`PYTEST_XDIST_AUTO_NUM_WORKERS` for pytest-xdist's `-n auto`), never from a literal such as
+`-n 8` or `--maxWorkers=8`. Under `parallel_checks` each check gets its equal slice of the gate's
+share, the same number in its env and in `{workers}`. Role sessions, whose Bash runs outside any
+gate, get `ROLE_WORKERS` through `CHECK_WORKERS`, `PYTEST_XDIST_AUTO_NUM_WORKERS` and
+`VITEST_MAX_WORKERS`. A literal count is capped by none of them.
+
 *The CI flake block* (GH-464, ADR-0085): a job named under `ci` may print, for the tests its own
 rerun found flaky, one line `agentic-flakes: {"v":1,"check":"<name>","tests":["<id>",...]}` per
 check, where `<name>` is a name under `checks`. The `full_checks` CI path and the merge gate read it
@@ -238,6 +245,7 @@ KEYS = (
     "check_timeouts",
     "not_ready_exit",
     "adr_naming",
+    "stacking",
 )
 # The six risk ids every product has (GH-591). The process side defines its own `BUILTIN_RISKS`
 # and a test pins the two equal: this tuple is only here so `risk_areas` can refuse a repeat.
@@ -584,6 +592,21 @@ def adr_naming(data: object, source: object) -> Literal["numbered", "dated"]:
     if value == "numbered":
         return "numbered"
     raise ValueError(f"{source}: expected `adr_naming` to be one of {ADR_NAMINGS}, not {value!r}")
+
+
+def stacking(data: object, source: object) -> bool:
+    """Whether the product lets a part start on its Ready same-split parent's branch (GH-858,
+    ADR-0103, ADR-0104). Opt-in: a key absent is `False`, the launch of today. Present, it must
+    be a real bool -- `isinstance`, so `1` and `"true"` are refused and not coerced: a typo that
+    quietly read as a no would leave a product waiting the way it did before, and one read as a
+    yes would start parts on a branch nobody asked to build on. Not a version pin."""
+    declared = _declared(data, source)
+    if "stacking" not in declared:
+        return False
+    value = declared["stacking"]
+    if not isinstance(value, bool):
+        raise ValueError(f"{source}: expected `stacking` to be true or false, a boolean")
+    return value
 
 
 def ci(data: object, source: object) -> tuple[str, ...]:
@@ -1487,7 +1510,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         affected_fallback,
         (),
         Computed(),
-        "list of globs whose change forces the full form of every check",
+        "list of globs whose change forces the full form of every check: the inputs with no "
+        "reliable mapping to the tests they can break",
     ),
     # Computed, not DependsOn("checks"): the reader returns `()` whenever the key is absent
     # (no tiers), whatever `checks` holds. The owner kept it so (GH-400): the reference
@@ -1644,5 +1668,13 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "`numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or "
         "`yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated "
         "form instead of renumbering it",
+    ),
+    KeyReference(
+        "stacking",
+        stacking,
+        (),
+        Computed(),
+        "boolean: true lets a part start on its Ready same-split parent's branch, once the "
+        "launch judgement reads it; absent means false, the launch of today",
     ),
 )

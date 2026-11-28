@@ -93,8 +93,11 @@ from ...application.ports import (
     SchemaGuard,
     Scratch,
 )
+from ...application.presubmit import CheckoutPresubmit
+from ...application.run_check import RunCheck
 from ...domain import reaping
 from ...domain.denials import denial_for
+from ...domain.presubmit import role_workers_env
 from ...domain.roles import Role
 from ...domain.rules import (
     ReportedFailure,
@@ -117,7 +120,7 @@ from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
 from .check_run_log import CheckRunLog
 from .check_server import SERVER, TIMEOUT_ENV, check_server, tool_timeout_ms
-from .hooks import DELIVERY_TOOL, HookActivity, TurnCount, hooks_for
+from .hooks import DELIVERY_TOOL, AttemptAbandon, HookActivity, TurnCount, hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -169,6 +172,7 @@ def options_for(
     writable: tuple[Path, ...] = (),
     max_turns: int | None = None,
     check_runs: CheckRunLog | None = None,
+    refuse: Callable[[str], str | None] | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -224,6 +228,7 @@ def options_for(
             check_results_dir,
             writable,
             check_runs,
+            refuse,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -250,8 +255,11 @@ def _child_env(
     own ambient `os.environ` value, never `env` (the runner's `git identity` overlay,
     which does not carry it in production; composing off `env` would silently drop
     whatever the real process inherited, invariant 8). Nothing is added when there is
-    no trace to mark against, so a role run under `NoTelemetry` sees exactly the `env`
-    it was given, as before this change.
+    no trace to mark against, so a role run under `NoTelemetry` sees `env` plus nothing
+    but the worker cap below.
+
+    `role_workers_env()` (GH-927) lands last, so the role's own cap wins over a
+    `CHECK_WORKERS` that came in through `env` or the inherited environment.
 
     `owner_mark`, when given, is the value of the process-owner variable (GH-282,
     ADR-0052) and lands in this copy only: `env` is shared by every attempt, so the
@@ -264,6 +272,7 @@ def _child_env(
         child["OTEL_RESOURCE_ATTRIBUTES"] = with_resource_marker(
             resource_attributes, role_slug=role.slug, trace_id=trace_id
         )
+    child.update(role_workers_env())
     return child
 
 
@@ -295,7 +304,7 @@ class ClaudeSdkRunner:
         *,
         reaper: ProcessReaper,
         product_key: str,
-        stall_timeout_s: float = 2400.0,
+        stall_timeout_s: float = 1800.0,
         clock: Callable[[], float] = time.monotonic,
         check_results_dir: Path | None = None,
         scratch: Scratch | None = None,
@@ -344,6 +353,7 @@ class ClaudeSdkRunner:
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
         token of its own, and reaped once its stream is closed, whichever way it ended.
@@ -352,6 +362,9 @@ class ClaudeSdkRunner:
         `now`; they leave on the result, or on the `AttemptFailed` of a failed attempt."""
         token = uuid.uuid4().hex
         hooks = HookActivity(self.clock)
+        # One flag per attempt (GH-1169), set on every exit before anything is reaped: the
+        # gate and `run_check` threads the reap cannot reach read it, and a retry gets its own.
+        abandon = AttemptAbandon()
         runs = (
             CheckRunLog(declared_checks, self.clock, now)
             if declared_checks and role.executes and now is not None
@@ -379,11 +392,14 @@ class ClaudeSdkRunner:
                     forbidden=forbidden,
                     check_tool=check_tool,
                     hooks=hooks,
+                    abandon=abandon,
                     runs=runs,
+                    refuse=refuse,
                     scratch_dir=scratch_dir,
                     kept=kept,
                 )
             except AttemptFailed as exc:
+                abandon.set()
                 exc.reaped = list(await self._reap(owner_task, token))
                 # Only a failing attempt reads the disk, and before its directory is
                 # removed: the space the directory held is not the space it left.
@@ -396,8 +412,10 @@ class ClaudeSdkRunner:
                 # A cancellation, or the process being asked to die: nothing to record, and
                 # the reap still has to happen (`_reap` finishes it even if this is
                 # cancelled again).
+                abandon.set()
                 await self._reap(owner_task, token)
                 raise
+            abandon.set()
             reaped = await self._reap(owner_task, token)
         if runs is not None:
             raw = replace(raw, check_runs=runs.snapshot())
@@ -457,7 +475,9 @@ class ClaudeSdkRunner:
         forbidden: Sequence[Forbidden] | None,
         check_tool: CheckTool | None,
         hooks: HookActivity,
+        abandon: AttemptAbandon,
         runs: CheckRunLog | None,
+        refuse: Callable[[str], str | None] | None,
         scratch_dir: Path | None,
         kept: Path | None,
     ) -> RawResult:
@@ -522,7 +542,7 @@ class ClaudeSdkRunner:
             # is the one thing that actually has the ambient `OTEL_RESOURCE_ATTRIBUTES`
             # a spawned role's telemetry should be marked against (invariant 8).
             resource_attributes=os.environ.get("OTEL_RESOURCE_ATTRIBUTES"),
-            presubmit=presubmit,
+            presubmit=_bound_presubmit(presubmit, abandon),
             on_denied=_count_denial,
             on_notice=_mark_notice,
             turns=turns,
@@ -532,7 +552,8 @@ class ClaudeSdkRunner:
             owner_mark=owner_mark,
             hook_activity=hooks,
             check_runs=runs,
-            check_tool=check_tool,
+            refuse=refuse,
+            check_tool=_bound_check_tool(check_tool, abandon),
             check_results_dir=self.check_results_dir,
             writable=tuple(p for p in (scratch_dir, kept) if p is not None),
         )
@@ -555,8 +576,8 @@ class ClaudeSdkRunner:
             usage = _usage(main_usage)
             self._warn(
                 f"[{role.name}] stalled {stalled.seconds}s, last event {stalled.last_event}, "
-                f"{calls} turns, {usage['input']} input / {usage['output']} output tokens "
-                "seen on the main thread, cost unknown\n"
+                f"in_hook {stalled.in_hook}, {calls} turns, {usage['input']} input / "
+                f"{usage['output']} output tokens seen on the main thread, cost unknown\n"
             )
             return AttemptFailed(
                 f"stalled: no sign of life for {stalled.seconds}s, last event {stalled.last_event}",
@@ -568,6 +589,7 @@ class ClaudeSdkRunner:
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
                 main_thread_turns=turns.value,
+                stall=stalled,
             )
 
         async def watch() -> None:
@@ -588,6 +610,7 @@ class ClaudeSdkRunner:
                         pending_tools=len(pulse.pending),
                         hooks_in_flight=hooks.in_flight,
                         last_hook_exit=hooks.last_exit,
+                        hook_expires=hooks.expires,
                         child=child,
                         previous_child=previous,
                         timeout_s=self.stall_timeout_s,
@@ -595,7 +618,15 @@ class ClaudeSdkRunner:
                 )
                 pulse.last_activity, previous = verdict.last_activity, child
                 if verdict.stalled:
-                    stalled = Stall(int(now - verdict.last_activity), pulse.last_event)
+                    stalled = Stall(
+                        int(now - verdict.last_activity),
+                        pulse.last_event,
+                        in_hook=hooks.in_flight > 0,
+                    )
+                    # Before the reap, whatever `in_hook` says: the gate thread is not the
+                    # CLI's and the reap does not reach it. A check it already launched ends
+                    # by its own wall (ADR-0108, addendum GH-1169).
+                    abandon.set()
                     left = await asyncio.to_thread(
                         self.reaper.reap_attempt, owner_task, os.getpid(), token
                     )
@@ -762,6 +793,67 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+class _AbandonablePresubmit:
+    """The attempt's view of a real `CheckoutPresubmit` (GH-1169): the same `Presubmit`, with
+    the attempt's `AttemptAbandon.is_set` passed on every call. Built per attempt by the
+    runner, so the flag is never stored in the presubmit and a retry gets its own; the real
+    object, which `develop.py` reads, is untouched."""
+
+    def __init__(self, target: CheckoutPresubmit, abandon: AttemptAbandon) -> None:
+        self._target = target
+        self._abandon = abandon
+
+    @property
+    def timeout_s(self) -> float:
+        return self._target.timeout_s
+
+    @property
+    def wait_max_s(self) -> float:
+        return self._target.wait_max_s
+
+    def __call__(self) -> str | None:
+        return self._target(abandoned=self._abandon.is_set)
+
+
+class _AbandonableCheck:
+    """The same for `RunCheck`, the Developer's `run_check` tool: `names`, `timeout_s` and
+    `verification_names` read through from the real object."""
+
+    def __init__(self, target: RunCheck, abandon: AttemptAbandon) -> None:
+        self._target = target
+        self._abandon = abandon
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return self._target.names
+
+    @property
+    def verification_names(self) -> tuple[str, ...]:
+        return self._target.verification_names
+
+    @property
+    def timeout_s(self) -> float:
+        return self._target.timeout_s
+
+    def __call__(self, name: str) -> str:
+        return self._target(name, abandoned=self._abandon.is_set)
+
+
+def _bound_presubmit(presubmit: Presubmit | None, abandon: AttemptAbandon) -> Presubmit | None:
+    """`presubmit` bound to the attempt's flag when it is the real one; a fake, or any other
+    implementation of the port, passes through unchanged and never sees the keyword."""
+    if isinstance(presubmit, CheckoutPresubmit):
+        return _AbandonablePresubmit(presubmit, abandon)
+    return presubmit
+
+
+def _bound_check_tool(check_tool: CheckTool | None, abandon: AttemptAbandon) -> CheckTool | None:
+    """The same for the `run_check` tool: only a real `RunCheck` is bound."""
+    if isinstance(check_tool, RunCheck):
+        return _AbandonableCheck(check_tool, abandon)
+    return check_tool
 
 
 def _opened(

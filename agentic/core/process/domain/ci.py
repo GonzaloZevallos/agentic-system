@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -119,9 +120,45 @@ class CiReport:
 class CiUnreadable:
     """The CI could not be read, which is not the same as a report that lacks a check:
     `gh` is missing or failed (`gh_unavailable`), or answered something this code cannot
-    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462)."""
+    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462).
+
+    `detail` is what `gh` said, for the escalation and refusal text only (GH-1151): never a span
+    attribute, a metric label or part of `cause`, and out of equality, so no verdict, rule or route
+    may read it. It is filled only by `of`, through `_quotable`, because the text goes to a comment
+    in a public repository."""
 
     cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"]
+    detail: str = field(default="", compare=False)
+
+    @classmethod
+    def of(
+        cls, cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"], raw: str
+    ) -> CiUnreadable:
+        """An unreadable CI quoting `raw` through `_quotable`: the one way to fill `detail`."""
+        return cls(cause, _quotable(raw))
+
+
+_DETAIL_MAX = 200
+_REDACTED = "[redacted]"
+# A GitHub token in any of its forms, then the credentials of a URL (`://user:pass@`).
+_TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+")
+_URL_CREDENTIALS = re.compile(r"(?<=://)[^/\s@:]*:[^/\s@]*(?=@)")
+_COMMENT_MARKERS = ("`", "<!--", "-->", "{{")
+
+
+def _quotable(raw: str) -> str:
+    """`raw` made safe to quote in a comment: control characters (newlines included), backticks
+    and the `<!--`, `-->`, `{{` markers dropped (repeated until none is left, so one cannot be
+    rebuilt from what surrounds another), tokens and URL credentials replaced by `[redacted]`
+    before the cut to 200 characters, so a token the cut would split is never left in part."""
+    text = "".join(char for char in raw if unicodedata.category(char) != "Cc")
+    previous = None
+    while previous != text:
+        previous = text
+        for marker in _COMMENT_MARKERS:
+            text = text.replace(marker, "")
+    text = _URL_CREDENTIALS.sub(_REDACTED, _TOKENS.sub(_REDACTED, text))
+    return text.strip()[:_DETAIL_MAX]
 
 
 @dataclass(frozen=True)
@@ -1222,6 +1259,11 @@ _PLAYWRIGHT_HEADER = re.compile(r"^\s*\d+\) (\[[^\]]*\] › .*)$")
 _PLAYWRIGHT_RULE = re.compile(r"\s*─+\s*$")
 _PLAYWRIGHT_RETRY = re.compile(r"\s*\(retry #\d+\)\s*$")
 _PLAYWRIGHT_POSITION = re.compile(r":\d+:\d+$")
+# The list reporter's line for one finished test: `✘  N [project] › file:line:col › title (Xs)`,
+# `✓` when it passed (GH-1151). A job cancelled at its time limit never prints the numbered
+# summary, so these lines are all a log has to name the failing specs.
+_LIST_LINE = re.compile(r"^\s*(?P<mark>[✘✓])\s+\d+\s+(?P<key>\[[^\]]*\] › .*)$")
+_LIST_TIMING = re.compile(r"\s*\(\d+(?:\.\d+)?(?:ms|s|m)\)\s*$")
 # Anchored at the start of a line already stripped of gh's prefix and ANSI: the first line of a
 # test's error under a header, in pytest (`E   `) and Playwright (`TimeoutError:`).
 ERROR_LINE = re.compile(r"^\s*(?:E   |\w*Error:)")
@@ -1291,6 +1333,26 @@ def _playwright_id(text: str) -> str | None:
     return f"{project} › {path}{sep}{tail}".rstrip()
 
 
+def _list_reporter_ids(lines: Sequence[str]) -> list[tuple[int, str]]:
+    """`(line, key)` of the `✘` lines of Playwright's list reporter, the key being
+    `[project] › file:line:col › title`: the index, the marker, a `(retry #n)` and the timing
+    only at the end of the line are left out, so parentheses inside a title stay. A key a later
+    `✓` line repeats is a retry that passed and is not listed; a key that failed more than once
+    is listed once, at its first line."""
+    marks: list[tuple[int, str, str]] = []
+    for i, text in enumerate(lines):
+        found = _LIST_LINE.match(text)
+        if found is not None:
+            key = _PLAYWRIGHT_RETRY.sub("", _LIST_TIMING.sub("", found.group("key"), count=1))
+            marks.append((i, found.group("mark"), key.rstrip()))
+    passed_at = {key: i for i, mark, key in marks if mark == "✓"}
+    firsts: dict[str, int] = {}
+    for i, mark, key in marks:
+        if mark == "✘" and passed_at.get(key, -1) < i:
+            firsts.setdefault(key, i)
+    return [(i, key) for key, i in firsts.items()]
+
+
 def _fit_to_travel(item: str) -> bool:
     return (
         0 < len(item) <= FLAKE_ID_MAX_CHARS
@@ -1305,10 +1367,10 @@ def scan_headers(text: str) -> HeaderScan:
     truncated (a cut id could be another test's), and counted in `dropped`. Pure."""
     lines = _clean_lines(text)
     found = _pytest_ids(lines)
-    for i, clean in enumerate(lines):
-        playwright = _playwright_id(clean)
-        if playwright is not None:
-            found.append((i, playwright))
+    summary = [(i, pid) for i, clean in enumerate(lines) if (pid := _playwright_id(clean))]
+    # The numbered summary is the complete word on a run that finished; the `✘` lines name the
+    # same tests with another key, so they are read only when the run was cut before it.
+    found += summary or _list_reporter_ids(lines)
     headers: list[FailingHeader] = []
     seen: set[str] = set()
     dropped = 0

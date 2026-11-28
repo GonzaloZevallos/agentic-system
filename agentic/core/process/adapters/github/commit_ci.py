@@ -12,7 +12,7 @@ import re
 
 from ...domain.ci import CiReport, CiUnreadable
 from ...domain.rules import same_commit
-from .tracker import COMMIT_CI_QUERY, GhTracker, _Unreadable, commit_report
+from .tracker import COMMIT_CI_QUERY, GhTracker, _Unreadable, _why, commit_report
 
 # A full lower-case sha, nothing else: the oid is handed to `gh` as a string and the query asks
 # for exactly that object, so a short, upper-case or odd one is refused before any call.
@@ -41,8 +41,8 @@ class GhCommitCi:
             return answer
         try:
             report = commit_report(answer["data"]["repository"]["object"])
-        except (_Unreadable, KeyError, TypeError):
-            return CiUnreadable("gh_unreadable")
+        except (_Unreadable, KeyError, TypeError) as exc:
+            return CiUnreadable.of("gh_unreadable", _why(exc))
         if not same_commit(report.head_sha, oid):
             return CiUnreadable("gh_unreadable")
         return report

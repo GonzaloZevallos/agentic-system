@@ -7,16 +7,19 @@ Esta página muestra las clases públicas de los módulos del grupo `github` de 
   - [adapters: filesystem (parte 2)](classes-process-adapters-filesystem-2.md)
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: shell](classes-process-adapters-shell.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
   - [adapters: toplevel](classes-process-adapters-toplevel.md)
 
 ```mermaid
 classDiagram
     class github__account__AccountKeys["AccountKeys"]
+    class github__activity__GhActivity["GhActivity"]
     class github__board__GhBoard["GhBoard"]
     class github__ci_logs__GhCiLogs["GhCiLogs"]
     class github__commit_ci__GhCommitCi["GhCommitCi"]
     class github__format_fix_reads__GhFormatFixReads["GhFormatFixReads"]
     class github__format_fix_reads__GhRepoSlug["GhRepoSlug"]
+    class github__gh_call_log__InProcessGhCallLog["InProcessGhCallLog"]
     class github__inbox__GhInbox["GhInbox"]
     class github__label_timeline__GhLabelTimeline["GhLabelTimeline"]
     class github__run__GhRetry["GhRetry"]

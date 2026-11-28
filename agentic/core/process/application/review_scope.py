@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Literal
 
 from ..domain import landing, rules
+from ..domain.docs import Docs
 from ..domain.task import TaskState
-from .ports import GitError, Ports, RemergeDiffUnsupported
+from .checkouts import task_base
+from .ports import GitError, Ports, RemergeDiffUnsupported, Workspace
 
-StepKind = Literal["upstream_merge", "own_commit", "foreign_merge"]
+StepKind = landing.StepKind
 UnreadableCause = Literal["unreadable", "no_remerge_diff"]
 
 RESOLUTION_SECTION = "Review scope: resolution"
@@ -88,6 +90,11 @@ def _unreadable(tip: str | None, cause: UnreadableCause) -> landing.ScopeFacts:
 def _facts(
     state: TaskState, tip: str | None, head: str, path: Path, ports: Ports
 ) -> landing.ScopeFacts:
+    """The facts of the pass over `head`, read in this order: the tip and its ancestry, the
+    chain and the kind of each commit, the texts (`merge_resolution`, which can raise
+    `RemergeDiffUnsupported`, so that wins over a later `GitError`), the paths of the one-parent
+    commits (`touched_paths`), and last the docs block, read once at the task's base and only
+    when a step is a regeneration or a merge with text. Any `GitError` is the caller's."""
     if tip is None:
         return landing.ScopeFacts(None, True, None, False, False, ())
     workspace = ports.workspace
@@ -95,18 +102,42 @@ def _facts(
         return landing.ScopeFacts(tip, True, None, False, False, ())
     commits = workspace.first_parent_commits(tip, head)
     upstream = _upstream(state, ports) if any(len(c.parents) > 1 for c in commits) else None
-    kinds = [_kind(commit, upstream, path, ports) for commit in commits]
-    # The text is read only when a resolution could be sent: a chain with no upstream merge
-    # (or a foreign one) is decided before any text, so an old git cannot turn it into
-    # `no_remerge_diff`.
-    wanted = "upstream_merge" in kinds and "foreign_merge" not in kinds
+    kinds = [_kind(state, commit, upstream, path, ports) for commit in commits]
+    # Text and paths are read only when a resolution or a regeneration could be sent: a chain
+    # with neither (or with a foreign merge) is decided before any text, so an old git cannot
+    # turn it into `no_remerge_diff`.
+    wanted = "foreign_merge" not in kinds and ("upstream_merge" in kinds or "regeneration" in kinds)
+    texts = [workspace.merge_resolution(commit.sha) if wanted else "" for commit in commits]
     steps = tuple(
         landing.ScopeStep(
-            commit.sha, kind, workspace.merge_resolution(commit.sha) if wanted else ""
+            commit.sha,
+            kind,
+            text,
+            _paths(workspace, commit, text) if wanted else (),
         )
-        for commit, kind in zip(commits, kinds, strict=True)
+        for commit, kind, text in zip(commits, kinds, texts, strict=True)
     )
-    return landing.ScopeFacts(tip, True, None, True, False, steps)
+    return landing.ScopeFacts(tip, True, None, True, False, steps, _docs(state, steps, ports))
+
+
+def _paths(workspace: Workspace, commit: rules.Commit, text: str) -> tuple[str, ...]:
+    """What the step adds beyond git's own merge of its parents: the paths of a merge's
+    remerge-diff (`()` when clean or when they cannot be told), the paths a one-parent commit
+    touches."""
+    if len(commit.parents) > 1:
+        return landing.diff_paths(text) or ()
+    return workspace.touched_paths(commit.parents[0], commit.sha)
+
+
+def _docs(state: TaskState, steps: tuple[landing.ScopeStep, ...], ports: Ports) -> Docs | None:
+    """The product's docs block at the task's base, never at the head: a branch cannot widen
+    what it is allowed to regenerate. Read only when a step could be covered by it."""
+    if not any(
+        step.kind == "regeneration" or (step.kind == "upstream_merge" and step.text)
+        for step in steps
+    ):
+        return None
+    return ports.stack.docs(task_base(state, ports))
 
 
 def _upstream(state: TaskState, ports: Ports) -> str:
@@ -123,8 +154,16 @@ def _upstream(state: TaskState, ports: Ports) -> str:
     return tip
 
 
-def _kind(commit: rules.Commit, upstream: str | None, path: Path, ports: Ports) -> StepKind:
+def _kind(
+    state: TaskState, commit: rules.Commit, upstream: str | None, path: Path, ports: Ports
+) -> StepKind:
+    """A one-parent commit is a `regeneration` only when the system recorded its sha as the
+    regeneration of a reintegration (`rules.same_commit`); who wrote it, what it says and the
+    paths it touches decide nothing here."""
     if len(commit.parents) < 2:
+        recorded = (row.get("regeneration") for row in state.get("reintegrations", []))
+        if any(rules.same_commit(commit.sha, sha) for sha in recorded):
+            return "regeneration"
         return "own_commit"
     if upstream is not None and all(
         ports.workspace.is_ancestor(path, parent, upstream) for parent in commit.parents[1:]

@@ -2,10 +2,10 @@
 for an issue, and what has to be written to put it there.
 
 The Project is an output. Nothing here, and nothing that calls it, reads a card's value
-back: the only inputs are facts the poller already holds (the issue's labels and state, the
-live registry, the `BlockerReport` of an issue with no document, the task document, the
-evaluation set). `card` is the one place Etapa and Bloqueo are computed; no clock is read
-here, `now` always arrives as an argument.
+back: the only inputs are facts about the issue itself (its labels and state, the live
+registry, the `BlockerReport` of an issue with no document, the task document) and `today`.
+No round scheduling result is an input. `card` is the one place Etapa and Motivo are
+computed; no clock is read here, `today` and `now` always arrive as arguments.
 """
 
 from __future__ import annotations
@@ -15,20 +15,18 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal, assert_never, get_args
+from typing import Literal, Protocol, assert_never, get_args
 
-from . import rules
+from . import hold, rules, tracker_items
+from .stacking import PauseCause
 from .task import Status
 
-Etapa = Literal[
-    "Corriendo", "En PR", "Trabada", "Necesita humano", "En cola", "Fuera del sistema", "Hecha"
-]
-"""The Project's `Status` field, renamed Etapa; the seven options a person created. `En PR` is
-the owner's (ADR-0073): a task approved and waiting on CI and merge, nothing live."""
+Etapa = Literal["Te necesita", "En curso", "Próximo", "En pausa", "Hecho"]
+"""The Project's `Status` field, renamed Etapa; the five options a person created."""
 
-Field = Literal["etapa", "bloqueo", "costo", "inicio", "fin"]
+Field = Literal["etapa", "motivo", "costo", "inicio", "fin"]
 """The five fields the system writes. Bloque and Hito are never in this list (ADR-0073)."""
-FIELDS: tuple[Field, ...] = ("etapa", "bloqueo", "costo", "inicio", "fin")
+FIELDS: tuple[Field, ...] = ("etapa", "motivo", "costo", "inicio", "fin")
 
 AGENTIC_LABEL = "agentic"
 NEEDS_HUMAN_LABEL = "needs-human"
@@ -37,20 +35,59 @@ READY_FOR_HUMAN_LABEL = "ready-for-human"
 BOARD_RETRY_AFTER = timedelta(minutes=15)
 """How long the mirror stays away from GitHub after a Project call failed whole."""
 
-BLOQUEO_MAX = 200
-NO_LIVE_PROCESS = "sin proceso vivo: retomar o esperar cupo"
+HECHO_DAYS = 7
+"""How many days after its close day an issue stays a Hecho card; later it has no Etapa."""
+EXPIRY_READS_MAX = 10
+"""The most remembered closed issues one round re-reads to see them expire."""
+UNREAD_MAX = 3
+"""Consecutive failed reads after which an issue leaves the memory."""
+
+MOTIVO_MAX = 200
+RUNNING = "corriendo"
+IN_PR = "en PR: espera CI y merge"
+RETAKES_ITSELF = "se retoma sola"
+WAITING_ANSWER = "esperando tu respuesta"
+NEEDS_ATTENTION = "necesita tu atención"
+READY_FOR_REVIEW = "lista para tu revisión"
 DISCARDED = "descartada: cerrar el issue"
-SPLIT = "partida: cerrar el issue"
 TRACKER_ONLY = "lista de tracker pendiente"
 UNKNOWN_STATUS = "documento con estado desconocido"
+NO_LIVE_PROCESS = "sin proceso vivo"
+WAITING_PLACE = "esperando lugar"
+HELD = "retenida: agentic-hold"
+NEEDS_TRIAGE = "sin triage"
+OUTSIDE = "fuera de la bandeja"
+BLOCKER_PREFIX = "espera "
+STACK_STOPPED = "padre #{} detenido"
+STACK_ABANDONED = "padre #{} abandonado"
+STACK_UNREADABLE = "pila ilegible"
+FALLBACK_MOTIVO: dict[Etapa, str] = {
+    "Te necesita": NEEDS_ATTENTION,
+    "En curso": RUNNING,
+    "Próximo": WAITING_PLACE,
+    "En pausa": OUTSIDE,
+}
+"""One non-empty Motivo per Etapa that carries one. Hecho has none."""
 
 _STATUSES: dict[str, Status] = {status: status for status in get_args(Status)}
+_IN_FLIGHT: frozenset[Status] = frozenset(
+    {"open", "defined", "returned", "definition_ready", "planned", "developing"}
+)
+_ENDS: dict[Status, str] = {
+    "discarded": DISCARDED,
+    "tracker_only": TRACKER_ONLY,
+    "evaluated": UNKNOWN_STATUS,
+}
+"""The statuses that need the human whatever else is true, and their Motivo."""
 
 
 @dataclass(frozen=True)
 class IssueFacts:
-    """Everything `card` reads about one issue. `blocker` is only meaningful for an issue
-    without a document; `in_eval_set` is `None` when the evaluation set could not be read."""
+    """Everything `card` reads about one issue: its own state and `today`. `blocker` is only
+    meaningful for an issue without a document; `resumes_itself` says the poller retakes this
+    pause on its own (`rules.poller_retakes`). `stack_pause` is why the round holds this stacked
+    child, as the cause and the issue of the chain link that caused it (`None` for none): a
+    fact about this issue the round already computed, never a scheduling result."""
 
     number: int
     closed: bool
@@ -59,19 +96,40 @@ class IssueFacts:
     live: bool
     blocker: rules.BlockerReport | None
     document: Mapping[str, object] | None
-    in_eval_set: bool | None
+    today: date
+    resumes_itself: bool
+    stack_pause: tuple[PauseCause, int | None] | None = None
 
 
 @dataclass(frozen=True)
 class Card:
-    """One issue's card: the five values the Project shows. `None` is "no value"."""
+    """One issue's card: the five values the Project shows. `None` is "no value"; an `etapa`
+    of `None` is a card that is cleared and never added."""
 
     number: int
-    etapa: Etapa
-    bloqueo: str | None
+    etapa: Etapa | None
+    motivo: str | None
     cost_usd: float | None
     started: date | None
     finished: date | None
+
+
+def hecho_until(closed_at: date) -> date:
+    """The last day a card closed on `closed_at` is Hecho (inclusive)."""
+    return closed_at + timedelta(days=HECHO_DAYS)
+
+
+def hecho_expired(until: date, today: date) -> bool:
+    """Whether a Hecho card whose last day is `until` is gone on `today`. The one comparison."""
+    return today > until
+
+
+def last_hecho_day(value: Card) -> date | None:
+    """The last day `value` is Hecho, or None when it is not a Hecho card with a close day.
+    The one place that says which Etapa carries an expiry, so no caller names the option."""
+    if value.etapa == "Hecho" and value.finished is not None:
+        return hecho_until(value.finished)
+    return None
 
 
 def _first_line(text: object) -> str | None:
@@ -79,7 +137,7 @@ def _first_line(text: object) -> str | None:
         return None
     for line in text.splitlines():
         if line.strip():
-            return line.strip()[:BLOQUEO_MAX]
+            return line.strip()[:MOTIVO_MAX]
     return None
 
 
@@ -89,50 +147,103 @@ def _blockers(report: rules.BlockerReport) -> str:
         *report.unknown,
         *(number for number, _ in report.closed_unresolved),
     }
-    return ", ".join(f"#{n}" for n in sorted(numbers))
+    return BLOCKER_PREFIX + ", ".join(f"#{n}" for n in sorted(numbers))
 
 
-def _mapped(facts: IssueFacts) -> tuple[Etapa, str | None]:
-    """The map for an open, `agentic` issue with no live process."""
-    document = facts.document
-    if document is None:
-        if facts.blocker:
-            return "Trabada", _blockers(facts.blocker)
-        return "En cola", None
-    status = _STATUSES.get(str(document.get("status")))
+def _needs_you(facts: IssueFacts) -> str:
+    if facts.resumes_itself:
+        return RETAKES_ITSELF
+    line = _first_line((facts.document or {}).get("escalated"))
+    return NEEDS_ATTENTION if line is None else f"{WAITING_ANSWER}: {line}"
+
+
+def _attention(facts: IssueFacts, status: Status | None) -> str | None:
+    """The Motivo of a Te necesita card that no other rule outranks, `None` when the issue
+    does not need the person (or is in flight, which `_stalled` says)."""
+    if status == "waiting_on_human" or NEEDS_HUMAN_LABEL in facts.labels:
+        return _needs_you(facts)
+    if READY_FOR_HUMAN_LABEL in facts.labels:
+        return READY_FOR_REVIEW
+    if facts.document is None:
+        return None
     if status is None:
-        return "Necesita humano", UNKNOWN_STATUS
-    match status:
-        case "open" | "defined" | "returned" | "definition_ready" | "planned" | "developing":
-            if facts.blocker:
-                return "Trabada", _blockers(facts.blocker)
-            return "Trabada", NO_LIVE_PROCESS
-        case "waiting_on_human":
-            return "Necesita humano", _first_line(document.get("escalated"))
-        case "ready_for_review":
-            return "En PR", None
-        case "discarded":
-            return "Necesita humano", DISCARDED
-        case "split":
-            return "Necesita humano", SPLIT
-        case "tracker_only":
-            return "Necesita humano", TRACKER_ONLY
-        case "evaluated":
-            return "Hecha", None
+        return UNKNOWN_STATUS
+    if status in _ENDS:
+        return _ENDS[status]
+    return None
+
+
+def _stalled(facts: IssueFacts, status: Status | None) -> str | None:
+    """An in-flight document with no live process and no blocker of its own."""
+    if facts.document is not None and status in _IN_FLIGHT and not facts.blocker:
+        return NO_LIVE_PROCESS
+    return None
+
+
+def _paused(facts: IssueFacts) -> str | None:
+    if hold.HOLD_LABEL in facts.labels:
+        return HELD
+    if tracker_items.TRIAGE_LABEL in facts.labels:
+        return NEEDS_TRIAGE
+    if AGENTIC_LABEL not in facts.labels:
+        return OUTSIDE
+    return None
+
+
+def _stack_row(pause: tuple[PauseCause, int | None]) -> tuple[Etapa, str]:
+    """The row of a stacked child its parents hold. The Motivo names the link that caused the
+    hold; a cause that needs one and has none is `unreadable`. `none` is no pause: the caller
+    never passes it."""
+    cause, link = pause
+    if link is None:
+        return "Te necesita", STACK_UNREADABLE
+    match cause:
+        case "parent_escalated" | "parent_not_ready":
+            return "Próximo", f"{BLOCKER_PREFIX}#{link}"
+        case "parent_stopped":
+            return "Te necesita", STACK_STOPPED.format(link)
+        case "parent_abandoned":
+            return "Te necesita", STACK_ABANDONED.format(link)
+        case "unreadable":
+            return "Te necesita", STACK_UNREADABLE
+        case "none":
+            return "Te necesita", STACK_UNREADABLE
         case _:
-            assert_never(status)
+            assert_never(cause)
 
 
-def _stage(facts: IssueFacts) -> tuple[Etapa, str | None]:
+def _stack_paused(facts: IssueFacts, status: Status | None) -> tuple[Etapa, str] | None:
+    """The stack row, only for a document in flight (ADR-0103: a task with no document yet or
+    past `developing` has nothing to hold)."""
+    pause = facts.stack_pause
+    if pause is None or pause[0] == "none" or facts.document is None or status not in _IN_FLIGHT:
+        return None
+    return _stack_row(pause)
+
+
+def _stage(facts: IssueFacts) -> tuple[Etapa | None, str | None]:
+    status = None if facts.document is None else _STATUSES.get(str(facts.document.get("status")))
+    if status == "split":
+        return None, None
     if facts.closed:
-        return "Hecha", None
+        if facts.closed_at is not None and hecho_expired(hecho_until(facts.closed_at), facts.today):
+            return None, None
+        return "Hecho", None
     if facts.live:
-        return "Corriendo", None
-    if NEEDS_HUMAN_LABEL in facts.labels:
-        return "Necesita humano", _first_line((facts.document or {}).get("escalated"))
-    if AGENTIC_LABEL not in facts.labels or READY_FOR_HUMAN_LABEL in facts.labels:
-        return "Fuera del sistema", None
-    return _mapped(facts)
+        return "En curso", RUNNING
+    if status == "ready_for_review":
+        return "En curso", IN_PR
+    if (attention := _attention(facts, status)) is not None:
+        return "Te necesita", attention
+    if _paused(facts) is None and (row := _stack_paused(facts, status)) is not None:
+        return row
+    if (stalled := _stalled(facts, status)) is not None:
+        return "Te necesita", stalled
+    if (paused := _paused(facts)) is not None:
+        return "En pausa", paused
+    if facts.blocker:
+        return "Próximo", _blockers(facts.blocker)
+    return "Próximo", WAITING_PLACE
 
 
 def _cost(document: Mapping[str, object] | None) -> float | None:
@@ -160,13 +271,19 @@ def _first_run_day(document: Mapping[str, object] | None) -> date | None:
 
 
 def card(facts: IssueFacts) -> Card:
-    """The card for `facts`. Total: precedence Hecha > Corriendo > Necesita humano > Fuera
-    del sistema > Trabada > En cola. Bloqueo is set only on Trabada and Necesita humano."""
-    etapa, bloqueo = _stage(facts)
+    """The card for `facts`. Total, and a function of the issue's own state and `today`:
+    precedence cleared (no Etapa) > Hecho > En curso > Te necesita > En pausa > Próximo.
+    Motivo is set on every card but Hecho, and falls back to its Etapa's constant when the
+    rule that put it there has none. A closed issue with no close day stays Hecho."""
+    etapa, motivo = _stage(facts)
+    if etapa == "Hecho" or etapa is None:
+        motivo = None
+    elif not motivo:
+        motivo = FALLBACK_MOTIVO[etapa]
     return Card(
         number=facts.number,
         etapa=etapa,
-        bloqueo=bloqueo if etapa in ("Trabada", "Necesita humano") else None,
+        motivo=motivo,
         cost_usd=_cost(facts.document),
         started=_first_run_day(facts.document),
         finished=facts.closed_at,
@@ -178,7 +295,7 @@ def fingerprint(value: Card) -> str:
     payload = json.dumps(
         [
             value.etapa,
-            value.bloqueo,
+            value.motivo,
             value.cost_usd,
             value.started.isoformat() if value.started else None,
             value.finished.isoformat() if value.finished else None,
@@ -190,10 +307,11 @@ def fingerprint(value: Card) -> str:
 
 def present(value: Card) -> frozenset[Field]:
     """The fields that carry a value on `value`: what the memory keeps beside the hash, so a
-    later card without one knows whether there is something on the board to clear."""
+    later card without one knows whether there is something on the board to clear. A card
+    with no Etapa reports no `etapa`."""
     have: dict[Field, bool] = {
-        "etapa": True,
-        "bloqueo": value.bloqueo is not None,
+        "etapa": value.etapa is not None,
+        "motivo": value.motivo is not None,
         "costo": value.cost_usd is not None,
         "inicio": value.started is not None,
         "fin": value.finished is not None,
@@ -222,12 +340,25 @@ class FieldWrite:
 
 
 def writes(value: Card, previous: frozenset[Field] | None) -> list[FieldWrite]:
-    """What puts `value` on the board. Etapa is always set; another field is set when it has
-    a value and cleared only when `previous` (the fields the last send put there) had one.
-    `previous=None`, a card never sent, clears nothing."""
+    """What puts `value` on the board. Etapa is set when it has a value; another field is set
+    when it has a value and cleared only when `previous` (the fields the last send put there)
+    had one. `previous=None`, a card never sent, clears nothing.
+
+    A card with no Etapa never adds an item: with nothing on the board for it, nothing is
+    written. When `previous` had an Etapa it is cleared, with every field `previous` had and
+    the card no longer carries; costo, inicio and fin are not set again."""
+    if value.etapa is None:
+        if previous is None or "etapa" not in previous:
+            return []
+        kept = present(value)
+        return [
+            FieldWrite(value.number, name, None)
+            for name in FIELDS
+            if name in previous and (name == "etapa" or name not in kept)
+        ]
     values: dict[Field, str | float | date | None] = {
         "etapa": value.etapa,
-        "bloqueo": value.bloqueo,
+        "motivo": value.motivo,
         "costo": value.cost_usd,
         "inicio": value.started,
         "fin": value.finished,
@@ -237,3 +368,32 @@ def writes(value: Card, previous: frozenset[Field] | None) -> list[FieldWrite]:
         for name in FIELDS
         if values[name] is not None or (previous is not None and name in previous)
     ]
+
+
+class Remembered(Protocol):
+    """What `expiry_due` reads of a remembered issue: the last day it is Hecho, when it was
+    sent as a Hecho card, and how many reads in a row failed."""
+
+    @property
+    def hecho_until(self) -> date | None: ...
+
+    @property
+    def unread(self) -> int: ...
+
+
+def expiry_due(entries: Mapping[int, Remembered], today: date) -> list[int]:
+    """The remembered issues whose Hecho card is gone on `today` and so must be re-read to
+    clear it: oldest `hecho_until` first, then issue number, those that failed to read last,
+    at most `EXPIRY_READS_MAX`."""
+    due = [
+        (entry.unread > 0, entry.hecho_until, number)
+        for number, entry in entries.items()
+        if entry.hecho_until is not None and hecho_expired(entry.hecho_until, today)
+    ]
+    ordered = sorted(due, key=lambda item: (item[0], item[1] or date.min, item[2]))
+    return [number for _, _, number in ordered[:EXPIRY_READS_MAX]]
+
+
+def dropped(unread: int) -> bool:
+    """Whether an issue that failed to read `unread` times in a row leaves the memory."""
+    return unread >= UNREAD_MAX

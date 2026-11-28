@@ -145,7 +145,7 @@ def test_a_rejected_sha_escalates_exactly_once_over_three_passes() -> None:
     escalation, out = build(tracker, inbox, store)
 
     escalation.run()
-    assert out == ["escalation: opened", "escalation: failed"]
+    assert out == ["escalation: opened", "escalation: failed (comment)"]
     assert len(tracker.posted()) == 1
 
     out.clear()
@@ -216,7 +216,7 @@ def test_a_reached_bound_opens_no_issue() -> None:
     escalation.run()
 
     assert tracker.calls == []
-    assert out == ["escalation: failed"]
+    assert out == ["escalation: failed (issue_lookup)"]
 
 
 def test_unavailable_at_three_comments_once_and_at_two_not_at_all() -> None:
@@ -275,7 +275,7 @@ def test_hostile_values_never_reach_the_tracker_or_out() -> None:
 
     seen = [str(args) for _, args in tracker.calls] + out
     assert not any(HOSTILE in s or short in s or "A" * 40 in s for s in seen)
-    assert out.count("escalation: failed") == 1
+    assert out.count("escalation: failed (invalid_sha)") == 1
     assert any("is unknown" in text for text in tracker.posted())
     assert len(tracker.posted()) == 2  # B escalated, A unavailable with an unknown cause
 
@@ -286,7 +286,7 @@ def test_a_sha_that_is_not_40_hex_alone_is_failed_without_calls() -> None:
 
     escalation.run()
 
-    assert out == ["escalation: failed"]
+    assert out == ["escalation: failed (invalid_sha)"]
     assert tracker.calls == [] and inbox.calls == 0
 
 
@@ -297,7 +297,7 @@ def test_a_url_without_an_issue_number_fails_without_a_comment(stored: str) -> N
 
     escalation.run()
 
-    assert out == ["escalation: failed"] and tracker.calls == []
+    assert out == ["escalation: failed (bad_url)"] and tracker.calls == []
 
 
 def test_unreadable_comments_on_a_stored_url_end_the_pass_with_no_search_or_second_issue() -> None:
@@ -306,7 +306,7 @@ def test_unreadable_comments_on_a_stored_url_end_the_pass_with_no_search_or_seco
 
     escalation.run()
 
-    assert out == ["escalation: failed"]
+    assert out == ["escalation: failed (comments)"]
     assert inbox.calls == 0
     assert tracker.names() == ["issue_comments"]
 
@@ -317,28 +317,61 @@ def test_a_failed_comment_continues_with_the_next_sha() -> None:
 
     escalation.run()
 
-    assert out == ["escalation: failed", f"escalation: escalated {B}"]
+    assert out == ["escalation: failed (comment)", f"escalation: escalated {B}"]
 
 
 @pytest.mark.parametrize(
-    ("tracker_fail", "store_fail"),
+    ("tracker_fail", "store_fail", "reason"),
     [
-        ((), ("rejected",)),
-        (("issue_comments",), ()),
-        (("open_issue",), ()),
-        ((), ("write",)),
+        ((), ("rejected",), "unknown"),
+        (("issue_comments",), (), "comments"),
+        (("open_issue",), (), "issue_open"),
+        ((), ("write",), "unknown"),
     ],
 )
 def test_a_port_that_raises_never_makes_run_raise(
-    tracker_fail: tuple[str, ...], store_fail: tuple[str, ...]
+    tracker_fail: tuple[str, ...], store_fail: tuple[str, ...], reason: str
 ) -> None:
     tracker = Tracker(fail=tracker_fail)
     escalation, out = build(tracker, Inbox(), Store(rejected={A}, fail=store_fail))
 
     escalation.run()
 
-    assert "escalation: failed" in out
+    assert f"escalation: failed ({reason})" in out
     assert not any(HOSTILE in line for line in out)
+
+
+def test_a_failed_open_issue_ends_the_pass_and_the_next_pass_retries() -> None:
+    tracker = Tracker(fail=("open_issue",))
+    store = Store(rejected={A})
+    escalation, out = build(tracker, Inbox(), store)
+
+    escalation.run()
+
+    assert out == ["escalation: failed (issue_open)"]
+    assert store.written == [] and tracker.posted() == []
+    assert not any(HOSTILE in line for line in out)
+
+    tracker.fail.clear()
+    out.clear()
+    escalation.run()
+    assert out == ["escalation: opened", f"escalation: escalated {A}"]
+
+
+def test_a_failed_comment_is_retried_by_the_next_pass_and_posted_once() -> None:
+    tracker = Tracker(fail=("comment_on_issue",))
+    escalation, out = build(tracker, Inbox(), Store(rejected={A}, issue=URL))
+
+    escalation.run()
+    assert out == ["escalation: failed (comment)"]
+    assert HOSTILE not in " ".join(out)
+
+    out.clear()
+    escalation.run()
+    escalation.run()
+
+    assert out == [f"escalation: escalated {A}"]
+    assert [has_line(c, render_marker(ESCALATED_MARKER, A)) for c in tracker.comments] == [True]
 
 
 def test_the_module_imports_only_ports_rotate_and_domain() -> None:

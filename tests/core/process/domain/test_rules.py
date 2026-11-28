@@ -36,6 +36,7 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried, FailureReason
+from tests.fakes import measured
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -420,7 +421,7 @@ def test_a_pre_change_document_with_no_design_sections_resumes_into_plan():
 
 
 def test_resume_target_of_a_fresh_touches_ui_task_with_nothing_run_starts_at_ux_flow():
-    state = {**UX_FLAGS, "status": "definition_ready"}
+    state = measured({**UX_FLAGS, "status": "definition_ready"})
     assert rules.resume_target(state) == "ux_flow"
 
 
@@ -5836,3 +5837,44 @@ def test_escalation_at_reads_a_naive_instant_as_none_and_an_offset_one_in_utc():
     at = rules.escalation_at([_escalated("cap", "2026-11-01T10:00:00+02:00")])
     assert at == datetime(2026, 11, 1, 8, tzinfo=UTC)
     assert at is not None and at.utcoffset() == timedelta(0)
+
+
+# -- poller_retakes: what the board says retakes itself (GH-877) ----------------------------------
+
+
+def _delivery_transient() -> dict:
+    return {"kind": "escalation", "value": "delivery", "cause": "delivery_transient"}
+
+
+def test_poller_retakes_is_true_for_a_live_external_pause():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert rules.poller_retakes(cast(Any, state))
+
+
+def test_poller_retakes_is_false_for_a_pause_that_needs_a_human():
+    assert not rules.poller_retakes(cast(Any, _paused_by(_escalation_entry("questions"))))
+    assert not rules.poller_retakes(cast(Any, {}))
+
+
+def test_poller_retakes_is_false_while_held_on_format_retakes():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert not rules.poller_retakes(cast(Any, {**state, "format_hold": True}))
+
+
+def test_poller_retakes_is_false_for_a_format_pause_whose_hold_is_due():
+    failure = {**_failure_entry("schema"), "rule": "schema_invalid"}
+    pause = _paused_by(failure, _escalation_entry("failure"))
+    assert rules.poller_retakes(cast(Any, pause))
+    due = {**pause, "format_retakes": {"schema_invalid": 2}}
+    assert not rules.poller_retakes(cast(Any, due))
+
+
+def test_spent_mechanical_retakes_still_read_resumes_itself_known_limit():
+    """Known limit (GH-877): the `Auto-resumed:` count (`MECHANICAL_RETAKE_MAX`) lives in the
+    issue's comments, which the mirror does not read, so a mechanical pause after three spent
+    retakes still says it retakes itself (`board.RETAKES_ITSELF`). The outside follow-up issue
+    ("Board mirror: record spent mechanical retakes in the task document") closes it: whoever
+    does inverts this test."""
+    epochs = [_delivery_transient(), {"kind": "resumed"}] * 3 + [_delivery_transient()]
+    state = {"pause_log": epochs, "escalated": "delivery failed"}
+    assert rules.poller_retakes(cast(Any, state))

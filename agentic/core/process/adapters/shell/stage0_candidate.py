@@ -8,6 +8,12 @@ logged or printed: a cause comes only from an exit code, an exception type or a 
 shebangs): the one built in `<sha>.partial` does not work once `promote` renames it, so the
 venv is rebuilt at the final path and run before `current` moves.
 
+The smoke of a stage is `--help` and then, per product, `agentic stage0 smoke --product-dir P`: the
+real preflight with no GitHub call (GH-1152), so its time does not grow with the product's queue.
+A stage that predates that subcommand exits 2 on it (argparse); it is then judged by the legacy
+`poll --dry-run --once`, as before, and `smoke: legacy step` is said. A 2 from the new step is
+never `Red` by itself.
+
 The smoke covers the stage's code and its own `.env`, not the unit's `Environment=` or
 `EnvironmentFile=`."""
 
@@ -20,7 +26,7 @@ import shutil
 import signal
 import subprocess
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -36,6 +42,14 @@ RESOLVE_TIMEOUT_S = 60
 UV_SYNC_TIMEOUT_S = 900
 HELP_TIMEOUT_S = 60
 POLL_SMOKE_TIMEOUT_S = 300
+"""The legacy poll dry-run, kept only for a stage that predates `stage0 smoke`."""
+PRODUCT_SMOKE_TIMEOUT_S = 120
+"""`max(120, 4 x measured)` rounded up to 30 s. Measured on 2026-11-26 on the machine that runs
+the rotation: `agentic stage0 smoke --product-dir <the agentic-system checkout>`, on a fresh stage
+with a cold `.pyc`, 12.2 s (4 x = 49 s, under the floor). The machine may be loaded. Apostrophe,
+the product the old smoke timed out on, was not measured."""
+_USAGE_EXIT = 2
+"""What argparse exits with on a subcommand the stage does not know."""
 
 _KILL_GRACE_S = 5.0
 _PREFIX = re.compile(r"[0-9a-f]{7,40}")
@@ -113,6 +127,17 @@ def _help(stage: Path) -> _Step:
     return _Step(argv, stage, HELP_TIMEOUT_S, "uv", "smoke_timeout")
 
 
+def _product_smoke(stage: Path, product: Path) -> _Step:
+    argv = (
+        str(stage / ".venv" / "bin" / "agentic"),
+        "stage0",
+        "smoke",
+        "--product-dir",
+        str(product),
+    )
+    return _Step(argv, stage, PRODUCT_SMOKE_TIMEOUT_S, "uv", "smoke_timeout")
+
+
 def _poll(stage: Path, product: Path) -> _Step:
     argv = (
         str(stage / ".venv" / "bin" / "agentic"),
@@ -137,12 +162,14 @@ class ShellStage0Candidate:
         products: tuple[Path, ...],
         origin_url: str,
         runner: Runner | None = None,
+        out: Callable[[str], None] | None = None,
     ) -> None:
         self._root = root
         self._scratch = scratch
         self._products = products
         self._origin_url = origin_url
         self._runner: Runner = runner if runner is not None else SubprocessRunner()
+        self._out: Callable[[str], None] = out if out is not None else _say_nothing
 
     def prepare(self, sha: str) -> Prepared | Unavailable:
         if _PREFIX.fullmatch(sha) is None:
@@ -176,14 +203,18 @@ class ShellStage0Candidate:
 
     def smoke(self, stage: str) -> Green | Red | Unavailable:
         directory = self._root / stage
-        steps = (_help(directory), *(_poll(directory, p) for p in self._products))
-        for step in steps:
-            result = self._run(step)
-            if isinstance(result, Unavailable):
-                return result
-            if result != 0:
-                return Red()
-        return Green()
+        result = self._run(_help(directory))
+        for product in self._products:
+            if isinstance(result, Unavailable) or result != 0:
+                break
+            result = self._run(_product_smoke(directory, product))
+            if result == _USAGE_EXIT:
+                # A stage from before the subcommand: not a verdict on its code.
+                self._out("smoke: legacy step")
+                result = self._run(_poll(directory, product))
+        if isinstance(result, Unavailable):
+            return result
+        return Green() if result == 0 else Red()
 
     def settle(self, sha: str) -> Green | Unavailable:
         stage = self._root / sha
@@ -221,6 +252,10 @@ class ShellStage0Candidate:
         if isinstance(result, OSError):
             return Unavailable(_cause_of(result, step.cause))
         return result
+
+
+def _say_nothing(line: str) -> None:
+    return None
 
 
 def _cause_of(error: OSError, step_cause: CandidateCause) -> CandidateCause:

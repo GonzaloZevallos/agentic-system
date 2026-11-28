@@ -37,7 +37,7 @@ BY_STATUS = [
     ("open", None, "define"),
     ("defined", None, "validate"),
     ("returned", "define", "define"),
-    ("definition_ready", "plan", "plan"),
+    ("definition_ready", "early_size", "early_size"),
     ("planned", None, None),
     ("developing", None, None),
     ("ready_for_review", None, None),
@@ -51,7 +51,7 @@ BY_STATUS = [
 # (label, state facts as pairs, after_validate, resume_target).
 ROWS: list[tuple[str, tuple[tuple[str, Any], ...], str | None, str | None]] = [
     ("pull request, stage open", (("status", "developing"), ("pull_request", PR)), None, None),
-    ("pull request, definition_ready", (("pull_request", PR),), "plan", None),
+    ("pull request, definition_ready", (("pull_request", PR),), "early_size", None),
     ("plan due, definition_ready", (("plan_due", True),), "plan", "plan"),
     ("plan due, developing", (("status", "developing"), ("plan_due", True)), None, "plan"),
     ("parts without subtasks", (("status", "planned"), ("parts", PART)), None, "split"),
@@ -75,8 +75,8 @@ ROWS: list[tuple[str, tuple[tuple[str, Any], ...], str | None, str | None]] = [
         None,
         "diagnose",
     ),
-    ("feature touches_ui, no design run", (("flags", UI),), "ux_flow", "ux_flow"),
-    ("feature touches_copy only", (("flags", COPY),), "write_copy", "write_copy"),
+    ("feature touches_ui, no design run", (("flags", UI),), "early_size", "early_size"),
+    ("feature touches_copy only", (("flags", COPY),), "early_size", "early_size"),
     ("bug definition_ready", (("type", "bug"),), "plan", "plan"),
     ("bug returned", (("type", "bug"), ("status", "returned")), "diagnose", "diagnose"),
     ("platform definition_ready", (("type", "platform"),), "plan", "plan"),
@@ -123,3 +123,40 @@ def test_a_mixed_state_routes_as_it_does_today(label, facts, validated, resumed)
 def test_a_task_with_no_type_that_is_open_goes_to_classify():
     assert rules.after_validate({"status": "open"}) is None
     assert rules.resume_target({"status": "open"}) == "classify"
+
+
+# The rows whose output changed, with the early check answered: today's output, unchanged.
+MEASURED = [
+    (("pull_request", PR),),
+    (("flags", UI),),
+    (("flags", COPY),),
+    (),
+]
+TODAY = [("plan", None), ("ux_flow", "ux_flow"), ("write_copy", "write_copy"), ("plan", "plan")]
+
+
+@pytest.mark.parametrize(("facts", "today"), zip(MEASURED, TODAY, strict=True))
+def test_a_measured_task_routes_exactly_as_before_the_early_check(facts, today):
+    state = feature(**dict(facts))
+    state["early_split"] = [{"verdict": "go", "cause": "close", "at": "2026-01-01T00:00:00+00:00"}]
+    assert (rules.after_validate(state), rules.resume_target(state)) == today
+
+
+def test_a_definition_ready_task_with_parts_and_no_subtasks_resumes_to_split():
+    assert rules.resume_target(feature(parts=PART)) == "split"
+
+
+@pytest.mark.parametrize(
+    ("facts", "expected"),
+    [
+        (rules.escalation("cap", "r"), None),
+        ((("parts", PART),), "split"),
+        ((("parts", PART), ("subtasks", PENDING)), "plan"),
+        ((("flags", UI),), "ux_flow"),
+        ((), "plan"),
+        ((("path", "light"), ("parts", PART)), "split"),
+    ],
+)
+def test_after_early_size_splits_or_falls_through_to_the_design_step_or_the_plan(facts, expected):
+    state = feature(**(facts if isinstance(facts, dict) else dict(facts)))
+    assert rules.after_early_size(state) == expected

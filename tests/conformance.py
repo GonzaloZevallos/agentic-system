@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
+from agentic.core.process.adapters.github.gh_call_log import InProcessGhCallLog
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     Board,
@@ -30,6 +31,7 @@ from agentic.core.process.application.ports import (
     FormatFiler,
     FormatFixReads,
     FreeSpace,
+    GhCallLog,
     Inbox,
     LabelTimeline,
     LandRecord,
@@ -117,6 +119,7 @@ _spec_reader: SpecReader = FakeSpecReader({})
 _spec_validator: SpecValidator = FakeSpecValidator()
 _domain_spec_validator: SpecValidator = DomainSpecValidator()
 _stop_flag: StopFlag = FakeStopFlag()
+_gh_call_log: GhCallLog = InProcessGhCallLog()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
 _land_record: LandRecord = FakeLandRecord()
@@ -177,6 +180,7 @@ COVERED: dict[str, type] = {
     "SpecReader": FakeSpecReader,
     "SpecValidator": FakeSpecValidator,
     "StopFlag": FakeStopFlag,
+    "GhCallLog": InProcessGhCallLog,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,
     "LandRecord": FakeLandRecord,
@@ -198,6 +202,12 @@ _INLINE = (
     "the stand-ins live inline in test modules outside mypy's scope, "
     "so only their member names are checked"
 )
+
+_INLINE_UNIMPLEMENTED = (
+    "nothing reads the port yet (GH-1056 part 4 wires it): the only stand-in is the inline stub "
+    "of the evaluation test, outside mypy's scope, so only its member names are checked"
+)
+_NOTIFIER_STAND_IN = ("tests/core/process/adapters/langgraph/test_graph_evaluation.py", "_Stub")
 
 UNCOVERED: dict[str, Uncovered] = {
     "BudgetStore": Uncovered(
@@ -270,6 +280,15 @@ UNCOVERED: dict[str, Uncovered] = {
     "FailurePolicy": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Policy"),), _INLINE
     ),
+    "Notifier": Uncovered((_NOTIFIER_STAND_IN,), _INLINE_UNIMPLEMENTED),
+    "Notified": Uncovered(
+        (
+            ("agentic/core/process/adapters/filesystem/notified.py", "FilesystemNotified"),
+            _NOTIFIER_STAND_IN,
+        ),
+        _INLINE_UNIMPLEMENTED,
+    ),
+    "Activity": Uncovered((_NOTIFIER_STAND_IN,), _INLINE_UNIMPLEMENTED),
 }
 
 

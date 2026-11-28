@@ -20,7 +20,8 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
     - [application: landing (parte 2)](packages-process-application-landing-2.md)
     - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
     - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-    - [application: reflection](packages-process-application-reflection.md)
+    - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+    - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
     - [application: support (parte 1)](packages-process-application-support-1.md)
     - [application: support (parte 2)](packages-process-application-support-2.md)
   - [adapters](packages-process-adapters.md)
@@ -31,6 +32,7 @@ Esta página muestra los paquetes de `agentic.core.process`: `domain`, `applicat
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
 
 ```mermaid
 graph TD
@@ -41,11 +43,13 @@ graph TD
     g_pkg__adapters__github["adapters.github (paquete)"]
     g_pkg__adapters__langgraph["adapters.langgraph (paquete)"]
     g_pkg__adapters__shell["adapters.shell (paquete)"]
+    g_pkg__adapters__smtp["adapters.smtp (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
     g_pkg__adapters --> g_pkg__application
     g_pkg__adapters --> g_pkg__domain
     g_pkg__adapters__claude_sdk --> g_pkg__adapters
+    g_pkg__adapters__claude_sdk --> g_pkg__adapters__git
     g_pkg__adapters__claude_sdk --> g_pkg__application
     g_pkg__adapters__claude_sdk --> g_pkg__domain
     g_pkg__adapters__filesystem --> g_pkg__adapters
@@ -60,5 +64,6 @@ graph TD
     g_pkg__adapters__langgraph --> g_pkg__domain
     g_pkg__adapters__shell --> g_pkg__application
     g_pkg__adapters__shell --> g_pkg__domain
+    g_pkg__adapters__smtp --> g_pkg__application
     g_pkg__application --> g_pkg__domain
 ```

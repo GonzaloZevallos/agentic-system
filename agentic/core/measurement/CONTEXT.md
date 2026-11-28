@@ -6,7 +6,7 @@ proceso registra; el proceso no la conoce.
 ## Language
 
 **Retrabajo**:
-Corrida de rol que repite trabajo ya hecho en la tarea, sea por devolución o por fallo de rol. Medido en plata: todo el costo de una corrida posterior a una devolución, y de una corrida de primera entrega sólo el costo de sus intentos fallidos, más la plata de intentos fallidos que ninguna corrida contabiliza. Cada dólar cuenta una sola vez, y el valor de la tarea es la suma de los de sus corridas. Las devoluciones internas y los Developers en paralelo no son retrabajo.
+Corrida de rol que repite trabajo ya hecho en la tarea, sea por devolución o por fallo de rol. Medido en plata: todo el costo de una corrida posterior a una devolución, y de una corrida de primera entrega sólo el costo de sus intentos fallidos, más la plata de intentos fallidos que ninguna corrida contabiliza. Cada dólar cuenta una sola vez, y el valor de la tarea es la suma de los de sus corridas. Las devoluciones internas y los Developers en paralelo no son retrabajo. Las devoluciones y el retrabajo no se comparan a través de GH-979: un timeout sin ningún test rojo dejó de ser una devolución.
 _Avoid_: reintento (el reintento es un hecho; el retrabajo es lo que cuesta)
 _Campo_: rework — de manufactura y de ingeniería de software clásica; DORA no lo mide, su vecino es change failure rate
 
@@ -84,7 +84,7 @@ _Campo_: sin término de arte — el vecino más cercano es el tiempo bloqueado 
 
 **Etapa del ciclo**:
 Una de las diez partes en que se reparte el ciclo de una tarea (`CycleStage`): cola, definición, plan, desarrollo, revisión, checks, espera humana, límite de cuenta, aterrizaje y otro. Cada rol corre en una sola, según `ROLE_STAGES` (el único mapa de rol a etapa, por `Role.slug`). Cuando dos Reclamos cubren el mismo instante gana el de menor rango y, entre rangos iguales, la etapa más cercana al merge (`STAGE_PRECEDENCE`: espera humana, límite de cuenta, checks, aterrizaje, revisión, desarrollo, plan, definición, cola, otro). La cola es el tiempo antes de la primera corrida más las esperas de cupo que ningún otro Reclamo cubre. El aterrizaje es el pull request abierto hasta el merge, que se parte después por Resultado de entrega, e incluye el trabajo de los roles mientras el pull request está abierto. Una pausa externa cuyos motivos de fallo son todos de límite (`account_limit` o `github_rate_limit`, el conjunto `ACCOUNT_LIMIT_REASONS` de `stages.py`, la única lista de motivos de límite de la medición) cae en la etapa de límite de cuenta y queda fuera de `cycle_active_h`; si mezcla otro motivo externo, va a otro. Una pausa por `github_rate_limit` cuenta ahí solo mientras es silenciosa: el último tramo de la que llegó al aviso de las 12 h (`rate_limit.RATE_LIMIT_WAIT_MAX`, 12 h; `rules.RATE_LIMIT_PERSISTED`) es espera humana (ver Tiempo en pausa). Advertencia: `stage_h.*` y `cycle_active_h` no se comparan de un lado al otro de GH-1033 (las horas de `github_rate_limit` pasaron de otro al límite de cuenta). `stage_split` es la única cifra de segundos por etapa (ADR-0099).
-_Avoid_: Etapa (a secas: es la de la Tarjeta, de siete valores), Aterrizaje, Cola exenta, Cola de escalados, Cupo de chequeo
+_Avoid_: Etapa (a secas: es la de la Tarjeta, de cinco valores), Aterrizaje, Cola exenta, Cola de escalados, Cupo de chequeo
 _Campo_: stage — el vecino más cercano son las fases del tiempo de ciclo en un value stream map
 
 **Reclamo**:

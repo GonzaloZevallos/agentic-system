@@ -16,9 +16,12 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
   - [application: support (parte 6)](classes-process-application-support-6.md)
   - [application: support (parte 7)](classes-process-application-support-7.md)
   - [application: support (parte 8)](classes-process-application-support-8.md)
+  - [application: support (parte 9)](classes-process-application-support-9.md)
 
 ```mermaid
 classDiagram
+    class poll__OrderEntry["OrderEntry"]
+    class poll__OrderLock["OrderLock"]
     class poll__RetakesSpent["RetakesSpent"]
     class poll__Seen["Seen"]
     class poll__StackUnreadable["StackUnreadable"]

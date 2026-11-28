@@ -1,0 +1,20 @@
+{
+  "note": "SYNTHETIC: a 201 to POST /repos/{owner}/{repo}/pulls, shaped from GitHub's REST docs (create a pull request); gh api -i prints the status line, the headers, a blank line and the body.",
+  "status": 201,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-ratelimit-remaining",
+      "4990"
+    ],
+    [
+      "x-ratelimit-reset",
+      "1790000000"
+    ]
+  ],
+  "body": "{\"url\": \"https://api.github.com/repos/o/r/pulls/7\", \"html_url\": \"https://github.com/o/r/pull/7\", \"number\": 7, \"state\": \"open\"}",
+  "stderr": ""
+}

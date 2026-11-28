@@ -9,6 +9,7 @@ Esta página muestra los módulos sueltos de `adapters`, los que no están en ni
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [application](packages-process-application.md)
   - [domain](packages-process-domain.md)
 
@@ -17,6 +18,7 @@ graph TD
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_adapters__evaluation["adapters.evaluation"]
+    m_adapters__offline["adapters.offline"]
     m_adapters__playbook_land_record["adapters.playbook_land_record"]
     m_adapters__plugins["adapters.plugins"]
     m_adapters__telemetry["adapters.telemetry"]

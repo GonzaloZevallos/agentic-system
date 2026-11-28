@@ -60,6 +60,7 @@ WALKERS = (
     "tests/core/process/domain/test_escalation_spec_guard.py",
     "tests/core/process/application/test_release.py",
     "tests/core/process/application/test_prompt_placeholder_scan.py",
+    "tests/core/process/application/test_notify.py",
 )
 KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
@@ -102,6 +103,17 @@ TABLE: tuple[Row, ...] = (
         ),
         "`tests/conformance.py` names it as the only implementation of the `BudgetStore` "
         "port, and these import `tests/conformance.py` or read it with the stand-in check",
+    ),
+    Row(
+        "agentic/core/process/adapters/filesystem/notified.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "`tests/conformance.py` names it as a stand-in of the `Notified` port, and these import "
+        "`tests/conformance.py` or read it with the stand-in check",
     ),
     Row(
         "agentic/core/process/adapters/git/workspace.py",
@@ -218,6 +230,11 @@ TABLE: tuple[Row, ...] = (
         "the recorded page of the issues listing GhIssueListing parses",
     ),
     Row(
+        "tests/core/process/adapters/github/fixtures/*_[0-9][0-9][0-9]*.json",
+        ("tests/core/process/adapters/github/test_tracker.py",),
+        "the answers of `gh api -i` the moved writes (pr create, comment, edit) are run against",
+    ),
+    Row(
         "tests/core/process/adapters/github/fixtures/commit_ci_synthetic.json",
         ("tests/core/process/adapters/github/test_commit_ci.py",),
         "the synthetic answer to COMMIT_CI_QUERY the by-sha CI reader is run against",
@@ -289,6 +306,48 @@ TABLE: tuple[Row, ...] = (
         ),
         "the six spec-path schemas as rendered before the spec subclasses: the golden test and "
         "the sync test read it",
+    ),
+    # Scripts that left `affected_fallback` (GH-1068): the targets are the tests that run each
+    # one. The scripts no test runs have no Row: a change to one of them is refused with 9,
+    # which is the full suite.
+    Row(
+        "scripts/ci_flakes.py",
+        ("tests/test_ci_flakes.py",),
+        "that test runs the script as a process over junit fixtures",
+    ),
+    Row(
+        "scripts/docs/check.py",
+        ("tests/test_docs.py",),
+        "that test runs the checker as a process; the other modules of scripts/docs have no Row",
+    ),
+    Row(
+        "scripts/docs/generate.py",
+        ("tests/test_docs.py",),
+        "that test loads the generator and runs it as a process over a temporary root",
+    ),
+    Row(
+        "scripts/gate_concurrency.py",
+        ("tests/test_gate_concurrency.py",),
+        "that test loads the script by path and runs it over recorded transcripts",
+    ),
+    Row(
+        "scripts/poll_waits.py",
+        ("tests/test_poll_waits.py",),
+        "that test loads the script by path and runs it over journal text",
+    ),
+    Row(
+        "scripts/install-poller.sh",
+        ("tests/test_install_poller.py",),
+        "that test runs the installer, and the copy of this script it renders from, in a temp dir",
+    ),
+    Row(
+        "scripts/systemd/*",
+        (
+            "tests/core/process/domain/test_poller_units.py",
+            "tests/test_install_poller.py",
+        ),
+        "the first renders the poller unit template; the second copies the directory and "
+        "renders every template through the installer",
     ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
@@ -533,6 +592,24 @@ def select(
     if not chosen:
         return Empty("the change reaches no test")
     return Selection(chosen)
+
+
+def closure_fraction(glob_files: Iterable[str], graph_: Graph) -> float:
+    """The share of the graph's test files that reaching selects for the worst file of a
+    glob: its import closure. A file outside the graph contributes 0.0, and so do an empty
+    glob and a graph with no tests. The loaders and the Rows are not counted: `select` adds
+    them."""
+    total = sum(1 for path in graph_.paths.values() if is_test(path))
+    if not total:
+        return 0.0
+    return max(
+        (
+            len(reaching([module_name(path)], graph_)) / total
+            for path in glob_files
+            if in_graph(path)
+        ),
+        default=0.0,
+    )
 
 
 def _run_pytest(files: Sequence[str], root: Path, options: Options) -> int:

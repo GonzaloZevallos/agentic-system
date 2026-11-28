@@ -67,7 +67,10 @@ sequenceDiagram
      cuenta, un disco lleno, o una escalación con una `MechanicalCause` como un CI sin
      veredicto o una entrega transitoria del sistema), el poller la retoma por su calendario,
      con el tope de `agentic/core/process/domain/rules.py:auto_resume_limit` (tres retomas
-     para una causa mecánica, `agentic/core/process/domain/rules.py:schedule_for`):
+     para una causa mecánica, salvo `check_timeout`, que tiene dos y además pasa por
+     `agentic/core/process/domain/rules.py:check_timeout_retake`: la segunda retoma exige
+     evidencia cambiada, otra cabeza u otros workers, y una tercera siempre va a una persona;
+     `agentic/core/process/domain/rules.py:schedule_for`):
      `agentic/core/process/application/poll.py:gather_resumes` evalúa cada pausa con
      `agentic/core/process/domain/rules.py:auto_resumable` y
      `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y,

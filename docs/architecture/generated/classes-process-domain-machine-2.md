@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 4, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `machine` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 5, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: machine (parte 4)](classes-process-domain-machine-4.md)
+  - [domain: machine (parte 5)](classes-process-domain-machine-5.md)
   - [domain: playbook (parte 1)](classes-process-domain-playbook-1.md)
   - [domain: playbook (parte 2)](classes-process-domain-playbook-2.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
@@ -32,21 +33,27 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class github_budget__Wait["Wait"]
+    class notify__DigestEvent["DigestEvent"]
+    class notify__DigestKey["DigestKey"]
     class notify__EventKey["EventKey"]
+    class notify__Judged["Judged"]
     class notify__NotifiedRecord["NotifiedRecord"]
+    class notify__NotifyKinds["NotifyKinds"]
     class notify__PartFact["PartFact"]
     class notify__ReleaseEvent["ReleaseEvent"]
     class notify__SplitFacts["SplitFacts"]
     class notify__WaitingEvent["WaitingEvent"]
-    class output_repair__RepairContext["RepairContext"]
-    class reaping__ParsedMark["ParsedMark"]
-    class reaping__ReapScope["ReapScope"]
-    class reaping__ReapedProcess["ReapedProcess"]
-    class refusal__OutputRefusal["OutputRefusal"]
-    class retakes__Budget["Budget"]
-    class scratch__KeptFolder["KeptFolder"]
-    class scratch__Leftover["Leftover"]
-    class scratch__Orphans["Orphans"]
+    class notify_message__AcceptedDeparture["AcceptedDeparture"]
+    class notify_message__DigestRow["DigestRow"]
+    class notify_message__DigestView["DigestView"]
+    class notify_message__Message["Message"]
+    notify__DigestEvent --> notify__DigestKey
     notify__ReleaseEvent --> notify__EventKey
     notify__WaitingEvent --> notify__EventKey
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 3)](classes-process-domain-machine-3.md)
+  - `notify_message.DigestView` se asocia con `notify_message.WindowedSection`

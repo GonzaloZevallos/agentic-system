@@ -22,6 +22,7 @@ graph TD
     tracker_only["tracker_only"]
     phase_classify -.-> plan
     phase_define -.-> plan
+    phase_define -.-> split
     phase_design -.-> plan
     plan -.-> phase_build
     plan -.-> phase_define

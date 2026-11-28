@@ -73,3 +73,45 @@ hay aprobación que acarrear.
 - Seguimiento: cuando haya corridas, contar los alcances y las causas de `review_scopes` para
   medir el ahorro y ajustar el tope.
 - Los documentos de tareas anteriores no tienen `review_scopes` y se leen igual que antes.
+
+## Adenda (GH-976): el paso `regeneration` y un solo calculador del alcance
+
+- **Un solo calculador.** `application.review_scope.scope_of` es el único que calcula qué cubre una
+  pasada. `landing_sync` ya no arma `ScopeFacts` ni `ScopeStep` a mano: tras la guarda
+  `rules.head_reviewed` llama a `scope_of` sobre el merge local sin empujar y empuja solo si el
+  alcance es `carried`; el acarreo se registra con la punta aceptada como base y con la causa del
+  veredicto (`clean` o `regenerated`).
+- **El tipo `regeneration` y su procedencia.** Un commit de un padre es `regeneration` solo si su
+  sha coincide (`rules.same_commit`) con algún `reintegrations[*].regeneration` del documento de la
+  tarea; ni el autor, ni el mensaje, ni los paths deciden el tipo. Cada paso lleva `paths`: los que
+  agrega más allá del merge propio de git (los del remerge-diff en un merge, vacío si es limpio; los
+  que toca un commit de un padre, por `touched_paths`). `diff_paths` los lee de las cabeceras
+  `diff --git`; con un path citado, un ` b/` ambiguo o texto sin cabecera devuelve `None`, y un
+  paso con texto cuyos paths no se pudieron leer nunca está cubierto.
+- **Dos maneras de avanzar sin revisión.** (a) Un commit de un padre registrado por el sistema con
+  todos sus paths bajo `docs.paths`. (b) Un merge del upstream cuya resolución cae entera bajo
+  `docs.paths`, lo haya hecho quien sea: eso no es procedencia, solo que lo que cambió es salida
+  del comando de docs. Cubierto significa: `paths` no vacío y cada uno cumple `domain.docs.owned`,
+  que aplica solo `landing.review_scope`. Un commit propio, o una regeneración no cubierta, es un
+  commit propio efectivo y el alcance sigue como antes (`resolution`, `own_before_merge`). Una
+  cadena de solo regeneraciones cubiertas, o un merge limpio más regeneraciones cubiertas, da
+  `carried` con causa `regenerated`.
+- **Qué verifica el contenido.** Con `docs.mode: commit` el chequeo `docs` verifica el contenido
+  generado de la cabeza. Con `validate` nada lo verifica: se apoya en que master regenera tras cada
+  merge (ADR-0074).
+- **El merge asentado de GH-603.** El conflicto de docs que el aterrizaje asienta desde el lado del
+  upstream ahora registra `carried`/`regenerated` en lugar de `clean`.
+- **El par `full`/`regenerated`.** `review.py` no cambia: registra un veredicto `carried` como
+  `full` con la causa del veredicto, así que una cadena con una regeneración queda como
+  `full`/`regenerated`.
+- **`docs` se lee en la base de la tarea.** `ports.stack.docs(task_base(state, ports))`, una vez, y
+  solo si algún paso es `regeneration` o un merge con texto; nunca en la cabeza, así que una rama no
+  puede ampliar lo que se le permite regenerar. Un `GitError` ahí da `full`/`unreadable`.
+- **Cambios conservadores.** Un merge de `_bring_in` es `foreign_merge` y una cadena ilegible ya no
+  acarrea en un sync: no se acarrea ni se empuja. Un git sin `--remerge-diff` sigue dando
+  `full`/`no_remerge_diff`. Con una punta aceptada por `close_docs`, la base registrada es la
+  cabeza de `close_docs`.
+- **Costo.** Una lectura de `touched_paths` por commit de un padre posterior a la punta, solo en
+  cadenas con un merge del upstream o una regeneración, más a lo sumo una lectura del stack en la
+  base; el resto de las cadenas no lee nada nuevo.
+

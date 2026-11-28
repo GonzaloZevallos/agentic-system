@@ -8,6 +8,7 @@ Esta página muestra las clases públicas de los módulos del grupo `toplevel` d
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)
+  - [adapters: smtp](classes-process-adapters-smtp.md)
 
 ```mermaid
 classDiagram
@@ -16,6 +17,8 @@ classDiagram
     class evaluation__EvaluationTracker["EvaluationTracker"]
     class evaluation__EvaluationWorkspace["EvaluationWorkspace"]
     class evaluation__EvaluationWrite["EvaluationWrite"]
+    class offline__GithubCalled["GithubCalled"]
+    class offline__NoGithub["NoGithub"]
     class playbook_land_record__FilesystemLandRecord["FilesystemLandRecord"]
     class telemetry__NoTelemetry["NoTelemetry"]
     class telemetry__RoleSpan["RoleSpan"]

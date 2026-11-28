@@ -45,6 +45,7 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
     BlockingRunner,
+    Measured,
     MemoryCommands,
     MemoryInbox,
     MemoryKnowledge,
@@ -61,6 +62,7 @@ from tests.fakes import (
     design_draft,
     design_findings,
     diagnosed,
+    early_sized,
     final_validation,
     finding,
     memory_ports,
@@ -154,6 +156,7 @@ def compiled(
     inbox=None,
     prompts_for=None,
     now=None,
+    early_check=False,
 ):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
@@ -184,14 +187,17 @@ def compiled(
             # pass one run stored cannot show up as a reused row in the next run's prompt.
             check_results=None,
             sample_app=sample_app,
-            **({"inbox": inbox} if inbox is not None else {}),
+            # GH-1104: delivery reads the issue body now; the default inbox answers one.
+            inbox=inbox if inbox is not None else MemoryInbox(unseeded_body="Issue body."),
             **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
             **({"now": now} if now is not None else {}),
         )
 
-    return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
+    graph = build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
         checkpointer=saver or InMemorySaver()
     )
+    # The early size check is answered unless the test is about it (`early_check=True`).
+    return graph if early_check else Measured(graph)
 
 
 class _Rooted:
@@ -377,6 +383,60 @@ async def test_a_stored_plan_with_parts_and_a_checklist_ends_in_a_split_that_pos
     assert final["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
         final["tracker_checklist"]
     )
+
+
+# The early size check (GH-999, ADR-0110): between PM's approval and the design branch.
+
+BRIEF = "Exports must be reachable from the reports page."
+EARLY_PARTS = [
+    {"title": "Catalogue", "body": f"Export, #1.\n\n> {BRIEF}", "depends_on": []},
+    {"title": "Screens", "body": f"Pick, #1.\n\n> {BRIEF}", "depends_on": [1]},
+]
+CLEARLY_OVER = {"hand_files": 100, "hand_lines": 5000, "test_lines": 100}
+
+
+def test_the_graph_builds_with_early_size_among_validates_targets():
+    graph = compiled(ScriptedRunner(), early_check=True).get_graph()
+    edges = {(e.source, e.target) for e in graph.edges}
+    assert {("validate", "early_size"), ("early_size", "split"), ("early_size", "plan")} <= edges
+
+
+async def test_a_clearly_oversized_feature_splits_before_the_design_branch_or_the_plan(config):
+    fakes = Fakes()
+    fakes.tracker.issue_numbers_from = 101
+    script = script_for(
+        pm=[
+            verdict(
+                "approved",
+                reason=BRIEF,
+                flags={"touches_ui": True, "touches_copy": False},
+            )
+        ],
+        definition_sizer=[early_sized(parts=EARLY_PARTS, **CLEARLY_OVER)],
+    )
+    graph = compiled(script, fakes=fakes, inbox=MemoryInbox(open_issues=[]), early_check=True)
+    final = await graph.ainvoke(TASK, config=config)
+
+    assert final["status"] == "split" and not final.get("escalated")
+    assert [r["verdict"] for r in final["early_split"]] == ["split"]
+    assert [title for title, _ in fakes.tracker.opened_issues] == ["Catalogue", "Screens"]
+    assert script.slugs.count("definition_sizer") == 1
+    assert not {"ux_designer", "tech_lead_ephemeral", "tech_lead"} & set(script.slugs)
+
+
+async def test_the_early_check_runs_once_across_a_returned_prd(config):
+    script = script_for(
+        product_analyst=[defined(1), defined(2)],
+        pm=[verdict("returned", "missing empty state"), verdict("approved")],
+        definition_sizer=[early_sized()],
+        **technical(),
+    )
+    final = await compiled(script, early_check=True).ainvoke(TASK, config=config)
+
+    assert final["status"] == "ready_for_review"
+    assert script.slugs.count("definition_sizer") == 1
+    assert script.slugs.index("definition_sizer") > script.slugs.index("pm", 6)
+    assert [r["cause"] for r in final["early_split"]] == ["fits"]
 
 
 # The definition-side design branch (ADR-0040): only reached when PM validates with
@@ -1260,6 +1320,7 @@ def test_exported_graph_uses_the_default_ports():
         "define",
         "diagnose",
         "validate",
+        "early_size",
         "ux_flow",
         "ux_walk",
         "ui_screens",

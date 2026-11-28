@@ -9,6 +9,7 @@ Esta página muestra los grupos de módulos de `application` y una flecha por ca
   - [adapters.github](packages-process-adapters-github.md)
   - [adapters.langgraph](packages-process-adapters-langgraph.md)
   - [adapters.shell](packages-process-adapters-shell.md)
+  - [adapters.smtp](packages-process-adapters-smtp.md)
   - [adapters](packages-process-adapters.md)
   - [domain](packages-process-domain.md)
 - Grupos:
@@ -21,7 +22,8 @@ Esta página muestra los grupos de módulos de `application` y una flecha por ca
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: reflection](packages-process-application-reflection.md)
+  - [application: reflection (parte 1)](packages-process-application-reflection-1.md)
+  - [application: reflection (parte 2)](packages-process-application-reflection-2.md)
   - [application: support (parte 1)](packages-process-application-support-1.md)
   - [application: support (parte 2)](packages-process-application-support-2.md)
 
@@ -63,4 +65,5 @@ graph TD
     g_application__support --> g_application__checks
     g_application__support --> g_application__landing
     g_application__support --> g_application__lifecycle
+    g_application__support --> g_application__reflection
 ```

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -21,8 +21,12 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady, PrototypeListing
 from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.gh_calls import GhCallKind
+from ..domain.github_access import Turn as Turn
+from ..domain.github_access import WriteGate as WriteGate
 from ..domain.github_budget import Budget
 from ..domain.landing import IssueRef
+from ..domain.notify import NotifiedRecord
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.playbook_land import LandAttempt
@@ -52,7 +56,7 @@ from ..domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
 )
-from ..domain.stall import ChildActivity
+from ..domain.stall import ChildActivity, Stall
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     CheckRun,
@@ -205,6 +209,7 @@ class AttemptFailed(Exception):
         detail: str = "",
         repairs: Sequence[RefusalRepair] = (),
         value_len: int | None = None,
+        stall: Stall | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -264,6 +269,10 @@ class AttemptFailed(Exception):
         # The refusals this attempt repaired before the one that failed it (GH-1016): its own
         # record, never another attempt's; empty at every other site.
         self.repairs = list(repairs)
+        # How the stall was told (GH-978): the silence, the last event's kind and whether a
+        # hook was in flight, set only where `reason` is `stall` (the runner's watchdog);
+        # `None` at every other site.
+        self.stall = stall
         # The size of the refused value, measured by `run_role._refused` on the raw structured
         # output before `refusal_retry.clean_value` cut it (`format_issue.value_len`); `None`
         # at every other site and when the size is unknown.
@@ -359,6 +368,7 @@ class RoleRunner(Protocol):
         max_turns: int | None = None,
         declared_checks: Mapping[str, str] | None = None,
         now: Callable[[], str] | None = None,
+        refuse: Callable[[str], str | None] | None = None,
     ) -> RawResult: ...
 
 
@@ -678,6 +688,13 @@ class ProductStack(Protocol):
         file names. Raises `ValueError` when the key is there with any other value."""
         ...
 
+    def stacking(self, revision: str) -> bool:
+        """Whether the product lets a part start on its Ready same-split parent's branch
+        (`core.knowledge`, GH-858, ADR-0103), as the commit `revision` declares it. Opt-in:
+        `False` when the key is absent, the launch of today byte for byte. Raises `ValueError`
+        when the key is there but not a boolean."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
@@ -772,6 +789,12 @@ class RunStopped(BaseException):
     rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
 
 
+class CheckAbandoned(BaseException):
+    """The attempt that asked for a share or a check was abandoned (a stall, or any exit of
+    the attempt). Not an `Exception`, for the reason `RunStopped` is not one. It is never a
+    verdict: no row, no flake, no refusal and no stored pass comes of it."""
+
+
 class StopFlag(Protocol):
     """Whether the run was told to stop. Only `run` and `resume` own one that can be set;
     every other verb gets one that never is."""
@@ -779,6 +802,24 @@ class StopFlag(Protocol):
     def is_set(self) -> bool: ...
 
     def set(self) -> None: ...
+
+
+class GhCallLog(Protocol):
+    """How many times the system launched `gh`, by kind (GH-990).
+
+    `record` counts one attempted launch: once per attempt, before the process starts, so a
+    missing `gh` counts too. It is not a GitHub request: a launch may make none, or several
+    (a GraphQL call, a paginated read).
+
+    `drain` returns the counts since the last drain, all six kinds present and zeros
+    included, and resets them. Exactly one consumer drains (the poller round, in a later
+    part): a second would take counts the first never sees.
+
+    The log is per process: it does not see the `gh` another process launches."""
+
+    def record(self, kind: GhCallKind) -> None: ...
+
+    def drain(self) -> Mapping[GhCallKind, int]: ...
 
 
 class Commands(Protocol):
@@ -943,6 +984,13 @@ class TrackerTransient(TrackerCallFailed):
     stderr."""
 
 
+class TrackerTurnRefused(TrackerTransient):
+    """A write's turn was refused (its wait was over the bound) or its wait was stopped, so
+    `gh` never launched and nothing reached GitHub. A `TrackerTransient`, so a caller that
+    treats a transient failure as a call to retry later absorbs it unchanged. The message
+    names the call and the bound, never stderr."""
+
+
 class TrackerRateLimited(TrackerCallFailed):
     """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
     stated is longer than the policy's cap (GH-389). The message names the call and the
@@ -1023,6 +1071,10 @@ class Upstream:
     # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
     # left out), for the run's log and the poll round's output. None when nothing to say.
     note: str | None
+    # GH-1142: the short shas of the product checkout's commits the upstream lacks, and whether
+    # the fetch failed; the data behind `note`, so no caller ever parses the note's text.
+    left_out: tuple[str, ...] = ()
+    fetch_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1118,7 +1170,10 @@ class Workspace(Protocol):
         of it included. None when `path` is in no repository, or when git is not there."""
         ...
 
-    def task_checkout(self, task_id: str) -> Checkout: ...
+    def task_checkout(self, task_id: str, start: Callable[[], str] | None = None) -> Checkout:
+        """The task's worktree on its branch. `start` is asked only when the branch does not
+        exist and returns the sha it starts at; without it, the fetched upstream."""
+        ...
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...
 
@@ -1337,11 +1392,15 @@ class Workspace(Protocol):
         sha, and it never decides whether a replace is warranted: its caller does."""
         ...
 
-    def remote_tip(self, path: Path, branch: str) -> str | None:
+    def remote_tip(self, path: Path, branch: str, *, bounded: bool = False) -> str | None:
         """The full sha `origin` holds for `branch`, whose object is local afterwards (it
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
         remote has no such branch. A failed read, an unreachable origin or a remote that
-        moved between the read and the fetch raises `GitError`: it is never "absent"."""
+        moved between the read and the fetch raises `GitError`: it is never "absent".
+        `bounded=True` (the stacking judgement, GH-858) runs each git step under
+        `FETCH_TIMEOUT_S`, a timeout being a `GitError` too, and fetches into
+        `refs/agentic/stacking-tips/<branch>` instead of `refs/agentic/remote-tips/<branch>`;
+        the default is the call every other caller makes."""
         ...
 
     def publish_ci_ref(self, path: Path, ref: str) -> None:
@@ -2191,6 +2250,16 @@ class RunRegistration:
 
 
 @dataclass(frozen=True)
+class StackHint:
+    """The Ready parent a stacked launch was judged to build on (GH-858, ADR-0103): its issue
+    and the approved head the judgement saw. It only names the parent: the start gate reads
+    the parent's facts afresh, so a hint never decides a base."""
+
+    parent: int
+    head: str
+
+
+@dataclass(frozen=True)
 class LaunchAttempt:
     """What a launch left behind when it tried but did not reach a registered run
     (GH-137, `launches/<product>-<issue>.json`): `since` and `prior` feed
@@ -2203,6 +2272,9 @@ class LaunchAttempt:
     # record, so a relaunch of the same issue keeps it and it counts until a document
     # exists. `None` for a launch with no experiment, which is every launch of today.
     arm: str | None = None
+    # The stacked-start hint of the launch (GH-858): rewritten by every `record_launch`, never
+    # inherited, so a launch that is not stacked leaves none.
+    stack_hint: StackHint | None = None
 
 
 class CheckResults(Protocol):
@@ -2267,12 +2339,19 @@ class RunRegistry(Protocol):
         ...
 
     def record_launch(
-        self, product: str, issue: int, when: datetime, arm: str | None = None
+        self,
+        product: str,
+        issue: int,
+        when: datetime,
+        arm: str | None = None,
+        stack_hint: StackHint | None = None,
     ) -> None:
         """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
         clock, never read here): `prior` grows by one, `since` becomes `when`. `arm` (GH-470)
         is the arm assigned to this launch; `None` keeps the one the record already has, and a
-        record that never had one stays `{since, prior}` exactly."""
+        record that never had one stays `{since, prior}` exactly. `stack_hint` (GH-858) is the
+        parent of a stacked launch; unlike the arm it is rewritten every time: `None` clears
+        an old one."""
         ...
 
     def clear_launch(self, product: str, issue: int) -> None:
@@ -2522,10 +2601,14 @@ class IssueRow:
 @dataclass(frozen=True)
 class SentEntry:
     """What was last sent for one issue: the card's fingerprint and the fields that carried
-    a value, so a field that later has none knows there is something to clear."""
+    a value, so a field that later has none knows there is something to clear. `hecho_until` is
+    the last day it is a Hecho card (`None` for any other card) and `unread` counts the reads of
+    it that failed in a row."""
 
     fingerprint: str
     present: frozenset[Field]
+    hecho_until: date | None = None
+    unread: int = 0
 
 
 @dataclass(frozen=True)
@@ -2593,18 +2676,137 @@ class BoardSent(Protocol):
 
 
 @dataclass(frozen=True)
+class Mail:
+    """One message the notifier sends: a `subject` and a plain-text `body`."""
+
+    subject: str
+    body: str
+
+
+@dataclass(frozen=True)
+class ActivityRow:
+    """One merged pull request or closed issue the activity read found."""
+
+    number: int
+    title: str
+    url: str
+    instant: datetime
+
+
+class NotifyFailed(Exception):
+    """A send that did not go through. `cause` is the type name of the underlying error and
+    nothing else: the message of the original is never carried (GH-1056, ADR-0106)."""
+
+    def __init__(self, cause: str):
+        super().__init__(cause)
+        self.cause = cause
+
+    def __str__(self) -> str:
+        return self.cause
+
+
+@dataclass(frozen=True)
+class NotifySettings:
+    """What the notifier use case reads of the configuration (GH-1057), raw: `digest_hour` is the
+    hour as written and `events` the kind names as written, `None` for all kinds."""
+
+    digest_hour: str | None
+    events: tuple[str, ...] | None
+
+
+class Notifier(Protocol):
+    """Sends the email notices (GH-1056)."""
+
+    def send(self, mail: Mail) -> None:
+        """Sends `mail`. Raises `NotifyFailed` when it did not go through."""
+        ...
+
+
+class Notified(Protocol):
+    """The notifier's memory of what it settled, on disk (GH-1056)."""
+
+    def load(self) -> NotifiedRecord:
+        """The record, empty when the file is missing or unreadable."""
+        ...
+
+    def save(self, record: NotifiedRecord) -> None: ...
+
+
+@dataclass(frozen=True)
+class ActivityPage:
+    """What one Activity read returned: `rows` oldest first, ordered by `(instant, number)`,
+    and `cut_at`, the instant of the first matching row that was not returned (the row
+    `limit + 1`, the contract of `domain.notify.advance_read_at`), `None` when none was cut.
+    Every instant is aware UTC; a page that is not is a `ValueError` at construction."""
+
+    rows: tuple[ActivityRow, ...]
+    cut_at: datetime | None
+
+    def __post_init__(self) -> None:
+        for row in self.rows:
+            if not _is_utc(row.instant):
+                raise ValueError("an activity row's instant is not aware UTC")
+        if self.cut_at is not None and not _is_utc(self.cut_at):
+            raise ValueError("an activity page's cut_at is not aware UTC")
+        keys = [(row.instant, row.number) for row in self.rows]
+        if keys != sorted(keys):
+            raise ValueError("an activity page's rows are not sorted by (instant, number)")
+        if self.cut_at is not None and self.rows and self.cut_at < self.rows[-1].instant:
+            raise ValueError("an activity page's cut_at is earlier than its last row")
+
+    @property
+    def cut(self) -> bool:
+        """Whether the read stopped at its limit with matching rows left."""
+        return self.cut_at is not None
+
+
+def _is_utc(instant: datetime) -> bool:
+    offset = instant.utcoffset()
+    return offset is not None and offset == timedelta(0)
+
+
+class ActivityFailed(Exception):
+    """An Activity read that did not go through. `cause` is the type name of the underlying
+    error and nothing else: no message, HTTP status or `gh` output is carried (GH-1056)."""
+
+    def __init__(self, cause: str):
+        super().__init__(cause)
+        self.cause = cause
+
+    def __str__(self) -> str:
+        return self.cause
+
+
+class Activity(Protocol):
+    """What happened in the product's repository, for the digest (GH-1056). Both reads return
+    an `ActivityPage` oldest first, ordered by `(instant, number)`, with `since` exclusive.
+    Both raise only `ActivityFailed`."""
+
+    def merged_prs(self, since: datetime, limit: int) -> ActivityPage:
+        """The pull requests merged after `since`, oldest first, at most `limit`."""
+        ...
+
+    def closed_issues(self, since: datetime, limit: int) -> ActivityPage:
+        """The issues closed after `since`, oldest first, at most `limit`."""
+        ...
+
+
+@dataclass(frozen=True)
 class CheckRequest:
     """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
     and `token` are `None` on the gate's first call and are the grant's on every later one,
     so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
     may wait; `expires_after_s` is how long the share may be held before the ledger drops
-    it, whatever its holder says."""
+    it, whatever its holder says. `cancelled` is the abandonment flag of the attempt that
+    asks, or `None`: read on every pass of the wait, a set one leaves the queue by raising
+    `CheckAbandoned` instead of booking. It is no part of what the request says."""
 
     priority: CheckPriority
     wait_max_s: float
     expires_after_s: float
     enqueued_at: float | None = None
     token: str | None = None
+    cancelled: Callable[[], bool] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -2771,6 +2973,13 @@ class Ports:
     # What the release of a format hold reads (GH-1067). `None` releases nothing and makes no
     # call, which is how every run went before it existed (dry-run, evaluation).
     format_fixes: FormatFixReads | None = None
+    # The email notifier (GH-1056): what sends, what it remembers and what it reads. `None` for
+    # all three, which is how every run goes until a later part wires them (dry-run, evaluation).
+    notifier: Notifier | None = None
+    notified: Notified | None = None
+    activity: Activity | None = None
+    # The digest hour and the kinds to mail, as configured (GH-1057). `None` with the notifier.
+    notify_settings: NotifySettings | None = None
     # The paths a checkout has pending against its HEAD. `None` reads none, which is how every
     # run went before it existed; nothing reads it yet.
     pending_paths: PendingPaths | None = None

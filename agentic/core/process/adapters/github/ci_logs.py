@@ -16,6 +16,7 @@ from typing import Protocol
 
 import yaml
 
+from ...application.ports import GhCallLog
 from ...domain import rules
 from ...domain.ci import (
     FLAKE_BLOCK_PREFIX,
@@ -31,7 +32,7 @@ from ...domain.ci import (
     runs_of,
 )
 from ...domain.landing import CI_LOG_JOBS
-from .run import StreamRead, bounded_stream
+from .run import StreamRead, stream_gh
 
 # Declared, not measured: a failed step's log is a few hundred KB at most on this product's CI.
 CI_LOG_JOB_BYTES = 1024 * 1024
@@ -44,16 +45,29 @@ CI_LOG_TIMEOUT_S = 30.0
 # a log with a byte-order mark before the timestamp. Only a line with all three columns has a
 # `<text>` to look at.
 _LOG_TIMESTAMP = re.compile(r"\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
+# The conclusions of a job GitHub stopped at its time limit or cancelled, which print no failed
+# step for `--log-failed`.
+_CUT_CONCLUSIONS = frozenset({"CANCELLED", "TIMED_OUT"})
 
 
 class _Stream(Protocol):
     def __call__(
-        self, args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        max_bytes: int,
+        timeout_s: float,
+        calls: GhCallLog | None,
     ) -> StreamRead: ...
 
 
-def _tail_stream(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
-    return bounded_stream(args, cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True)
+def _tail_stream(
+    args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float, calls: GhCallLog | None
+) -> StreamRead:
+    return stream_gh(
+        args, cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True, calls=calls
+    )
 
 
 class GhCiLogs:
@@ -65,13 +79,15 @@ class GhCiLogs:
         product_dir: Path,
         ci_report: Callable[[str], CiReport | CiUnreadable],
         *,
-        stream: _Stream = bounded_stream,
+        stream: _Stream = stream_gh,
         max_bytes: int = CI_LOG_JOB_BYTES,
         timeout_s: float = CI_LOG_TIMEOUT_S,
         flake_stream: _Stream = _tail_stream,
         flake_max_bytes: int = CI_FLAKE_LOG_BYTES,
         declared: Callable[[], Sequence[str]] = lambda: (),
+        calls: GhCallLog | None = None,
     ) -> None:
+        self._calls = calls
         self._declared = declared
         self._product_dir = product_dir
         self._ci_report = ci_report
@@ -108,17 +124,40 @@ class GhCiLogs:
         ids = JOB_LINK.search(check.link)
         if ids is None:
             return _unread(check.name, check.link, "unreadable")
-        args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log-failed"]
+        run, job = ids.group(1), ids.group(2)
+        failed = self._job_log(check, run, job, "--log-failed", self._stream, self._max_bytes)
+        # A job cut at its time limit has no failed step to print (GH-1151): what ran is in the
+        # whole log, whose last bytes are the ones kept, as the flake block's read does.
+        if failed.cause == "empty" and check.conclusion in _CUT_CONCLUSIONS:
+            return self._job_log(
+                check, run, job, "--log", self._flake_stream, self._flake_max_bytes
+            )
+        return failed
+
+    def _job_log(
+        self,
+        check: CiCheck,
+        run: str,
+        job: str,
+        flag: str,
+        stream: _Stream,
+        max_bytes: int,
+    ) -> JobLog:
+        args = ["run", "view", run, "--job", job, flag]
         try:
-            read = self._stream(
-                args, cwd=self._product_dir, max_bytes=self._max_bytes, timeout_s=self._timeout_s
+            read = stream(
+                args,
+                cwd=self._product_dir,
+                max_bytes=max_bytes,
+                timeout_s=self._timeout_s,
+                calls=self._calls,
             )
         except (OSError, ValueError, subprocess.SubprocessError):
             return _unread(check.name, check.link, "unreadable")
         # A stream that filled the cap kept the whole of what the excerpt can use: a wait that
         # ran out while the rest was being counted and dropped (and the kill that followed) is
         # not a log that was not read.
-        capped = len(read.data) >= self._max_bytes
+        capped = len(read.data) >= max_bytes
         if read.timed_out and not capped:
             return _unread(check.name, check.link, "timed_out")
         if read.returncode != 0 and not capped:
@@ -157,13 +196,14 @@ class GhCiLogs:
         ids = JOB_LINK.search(check.link)
         if ids is None:
             return None
-        args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log"]
+        args = ["run", "view", ids.group(1), "--job", ids.group(2), "--log"]
         try:
             read = self._flake_stream(
                 args,
                 cwd=self._product_dir,
                 max_bytes=self._flake_max_bytes,
                 timeout_s=self._timeout_s,
+                calls=self._calls,
             )
         except (OSError, ValueError, subprocess.SubprocessError):
             return None

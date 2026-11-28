@@ -155,3 +155,31 @@ la llamada a la herramienta de entrega, la fuente del issue, usada en los dos la
 comparación) y de los documentos de tarea (el registro nuevo, que además da `wait_s` y
 `run_s` por separado). El «antes» es la tabla del issue; el «después» se corre sobre apostrophe
 tras una semana de ejecuciones.
+
+## Adenda GH-927 (2026-11-23): el cupo se reparte entre los chequeos en paralelo y las sesiones de rol tienen tope
+
+Con `parallel_checks`, cada chequeo que corría a la vez recibía el cupo entero como `{workers}` y
+`CHECK_WORKERS`: una puerta con 6 núcleos que corría seis chequeos juntos entregaba 36. Las
+sesiones de los roles tampoco tenían tope, así que `pytest -n 8` en el Bash de un Tech Lead
+levantaba 8 trabajadores para una sola prueba.
+
+- **Reparto.** Bajo `parallel_checks` el cupo se reparte en partes iguales entre los chequeos que
+  corren a la vez (`split(cupo, K)` en `domain/check_schedule.py`): el resto va a los primeros, en
+  orden declarado, cada chequeo recibe al menos 1 y la suma es `max(cupo, K)`. Con K > cupo la suma
+  es K, por encima de lo que reserva el libro; se acepta, porque un chequeo sin trabajadores no
+  corre.
+- **Qué lleva la parte.** El entorno (`CHECK_WORKERS`, `PYTEST_XDIST_AUTO_NUM_WORKERS`) y el
+  `{workers}` del comando llevan la parte del chequeo, la misma en todas sus formas (afectada,
+  completa y repetición). La ruta serial, el testigo y `run_check` conservan el cupo entero
+  (`split(cupo, 1)`). Sin cupo, `env=None` y el comando intacto, como antes.
+- **Sesiones de rol.** Cada sesión con Bash arranca con `ROLE_WORKERS = 2` en `CHECK_WORKERS`,
+  `PYTEST_XDIST_AUTO_NUM_WORKERS` y `VITEST_MAX_WORKERS`. Esas variables nunca llegan a los
+  comandos de la puerta, que arma su entorno desde `os.environ` y el cupo, no desde las opciones
+  de la sesión.
+- **Límite conocido.** Un número literal (`-n 8`, `--maxWorkers=8`) no lo limita ninguna variable:
+  el comando de un producto debe tomar su cuenta de `{workers}` o `CHECK_WORKERS`.
+- **Costo y medición.** El chequeo largo puede perder núcleos frente a los cortos. Se mide con
+  `run_s` de cada puerta junto a `share` y `peers`, que el registro de la puerta ya lleva; no con
+  `over_budget`, porque este repo sólo declara `check_budgets` para `docs`.
+- **Sin cambios.** El planificador, la reserva y el libro quedan como se decidieron; `share` y
+  `peers` del registro siguen siendo el cupo concedido.

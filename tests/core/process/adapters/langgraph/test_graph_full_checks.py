@@ -26,7 +26,9 @@ from tests.core.process.adapters.langgraph.test_graph import (
     technical,
 )
 from tests.fakes import (
+    Measured,
     MemoryCommands,
+    MemoryInbox,
     MemorySampleApp,
     MemoryStack,
     ScriptedRunner,
@@ -114,11 +116,12 @@ def build(script, stack, commands, fakes=None, workspace=None):
             stack=stack,
             commands=commands,
             sample_app=MemorySampleApp(),
+            inbox=MemoryInbox(unseeded_body="Issue body."),
             check_results=None,  # these tests pin the tiers, not the reuse of a pass
         )
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)
-    return graph.compile(checkpointer=InMemorySaver()), fakes, script
+    return Measured(graph.compile(checkpointer=InMemorySaver())), fakes, script
 
 
 def commands_run(commands) -> list[str]:
