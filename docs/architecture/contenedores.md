@@ -87,7 +87,8 @@ es el aviso inicial, las líneas de la ronda, las notas `would ...` y una línea
 `dry-run: unclassified <Puerto>.<nombre>` por cada rechazo. Termina con 0; con 1 si hubo algún
 rechazo o si el tracker falló (`TrackerCallFailed`, `round ended early`).
 
-Cada ronda de `agentic/cli.py:_poll` termina, en un `finally` (también tras `TrackerCallFailed` o
+Cada ronda de `agentic/cli.py:_poll` que corre (una ronda saltada por el límite de GitHub, más abajo, no
+imprime la línea ni corre el paso) termina, en un `finally` (también tras `TrackerCallFailed` o
 cualquier otra excepción) y antes del sleep, con la línea `agentic: poll: graphql budget: ...` (GH-939).
 La arma `agentic/core/process/application/budget_round.py:budget_round`: drena el registro de
 llamadas `gh`, lee `gh api rate_limit` con `agentic/composition.py:budget_read` (acotada a
@@ -95,6 +96,20 @@ llamadas `gh`, lee `gh api rate_limit` con `agentic/composition.py:budget_read` 
 la ronda con `agentic/core/process/domain/github_budget.py:round_points`. Solo corre si `main` pasa `budget_read` y
 `gh_calls`; sin alguno de los dos, `_poll` no imprime ni drena nada. La lectura es síncrona y puede
 frenar el lazo hasta unos 5 s, igual que las demás llamadas `gh` de la ronda.
+
+Límite de GraphQL de GitHub (GH-1214): `gh issue list` imprime `GraphQL: API rate limit already
+exceeded`, y `agentic/core/process/adapters/github/run.py:_retryable_kind` lo clasifica como
+`rate_limited` junto al mensaje REST, con la tupla `GH_RATE_LIMIT_MARKERS` (minúsculas). La política
+de reintento espera el reset y, pasado su tope, levanta `TrackerRateLimited(resets_at=...)`. Si una
+ronda de `_poll` termina en esa excepción, el lazo fija su local `rate_limited_until` con
+`agentic/core/process/domain/rate_limit.py:skip_until` (el `governing_reset` del producto, con tope
+`RATE_LIMIT_WAIT_MAX` desde ahora; `None` sin `resets_at`). Mientras
+`rate_limit.py:round_skip` devuelva ese instante (`ahora < until <= ahora + RATE_LIMIT_WAIT_MAX`), la
+ronda solo escribe los latidos `start` y `end`, imprime `agentic: poll: round skipped: GitHub rate
+limit until <ISO>` y duerme `interval_s`: no llama a `gh`, ni a `upstream()`, ni a `run_once`, ni al
+paso del presupuesto. `_reexec` y `_reap_inherited` sí corren antes del chequeo. Una ronda saltada
+nunca escribe ni extiende `rate_limited_until`; cuando `round_skip` da `None` el local se limpia y la
+ronda corre como siempre. El local vive solo en memoria (fila en `tests/test_poll_inventory.py`).
 
 Al final de cada ronda, `poll.run_once` corre el barrido de worktrees (GH-824): borra los
 checkouts bajo `.agentic/worktrees` de las tareas cuyo issue está CLOSED, nunca las ramas. Corre
