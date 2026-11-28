@@ -88,6 +88,9 @@ TABLE: tuple[Row, ...] = (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
             "tests/core/process/adapters/filesystem/test_prompts.py",
             "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/core/process/adapters/test_evaluation.py",
+            "tests/core/process/adapters/github/test_tracker.py",
+            "tests/core/process/application/test_dry_run.py",
             "tests/test_conformance_scope.py",
         ),
         "no module imports it until the rollback of #738 wires it, and these scan the adapter "
@@ -99,6 +102,9 @@ TABLE: tuple[Row, ...] = (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
             "tests/core/process/adapters/filesystem/test_prompts.py",
             "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/core/process/adapters/test_evaluation.py",
+            "tests/core/process/adapters/github/test_tracker.py",
+            "tests/core/process/application/test_dry_run.py",
             "tests/test_conformance_scope.py",
         ),
         "`tests/conformance.py` names it as the only implementation of the `BudgetStore` "
@@ -110,6 +116,9 @@ TABLE: tuple[Row, ...] = (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
             "tests/core/process/adapters/filesystem/test_prompts.py",
             "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/core/process/adapters/test_evaluation.py",
+            "tests/core/process/adapters/github/test_tracker.py",
+            "tests/core/process/application/test_dry_run.py",
             "tests/test_conformance_scope.py",
         ),
         "`tests/conformance.py` names it as a stand-in of the `Notified` port, and these import "
@@ -121,6 +130,9 @@ TABLE: tuple[Row, ...] = (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
             "tests/core/process/adapters/filesystem/test_prompts.py",
             "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/core/process/adapters/test_evaluation.py",
+            "tests/core/process/adapters/github/test_tracker.py",
+            "tests/core/process/application/test_dry_run.py",
             "tests/test_conformance_scope.py",
         ),
         "`tests/conformance.py` names it as the only implementation of the `PendingPaths` "

@@ -108,7 +108,7 @@ READS = {
     "Tracker": _names(
         """branch_ci changed_files ci_report dispatched_ci held_issues issue_comments
         issue_created_at issue_state list_pull_requests pull_request pull_request_body
-        pull_requests_on queue timestamped_comments watched_branch_ci"""
+        pull_requests_on queue queue_entries timestamped_comments watched_branch_ci"""
     ),
     "TaskDocuments": _names("flakes_since ids ids_touched_since load path_for text"),
     "Workspace": _names(

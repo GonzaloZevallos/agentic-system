@@ -381,3 +381,24 @@ def prompts_serve_spec_blocks(
         raise AssertionError(f"Prompts.spec_block({bad!r}) answered instead of raising ValueError")
     if prompts.spec_block_names() != ("../x", "alpha", "zeta"):
         raise AssertionError(f"Prompts.spec_block_names answered {prompts.spec_block_names()!r}")
+
+
+def tracker_queue_entries_agree_with_queue(tracker: Tracker) -> None:
+    """The `Tracker.queue_entries` contract (GH-1212), stated once: the entries are sorted
+    strictly ascending by number, every `updated_at` is a `str` (`""` when none is known,
+    never `None`), and the numbers are exactly those of `queue()`. Raises `AssertionError`
+    for a tracker that answers otherwise."""
+    entries = tracker.queue_entries()
+    numbers = [entry.number for entry in entries]
+    if numbers != sorted(set(numbers)):
+        raise AssertionError(f"Tracker.queue_entries not strictly ascending by number: {numbers}")
+    for entry in entries:
+        if not isinstance(entry.updated_at, str):
+            raise AssertionError(
+                f"Tracker.queue_entries gave #{entry.number} an updated_at of "
+                f"{entry.updated_at!r}, not a str"
+            )
+    if numbers != tracker.queue():
+        raise AssertionError(
+            f"Tracker.queue_entries numbers {numbers} differ from Tracker.queue() {tracker.queue()}"
+        )

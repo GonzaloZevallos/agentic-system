@@ -14,6 +14,7 @@ from agentic.core.process.adapters.evaluation import (
     EvaluationWrite,
 )
 from agentic.core.process.application.ports import Tracker, Workspace
+from tests.conformance import tracker_queue_entries_agree_with_queue
 from tests.fakes import MemoryStack, MemoryTracker, MemoryWorkspace
 
 # Every `Tracker` member the decorator refuses, with arguments that would reach a real tracker.
@@ -51,6 +52,7 @@ READS_TRACKER = (
     "pull_request_body",
     "pull_requests_on",
     "queue",
+    "queue_entries",
     "watched_branch_ci",
 )
 
@@ -113,6 +115,16 @@ def test_a_tracker_read_passes_through_to_the_real_tracker():
     assert tracker.changed_files("https://github.com/o/r/pull/7") == 12
     assert inner.changed_files_asked == ["https://github.com/o/r/pull/7"]
     assert tracker.queue() == inner.queue()
+
+
+def test_the_evaluation_tracker_keeps_the_queue_entries_contract():
+    inner = MemoryTracker()
+    inner._queue = [20, 4, 9]
+    inner.queue_updated = {4: "2026-11-28T10:00:00Z"}
+    tracker = EvaluationTracker(inner)
+
+    tracker_queue_entries_agree_with_queue(tracker)
+    assert tracker.queue_entries() == inner.queue_entries()
 
 
 def test_a_name_the_decorator_never_classified_is_refused_instead_of_delegated():

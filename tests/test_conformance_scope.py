@@ -22,7 +22,7 @@ from types import ModuleType
 
 import pytest
 
-from agentic.core.process.application.ports import Ports
+from agentic.core.process.application.ports import Ports, QueueEntry
 from agentic.core.process.domain.roles import DEVELOPER, PM, Role
 from tests.conformance import (
     COVERED,
@@ -32,8 +32,16 @@ from tests.conformance import (
     perf_runner_stops_with_the_flag,
     prompts_keep_an_unreadable_file_for_its_role,
     prompts_serve_the_text_of_construction,
+    tracker_queue_entries_agree_with_queue,
 )
-from tests.fakes import FakePerfLock, FakePerfRunner, FakeStopFlag, MemoryPrompts, memory_ports
+from tests.fakes import (
+    FakePerfLock,
+    FakePerfRunner,
+    FakeStopFlag,
+    MemoryPrompts,
+    MemoryTracker,
+    memory_ports,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 PORTS = REPO / "agentic" / "core" / "process" / "application" / "ports.py"
@@ -379,6 +387,49 @@ def test_the_stop_contract_refuses_a_runner_and_a_lock_that_ignore_the_flag(tmp_
     with pytest.raises(AssertionError, match="PerfLock.acquire answered True"):
         perf_lock_stops_with_the_flag(lock, FakeStopFlag())
     assert lock.released == 1  # the contract gives back what the deaf lock took
+
+
+def test_the_tracker_double_keeps_the_queue_entries_contract():
+    tracker = MemoryTracker()
+    tracker._queue = [20, 4, 9]
+    tracker_queue_entries_agree_with_queue(tracker)
+    assert [e.updated_at for e in tracker.queue_entries()] == ["", "", ""]
+    tracker.queue_updated = {4: "2026-11-28T10:00:00Z", 20: "2026-11-28T11:00:00Z"}
+    tracker_queue_entries_agree_with_queue(tracker)
+    assert tracker.queue_entries() == [
+        QueueEntry(4, "2026-11-28T10:00:00Z"),
+        QueueEntry(9, ""),
+        QueueEntry(20, "2026-11-28T11:00:00Z"),
+    ]
+
+
+class _UnsortedEntries(MemoryTracker):
+    def queue_entries(self) -> list[QueueEntry]:
+        return [QueueEntry(9, ""), QueueEntry(4, "")]
+
+
+class _NoneStamp(MemoryTracker):
+    def queue_entries(self) -> list[QueueEntry]:
+        return [QueueEntry(4, None)]
+
+
+class _OtherNumbers(MemoryTracker):
+    def queue(self) -> list[int]:
+        return sorted(self._queue)
+
+    def queue_entries(self) -> list[QueueEntry]:
+        return [QueueEntry(4, "")]
+
+
+def test_the_queue_entries_contract_refuses_unsorted_none_and_disagreeing_entries():
+    for tracker, message in (
+        (_UnsortedEntries(), "not strictly ascending"),
+        (_NoneStamp(), "not a str"),
+        (_OtherNumbers(), "differ from Tracker.queue"),
+    ):
+        tracker._queue = [4, 9]
+        with pytest.raises(AssertionError, match=message):
+            tracker_queue_entries_agree_with_queue(tracker)
 
 
 def test_the_prompts_double_keeps_the_snapshot_contract(tmp_path):
