@@ -445,7 +445,7 @@ def _imports_notify_use_case(path: Path, tree: ast.AST) -> bool:
     return False
 
 
-def test_nothing_imports_the_notify_use_case_yet() -> None:
+def test_only_the_poll_and_its_loop_import_the_notify_use_case() -> None:
     root = Path(__file__).resolve().parents[4] / "agentic"
     own = root / "core" / "process" / "application" / "notify.py"
     importers = {
